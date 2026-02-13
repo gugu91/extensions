@@ -1,0 +1,3 @@
+node_modules
+dist
+nvim-bridge/nvim/**/*.lua

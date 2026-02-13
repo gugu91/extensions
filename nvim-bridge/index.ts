@@ -12,6 +12,7 @@ interface EditorState {
   visibleEnd: number | null;
   selectionStart: number | null;
   selectionEnd: number | null;
+  commentStart: number | null;
   commentEnd: number | null;
   commentText: string | null;
 }

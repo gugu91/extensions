@@ -1,0 +1,36 @@
+{
+  "name": "nvim-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.18.1",
+  "scripts": {
+    "format": "pnpm format:ts && pnpm format:lua",
+    "format:ts": "prettier --write .",
+    "format:lua": "stylua nvim-bridge/nvim",
+    "format:check": "pnpm format:check:ts && pnpm format:check:lua",
+    "format:check:ts": "prettier --check .",
+    "format:check:lua": "stylua --check nvim-bridge/nvim",
+    "lint": "eslint nvim-bridge --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm lint && pnpm typecheck && pnpm format:check",
+    "prepush": "pnpm lint && pnpm typecheck",
+    "lint-staged": "lint-staged",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs,json,md,yml,yaml}": "prettier --write",
+    "nvim-bridge/nvim/**/*.lua": "stylua"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "@types/node": "^22.13.1",
+    "eslint": "^9.19.0",
+    "globals": "^15.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.5.1",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.22.0"
+  }
+}

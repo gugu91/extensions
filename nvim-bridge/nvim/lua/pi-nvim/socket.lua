@@ -12,19 +12,19 @@ local max_backoff = 10
 --- Compute the socket path from git repo root + branch.
 --- Returns nil if not in a git repo.
 local function compute_socket_path()
-  local repo_root = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")[1]
+  local repo_root = vim.fn.systemlist('git rev-parse --show-toplevel 2>/dev/null')[1]
   if vim.v.shell_error ~= 0 or not repo_root then
     return nil
   end
 
-  local branch = vim.fn.systemlist("git branch --show-current 2>/dev/null")[1]
+  local branch = vim.fn.systemlist('git branch --show-current 2>/dev/null')[1]
   if vim.v.shell_error ~= 0 or not branch then
-    branch = ""
+    branch = ''
   end
 
-  local key = repo_root .. ":" .. branch
+  local key = repo_root .. ':' .. branch
   local hash = vim.fn.sha256(key)
-  return "/tmp/pi-nvim/" .. hash .. ".sock"
+  return '/tmp/pi-nvim/' .. hash .. '.sock'
 end
 
 --- Get socket path (cached).
@@ -56,10 +56,14 @@ local function schedule_reconnect()
   reconnect_timer = uv.new_timer()
   local delay_ms = backoff * 1000
 
-  reconnect_timer:start(delay_ms, 0, vim.schedule_wrap(function()
-    cancel_reconnect()
-    M.connect()
-  end))
+  reconnect_timer:start(
+    delay_ms,
+    0,
+    vim.schedule_wrap(function()
+      cancel_reconnect()
+      M.connect()
+    end)
+  )
 
   -- Exponential backoff, capped
   backoff = math.min(backoff * 2, max_backoff)
@@ -89,7 +93,7 @@ function M.send(data)
   end
 
   local success = pcall(function()
-    pipe:write(encoded .. "\n")
+    pipe:write(encoded .. '\n')
   end)
 
   return success

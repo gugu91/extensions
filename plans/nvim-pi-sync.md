@@ -48,8 +48,8 @@ Symlinked into `~/.pi/agent/extensions/nvim-bridge` or registered in `settings.j
 
 ```ts
 interface EditorState {
-  file: string | null;        // relative to repo root
-  line: number | null;        // cursor line from buffer_focus
+  file: string | null; // relative to repo root
+  line: number | null; // cursor line from buffer_focus
   visibleStart: number | null;
   visibleEnd: number | null;
   selectionStart: number | null;
@@ -88,11 +88,11 @@ nvim/
 
 ### Autocommands
 
-| Autocommand | Event | Debounce |
-|---|---|---|
-| `BufEnter` | `buffer_focus` | No |
-| `WinScrolled` | `visible_range` | 150ms |
-| `CursorMoved` (visual mode) | `selection` | 150ms |
+| Autocommand                 | Event           | Debounce |
+| --------------------------- | --------------- | -------- |
+| `BufEnter`                  | `buffer_focus`  | No       |
+| `WinScrolled`               | `visible_range` | 150ms    |
+| `CursorMoved` (visual mode) | `selection`     | 150ms    |
 
 ### Socket Connection
 
@@ -123,11 +123,13 @@ nvim/
 ## Setup
 
 1. Symlink pi extension:
+
    ```bash
    ln -s /Users/guglielmoporcellini/src/gugu910/extensions/nvim-bridge ~/.pi/agent/extensions/nvim-bridge
    ```
 
 2. Add nvim plugin to runtimepath (e.g. in `init.lua`):
+
    ```lua
    vim.opt.rtp:prepend("/Users/guglielmoporcellini/src/gugu910/extensions/nvim-bridge/nvim")
    require("pi-nvim").setup()
