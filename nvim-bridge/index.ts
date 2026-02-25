@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -21,7 +22,8 @@ type NvimEvent =
   | { type: "buffer_focus"; file: string; line: number }
   | { type: "visible_range"; file: string; start: number; end: number }
   | { type: "selection"; file: string; start: number; end: number }
-  | { type: "selection_comment"; file: string; start: number; end: number; comment: string };
+  | { type: "selection_comment"; file: string; start: number; end: number; comment: string }
+  | { type: "trigger_agent"; prompt: string };
 
 function computeSocketPath(cwd: string): string | null {
   try {
@@ -70,10 +72,26 @@ function formatContext(state: EditorState): string {
   return msg;
 }
 
+type NvimCommand = { type: "open_file"; file: string; line?: number };
+
 export default function (pi: ExtensionAPI) {
   let server: net.Server | null = null;
   let socketPath: string | null = null;
   let dirty = false;
+  const clients: Set<net.Socket> = new Set();
+
+  function sendToNvim(cmd: NvimCommand): boolean {
+    if (clients.size === 0) return false;
+    const payload = JSON.stringify(cmd) + "\n";
+    for (const c of clients) {
+      try {
+        c.write(payload);
+      } catch {
+        // Ignore write errors; close handler cleans up.
+      }
+    }
+    return true;
+  }
 
   const editorState: EditorState = {
     file: null,
@@ -86,6 +104,35 @@ export default function (pi: ExtensionAPI) {
     commentEnd: null,
     commentText: null,
   };
+
+  pi.registerTool({
+    name: "open_in_editor",
+    label: "Open in Editor",
+    description: "Open a file in the user's neovim editor, optionally at a specific line",
+    parameters: Type.Object({
+      file: Type.String({ description: "File path (relative to repo root)" }),
+      line: Type.Optional(Type.Number({ description: "Line number to jump to" })),
+    }),
+    async execute(_toolCallId, params) {
+      const sent = sendToNvim({
+        type: "open_file",
+        file: params.file,
+        line: params.line,
+      });
+
+      if (!sent) {
+        return {
+          content: [{ type: "text", text: "No neovim instance connected" }],
+          isError: true,
+        };
+      }
+
+      const target = params.line ? `${params.file}:${params.line}` : params.file;
+      return {
+        content: [{ type: "text", text: `Opened ${target} in editor` }],
+      };
+    },
+  });
 
   function handleEvent(event: NvimEvent) {
     switch (event.type) {
@@ -157,6 +204,7 @@ export default function (pi: ExtensionAPI) {
 
     server = net.createServer((conn) => {
       activeConnections += 1;
+      clients.add(conn);
       setBridgeStatus(true);
 
       let buffer = "";
@@ -171,7 +219,11 @@ export default function (pi: ExtensionAPI) {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line) as NvimEvent;
-            handleEvent(event);
+            if (event.type === "trigger_agent") {
+              pi.sendUserMessage(event.prompt);
+            } else {
+              handleEvent(event);
+            }
           } catch {
             // Ignore malformed JSON
           }
@@ -179,6 +231,7 @@ export default function (pi: ExtensionAPI) {
       });
 
       conn.on("close", () => {
+        clients.delete(conn);
         activeConnections = Math.max(0, activeConnections - 1);
         if (activeConnections === 0) {
           setBridgeStatus(false);

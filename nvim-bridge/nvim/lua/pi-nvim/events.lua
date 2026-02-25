@@ -118,9 +118,14 @@ function M.open_comment_window(start_line, end_line)
     end
   end
 
-  local function submit()
+  local function get_comment_text()
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local comment = trim(table.concat(lines, '\n'))
+    return trim(table.concat(lines, '\n'))
+  end
+
+  --- Queue as context (existing behavior)
+  local function queue_comment()
+    local comment = get_comment_text()
 
     if comment == '' then
       vim.notify('pi-nvim: empty comment discarded', vim.log.levels.WARN)
@@ -137,8 +142,40 @@ function M.open_comment_window(start_line, end_line)
     })
 
     if sent then
-      vim.notify('pi-nvim: comment sent', vim.log.levels.INFO)
+      vim.notify('pi-nvim: comment queued', vim.log.levels.INFO)
     else
+      vim.notify('pi-nvim: not connected to pi', vim.log.levels.WARN)
+    end
+
+    close_window()
+  end
+
+  --- Send to agent immediately
+  local function send_to_agent()
+    local comment = get_comment_text()
+
+    if comment == '' then
+      vim.notify('pi-nvim: empty prompt discarded', vim.log.levels.WARN)
+      close_window()
+      return
+    end
+
+    -- Send selection context first so before_agent_start picks it up
+    socket.send({
+      type = 'selection_comment',
+      file = file,
+      start = start_line,
+      ['end'] = end_line,
+      comment = comment,
+    })
+
+    -- Trigger the agent
+    local sent = socket.send({
+      type = 'trigger_agent',
+      prompt = comment,
+    })
+
+    if not sent then
       vim.notify('pi-nvim: not connected to pi', vim.log.levels.WARN)
     end
 
@@ -151,9 +188,13 @@ function M.open_comment_window(start_line, end_line)
   end
 
   local map_opts = { buffer = buf, nowait = true, silent = true }
-  -- Enter sends the comment
-  vim.keymap.set('n', '<CR>', submit, map_opts)
-  vim.keymap.set('i', '<CR>', submit, map_opts)
+  -- Enter queues as context
+  vim.keymap.set('n', '<CR>', queue_comment, map_opts)
+  vim.keymap.set('i', '<CR>', queue_comment, map_opts)
+
+  -- Ctrl-S sends to agent
+  vim.keymap.set('n', '<C-s>', send_to_agent, map_opts)
+  vim.keymap.set('i', '<C-s>', send_to_agent, map_opts)
 
   -- Shift-Enter inserts a new line (terminal support may vary)
   vim.keymap.set('i', '<S-CR>', newline, map_opts)
@@ -163,7 +204,6 @@ function M.open_comment_window(start_line, end_line)
   vim.keymap.set('n', '<Esc>', close_window, map_opts)
   vim.keymap.set('i', '<Esc>', close_window, map_opts)
 
-  vim.notify('pi-nvim: Enter=send • Shift-Enter/C-j=new line • Esc=cancel', vim.log.levels.INFO)
   vim.cmd('startinsert')
 end
 

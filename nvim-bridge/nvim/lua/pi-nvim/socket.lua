@@ -131,7 +131,8 @@ function M.connect()
       backoff = 1 -- reset backoff on success
     end)
 
-    -- Handle disconnect
+    -- Handle incoming commands from pi
+    local read_buffer = ''
     pipe:read_start(function(read_err, data)
       if read_err or not data then
         -- Server closed connection
@@ -139,9 +140,47 @@ function M.connect()
           M.disconnect()
           schedule_reconnect()
         end)
+        return
+      end
+
+      read_buffer = read_buffer .. data
+      local lines = vim.split(read_buffer, '\n', { plain = true })
+      -- Keep the last incomplete line in buffer
+      read_buffer = table.remove(lines) or ''
+
+      for _, line in ipairs(lines) do
+        if line ~= '' then
+          vim.schedule(function()
+            local ok, cmd = pcall(vim.fn.json_decode, line)
+            if ok and cmd then
+              M.handle_command(cmd)
+            end
+          end)
+        end
       end
     end)
   end)
+end
+
+--- Handle a command from pi.
+function M.handle_command(cmd)
+  if cmd.type == 'open_file' and cmd.file then
+    local filepath = cmd.file
+    -- Resolve relative paths against cwd
+    if not vim.startswith(filepath, '/') then
+      filepath = vim.fn.getcwd() .. '/' .. filepath
+    end
+
+    vim.cmd('edit ' .. vim.fn.fnameescape(filepath))
+
+    if cmd.line then
+      local line = tonumber(cmd.line)
+      if line then
+        vim.api.nvim_win_set_cursor(0, { line, 0 })
+        vim.cmd('normal! zz')
+      end
+    end
+  end
 end
 
 --- Check if currently connected.
