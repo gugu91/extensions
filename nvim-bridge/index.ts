@@ -309,14 +309,10 @@ export default function (pi: ExtensionAPI) {
     return broadcast(cmd);
   }
 
-  function notifyCommentUpdated(comment: CommentRecord): void {
+  function notifyThreadUpdated(threadId?: string): void {
     if (!commentStore) return;
 
-    const summary = commentStore.getThreadSummary(comment.threadId);
-    broadcast({
-      type: "comment.added",
-      payload: { comment },
-    });
+    const summary = commentStore.getThreadSummary(threadId);
     broadcast({
       type: "comments.updated",
       payload: {
@@ -325,6 +321,32 @@ export default function (pi: ExtensionAPI) {
         latestId: summary.latestId,
       },
     });
+  }
+
+  function notifyAllCommentsWiped(removed: number): void {
+    broadcast({
+      type: "comments.wiped",
+      payload: {
+        removed,
+      },
+    });
+
+    // No threadId on purpose: clients should refresh whichever thread is open.
+    broadcast({
+      type: "comments.updated",
+      payload: {
+        total: 0,
+        latestId: null,
+      },
+    });
+  }
+
+  function notifyCommentUpdated(comment: CommentRecord): void {
+    broadcast({
+      type: "comment.added",
+      payload: { comment },
+    });
+    notifyThreadUpdated(comment.threadId);
   }
 
   function handleEvent(event: NvimEvent): void {
@@ -420,6 +442,7 @@ export default function (pi: ExtensionAPI) {
         });
 
         notifyCommentUpdated(comment);
+        return;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
@@ -551,6 +574,42 @@ export default function (pi: ExtensionAPI) {
         content: [{ type: "text", text: formatCommentListForTool(result) }],
         details: result,
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "comment_wipe_all",
+    label: "Wipe All Comments",
+    description: "Delete all persistent A2A comments in the current git repository",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!commentStore) {
+        return {
+          content: [{ type: "text", text: "Comment store is unavailable" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const result = await commentStore.wipeAllComments();
+        notifyAllCommentsWiped(result.removed);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Wiped all comments in this repository (${result.removed} removed).`,
+            },
+          ],
+          details: result,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to wipe comments";
+        return {
+          content: [{ type: "text", text: message }],
+          isError: true,
+        };
+      }
     },
   });
 

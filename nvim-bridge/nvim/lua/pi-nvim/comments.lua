@@ -5,7 +5,10 @@ local M = {}
 local setup_done = false
 local active_thread = 'global'
 local timeline_buf = nil
+local timeline_win = nil
 local refresh_pending = false
+
+local close_timeline_window
 
 local function trim(text)
   return (text:gsub('^%s+', ''):gsub('%s+$', ''))
@@ -114,6 +117,41 @@ local function format_context(context)
   return context.file
 end
 
+local function timeline_window_config()
+  local width = math.max(46, math.min(100, math.floor(vim.o.columns * 0.45)))
+  local height = math.max(12, vim.o.lines - 6)
+
+  return {
+    relative = 'editor',
+    style = 'minimal',
+    border = 'rounded',
+    width = width,
+    height = height,
+    row = 1,
+    col = math.max(0, vim.o.columns - width - 2),
+    title = string.format(' A2A comments [%s] ', active_thread),
+    title_pos = 'center',
+  }
+end
+
+local function set_timeline_title(total)
+  if not timeline_win or not vim.api.nvim_win_is_valid(timeline_win) then
+    return
+  end
+
+  local config = vim.api.nvim_win_get_config(timeline_win)
+  config.title = string.format(' A2A comments [%s] (%d) ', active_thread, tonumber(total) or 0)
+  config.title_pos = 'center'
+  vim.api.nvim_win_set_config(timeline_win, config)
+end
+
+close_timeline_window = function()
+  if timeline_win and vim.api.nvim_win_is_valid(timeline_win) then
+    vim.api.nvim_win_close(timeline_win, true)
+  end
+  timeline_win = nil
+end
+
 local function configure_timeline_buffer(buf)
   vim.bo[buf].buftype = 'nofile'
   vim.bo[buf].bufhidden = 'hide'
@@ -128,14 +166,14 @@ local function configure_timeline_buffer(buf)
   end
 
   local map_opts = { buffer = buf, silent = true }
-  vim.keymap.set('n', 'q', function()
-    local wins = vim.fn.win_findbuf(buf)
-    for _, win in ipairs(wins) do
-      if vim.api.nvim_win_is_valid(win) then
-        vim.api.nvim_win_close(win, true)
-      end
-    end
-  end, vim.tbl_extend('force', map_opts, { desc = 'Close comments timeline' }))
+  vim.keymap.set(
+    'n',
+    'q',
+    close_timeline_window,
+    vim.tbl_extend('force', map_opts, {
+      desc = 'Close comments timeline',
+    })
+  )
 
   vim.keymap.set('n', 'r', function()
     M.refresh({ open_if_missing = false })
@@ -146,25 +184,27 @@ local function configure_timeline_buffer(buf)
   end, vim.tbl_extend('force', map_opts, { desc = 'Add A2A comment' }))
 end
 
-local function ensure_timeline_buffer()
-  if timeline_buf and vim.api.nvim_buf_is_valid(timeline_buf) then
-    local wins = vim.fn.win_findbuf(timeline_buf)
-    if #wins > 0 then
-      vim.api.nvim_set_current_win(wins[1])
-      return timeline_buf
-    end
+local function ensure_timeline_window()
+  if timeline_buf and not vim.api.nvim_buf_is_valid(timeline_buf) then
+    timeline_buf = nil
+    timeline_win = nil
+  end
 
-    vim.cmd('botright split')
-    local win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(win, timeline_buf)
+  if not timeline_buf then
+    timeline_buf = vim.api.nvim_create_buf(false, true)
+    configure_timeline_buffer(timeline_buf)
+  end
+
+  local config = timeline_window_config()
+
+  if timeline_win and vim.api.nvim_win_is_valid(timeline_win) then
+    vim.api.nvim_win_set_buf(timeline_win, timeline_buf)
+    vim.api.nvim_win_set_config(timeline_win, config)
+    vim.api.nvim_set_current_win(timeline_win)
     return timeline_buf
   end
 
-  vim.cmd('botright split')
-  local win = vim.api.nvim_get_current_win()
-  timeline_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(win, timeline_buf)
-  configure_timeline_buffer(timeline_buf)
+  timeline_win = vim.api.nvim_open_win(timeline_buf, true, config)
   return timeline_buf
 end
 
@@ -200,6 +240,7 @@ local function render_timeline(result)
   if #comments == 0 then
     table.insert(lines, '_No comments yet_')
     set_timeline_lines(lines)
+    set_timeline_title(total)
     return
   end
 
@@ -234,6 +275,7 @@ local function render_timeline(result)
   end
 
   set_timeline_lines(lines)
+  set_timeline_title(total)
 end
 
 local function request_comments(thread_id, timeout_ms)
@@ -250,6 +292,10 @@ local function schedule_refresh_if_open(thread_id)
   end
 
   if not timeline_buf or not vim.api.nvim_buf_is_valid(timeline_buf) then
+    return
+  end
+
+  if not timeline_win or not vim.api.nvim_win_is_valid(timeline_win) then
     return
   end
 
@@ -288,7 +334,7 @@ end
 
 function M.open(thread_id)
   active_thread = normalize_thread_id(thread_id)
-  ensure_timeline_buffer()
+  ensure_timeline_window()
   M.refresh({
     thread_id = active_thread,
     open_if_missing = false,
@@ -304,10 +350,17 @@ function M.refresh(opts)
 
   local should_open = opts.open_if_missing == true
   if should_open then
-    ensure_timeline_buffer()
+    ensure_timeline_window()
   end
 
   if not timeline_buf or not vim.api.nvim_buf_is_valid(timeline_buf) then
+    if not opts.silent then
+      vim.notify('pi-nvim: comments timeline is not open', vim.log.levels.WARN)
+    end
+    return
+  end
+
+  if not timeline_win or not vim.api.nvim_win_is_valid(timeline_win) then
     if not opts.silent then
       vim.notify('pi-nvim: comments timeline is not open', vim.log.levels.WARN)
     end

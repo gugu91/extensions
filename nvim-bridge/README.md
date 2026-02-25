@@ -71,7 +71,7 @@ One-shot context comment (injected into next agent run):
 
 Persistent A2A comments (stored under `.pi/a2a/comments`):
 
-- `:PiCommentsOpen [thread]` — open comments timeline
+- `:PiCommentsOpen [thread]` — open comments timeline in a floating side panel
 - `:PiCommentsRefresh [thread]` — refresh timeline from pi
 - `:PiCommentAdd [thread]` — add a persistent comment
 
@@ -86,6 +86,16 @@ Composer controls:
 - `Enter` → submit comment
 - `Shift-Enter` / `Ctrl-j` → newline
 - `Esc` → cancel
+
+Timeline panel controls:
+
+- `a` → add comment
+- `r` → refresh
+- `q` → close panel
+
+Global wipe (all threads) is available via skill:
+
+- `/skill:wipe-a2a-comments`
 
 ## Development tooling
 

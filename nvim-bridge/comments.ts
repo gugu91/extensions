@@ -53,6 +53,11 @@ export interface CommentListResult {
   comments: CommentRecord[];
 }
 
+export interface CommentWipeResult {
+  removed: number;
+  remaining: number;
+}
+
 const INDEX_VERSION = 1 as const;
 const DEFAULT_THREAD_ID = "global";
 const MAX_LIMIT = 500;
@@ -246,6 +251,35 @@ export class CommentStore {
       total: threadComments.length,
       comments,
     };
+  }
+
+  async wipeAllComments(): Promise<CommentWipeResult> {
+    return this.withWriteLock(async () => {
+      const index = this.getIndex();
+      const removed = index.comments.length;
+
+      try {
+        fs.rmSync(this.baseDir, { recursive: true, force: true });
+      } catch {
+        // Ignore deletion failures and continue rebuilding the storage layout.
+      }
+
+      this.ensureLayout();
+
+      const nextIndex: CommentIndex = {
+        version: INDEX_VERSION,
+        updatedAt: new Date().toISOString(),
+        comments: [],
+      };
+
+      this.writeJsonAtomic(this.indexPath, nextIndex);
+      this.indexCache = nextIndex;
+
+      return {
+        removed,
+        remaining: 0,
+      };
+    });
   }
 
   private withWriteLock<T>(operation: () => T | Promise<T>): Promise<T> {
