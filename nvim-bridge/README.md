@@ -1,6 +1,6 @@
 # nvim-bridge
 
-Neovim ↔ pi bridge that sends active editor context (file, viewport, selection, comments) into pi before each agent run.
+Neovim ↔ pi bridge that sends active editor context (file, viewport, selection, one-shot comments) into pi before each agent run, and now also supports persistent local A2A comments.
 
 ## How it works
 
@@ -43,7 +43,9 @@ Because the Neovim plugin lives in `nvim-bridge/nvim`, point lazy to that direct
   lazy = false,
   config = function()
     require("pi-nvim").setup({
-      comment_keymap = "<leader>pc", -- optional
+      comment_keymap = "<leader>pc", -- one-shot context comment
+      a2a_comment_keymap = "<leader>pa", -- persistent A2A comment
+      a2a_open_keymap = "<leader>pl", -- open timeline
     })
   end,
 }
@@ -57,21 +59,31 @@ After linking/configuring, restart both so socket + autocommands are initialized
 
 ## Usage
 
-Commands:
+Core bridge commands:
 
 - `:PiNvimEnable`
 - `:PiNvimDisable`
 - `:PiNvimStatus`
-- `:'<,'>PiNvimComment` (comment on selected range)
 
-Default keymap for comments (if enabled in setup):
+One-shot context comment (injected into next agent run):
 
-- Visual mode: `<leader>pc`
-- Normal mode: `<leader>pc` (current line)
+- `:'<,'>PiNvimComment`
 
-Comment window controls:
+Persistent A2A comments (stored under `.pi/a2a/comments`):
 
-- `Enter` → send comment
+- `:PiCommentsOpen [thread]` — open comments timeline
+- `:PiCommentsRefresh [thread]` — refresh timeline from pi
+- `:PiCommentAdd [thread]` — add a persistent comment
+
+Default keymaps (if enabled in setup):
+
+- One-shot context comment: `<leader>pc`
+- Add persistent A2A comment: `<leader>pa`
+- Open A2A timeline: `<leader>pl`
+
+Composer controls:
+
+- `Enter` → submit comment
 - `Shift-Enter` / `Ctrl-j` → newline
 - `Esc` → cancel
 
