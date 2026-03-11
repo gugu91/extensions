@@ -1,6 +1,6 @@
 # nvim-bridge
 
-Neovim ↔ pi bridge that sends active editor context (file, viewport, selection, one-shot comments) into pi before each agent run, and now also supports persistent local A2A comments.
+Neovim ↔ pi bridge that sends active editor context (file, viewport, selection) into pi before each agent run, and supports persistent local PiComms comments.
 
 ## How it works
 
@@ -11,7 +11,6 @@ Neovim ↔ pi bridge that sends active editor context (file, viewport, selection
   - visible line range
   - cursor line
   - selection
-  - optional one-shot comment
 
 > Important: Neovim and pi must be in the **same git repo and same branch**.
 
@@ -42,11 +41,7 @@ Because the Neovim plugin lives in `nvim-bridge/nvim`, point lazy to that direct
   name = "pi-nvim",
   lazy = false,
   config = function()
-    require("pi-nvim").setup({
-      comment_keymap = "<leader>pc", -- one-shot context comment
-      a2a_comment_keymap = "<leader>pa", -- persistent A2A comment
-      a2a_open_keymap = "<leader>pl", -- open timeline
-    })
+    require("pi-nvim").setup()
   end,
 }
 ```
@@ -57,6 +52,11 @@ If this repo is elsewhere, change the `dir` path.
 
 After linking/configuring, restart both so socket + autocommands are initialized.
 
+### Keymaps
+
+This plugin does **not** define global keymaps by default.
+Define mappings in your Neovim config (e.g. lazy `keys` field).
+
 ## Usage
 
 Core bridge commands:
@@ -65,21 +65,18 @@ Core bridge commands:
 - `:PiNvimDisable`
 - `:PiNvimStatus`
 
-One-shot context comment (injected into next agent run):
+PiComms commands (stored under `.pi/a2a/comments`):
 
-- `:'<,'>PiNvimComment`
+- `:PiCommsOpen [thread]` — open comments timeline in a floating side panel
+- `:PiCommsRefresh [thread]` — refresh timeline from pi
+- `:PiCommsAdd [thread]` — add a persistent comment
+- `:PiCommsRead` — trigger `/picomms:read`
+- `:PiCommsClean` — trigger `/picomms:clean`
 
-Persistent A2A comments (stored under `.pi/a2a/comments`):
+Pi slash commands:
 
-- `:PiCommentsOpen [thread]` — open comments timeline in a floating side panel
-- `:PiCommentsRefresh [thread]` — refresh timeline from pi
-- `:PiCommentAdd [thread]` — add a persistent comment
-
-Default keymaps (if enabled in setup):
-
-- One-shot context comment: `<leader>pc`
-- Add persistent A2A comment: `<leader>pa`
-- Open A2A timeline: `<leader>pl`
+- `/picomms:read` — load all repository comments and queue them as guidance for the agent
+- `/picomms:clean` — wipe all repository comments
 
 Composer controls:
 
@@ -91,9 +88,17 @@ Timeline panel controls:
 
 - `a` → add comment
 - `r` → refresh
+- `s` → trigger `/picomms:read`
+- `c` → trigger `/picomms:clean`
 - `q` → close panel
 
-Global wipe (all threads) is available via skill:
+Line indicators:
+
+- File lines with comment context show a speech-bubble virtual text marker (``)
+- Multiple comments use a superscript counter (e.g. `²`)
+- Uses virtual text, not sign column, to avoid conflicts with git gutter plugins
+
+Global wipe is also available via skill:
 
 - `/skill:wipe-a2a-comments`
 

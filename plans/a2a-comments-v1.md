@@ -137,9 +137,11 @@ Tool behavior expectations:
 
 ### Commands
 
-- `:PiCommentsOpen` — open timeline buffer
-- `:PiCommentAdd` — open composer and submit comment
-- `:PiCommentsRefresh` — force reload from extension
+- `:PiCommsOpen` — open timeline buffer
+- `:PiCommsAdd` — open composer and submit comment
+- `:PiCommsRefresh` — force reload from extension
+- `:PiCommsRead` — trigger `/picomms:read`
+- `:PiCommsClean` — trigger `/picomms:clean`
 
 ### Views
 
@@ -196,9 +198,10 @@ Deliverable: end-to-end API without nvim UI polish
 
 ### Phase 3 — Neovim UI
 
-- Implement `:PiCommentsOpen`, `:PiCommentAdd`, `:PiCommentsRefresh`
+- Implement `:PiCommsOpen`, `:PiCommsAdd`, `:PiCommsRefresh`, `:PiCommsRead`, `:PiCommsClean`
 - Render timeline buffer
 - Wire live refresh on push events
+- Add virtual-text line indicators for comment context
 
 Deliverable: usable comments workflow in nvim
 

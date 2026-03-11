@@ -14,16 +14,12 @@ interface EditorState {
   visibleEnd: number | null;
   selectionStart: number | null;
   selectionEnd: number | null;
-  commentStart: number | null;
-  commentEnd: number | null;
-  commentText: string | null;
 }
 
 type NvimEvent =
   | { type: "buffer_focus"; file: string; line: number }
   | { type: "visible_range"; file: string; start: number; end: number }
   | { type: "selection"; file: string; start: number; end: number }
-  | { type: "selection_comment"; file: string; start: number; end: number; comment: string }
   | { type: "trigger_agent"; prompt: string };
 
 type NvimCommand = { type: "open_file"; file: string; line?: number };
@@ -33,6 +29,11 @@ type CommentRpcRequest =
       id: string;
       type: "comment.list" | "comment.sync";
       payload: { threadId?: string; limit?: number };
+    }
+  | {
+      id: string;
+      type: "comment.list_all";
+      payload: { limit?: number };
     }
   | {
       id: string;
@@ -86,12 +87,6 @@ function computeSocketPath(repoInfo: RepoInfo): string {
   return path.join(dir, `${hash}.sock`);
 }
 
-function formatInlineComment(comment: string): string {
-  const flattened = comment.replace(/\s+/g, " ").trim();
-  if (flattened.length <= 220) return flattened;
-  return `${flattened.slice(0, 219)}…`;
-}
-
 function formatContext(state: EditorState): string {
   if (!state.file) return "";
 
@@ -107,10 +102,6 @@ function formatContext(state: EditorState): string {
 
   if (state.selectionStart != null && state.selectionEnd != null) {
     msg += `, selection on lines ${state.selectionStart}-${state.selectionEnd}`;
-  }
-
-  if (state.commentStart != null && state.commentEnd != null && state.commentText) {
-    msg += `, comment on lines ${state.commentStart}-${state.commentEnd}: "${formatInlineComment(state.commentText)}"`;
   }
 
   msg += ".";
@@ -156,25 +147,6 @@ function parseNvimEvent(value: unknown): NvimEvent | null {
       };
     }
 
-    case "selection_comment": {
-      const start = toPositiveInteger(event.start);
-      const end = toPositiveInteger(event.end);
-      if (
-        typeof event.file !== "string" ||
-        start == null ||
-        end == null ||
-        typeof event.comment !== "string"
-      )
-        return null;
-      return {
-        type: "selection_comment",
-        file: event.file,
-        start,
-        end,
-        comment: event.comment,
-      };
-    }
-
     case "trigger_agent": {
       if (typeof event.prompt !== "string") return null;
       return {
@@ -207,6 +179,18 @@ function parseCommentRpcRequest(value: unknown): CommentRpcRequest | null {
       type: request.type,
       payload: {
         threadId: typeof payload.threadId === "string" ? payload.threadId : undefined,
+        limit: limit ?? undefined,
+      },
+    };
+  }
+
+  if (request.type === "comment.list_all") {
+    const payload = asObject(request.payload) ?? {};
+    const limit = toPositiveInteger(payload.limit);
+    return {
+      id: request.id,
+      type: "comment.list_all",
+      payload: {
         limit: limit ?? undefined,
       },
     };
@@ -267,6 +251,72 @@ function formatCommentListForTool(result: {
   return text;
 }
 
+function formatCommentContext(comment: CommentRecord): string {
+  if (!comment.context?.file) return "";
+
+  if (comment.context.startLine != null && comment.context.endLine != null) {
+    return ` (${comment.context.file}:${comment.context.startLine}-${comment.context.endLine})`;
+  }
+
+  return ` (${comment.context.file})`;
+}
+
+function buildPiCommsReadPrompt(
+  state: EditorState,
+  comments: CommentRecord[],
+  totalCount: number,
+  maxChars = 18000,
+): { prompt: string; included: number; truncated: boolean } {
+  const header: string[] = [
+    "Please read and apply the following persistent PiComms comments for this repository before proceeding.",
+  ];
+
+  const context = formatContext(state);
+  if (context) {
+    header.push(`Current editor context: ${context}`);
+  }
+
+  const lines: string[] = [];
+  let usedChars = 0;
+  let included = 0;
+
+  for (const comment of comments) {
+    const actor = `${comment.actorType}:${comment.actorId}`;
+    const contextSuffix = formatCommentContext(comment);
+    const chunk =
+      `[${comment.createdAt}] [${comment.threadId}] [${comment.id}] ${actor}${contextSuffix}\n` +
+      `${comment.body}\n`;
+
+    if (usedChars + chunk.length > maxChars && included > 0) {
+      break;
+    }
+
+    lines.push(chunk);
+    usedChars += chunk.length;
+    included += 1;
+
+    if (usedChars >= maxChars) {
+      break;
+    }
+  }
+
+  const truncated = included < totalCount;
+  const footer: string[] = [
+    `Loaded comments: ${included}/${totalCount}.`,
+    "Acknowledge the comment constraints and then continue with the task.",
+  ];
+
+  if (truncated) {
+    footer.push("Some comments were omitted due to prompt size limits.");
+  }
+
+  return {
+    prompt: `${header.join("\n")}\n\n${lines.join("\n")}${footer.join("\n")}`,
+    included,
+    truncated,
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   let server: net.Server | null = null;
   let socketPath: string | null = null;
@@ -281,9 +331,6 @@ export default function (pi: ExtensionAPI) {
     visibleEnd: null,
     selectionStart: null,
     selectionEnd: null,
-    commentStart: null,
-    commentEnd: null,
-    commentText: null,
   };
 
   function sendJson(socket: net.Socket, payload: unknown): boolean {
@@ -349,6 +396,60 @@ export default function (pi: ExtensionAPI) {
     notifyThreadUpdated(comment.threadId);
   }
 
+  async function runPiCommsRead(source: "slash" | "panel"): Promise<{
+    ok: boolean;
+    message: string;
+  }> {
+    if (!commentStore) {
+      return { ok: false, message: "Comment store is unavailable" };
+    }
+
+    const all = commentStore.listAllComments();
+    if (all.total === 0) {
+      return { ok: false, message: "No PiComms comments found in this repository." };
+    }
+
+    const read = buildPiCommsReadPrompt(editorState, all.comments, all.total);
+
+    try {
+      pi.sendUserMessage(read.prompt);
+    } catch {
+      try {
+        pi.sendUserMessage(read.prompt, { deliverAs: "steer" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to queue PiComms read";
+        return { ok: false, message };
+      }
+    }
+
+    const truncationSuffix = read.truncated ? " Prompt was truncated to fit context." : "";
+    return {
+      ok: true,
+      message: `Queued PiComms read from ${source} (${read.included}/${all.total} comments included).${truncationSuffix}`,
+    };
+  }
+
+  async function runPiCommsClean(source: "slash" | "panel" | "tool"): Promise<{
+    ok: boolean;
+    message: string;
+  }> {
+    if (!commentStore) {
+      return { ok: false, message: "Comment store is unavailable" };
+    }
+
+    try {
+      const result = await commentStore.wipeAllComments();
+      notifyAllCommentsWiped(result.removed);
+      return {
+        ok: true,
+        message: `PiComms clean from ${source}: removed ${result.removed} comments in this repository.`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to wipe comments";
+      return { ok: false, message };
+    }
+  }
+
   function handleEvent(event: NvimEvent): void {
     switch (event.type) {
       case "buffer_focus": {
@@ -356,13 +457,9 @@ export default function (pi: ExtensionAPI) {
         editorState.file = event.file;
         editorState.line = event.line;
 
-        // Preserve one-shot comments when focus returns from temporary buffers.
         if (switchedFile) {
           editorState.selectionStart = null;
           editorState.selectionEnd = null;
-          editorState.commentStart = null;
-          editorState.commentEnd = null;
-          editorState.commentText = null;
         }
 
         dirty = true;
@@ -380,16 +477,6 @@ export default function (pi: ExtensionAPI) {
         editorState.file = event.file;
         editorState.selectionStart = event.start;
         editorState.selectionEnd = event.end;
-        dirty = true;
-        break;
-
-      case "selection_comment":
-        editorState.file = event.file;
-        editorState.selectionStart = event.start;
-        editorState.selectionEnd = event.end;
-        editorState.commentStart = event.start;
-        editorState.commentEnd = event.end;
-        editorState.commentText = event.comment;
         dirty = true;
         break;
 
@@ -415,6 +502,19 @@ export default function (pi: ExtensionAPI) {
       if (request.type === "comment.list" || request.type === "comment.sync") {
         const result = commentStore.listComments({
           threadId: request.payload.threadId,
+          limit: request.payload.limit,
+        });
+
+        sendJson(conn, {
+          type: "ok",
+          id: request.id,
+          result,
+        });
+        return;
+      }
+
+      if (request.type === "comment.list_all") {
+        const result = commentStore.listAllComments({
           limit: request.payload.limit,
         });
 
@@ -489,7 +589,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "comment_add",
     label: "Add Comment",
-    description: "Add a markdown comment to the local A2A thread",
+    description: "Add a markdown PiComms comment in the current git repository",
     parameters: Type.Object({
       comment: Type.String({ description: "Markdown comment body" }),
       thread_id: Type.Optional(Type.String({ description: "Thread id (default: global)" })),
@@ -549,7 +649,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "comment_list",
     label: "List Comments",
-    description: "List comments from the local A2A thread",
+    description: "List PiComms comments from the current git repository",
     parameters: Type.Object({
       thread_id: Type.Optional(Type.String({ description: "Thread id (default: global)" })),
       limit: Type.Optional(
@@ -580,36 +680,30 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "comment_wipe_all",
     label: "Wipe All Comments",
-    description: "Delete all persistent A2A comments in the current git repository",
+    description: "Delete all persistent PiComms comments in the current git repository",
     parameters: Type.Object({}),
     async execute() {
-      if (!commentStore) {
-        return {
-          content: [{ type: "text", text: "Comment store is unavailable" }],
-          isError: true,
-        };
-      }
+      const result = await runPiCommsClean("tool");
+      return {
+        content: [{ type: "text", text: result.message }],
+        isError: !result.ok,
+      };
+    },
+  });
 
-      try {
-        const result = await commentStore.wipeAllComments();
-        notifyAllCommentsWiped(result.removed);
+  pi.registerCommand("picomms:read", {
+    description: "Read all persistent PiComms comments and queue them for the agent",
+    handler: async (_args, ctx) => {
+      const result = await runPiCommsRead("slash");
+      ctx.ui.notify(result.message, result.ok ? "info" : "error");
+    },
+  });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Wiped all comments in this repository (${result.removed} removed).`,
-            },
-          ],
-          details: result,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to wipe comments";
-        return {
-          content: [{ type: "text", text: message }],
-          isError: true,
-        };
-      }
+  pi.registerCommand("picomms:clean", {
+    description: "Wipe all persistent PiComms comments in this repository",
+    handler: async (_args, ctx) => {
+      const result = await runPiCommsClean("slash");
+      ctx.ui.notify(result.message, result.ok ? "info" : "error");
     },
   });
 
@@ -674,7 +768,19 @@ export default function (pi: ExtensionAPI) {
             if (!event) continue;
 
             if (event.type === "trigger_agent") {
-              pi.sendUserMessage(event.prompt);
+              try {
+                pi.sendUserMessage(event.prompt);
+              } catch {
+                try {
+                  pi.sendUserMessage(event.prompt, { deliverAs: "steer" });
+                } catch {
+                  try {
+                    pi.sendUserMessage(event.prompt, { deliverAs: "followUp" });
+                  } catch {
+                    // Ignore dispatch failures.
+                  }
+                }
+              }
             } else {
               handleEvent(event);
             }
@@ -715,11 +821,6 @@ export default function (pi: ExtensionAPI) {
     if (!content) return;
 
     dirty = false;
-
-    // Comment notes are one-shot to avoid repeating them in later updates.
-    editorState.commentStart = null;
-    editorState.commentEnd = null;
-    editorState.commentText = null;
 
     return {
       message: {

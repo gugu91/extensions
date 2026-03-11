@@ -1,11 +1,11 @@
 ---
 name: wipe-a2a-comments
-description: Wipes all persistent A2A comments for the current git repository. Use when the user asks to clear/reset/remove all comments.
+description: Wipes all persistent PiComms comments for the current git repository. Use when the user asks to clear/reset/remove all comments.
 ---
 
-# Wipe A2A Comments
+# Wipe PiComms Comments
 
-Use this skill when the user wants to delete **all** stored A2A comments in the current repository.
+Use this skill when the user wants to delete **all** stored PiComms comments in the current repository.
 
 ## Preferred flow
 
@@ -36,7 +36,7 @@ cat > "$comments_dir/index.json" <<EOF
   "comments": []
 }
 EOF
-echo "Wiped A2A comments in repo: $repo_root"
+echo "Wiped PiComms comments in repo: $repo_root"
 echo "Removed comments: $removed"
 '
 ```

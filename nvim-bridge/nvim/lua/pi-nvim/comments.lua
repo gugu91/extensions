@@ -7,8 +7,26 @@ local active_thread = 'global'
 local timeline_buf = nil
 local timeline_win = nil
 local refresh_pending = false
+local indicator_refresh_pending = false
+
+local indicator_ns = vim.api.nvim_create_namespace('PiCommsIndicators')
+local indicator_cache_by_file = {}
+local indicator_icon = ''
 
 local close_timeline_window
+
+local superscript_digits = {
+  ['0'] = '⁰',
+  ['1'] = '¹',
+  ['2'] = '²',
+  ['3'] = '³',
+  ['4'] = '⁴',
+  ['5'] = '⁵',
+  ['6'] = '⁶',
+  ['7'] = '⁷',
+  ['8'] = '⁸',
+  ['9'] = '⁹',
+}
 
 local function trim(text)
   return (text:gsub('^%s+', ''):gsub('%s+$', ''))
@@ -25,14 +43,14 @@ local function normalize_thread_id(thread_id)
   return trimmed
 end
 
-local function get_relative_path()
-  local bufpath = vim.api.nvim_buf_get_name(0)
+local function get_relative_path_for_buf(bufnr)
+  local bufpath = vim.api.nvim_buf_get_name(bufnr)
   if bufpath == '' then
     return nil
   end
 
-  local buftype = vim.bo.buftype
-  if buftype ~= '' then
+  local bo = vim.bo[bufnr]
+  if bo and bo.buftype and bo.buftype ~= '' then
     return nil
   end
 
@@ -42,6 +60,10 @@ local function get_relative_path()
   end
 
   return bufpath
+end
+
+local function get_relative_path()
+  return get_relative_path_for_buf(0)
 end
 
 local function normalize_range(start_line, end_line)
@@ -57,13 +79,19 @@ local function normalize_range(start_line, end_line)
 end
 
 local function build_context(start_line, end_line)
-  if start_line == nil or end_line == nil then
-    return nil
-  end
-
   local file = get_relative_path()
   if not file then
     return nil
+  end
+
+  if start_line == nil and end_line == nil then
+    local current = vim.api.nvim_win_get_cursor(0)[1]
+    start_line = current
+    end_line = current
+  elseif start_line == nil then
+    start_line = end_line
+  elseif end_line == nil then
+    end_line = start_line
   end
 
   start_line, end_line = normalize_range(start_line, end_line)
@@ -117,6 +145,27 @@ local function format_context(context)
   return context.file
 end
 
+local function number_to_superscript(n)
+  local text = tostring(n)
+  local parts = {}
+  for c in text:gmatch('.') do
+    table.insert(parts, superscript_digits[c] or '')
+  end
+  return table.concat(parts)
+end
+
+local function indicator_text(count)
+  if not count or count <= 1 then
+    return indicator_icon
+  end
+
+  if count <= 99 then
+    return indicator_icon .. number_to_superscript(count)
+  end
+
+  return indicator_icon .. '⁺'
+end
+
 local function timeline_window_config()
   local width = math.max(46, math.min(100, math.floor(vim.o.columns * 0.45)))
   local height = math.max(12, vim.o.lines - 6)
@@ -129,7 +178,7 @@ local function timeline_window_config()
     height = height,
     row = 1,
     col = math.max(0, vim.o.columns - width - 2),
-    title = string.format(' A2A comments [%s] ', active_thread),
+    title = string.format(' PiComms [%s] ', active_thread),
     title_pos = 'center',
   }
 end
@@ -140,7 +189,7 @@ local function set_timeline_title(total)
   end
 
   local config = vim.api.nvim_win_get_config(timeline_win)
-  config.title = string.format(' A2A comments [%s] (%d) ', active_thread, tonumber(total) or 0)
+  config.title = string.format(' PiComms [%s] (%d) ', active_thread, tonumber(total) or 0)
   config.title_pos = 'center'
   vim.api.nvim_win_set_config(timeline_win, config)
 end
@@ -152,6 +201,168 @@ close_timeline_window = function()
   timeline_win = nil
 end
 
+local function request_comments(thread_id, timeout_ms)
+  return socket.request('comment.list', {
+    threadId = thread_id,
+  }, {
+    timeout_ms = timeout_ms or 8000,
+  })
+end
+
+local function request_all_comments(timeout_ms)
+  return socket.request('comment.list_all', {}, {
+    timeout_ms = timeout_ms or 12000,
+  })
+end
+
+local function trigger_agent_prompt(prompt)
+  local sent = socket.send({
+    type = 'trigger_agent',
+    prompt = prompt,
+  })
+
+  if not sent then
+    vim.notify('pi-nvim: not connected to pi', vim.log.levels.WARN)
+    return false
+  end
+
+  return true
+end
+
+local function clear_indicators(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  vim.api.nvim_buf_clear_namespace(bufnr, indicator_ns, 0, -1)
+end
+
+local function apply_indicators_to_buffer(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local bo = vim.bo[bufnr]
+  if bo and bo.buftype and bo.buftype ~= '' then
+    clear_indicators(bufnr)
+    return
+  end
+
+  local file = get_relative_path_for_buf(bufnr)
+  clear_indicators(bufnr)
+
+  if not file then
+    return
+  end
+
+  local lines = indicator_cache_by_file[file]
+  if type(lines) ~= 'table' then
+    return
+  end
+
+  vim.api.nvim_set_hl(0, 'PiCommsIndicator', { default = true, link = 'Comment' })
+
+  local line_numbers = {}
+  for line, _ in pairs(lines) do
+    table.insert(line_numbers, line)
+  end
+  table.sort(line_numbers)
+
+  for _, line in ipairs(line_numbers) do
+    local count = lines[line]
+    if type(count) == 'number' and count > 0 and line >= 1 then
+      vim.api.nvim_buf_set_extmark(bufnr, indicator_ns, line - 1, 0, {
+        virt_text = { { indicator_text(count), 'PiCommsIndicator' } },
+        virt_text_pos = 'eol',
+        hl_mode = 'combine',
+        priority = 12,
+      })
+    end
+  end
+end
+
+local function apply_indicators_to_visible_buffers()
+  local buffers = vim.api.nvim_list_bufs()
+  for _, bufnr in ipairs(buffers) do
+    if vim.api.nvim_buf_is_loaded(bufnr) then
+      apply_indicators_to_buffer(bufnr)
+    end
+  end
+end
+
+local function rebuild_indicator_cache(result)
+  indicator_cache_by_file = {}
+
+  if type(result) ~= 'table' or type(result.comments) ~= 'table' then
+    return
+  end
+
+  for _, comment in ipairs(result.comments) do
+    local context = type(comment) == 'table' and comment.context or nil
+    if type(context) == 'table' and type(context.file) == 'string' then
+      local start_line = tonumber(context.startLine)
+      local end_line = tonumber(context.endLine)
+
+      if start_line and not end_line then
+        end_line = start_line
+      end
+      if end_line and not start_line then
+        start_line = end_line
+      end
+
+      if start_line and end_line then
+        start_line = math.max(1, math.floor(start_line))
+        end_line = math.max(1, math.floor(end_line))
+        if start_line > end_line then
+          start_line, end_line = end_line, start_line
+        end
+
+        local file_map = indicator_cache_by_file[context.file]
+        if not file_map then
+          file_map = {}
+          indicator_cache_by_file[context.file] = file_map
+        end
+
+        local span = math.min(end_line - start_line + 1, 500)
+        for offset = 0, span - 1 do
+          local line = start_line + offset
+          file_map[line] = (file_map[line] or 0) + 1
+        end
+      end
+    end
+  end
+end
+
+local function refresh_indicators(opts)
+  opts = opts or {}
+
+  local result, err = request_all_comments(12000)
+  if not result then
+    if not opts.silent then
+      vim.notify(
+        'pi-nvim: failed to refresh PiComms indicators: ' .. get_error_message(err),
+        vim.log.levels.WARN
+      )
+    end
+    return
+  end
+
+  rebuild_indicator_cache(result)
+  apply_indicators_to_visible_buffers()
+end
+
+local function schedule_indicator_refresh(silent)
+  if indicator_refresh_pending then
+    return
+  end
+
+  indicator_refresh_pending = true
+  vim.defer_fn(function()
+    indicator_refresh_pending = false
+    refresh_indicators({ silent = silent ~= false })
+  end, 150)
+end
+
 local function configure_timeline_buffer(buf)
   vim.bo[buf].buftype = 'nofile'
   vim.bo[buf].bufhidden = 'hide'
@@ -160,7 +371,7 @@ local function configure_timeline_buffer(buf)
   vim.bo[buf].modifiable = false
   vim.bo[buf].readonly = true
 
-  local ok = pcall(vim.api.nvim_buf_set_name, buf, string.format('pi://comments/%s', active_thread))
+  local ok = pcall(vim.api.nvim_buf_set_name, buf, string.format('pi://picomms/%s', active_thread))
   if not ok then
     -- ignore duplicate-name errors
   end
@@ -171,17 +382,25 @@ local function configure_timeline_buffer(buf)
     'q',
     close_timeline_window,
     vim.tbl_extend('force', map_opts, {
-      desc = 'Close comments timeline',
+      desc = 'Close PiComms timeline',
     })
   )
 
   vim.keymap.set('n', 'r', function()
     M.refresh({ open_if_missing = false })
-  end, vim.tbl_extend('force', map_opts, { desc = 'Refresh comments timeline' }))
+  end, vim.tbl_extend('force', map_opts, { desc = 'Refresh PiComms timeline' }))
 
   vim.keymap.set('n', 'a', function()
     M.open_composer({ thread_id = active_thread })
-  end, vim.tbl_extend('force', map_opts, { desc = 'Add A2A comment' }))
+  end, vim.tbl_extend('force', map_opts, { desc = 'Add PiComms comment' }))
+
+  vim.keymap.set('n', 's', function()
+    M.trigger_read()
+  end, vim.tbl_extend('force', map_opts, { desc = 'Trigger /picomms:read' }))
+
+  vim.keymap.set('n', 'c', function()
+    M.trigger_clean()
+  end, vim.tbl_extend('force', map_opts, { desc = 'Trigger /picomms:clean' }))
 end
 
 local function ensure_timeline_window()
@@ -231,7 +450,7 @@ local function render_timeline(result)
   local total = type(result) == 'table' and tonumber(result.total) or #comments
 
   local lines = {
-    '# A2A Comments',
+    '# PiComms',
     string.format('thread: %s', active_thread),
     string.format('total: %d', total or 0),
     '',
@@ -278,14 +497,6 @@ local function render_timeline(result)
   set_timeline_title(total)
 end
 
-local function request_comments(thread_id, timeout_ms)
-  return socket.request('comment.list', {
-    threadId = thread_id,
-  }, {
-    timeout_ms = timeout_ms or 8000,
-  })
-end
-
 local function schedule_refresh_if_open(thread_id)
   if thread_id and thread_id ~= active_thread then
     return
@@ -319,17 +530,34 @@ function M.setup()
   end
   setup_done = true
 
+  vim.api.nvim_create_autocmd({ 'BufEnter', 'BufWinEnter' }, {
+    group = vim.api.nvim_create_augroup('PiCommsIndicators', { clear = true }),
+    callback = function(args)
+      apply_indicators_to_buffer(args.buf)
+    end,
+  })
+
   socket.on('comment.added', function(payload)
     schedule_refresh_if_open(thread_from_payload(payload))
+    schedule_indicator_refresh(true)
   end)
 
   socket.on('comments.updated', function(payload)
     schedule_refresh_if_open(thread_from_payload(payload))
+    schedule_indicator_refresh(true)
+  end)
+
+  socket.on('comments.wiped', function()
+    schedule_refresh_if_open(active_thread)
+    schedule_indicator_refresh(true)
   end)
 
   socket.on('connected', function()
     schedule_refresh_if_open(active_thread)
+    schedule_indicator_refresh(true)
   end)
+
+  schedule_indicator_refresh(true)
 end
 
 function M.open(thread_id)
@@ -355,14 +583,14 @@ function M.refresh(opts)
 
   if not timeline_buf or not vim.api.nvim_buf_is_valid(timeline_buf) then
     if not opts.silent then
-      vim.notify('pi-nvim: comments timeline is not open', vim.log.levels.WARN)
+      vim.notify('pi-nvim: PiComms timeline is not open', vim.log.levels.WARN)
     end
     return
   end
 
   if not timeline_win or not vim.api.nvim_win_is_valid(timeline_win) then
     if not opts.silent then
-      vim.notify('pi-nvim: comments timeline is not open', vim.log.levels.WARN)
+      vim.notify('pi-nvim: PiComms timeline is not open', vim.log.levels.WARN)
     end
     return
   end
@@ -371,15 +599,39 @@ function M.refresh(opts)
   if not result then
     if not opts.silent then
       vim.notify(
-        'pi-nvim: failed to load comments: ' .. get_error_message(err),
+        'pi-nvim: failed to load PiComms comments: ' .. get_error_message(err),
         vim.log.levels.WARN
       )
     end
     return
   end
 
-  pcall(vim.api.nvim_buf_set_name, timeline_buf, string.format('pi://comments/%s', active_thread))
+  pcall(vim.api.nvim_buf_set_name, timeline_buf, string.format('pi://picomms/%s', active_thread))
   render_timeline(result)
+end
+
+function M.trigger_read()
+  local ok = trigger_agent_prompt('/picomms:read')
+  if ok then
+    vim.notify('pi-nvim: triggered /picomms:read', vim.log.levels.INFO)
+  end
+end
+
+function M.trigger_clean()
+  local confirmed = vim.fn.confirm(
+    'Run /picomms:clean for this repository? This wipes all PiComms comments.',
+    '&Yes\n&No',
+    2
+  )
+
+  if confirmed ~= 1 then
+    return
+  end
+
+  local ok = trigger_agent_prompt('/picomms:clean')
+  if ok then
+    vim.notify('pi-nvim: triggered /picomms:clean', vim.log.levels.INFO)
+  end
 end
 
 function M.open_composer(opts)
@@ -402,9 +654,9 @@ function M.open_composer(opts)
   local row = 1
   local col = math.max(0, vim.o.columns - width - 2)
 
-  local title = string.format(' A2A comment [%s] ', active_thread)
+  local title = string.format(' PiComms add [%s] ', active_thread)
   if context then
-    title = string.format(' A2A comment [%s] %s ', active_thread, format_context(context))
+    title = string.format(' PiComms add [%s] %s ', active_thread, format_context(context))
   end
 
   local win = vim.api.nvim_open_win(buf, true, {
@@ -464,6 +716,8 @@ function M.open_composer(opts)
     end
 
     close_window()
+
+    schedule_indicator_refresh(true)
 
     if timeline_buf and vim.api.nvim_buf_is_valid(timeline_buf) then
       M.refresh({

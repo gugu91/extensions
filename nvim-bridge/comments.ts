@@ -53,6 +53,15 @@ export interface CommentListResult {
   comments: CommentRecord[];
 }
 
+export interface CommentListAllInput {
+  limit?: number;
+}
+
+export interface CommentListAllResult {
+  total: number;
+  comments: CommentRecord[];
+}
+
 export interface CommentWipeResult {
   removed: number;
   remaining: number;
@@ -249,6 +258,22 @@ export class CommentStore {
     return {
       threadId,
       total: threadComments.length,
+      comments,
+    };
+  }
+
+  listAllComments(input: CommentListAllInput = {}): CommentListAllResult {
+    const limit = normalizeLimit(input.limit);
+    const index = this.getIndex();
+    const selected = limit != null ? index.comments.slice(-limit) : index.comments;
+
+    const comments = selected.map((meta) => ({
+      ...meta,
+      body: this.readBody(meta),
+    }));
+
+    return {
+      total: index.comments.length,
       comments,
     };
   }

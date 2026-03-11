@@ -14,6 +14,13 @@ declare module "@mariozechner/pi-coding-agent" {
         ctx?: any,
       ) => Promise<any> | any;
     }): void;
+    registerCommand(
+      name: string,
+      options: {
+        description?: string;
+        handler: (args: string, ctx: any) => Promise<void> | void;
+      },
+    ): void;
     sendUserMessage(
       content: string | Array<Record<string, unknown>>,
       options?: { deliverAs?: string },
