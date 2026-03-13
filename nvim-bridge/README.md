@@ -67,9 +67,9 @@ Core bridge commands:
 
 PiComms commands (stored under `.pi/a2a/comments`):
 
-- `:PiCommsOpen [thread]` — open comments timeline in a floating side panel
-- `:PiCommsRefresh [thread]` — refresh timeline from pi
-- `:PiCommsAdd [thread]` — add a persistent comment
+- `:PiCommsOpen [thread]` — open the PiComms panel with timeline + inline composer
+- `:PiCommsRefresh [thread]` — refresh the open panel from pi
+- `:PiCommsAdd [thread]` — compatibility alias that opens the same panel and focuses the composer
 - `:PiCommsRead` — trigger `/picomms:read`
 - `:PiCommsClean` — trigger `/picomms:clean`
 
@@ -78,19 +78,17 @@ Pi slash commands:
 - `/picomms:read` — load all repository comments and queue them as guidance for the agent
 - `/picomms:clean` — wipe all repository comments
 
-Composer controls:
+Inline composer controls:
 
 - `Enter` → submit comment
 - `Shift-Enter` / `Ctrl-j` → newline
-- `Esc` → cancel
+- `q` (normal mode) → close panel
 
-Timeline panel controls:
+Panel notes:
 
-- `a` → add comment
-- `r` → refresh
-- `s` → trigger `/picomms:read`
-- `c` → trigger `/picomms:clean`
-- `q` → close panel
+- `:PiCommsOpen` is the primary entrypoint
+- the panel shows the timeline above and the composer at the bottom
+- advanced actions stay available as commands: `:PiCommsRefresh`, `:PiCommsRead`, `:PiCommsClean`
 
 Line indicators:
 

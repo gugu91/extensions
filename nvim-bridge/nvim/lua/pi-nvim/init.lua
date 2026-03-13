@@ -20,10 +20,19 @@ function M.setup(_opts)
         vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
         return
       end
+
       local thread_id = cmd_opts.args ~= '' and cmd_opts.args or nil
-      comments.open(thread_id)
+      local has_range = (cmd_opts.range or 0) > 0
+
+      comments.open({
+        thread_id = thread_id,
+        start_line = has_range and cmd_opts.line1 or nil,
+        end_line = has_range and cmd_opts.line2 or nil,
+        focus_composer = true,
+      })
     end, {
-      desc = 'Open PiComms timeline',
+      desc = 'Open PiComms panel',
+      range = true,
       nargs = '?',
     })
   end
@@ -35,7 +44,11 @@ function M.setup(_opts)
         return
       end
       local thread_id = cmd_opts.args ~= '' and cmd_opts.args or nil
-      comments.refresh({ thread_id = thread_id, open_if_missing = true })
+      comments.refresh({
+        thread_id = thread_id,
+        open_if_missing = true,
+        focus_composer = false,
+      })
     end, {
       desc = 'Refresh PiComms timeline',
       nargs = '?',
@@ -52,13 +65,14 @@ function M.setup(_opts)
       local thread_id = cmd_opts.args ~= '' and cmd_opts.args or nil
       local has_range = (cmd_opts.range or 0) > 0
 
-      comments.open_composer({
+      comments.open({
         thread_id = thread_id,
         start_line = has_range and cmd_opts.line1 or nil,
         end_line = has_range and cmd_opts.line2 or nil,
+        focus_composer = true,
       })
     end, {
-      desc = 'Add a persistent PiComms comment',
+      desc = 'Open PiComms and focus the inline composer',
       range = true,
       nargs = '?',
     })
