@@ -67,9 +67,11 @@ Core bridge commands:
 
 PiComms commands (stored under `.pi/a2a/comments`):
 
-- `:PiCommsOpen [thread]` — open the PiComms panel with timeline + inline composer
+- `:PiCommsOpen [thread]` — open the PiComms panel for the current context thread
+- `:PiCommsAdd [thread]` — open the same panel and focus the reply composer for the current context thread
+- `:PiCommsNext` — jump to the next PiComms thread in the current file
+- `:PiCommsClose` — close the PiComms panel
 - `:PiCommsRefresh [thread]` — refresh the open panel from pi
-- `:PiCommsAdd [thread]` — compatibility alias that opens the same panel and focuses the composer
 - `:PiCommsRead` — trigger `/picomms:read`
 - `:PiCommsClean` — trigger `/picomms:clean`
 
@@ -80,20 +82,24 @@ Pi slash commands:
 
 Inline composer controls:
 
+- panel opens in normal mode
+- `i` → jump into the reply composer and enter insert mode
 - `Enter` → submit comment
-- `Shift-Enter` / `Ctrl-j` → newline
-- `q` (normal mode) → close panel
+- `Shift-Enter` → newline
+- `q` or `<C-w>q` (normal mode) → close panel
 
 Panel notes:
 
-- `:PiCommsOpen` is the primary entrypoint
-- the panel shows the timeline above and the composer at the bottom
-- advanced actions stay available as commands: `:PiCommsRefresh`, `:PiCommsRead`, `:PiCommsClean`
+- `:PiCommsOpen` is the primary entrypoint and resolves the current context thread
+- `:PiCommsAdd` opens the same thread view but focuses the composer area
+- `:PiCommsNext` jumps to the next thread anchor in the current file
+- the panel shows the current thread above and the reply box at the bottom
+- advanced actions stay available as commands: `:PiCommsRefresh`, `:PiCommsClose`, `:PiCommsRead`, `:PiCommsClean`
 
 Line indicators:
 
-- File lines with comment context show a speech-bubble virtual text marker (``)
-- Multiple comments use a superscript counter (e.g. `²`)
+- File lines with comment context show a stronger speech-bubble virtual text marker with a count (e.g. `1`, `3`)
+- Range comments mark the start line only
 - Uses virtual text, not sign column, to avoid conflicts with git gutter plugins
 
 Global wipe is also available via skill:

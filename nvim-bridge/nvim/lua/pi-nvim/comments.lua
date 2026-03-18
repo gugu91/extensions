@@ -2,8 +2,15 @@ local socket = require('pi-nvim.socket')
 
 local M = {}
 
+local DEFAULT_THREAD = 'global'
+local CONTEXT_THREAD_PREFIX = 'ctx:'
+
 local setup_done = false
-local active_thread = 'global'
+local active_thread = DEFAULT_THREAD
+local active_thread_context = nil
+local active_thread_label = DEFAULT_THREAD
+local timeline_content_line_count = 8
+
 local timeline_buf = nil
 local timeline_win = nil
 local footer_buf = nil
@@ -19,21 +26,10 @@ local indicator_cache_by_file = {}
 local indicator_icon = ''
 
 local close_panel
+local focus_timeline
 local focus_composer
+local enter_insert_mode
 local submit_comment
-
-local superscript_digits = {
-  ['0'] = '⁰',
-  ['1'] = '¹',
-  ['2'] = '²',
-  ['3'] = '³',
-  ['4'] = '⁴',
-  ['5'] = '⁵',
-  ['6'] = '⁶',
-  ['7'] = '⁷',
-  ['8'] = '⁸',
-  ['9'] = '⁹',
-}
 
 local function is_valid_buf(bufnr)
   return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
@@ -61,17 +57,6 @@ local function truncate(text, max_len)
   end
 
   return text:sub(1, max_len - 1) .. '…'
-end
-
-local function normalize_thread_id(thread_id)
-  if type(thread_id) ~= 'string' then
-    return active_thread
-  end
-  local trimmed = trim(thread_id)
-  if trimmed == '' then
-    return active_thread
-  end
-  return trimmed
 end
 
 local function get_relative_path_for_buf(bufnr)
@@ -109,6 +94,34 @@ local function normalize_range(start_line, end_line)
   return start_line, end_line
 end
 
+local function normalize_context(context)
+  if type(context) ~= 'table' or type(context.file) ~= 'string' or context.file == '' then
+    return nil
+  end
+
+  local start_line = tonumber(context.startLine)
+  local end_line = tonumber(context.endLine)
+
+  if start_line == nil and end_line == nil then
+    return nil
+  end
+
+  if start_line == nil then
+    start_line = end_line
+  end
+  if end_line == nil then
+    end_line = start_line
+  end
+
+  start_line, end_line = normalize_range(start_line, end_line)
+
+  return {
+    file = context.file,
+    startLine = start_line,
+    endLine = end_line,
+  }
+end
+
 local function build_context(start_line, end_line)
   local file = get_relative_path()
   if not file then
@@ -133,15 +146,68 @@ local function build_context(start_line, end_line)
   }
 end
 
+local function build_context_thread_id(context)
+  local normalized = normalize_context(context)
+  if not normalized then
+    return nil
+  end
+
+  return string.format(
+    '%s%s:%d-%d',
+    CONTEXT_THREAD_PREFIX,
+    normalized.file,
+    normalized.startLine,
+    normalized.endLine
+  )
+end
+
+local function derive_comment_thread_id(comment)
+  if type(comment) ~= 'table' then
+    return DEFAULT_THREAD
+  end
+
+  if
+    type(comment.threadId) == 'string'
+    and comment.threadId ~= ''
+    and comment.threadId ~= DEFAULT_THREAD
+  then
+    return comment.threadId
+  end
+
+  local contextual = build_context_thread_id(comment.context)
+  if contextual then
+    return contextual
+  end
+
+  if type(comment.threadId) == 'string' and comment.threadId ~= '' then
+    return comment.threadId
+  end
+
+  return DEFAULT_THREAD
+end
+
+local function normalize_thread_id(thread_id, fallback)
+  if type(thread_id) ~= 'string' then
+    return fallback or DEFAULT_THREAD
+  end
+
+  local trimmed = trim(thread_id)
+  if trimmed == '' then
+    return fallback or DEFAULT_THREAD
+  end
+
+  return trimmed
+end
+
 local function thread_from_payload(payload)
   if type(payload) ~= 'table' then
     return nil
   end
   if type(payload.threadId) == 'string' then
-    return payload.threadId
+    return normalize_thread_id(payload.threadId)
   end
-  if type(payload.comment) == 'table' and type(payload.comment.threadId) == 'string' then
-    return payload.comment.threadId
+  if type(payload.comment) == 'table' then
+    return derive_comment_thread_id(payload.comment)
   end
   return nil
 end
@@ -162,51 +228,71 @@ local function get_error_message(err)
 end
 
 local function format_context(context)
-  if type(context) ~= 'table' or type(context.file) ~= 'string' then
+  local normalized = normalize_context(context)
+  if not normalized then
     return nil
   end
 
-  local start_line = tonumber(context.startLine)
-  local end_line = tonumber(context.endLine)
-
-  if start_line and end_line then
-    return string.format('%s:%d-%d', context.file, start_line, end_line)
+  if normalized.startLine and normalized.endLine then
+    return string.format('%s:%d-%d', normalized.file, normalized.startLine, normalized.endLine)
   end
 
-  return context.file
+  return normalized.file
 end
 
-local function number_to_superscript(n)
-  local text = tostring(n)
-  local parts = {}
-  for c in text:gmatch('.') do
-    table.insert(parts, superscript_digits[c] or '')
+local function format_timestamp(iso)
+  if type(iso) ~= 'string' or iso == '' then
+    return 'unknown-time'
   end
-  return table.concat(parts)
+
+  local ok, parsed = pcall(vim.fn.strptime, '%Y-%m-%dT%H:%M:%S', iso:sub(1, 19))
+  if ok and type(parsed) == 'number' and parsed > 0 then
+    return os.date('%Y-%m-%d %H:%M', parsed)
+  end
+
+  return iso
 end
 
-local function indicator_text(count)
-  if not count or count <= 1 then
-    return indicator_icon
+local function thread_label(thread_id, context)
+  local context_label = format_context(context)
+  if context_label then
+    return context_label
   end
 
-  if count <= 99 then
-    return indicator_icon .. number_to_superscript(count)
+  local normalized = normalize_thread_id(thread_id)
+  if vim.startswith(normalized, CONTEXT_THREAD_PREFIX) then
+    return normalized:sub(#CONTEXT_THREAD_PREFIX + 1)
   end
 
-  return indicator_icon .. '⁺'
+  return normalized
+end
+
+local function thread_title_label(thread_id, context)
+  local normalized = normalize_context(context)
+  if normalized then
+    if normalized.startLine == normalized.endLine then
+      return string.format('line %d', normalized.startLine)
+    end
+    return string.format('lines %d-%d', normalized.startLine, normalized.endLine)
+  end
+
+  local normalized_thread = normalize_thread_id(thread_id)
+  if normalized_thread == DEFAULT_THREAD then
+    return 'general'
+  end
+
+  return truncate(thread_label(thread_id, context), 24)
 end
 
 local function panel_metrics()
-  local width = math.max(46, math.min(100, math.floor(vim.o.columns * 0.45)))
-  local total_height = math.max(18, vim.o.lines - 6)
-  local footer_height = 3
-  local composer_height = math.max(4, math.min(8, math.floor(total_height * 0.24)))
-  local min_timeline_height = 8
-
-  if total_height - footer_height - composer_height < min_timeline_height then
-    composer_height = math.max(3, total_height - footer_height - min_timeline_height)
-  end
+  local width = math.max(54, math.min(96, math.floor(vim.o.columns * 0.42)))
+  local max_height = math.max(16, vim.o.lines - 6)
+  local footer_height = 2
+  local composer_height = 5
+  local min_timeline_height = 6
+  local desired_height = timeline_content_line_count + footer_height + composer_height + 2
+  local min_height = min_timeline_height + footer_height + composer_height
+  local total_height = math.max(min_height, math.min(max_height, desired_height))
 
   return {
     relative = 'editor',
@@ -223,6 +309,7 @@ end
 
 local function timeline_window_config()
   local metrics = panel_metrics()
+  local title_label = thread_title_label(active_thread, active_thread_context)
   return {
     relative = metrics.relative,
     style = metrics.style,
@@ -231,7 +318,7 @@ local function timeline_window_config()
     height = metrics.height,
     row = metrics.row,
     col = metrics.col,
-    title = string.format(' PiComms [%s] ', active_thread),
+    title = string.format(' PiComms · %s ', title_label),
     title_pos = 'center',
   }
 end
@@ -266,15 +353,16 @@ local function composer_window_config()
   }
 end
 
-local function set_timeline_title(total)
-  if not is_valid_win(timeline_win) then
-    return
+local function apply_panel_layout()
+  if is_valid_win(timeline_win) then
+    vim.api.nvim_win_set_config(timeline_win, timeline_window_config())
   end
-
-  local config = vim.api.nvim_win_get_config(timeline_win)
-  config.title = string.format(' PiComms [%s] (%d) ', active_thread, tonumber(total) or 0)
-  config.title_pos = 'center'
-  vim.api.nvim_win_set_config(timeline_win, config)
+  if is_valid_win(footer_win) then
+    vim.api.nvim_win_set_config(footer_win, footer_window_config())
+  end
+  if is_valid_win(composer_win) then
+    vim.api.nvim_win_set_config(composer_win, composer_window_config())
+  end
 end
 
 local function request_comments(thread_id, timeout_ms)
@@ -313,6 +401,17 @@ local function clear_indicators(bufnr)
   vim.api.nvim_buf_clear_namespace(bufnr, indicator_ns, 0, -1)
 end
 
+local function indicator_text(count)
+  local value = tonumber(count) or 0
+  if value <= 0 then
+    return indicator_icon
+  end
+  if value > 99 then
+    return indicator_icon .. '99+'
+  end
+  return indicator_icon .. tostring(value)
+end
+
 local function apply_indicators_to_buffer(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return
@@ -326,7 +425,6 @@ local function apply_indicators_to_buffer(bufnr)
 
   local file = get_relative_path_for_buf(bufnr)
   clear_indicators(bufnr)
-
   if not file then
     return
   end
@@ -336,7 +434,7 @@ local function apply_indicators_to_buffer(bufnr)
     return
   end
 
-  vim.api.nvim_set_hl(0, 'PiCommsIndicator', { default = true, link = 'Comment' })
+  vim.api.nvim_set_hl(0, 'PiCommsIndicator', { default = true, link = 'WarningMsg' })
 
   local line_numbers = {}
   for line, _ in pairs(lines) do
@@ -351,7 +449,7 @@ local function apply_indicators_to_buffer(bufnr)
         virt_text = { { indicator_text(count), 'PiCommsIndicator' } },
         virt_text_pos = 'eol',
         hl_mode = 'combine',
-        priority = 12,
+        priority = 16,
       })
     end
   end
@@ -374,37 +472,15 @@ local function rebuild_indicator_cache(result)
   end
 
   for _, comment in ipairs(result.comments) do
-    local context = type(comment) == 'table' and comment.context or nil
-    if type(context) == 'table' and type(context.file) == 'string' then
-      local start_line = tonumber(context.startLine)
-      local end_line = tonumber(context.endLine)
-
-      if start_line and not end_line then
-        end_line = start_line
-      end
-      if end_line and not start_line then
-        start_line = end_line
+    local context = normalize_context(type(comment) == 'table' and comment.context or nil)
+    if context then
+      local file_map = indicator_cache_by_file[context.file]
+      if not file_map then
+        file_map = {}
+        indicator_cache_by_file[context.file] = file_map
       end
 
-      if start_line and end_line then
-        start_line = math.max(1, math.floor(start_line))
-        end_line = math.max(1, math.floor(end_line))
-        if start_line > end_line then
-          start_line, end_line = end_line, start_line
-        end
-
-        local file_map = indicator_cache_by_file[context.file]
-        if not file_map then
-          file_map = {}
-          indicator_cache_by_file[context.file] = file_map
-        end
-
-        local span = math.min(end_line - start_line + 1, 500)
-        for offset = 0, span - 1 do
-          local line = start_line + offset
-          file_map[line] = (file_map[line] or 0) + 1
-        end
-      end
+      file_map[context.startLine] = (file_map[context.startLine] or 0) + 1
     end
   end
 end
@@ -440,21 +516,16 @@ local function schedule_indicator_refresh(silent)
 end
 
 local function get_composer_context_label()
-  local label = format_context(composer_context)
-  if not label or label == '' then
-    return 'no file context'
-  end
-
+  local normalized = normalize_context(composer_context) or normalize_context(active_thread_context)
+  local label = normalized and normalized.file or active_thread_label or 'general'
   local metrics = panel_metrics()
-  return truncate(label, math.max(20, metrics.width - 16))
+  return truncate(label, math.max(20, metrics.width - 10))
 end
 
 local function footer_lines()
-  local metrics = panel_metrics()
   return {
-    string.rep('─', math.max(12, metrics.width - 4)),
-    'new comment: ' .. get_composer_context_label(),
-    'Enter submit • Shift-Enter/C-j newline • q close',
+    'reply · ' .. get_composer_context_label(),
+    'i insert • Enter send • S-Enter nl • q close',
   }
 end
 
@@ -483,8 +554,7 @@ local function ensure_composer_seed()
     return
   end
 
-  local line_count = vim.api.nvim_buf_line_count(composer_buf)
-  if line_count == 0 then
+  if vim.api.nvim_buf_line_count(composer_buf) == 0 then
     vim.api.nvim_buf_set_lines(composer_buf, 0, -1, false, { '' })
   end
 end
@@ -496,7 +566,6 @@ local function reset_composer_buffer()
 
   vim.bo[composer_buf].modifiable = true
   vim.api.nvim_buf_set_lines(composer_buf, 0, -1, false, { '' })
-
   if is_valid_win(composer_win) then
     vim.api.nvim_win_set_cursor(composer_win, { 1, 0 })
   end
@@ -519,14 +588,47 @@ close_panel = function()
   timeline_win = nil
 end
 
-focus_composer = function()
+focus_timeline = function()
+  if not is_valid_win(timeline_win) then
+    return
+  end
+
+  vim.cmd('stopinsert')
+  vim.api.nvim_set_current_win(timeline_win)
+end
+
+focus_composer = function(start_insert)
   if not is_valid_win(composer_win) then
     return
   end
 
   ensure_composer_seed()
   vim.api.nvim_set_current_win(composer_win)
-  vim.cmd('startinsert')
+  if start_insert then
+    vim.cmd('startinsert')
+  else
+    vim.cmd('stopinsert')
+  end
+end
+
+enter_insert_mode = function()
+  focus_composer(true)
+end
+
+local function set_panel_window_options(winid, wrapped)
+  vim.wo[winid].wrap = wrapped
+  vim.wo[winid].number = false
+  vim.wo[winid].relativenumber = false
+  vim.wo[winid].signcolumn = 'no'
+  vim.wo[winid].cursorline = false
+  vim.wo[winid].winfixwidth = true
+  vim.wo[winid].winfixheight = true
+end
+
+local function set_common_panel_keymaps(buf)
+  local map_opts = { buffer = buf, silent = true }
+  vim.keymap.set('n', 'q', close_panel, map_opts)
+  vim.keymap.set('n', '<C-w>q', close_panel, map_opts)
 end
 
 local function configure_timeline_buffer(buf)
@@ -542,10 +644,11 @@ local function configure_timeline_buffer(buf)
     -- ignore duplicate-name errors
   end
 
-  vim.keymap.set('n', 'q', close_panel, {
+  set_common_panel_keymaps(buf)
+  vim.keymap.set('n', 'i', enter_insert_mode, {
     buffer = buf,
     silent = true,
-    desc = 'Close PiComms panel',
+    desc = 'Insert PiComms reply',
   })
 end
 
@@ -563,18 +666,25 @@ local function configure_footer_buffer(buf)
     -- ignore duplicate-name errors
   end
 
-  vim.keymap.set('n', 'q', close_panel, {
+  set_common_panel_keymaps(buf)
+  vim.keymap.set('n', 'i', enter_insert_mode, {
     buffer = buf,
     silent = true,
-    desc = 'Close PiComms panel',
+    desc = 'Insert PiComms reply',
   })
 end
 
 submit_comment = function()
+  local current_mode = vim.api.nvim_get_mode().mode
+  local was_insert = current_mode:sub(1, 1) == 'i'
   local comment = get_composer_text()
   if comment == '' then
     vim.notify('pi-nvim: comment is empty', vim.log.levels.WARN)
-    focus_composer()
+    if was_insert then
+      enter_insert_mode()
+    else
+      focus_composer(false)
+    end
     return
   end
 
@@ -583,13 +693,17 @@ submit_comment = function()
     body = comment,
     actorType = 'human',
     actorId = (vim.env.USER and vim.env.USER ~= '') and vim.env.USER or 'user',
-    context = composer_context,
+    context = composer_context or active_thread_context,
   }
 
   local result, err = socket.request('comment.add', payload, { timeout_ms = 8000 })
   if not result then
     vim.notify('pi-nvim: failed to add comment: ' .. get_error_message(err), vim.log.levels.WARN)
-    focus_composer()
+    if was_insert then
+      enter_insert_mode()
+    else
+      focus_composer(false)
+    end
     return
   end
 
@@ -610,7 +724,11 @@ submit_comment = function()
     })
   end
 
-  focus_composer()
+  if was_insert then
+    enter_insert_mode()
+  else
+    focus_composer(false)
+  end
 end
 
 local function configure_composer_buffer(buf)
@@ -636,8 +754,8 @@ local function configure_composer_buffer(buf)
   vim.keymap.set('n', '<CR>', submit_comment, map_opts)
   vim.keymap.set('i', '<CR>', submit_comment, map_opts)
   vim.keymap.set('i', '<S-CR>', newline, map_opts)
-  vim.keymap.set('i', '<C-j>', newline, map_opts)
   vim.keymap.set('n', 'q', close_panel, map_opts)
+  vim.keymap.set('n', '<C-w>q', close_panel, map_opts)
 end
 
 local function ensure_panel_windows(opts)
@@ -665,13 +783,7 @@ local function ensure_panel_windows(opts)
     vim.api.nvim_win_set_config(timeline_win, timeline_config)
   else
     timeline_win = vim.api.nvim_open_win(timeline_buf, false, timeline_config)
-    vim.wo[timeline_win].wrap = false
-    vim.wo[timeline_win].number = false
-    vim.wo[timeline_win].relativenumber = false
-    vim.wo[timeline_win].signcolumn = 'no'
-    vim.wo[timeline_win].cursorline = false
-    vim.wo[timeline_win].winfixwidth = true
-    vim.wo[timeline_win].winfixheight = true
+    set_panel_window_options(timeline_win, false)
   end
 
   if not is_valid_buf(footer_buf) then
@@ -685,13 +797,7 @@ local function ensure_panel_windows(opts)
     vim.api.nvim_win_set_config(footer_win, footer_config)
   else
     footer_win = vim.api.nvim_open_win(footer_buf, false, footer_config)
-    vim.wo[footer_win].wrap = false
-    vim.wo[footer_win].number = false
-    vim.wo[footer_win].relativenumber = false
-    vim.wo[footer_win].signcolumn = 'no'
-    vim.wo[footer_win].cursorline = false
-    vim.wo[footer_win].winfixwidth = true
-    vim.wo[footer_win].winfixheight = true
+    set_panel_window_options(footer_win, false)
     vim.wo[footer_win].winhighlight = 'Normal:NormalFloat,NormalNC:NormalFloat'
   end
 
@@ -707,23 +813,17 @@ local function ensure_panel_windows(opts)
     vim.api.nvim_win_set_config(composer_win, composer_config)
   else
     composer_win = vim.api.nvim_open_win(composer_buf, false, composer_config)
-    vim.wo[composer_win].wrap = true
-    vim.wo[composer_win].number = false
-    vim.wo[composer_win].relativenumber = false
-    vim.wo[composer_win].signcolumn = 'no'
-    vim.wo[composer_win].cursorline = false
-    vim.wo[composer_win].winfixwidth = true
-    vim.wo[composer_win].winfixheight = true
+    set_panel_window_options(composer_win, true)
     vim.wo[composer_win].winhighlight = 'Normal:NormalFloat,NormalNC:NormalFloat'
   end
 
   render_footer()
   ensure_composer_seed()
 
-  if opts.focus_composer ~= false then
-    focus_composer()
-  elseif is_valid_win(timeline_win) then
-    vim.api.nvim_set_current_win(timeline_win)
+  if opts.focus_composer then
+    focus_composer(false)
+  else
+    focus_timeline()
   end
 end
 
@@ -740,6 +840,32 @@ local function set_timeline_lines(lines)
   vim.bo[timeline_buf].modified = false
 end
 
+local function render_comment(comment)
+  local created_at = format_timestamp(comment.createdAt)
+  local actor_type = type(comment.actorType) == 'string' and comment.actorType or 'unknown'
+  local actor_id = type(comment.actorId) == 'string' and comment.actorId or 'unknown'
+  local context = format_context(comment.context)
+  local body = type(comment.body) == 'string' and comment.body or ''
+  local body_lines = body ~= '' and vim.split(body, '\n', { plain = true })
+    or { '_(empty comment)_' }
+
+  local lines = {
+    string.format('╭─ %s:%s · %s', actor_type, actor_id, created_at),
+  }
+
+  for _, body_line in ipairs(body_lines) do
+    table.insert(lines, '│ ' .. body_line)
+  end
+
+  if context then
+    table.insert(lines, '╰─ ' .. context)
+  else
+    table.insert(lines, '╰─ ' .. derive_comment_thread_id(comment))
+  end
+
+  return lines
+end
+
 local function render_timeline(result)
   if not is_valid_buf(timeline_buf) then
     return
@@ -747,56 +873,133 @@ local function render_timeline(result)
 
   local comments = type(result) == 'table' and type(result.comments) == 'table' and result.comments
     or {}
-  local total = type(result) == 'table' and tonumber(result.total) or #comments
 
-  local lines = {
-    '# PiComms',
-    string.format('thread: %s', active_thread),
-    string.format('total: %d', total or 0),
-    '',
-  }
+  local lines = {}
 
   if #comments == 0 then
     table.insert(lines, '_No comments yet_')
-    table.insert(lines, '')
   else
-    for _, comment in ipairs(comments) do
-      local created_at = type(comment.createdAt) == 'string' and comment.createdAt or 'unknown-time'
-      local actor_type = type(comment.actorType) == 'string' and comment.actorType or 'unknown'
-      local actor_id = type(comment.actorId) == 'string' and comment.actorId or 'unknown'
-      local comment_id = type(comment.id) == 'string' and comment.id or 'unknown-id'
-
-      table.insert(lines, string.rep('─', 72))
-      table.insert(lines, string.format('[%s] %s:%s', created_at, actor_type, actor_id))
-      table.insert(lines, string.format('id: %s', comment_id))
-
-      local context = format_context(comment.context)
-      if context then
-        table.insert(lines, string.format('context: %s', context))
+    for index, comment in ipairs(comments) do
+      if index > 1 then
+        table.insert(lines, '')
       end
-
-      table.insert(lines, '')
-
-      local body = type(comment.body) == 'string' and comment.body or ''
-      if body == '' then
-        table.insert(lines, '_(empty comment)_')
-      else
-        local body_lines = vim.split(body, '\n', { plain = true })
-        for _, body_line in ipairs(body_lines) do
-          table.insert(lines, body_line)
-        end
+      local rendered = render_comment(comment)
+      for _, line in ipairs(rendered) do
+        table.insert(lines, line)
       end
-
-      table.insert(lines, '')
     end
   end
 
+  timeline_content_line_count = math.max(8, #lines)
+  apply_panel_layout()
+  render_footer()
   set_timeline_lines(lines)
-  set_timeline_title(total)
+end
+
+local function is_same_context(a, b)
+  local left = normalize_context(a)
+  local right = normalize_context(b)
+  if not left or not right then
+    return false
+  end
+
+  return left.file == right.file
+    and left.startLine == right.startLine
+    and left.endLine == right.endLine
+end
+
+local function score_comment_for_context(comment, context)
+  local normalized_context = normalize_context(context)
+  local comment_context = normalize_context(type(comment) == 'table' and comment.context or nil)
+  if not normalized_context or not comment_context then
+    return nil
+  end
+  if comment_context.file ~= normalized_context.file then
+    return nil
+  end
+
+  local span = math.max(0, comment_context.endLine - comment_context.startLine)
+
+  if normalized_context.startLine ~= normalized_context.endLine then
+    if is_same_context(comment_context, normalized_context) then
+      return 0 + span / 1000
+    end
+
+    local overlaps = not (
+      comment_context.endLine < normalized_context.startLine
+      or comment_context.startLine > normalized_context.endLine
+    )
+    if overlaps then
+      return 100
+        + math.abs(comment_context.startLine - normalized_context.startLine)
+        + math.abs(comment_context.endLine - normalized_context.endLine)
+        + span / 1000
+    end
+
+    return nil
+  end
+
+  local line = normalized_context.startLine
+  if comment_context.startLine == line and comment_context.endLine == line then
+    return 0
+  end
+  if comment_context.startLine == line then
+    return 10 + span / 1000
+  end
+  if comment_context.startLine <= line and comment_context.endLine >= line then
+    return 20 + span / 1000
+  end
+
+  return nil
+end
+
+local function newer_comment(a, b)
+  local a_time = type(a) == 'table' and type(a.createdAt) == 'string' and a.createdAt or ''
+  local b_time = type(b) == 'table' and type(b.createdAt) == 'string' and b.createdAt or ''
+  if a_time ~= b_time then
+    return a_time > b_time
+  end
+
+  local a_id = type(a) == 'table' and type(a.id) == 'string' and a.id or ''
+  local b_id = type(b) == 'table' and type(b.id) == 'string' and b.id or ''
+  return a_id > b_id
+end
+
+local function resolve_thread_for_context(context, comments)
+  local normalized_context = normalize_context(context)
+  local fallback_thread = build_context_thread_id(normalized_context) or DEFAULT_THREAD
+  if not normalized_context or type(comments) ~= 'table' then
+    return fallback_thread, normalized_context, thread_label(fallback_thread, normalized_context)
+  end
+
+  local best_comment = nil
+  local best_score = nil
+
+  for _, comment in ipairs(comments) do
+    local score = score_comment_for_context(comment, normalized_context)
+    if score ~= nil then
+      if
+        best_score == nil
+        or score < best_score
+        or (score == best_score and newer_comment(comment, best_comment))
+      then
+        best_comment = comment
+        best_score = score
+      end
+    end
+  end
+
+  if best_comment then
+    local best_context = normalize_context(best_comment.context) or normalized_context
+    local best_thread = derive_comment_thread_id(best_comment)
+    return best_thread, best_context, thread_label(best_thread, best_context)
+  end
+
+  return fallback_thread, normalized_context, thread_label(fallback_thread, normalized_context)
 end
 
 local function schedule_refresh_if_open(thread_id)
-  if thread_id and thread_id ~= active_thread then
+  if thread_id and normalize_thread_id(thread_id) ~= active_thread then
     return
   end
 
@@ -816,6 +1019,57 @@ local function schedule_refresh_if_open(thread_id)
       silent = true,
     })
   end, 120)
+end
+
+local function collect_thread_targets(result, file)
+  local targets_by_thread = {}
+  local ordered = {}
+
+  if type(result) ~= 'table' or type(result.comments) ~= 'table' then
+    return ordered
+  end
+
+  for _, comment in ipairs(result.comments) do
+    local context = normalize_context(type(comment) == 'table' and comment.context or nil)
+    if context and context.file == file then
+      local thread_id = derive_comment_thread_id(comment)
+      local existing = targets_by_thread[thread_id]
+      if not existing then
+        existing = {
+          thread_id = thread_id,
+          context = context,
+          latest = comment,
+        }
+        targets_by_thread[thread_id] = existing
+        table.insert(ordered, existing)
+      else
+        if
+          context.startLine < existing.context.startLine
+          or (
+            context.startLine == existing.context.startLine
+            and context.endLine < existing.context.endLine
+          )
+        then
+          existing.context = context
+        end
+        if newer_comment(comment, existing.latest) then
+          existing.latest = comment
+        end
+      end
+    end
+  end
+
+  table.sort(ordered, function(a, b)
+    if a.context.startLine ~= b.context.startLine then
+      return a.context.startLine < b.context.startLine
+    end
+    if a.context.endLine ~= b.context.endLine then
+      return a.context.endLine < b.context.endLine
+    end
+    return a.thread_id < b.thread_id
+  end)
+
+  return ordered
 end
 
 function M.setup()
@@ -858,18 +1112,40 @@ function M.open(opts)
   if type(opts) == 'string' or opts == nil then
     opts = { thread_id = opts }
   end
+  opts = opts or {}
 
-  if opts.thread_id then
-    active_thread = normalize_thread_id(opts.thread_id)
+  local requested_context = opts.context or build_context(opts.start_line, opts.end_line)
+  local resolved_thread = normalize_thread_id(opts.thread_id, active_thread)
+  local resolved_context = normalize_context(requested_context)
+  local resolved_label = thread_label(resolved_thread, resolved_context)
+
+  if opts.thread_id == nil and resolved_context then
+    local all, err = request_all_comments(12000)
+    if all and type(all.comments) == 'table' then
+      resolved_thread, resolved_context, resolved_label =
+        resolve_thread_for_context(resolved_context, all.comments)
+    else
+      if not opts.silent then
+        vim.notify(
+          'pi-nvim: failed to resolve PiComms thread: ' .. get_error_message(err),
+          vim.log.levels.WARN
+        )
+      end
+      resolved_thread = build_context_thread_id(resolved_context) or DEFAULT_THREAD
+      resolved_label = thread_label(resolved_thread, resolved_context)
+    end
+  elseif opts.thread_id == nil and not resolved_context then
+    resolved_thread = DEFAULT_THREAD
+    resolved_label = DEFAULT_THREAD
   end
 
-  local context = build_context(opts.start_line, opts.end_line)
-  if context then
-    composer_context = context
-  end
+  active_thread = normalize_thread_id(resolved_thread, DEFAULT_THREAD)
+  active_thread_context = resolved_context
+  active_thread_label = resolved_label
+  composer_context = normalize_context(opts.reply_context) or resolved_context
 
   ensure_panel_windows({
-    focus_composer = opts.focus_composer ~= false,
+    focus_composer = opts.focus_composer == true,
   })
 
   M.refresh({
@@ -883,12 +1159,20 @@ function M.refresh(opts)
   opts = opts or {}
 
   if opts.thread_id then
-    active_thread = normalize_thread_id(opts.thread_id)
+    active_thread = normalize_thread_id(opts.thread_id, active_thread)
+    active_thread_label = thread_label(active_thread, active_thread_context)
+  end
+  if opts.context then
+    active_thread_context = normalize_context(opts.context)
+    active_thread_label = thread_label(active_thread, active_thread_context)
+  end
+  if opts.reply_context then
+    composer_context = normalize_context(opts.reply_context)
   end
 
   if opts.open_if_missing == true then
     ensure_panel_windows({
-      focus_composer = opts.focus_composer ~= false,
+      focus_composer = opts.focus_composer == true,
     })
   end
 
@@ -954,10 +1238,83 @@ function M.trigger_clean()
   end
 end
 
+function M.next_thread()
+  local file = get_relative_path()
+  if not file then
+    vim.notify('pi-nvim: current buffer is not a file', vim.log.levels.WARN)
+    return
+  end
+
+  local result, err = request_all_comments(12000)
+  if not result then
+    vim.notify(
+      'pi-nvim: failed to load PiComms threads: ' .. get_error_message(err),
+      vim.log.levels.WARN
+    )
+    return
+  end
+
+  local targets = collect_thread_targets(result, file)
+  if #targets == 0 then
+    vim.notify('pi-nvim: no PiComms threads found for this file', vim.log.levels.INFO)
+    return
+  end
+
+  local current_line = vim.api.nvim_win_get_cursor(0)[1]
+  local current_index = nil
+  for index, target in ipairs(targets) do
+    if current_line >= target.context.startLine and current_line <= target.context.endLine then
+      current_index = index
+      break
+    end
+  end
+
+  local next_target = nil
+  if current_index ~= nil then
+    next_target = targets[current_index + 1] or targets[1]
+  else
+    for _, target in ipairs(targets) do
+      if target.context.startLine > current_line then
+        next_target = target
+        break
+      end
+    end
+    if not next_target then
+      next_target = targets[1]
+    end
+  end
+
+  vim.api.nvim_win_set_cursor(0, { next_target.context.startLine, 0 })
+  vim.cmd('normal! zz')
+
+  M.open({
+    thread_id = next_target.thread_id,
+    context = next_target.context,
+    reply_context = next_target.context,
+    focus_composer = false,
+    silent = true,
+  })
+end
+
 function M.open_composer(opts)
   opts = opts or {}
   opts.focus_composer = true
   M.open(opts)
+end
+
+function M.close(opts)
+  opts = opts or {}
+
+  local open = is_valid_win(timeline_win) or is_valid_win(footer_win) or is_valid_win(composer_win)
+  if not open then
+    if not opts.silent then
+      vim.notify('pi-nvim: PiComms panel is not open', vim.log.levels.WARN)
+    end
+    return false
+  end
+
+  close_panel()
+  return true
 end
 
 return M

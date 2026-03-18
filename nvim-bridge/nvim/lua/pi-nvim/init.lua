@@ -28,10 +28,10 @@ function M.setup(_opts)
         thread_id = thread_id,
         start_line = has_range and cmd_opts.line1 or nil,
         end_line = has_range and cmd_opts.line2 or nil,
-        focus_composer = true,
+        focus_composer = false,
       })
     end, {
-      desc = 'Open PiComms panel',
+      desc = 'Open PiComms panel for the current thread',
       range = true,
       nargs = '?',
     })
@@ -75,6 +75,30 @@ function M.setup(_opts)
       desc = 'Open PiComms and focus the inline composer',
       range = true,
       nargs = '?',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsNext') == 0 then
+    vim.api.nvim_create_user_command('PiCommsNext', function()
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      comments.next_thread()
+    end, {
+      desc = 'Jump to the next PiComms thread in this file',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsClose') == 0 then
+    vim.api.nvim_create_user_command('PiCommsClose', function()
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      comments.close()
+    end, {
+      desc = 'Close the PiComms panel',
     })
   end
 

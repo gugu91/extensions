@@ -1,0 +1,41 @@
+{
+  "enabled": true,
+  "injectIntoBash": true,
+  "injectPythonShim": true,
+  "logPath": ".pi/neon-psql-tunnel.log",
+  "sourceEnv": {
+    "host": "DB_HOST",
+    "port": "DB_PORT",
+    "user": "DB_USER",
+    "password": "DB_PASSWORD",
+    "database": "DB_NAME"
+  },
+  "injectEnv": {
+    "NEON_TUNNEL_DATABASE_URL": "postgres_url",
+    "NEON_TUNNEL_SQLALCHEMY_URL": "sqlalchemy_url",
+    "NEON_TUNNEL_SQLALCHEMY_ASYNC_URL": "sqlalchemy_async_url",
+    "NEON_TUNNEL_ASYNCPG_DSN": "asyncpg_dsn",
+    "TEST_DB_URL": "sqlalchemy_url",
+    "DB_URL": "sqlalchemy_url",
+    "DATABASE_URL": "postgres_url",
+    "DB_HOST": "tunnel_host",
+    "DB_PORT": "tunnel_port",
+    "DB_USER": "source_user",
+    "DB_PASSWORD": "source_password",
+    "DB_NAME": "source_database",
+    "DB_HOST_POOLED": "",
+    "DB_READ_HOST": "",
+    "PGHOST": "tunnel_host",
+    "PGPORT": "tunnel_port",
+    "PGUSER": "source_user",
+    "PGPASSWORD": "source_password",
+    "PGDATABASE": "source_database",
+    "PGOPTIONS": "pgoptions",
+    "PGSSLMODE": "sslmode",
+    "NEON_ENDPOINT": "endpoint",
+    "NEON_TUNNEL_HOST": "tunnel_host",
+    "NEON_TUNNEL_PORT": "tunnel_port",
+    "NEON_TUNNEL_SSL_MODE": "sslmode",
+    "NEON_TUNNEL_ACTIVE": "1"
+  }
+}

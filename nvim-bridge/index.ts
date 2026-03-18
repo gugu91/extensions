@@ -5,7 +5,12 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { CommentStore, formatCommentPreview, type CommentRecord } from "./comments.js";
+import {
+  CommentStore,
+  buildContextThreadId,
+  formatCommentPreview,
+  type CommentRecord,
+} from "./comments.js";
 
 interface EditorState {
   file: string | null;
@@ -261,57 +266,139 @@ function formatCommentContext(comment: CommentRecord): string {
   return ` (${comment.context.file})`;
 }
 
+function getCurrentCommentContext(state: EditorState): {
+  file: string;
+  startLine: number;
+  endLine: number;
+} | null {
+  if (!state.file) return null;
+
+  const startLine = state.selectionStart ?? state.line;
+  const endLine = state.selectionEnd ?? state.line;
+  if (startLine == null || endLine == null) return null;
+
+  const normalizedStart = Math.min(startLine, endLine);
+  const normalizedEnd = Math.max(startLine, endLine);
+
+  return {
+    file: state.file,
+    startLine: normalizedStart,
+    endLine: normalizedEnd,
+  };
+}
+
+function commentMatchesCurrentContext(comment: CommentRecord, state: EditorState): boolean {
+  const current = getCurrentCommentContext(state);
+  if (!current || !comment.context?.file || comment.context.file !== current.file) {
+    return false;
+  }
+
+  const startLine = comment.context.startLine ?? comment.context.endLine;
+  const endLine = comment.context.endLine ?? comment.context.startLine;
+  if (startLine == null || endLine == null) return false;
+
+  if (current.startLine !== current.endLine) {
+    return startLine === current.startLine && endLine === current.endLine;
+  }
+
+  return startLine <= current.startLine && endLine >= current.startLine;
+}
+
+function formatCommentForRead(comment: CommentRecord): string {
+  const actor = `${comment.actorType}:${comment.actorId}`;
+  const contextSuffix = formatCommentContext(comment);
+  const bodyLines = comment.body.split(/\r?\n/);
+  const firstLine = bodyLines.shift() ?? "";
+
+  let chunk = `- ${actor}${contextSuffix}`;
+  if (firstLine.trim()) {
+    chunk += ` — ${firstLine.trim()}`;
+  }
+
+  if (bodyLines.length > 0) {
+    const remainder = bodyLines.join("\n").trim();
+    if (remainder) {
+      chunk += `\n  ${remainder.replace(/\n/g, "\n  ")}`;
+    }
+  }
+
+  return `${chunk}\n`;
+}
+
 function buildPiCommsReadPrompt(
   state: EditorState,
   comments: CommentRecord[],
   totalCount: number,
   maxChars = 18000,
 ): { prompt: string; included: number; truncated: boolean } {
-  const header: string[] = [
-    "Please read and apply the following persistent PiComms comments for this repository before proceeding.",
-  ];
+  const header: string[] = ["Apply these persistent PiComms comments as guidance for the task."];
 
   const context = formatContext(state);
   if (context) {
     header.push(`Current editor context: ${context}`);
   }
 
-  const lines: string[] = [];
+  const currentContext = getCurrentCommentContext(state);
+  const currentThreadId = buildContextThreadId(currentContext ?? undefined);
+
+  const prioritized = [...comments].sort((a, b) => {
+    const aRelevant =
+      (currentThreadId != null && a.threadId === currentThreadId) ||
+      commentMatchesCurrentContext(a, state);
+    const bRelevant =
+      (currentThreadId != null && b.threadId === currentThreadId) ||
+      commentMatchesCurrentContext(b, state);
+    if (aRelevant !== bRelevant) {
+      return aRelevant ? -1 : 1;
+    }
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+
+  const relevantComments = prioritized.filter(
+    (comment) =>
+      (currentThreadId != null && comment.threadId === currentThreadId) ||
+      commentMatchesCurrentContext(comment, state),
+  );
+  const otherComments = prioritized.filter((comment) => !relevantComments.includes(comment));
+
+  const sections: string[] = [];
   let usedChars = 0;
   let included = 0;
 
-  for (const comment of comments) {
-    const actor = `${comment.actorType}:${comment.actorId}`;
-    const contextSuffix = formatCommentContext(comment);
-    const chunk =
-      `[${comment.createdAt}] [${comment.threadId}] [${comment.id}] ${actor}${contextSuffix}\n` +
-      `${comment.body}\n`;
+  const appendSection = (title: string, items: CommentRecord[]): void => {
+    if (items.length === 0) return;
 
-    if (usedChars + chunk.length > maxChars && included > 0) {
-      break;
+    let section = `${title}:\n`;
+    let sectionIncluded = 0;
+
+    for (const comment of items) {
+      const chunk = formatCommentForRead(comment);
+      if (usedChars + section.length + chunk.length > maxChars && included > 0) {
+        break;
+      }
+
+      section += chunk;
+      usedChars += chunk.length;
+      included += 1;
+      sectionIncluded += 1;
     }
 
-    lines.push(chunk);
-    usedChars += chunk.length;
-    included += 1;
-
-    if (usedChars >= maxChars) {
-      break;
+    if (sectionIncluded > 0) {
+      sections.push(section.trimEnd());
     }
-  }
+  };
+
+  appendSection("Most relevant PiComms", relevantComments);
+  appendSection("Other PiComms in this repository", otherComments);
 
   const truncated = included < totalCount;
-  const footer: string[] = [
-    `Loaded comments: ${included}/${totalCount}.`,
-    "Acknowledge the comment constraints and then continue with the task.",
-  ];
-
+  const footer: string[] = [`Loaded comments: ${included}/${totalCount}.`];
   if (truncated) {
     footer.push("Some comments were omitted due to prompt size limits.");
   }
 
   return {
-    prompt: `${header.join("\n")}\n\n${lines.join("\n")}${footer.join("\n")}`,
+    prompt: `${header.join("\n")}\n\n${sections.join("\n\n")}\n\n${footer.join("\n")}`.trim(),
     included,
     truncated,
   };
@@ -396,7 +483,10 @@ export default function (pi: ExtensionAPI) {
     notifyThreadUpdated(comment.threadId);
   }
 
-  async function runPiCommsRead(source: "slash" | "panel"): Promise<{
+  async function runPiCommsRead(
+    source: "slash" | "panel",
+    options: { isIdle?: boolean } = {},
+  ): Promise<{
     ok: boolean;
     message: string;
   }> {
@@ -412,14 +502,14 @@ export default function (pi: ExtensionAPI) {
     const read = buildPiCommsReadPrompt(editorState, all.comments, all.total);
 
     try {
-      pi.sendUserMessage(read.prompt);
-    } catch {
-      try {
-        pi.sendUserMessage(read.prompt, { deliverAs: "steer" });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to queue PiComms read";
-        return { ok: false, message };
+      if (options.isIdle === false) {
+        pi.sendUserMessage(read.prompt, { deliverAs: "followUp" });
+      } else {
+        pi.sendUserMessage(read.prompt);
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to queue PiComms read";
+      return { ok: false, message };
     }
 
     const truncationSuffix = read.truncated ? " Prompt was truncated to fit context." : "";
@@ -694,7 +784,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("picomms:read", {
     description: "Read all persistent PiComms comments and queue them for the agent",
     handler: async (_args, ctx) => {
-      const result = await runPiCommsRead("slash");
+      const result = await runPiCommsRead("slash", {
+        isIdle: typeof ctx.isIdle === "function" ? ctx.isIdle() : undefined,
+      });
       ctx.ui.notify(result.message, result.ok ? "info" : "error");
     },
   });
@@ -769,16 +861,12 @@ export default function (pi: ExtensionAPI) {
 
             if (event.type === "trigger_agent") {
               try {
-                pi.sendUserMessage(event.prompt);
+                pi.sendUserMessage(event.prompt, { deliverAs: "followUp" });
               } catch {
                 try {
                   pi.sendUserMessage(event.prompt, { deliverAs: "steer" });
                 } catch {
-                  try {
-                    pi.sendUserMessage(event.prompt, { deliverAs: "followUp" });
-                  } catch {
-                    // Ignore dispatch failures.
-                  }
+                  // Ignore dispatch failures.
                 }
               }
             } else {

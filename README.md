@@ -5,10 +5,12 @@ Workspace for local pi/neovim extensions.
 ## Projects
 
 - `nvim-bridge` — syncs Neovim editor context into pi sessions.
+- `neon-psql` — config-driven Neon tunnel + `psql` tool + tunnel-aware bash for pi.
 
 See project-specific docs in:
 
 - `nvim-bridge/README.md`
+- `neon-psql/README.md`
 
 ## Dev commands (repo root)
 

@@ -69,6 +69,7 @@ export interface CommentWipeResult {
 
 const INDEX_VERSION = 1 as const;
 const DEFAULT_THREAD_ID = "global";
+const CONTEXT_THREAD_PREFIX = "ctx:";
 const MAX_LIMIT = 500;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -141,6 +142,42 @@ function normalizeLimit(limit: number | undefined): number | undefined {
   return Math.min(int, MAX_LIMIT);
 }
 
+export function buildContextThreadId(
+  context:
+    | CommentContext
+    | {
+        file?: string;
+        startLine?: number;
+        endLine?: number;
+      }
+    | null
+    | undefined,
+): string | null {
+  const normalized = normalizeContext(context);
+  if (!normalized?.file || normalized.startLine == null || normalized.endLine == null) {
+    return null;
+  }
+
+  return `${CONTEXT_THREAD_PREFIX}${normalized.file}:${normalized.startLine}-${normalized.endLine}`;
+}
+
+function resolveThreadId(
+  threadId: string | undefined,
+  context: CommentContext | undefined,
+): string {
+  const trimmed = threadId?.trim();
+  if (trimmed && trimmed.length > 0 && trimmed !== DEFAULT_THREAD_ID) {
+    return trimmed;
+  }
+
+  const contextualThreadId = buildContextThreadId(context);
+  if (contextualThreadId) {
+    return contextualThreadId;
+  }
+
+  return DEFAULT_THREAD_ID;
+}
+
 function compareComments(a: CommentMeta, b: CommentMeta): number {
   if (a.createdAt < b.createdAt) return -1;
   if (a.createdAt > b.createdAt) return 1;
@@ -203,13 +240,13 @@ export class CommentStore {
         throw new Error("Comment body cannot be empty");
       }
 
-      const threadId = normalizeThreadId(input.threadId);
+      const context = normalizeContext(input.context);
+      const threadId = resolveThreadId(input.threadId, context);
       const actorType = normalizeActorType(input.actorType);
       const actorId = normalizeActorId(input.actorId, actorType);
       const createdAt = new Date().toISOString();
       const id = createCommentId();
       const bodyPath = path.posix.join("items", `${id}.md`);
-      const context = normalizeContext(input.context);
 
       const meta: CommentMeta = {
         id,
@@ -398,9 +435,7 @@ export class CommentStore {
     if (!isObject(value)) return null;
     if (typeof value.id !== "string" || !value.id.trim()) return null;
 
-    const threadId = normalizeThreadId(
-      typeof value.threadId === "string" ? value.threadId : undefined,
-    );
+    const rawThreadId = typeof value.threadId === "string" ? value.threadId : undefined;
     const actorType = normalizeActorType(
       typeof value.actorType === "string" ? value.actorType : undefined,
     );
@@ -417,6 +452,7 @@ export class CommentStore {
     if (!isSafeRelativePath(value.bodyPath)) return null;
 
     const context = normalizeContext(isObject(value.context) ? value.context : undefined);
+    const threadId = resolveThreadId(rawThreadId, context);
 
     return {
       id: value.id,
