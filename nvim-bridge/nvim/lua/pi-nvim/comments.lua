@@ -22,6 +22,7 @@ local refresh_pending = false
 local indicator_refresh_pending = false
 
 local indicator_ns = vim.api.nvim_create_namespace('PiCommsIndicators')
+local timeline_ns = vim.api.nvim_create_namespace('PiCommsTimeline')
 local indicator_cache_by_file = {}
 local indicator_icon = ''
 
@@ -287,7 +288,7 @@ end
 local function panel_metrics()
   local width = math.max(54, math.min(96, math.floor(vim.o.columns * 0.42)))
   local max_height = math.max(16, vim.o.lines - 6)
-  local footer_height = 2
+  local footer_height = 3
   local composer_height = 5
   local min_timeline_height = 6
   local desired_height = timeline_content_line_count + footer_height + composer_height + 2
@@ -523,9 +524,14 @@ local function get_composer_context_label()
 end
 
 local function footer_lines()
+  local metrics = panel_metrics()
+  local reply_label = ' reply · ' .. get_composer_context_label() .. ' '
+  local pad_len = math.max(0, metrics.width - #reply_label)
+  local separator = string.rep('─', pad_len)
   return {
-    'reply · ' .. get_composer_context_label(),
-    'i insert • Enter send • S-Enter nl • q close',
+    '',
+    reply_label .. separator,
+    '  i insert · Enter send · S-Enter nl · q close',
   }
 end
 
@@ -535,7 +541,11 @@ local function render_footer()
   end
 
   vim.bo[footer_buf].modifiable = true
-  vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, footer_lines())
+  local fl = footer_lines()
+  vim.api.nvim_buf_set_lines(footer_buf, 0, -1, false, fl)
+  vim.api.nvim_buf_clear_namespace(footer_buf, timeline_ns, 0, -1)
+  vim.api.nvim_buf_add_highlight(footer_buf, timeline_ns, 'PiCommsCommentMeta', 1, 0, -1)
+  vim.api.nvim_buf_add_highlight(footer_buf, timeline_ns, 'PiCommsFooterHint', 2, 0, -1)
   vim.bo[footer_buf].modifiable = false
   vim.bo[footer_buf].modified = false
 end
@@ -617,6 +627,8 @@ end
 
 local function set_panel_window_options(winid, wrapped)
   vim.wo[winid].wrap = wrapped
+  vim.wo[winid].linebreak = wrapped
+  vim.wo[winid].breakindent = wrapped
   vim.wo[winid].number = false
   vim.wo[winid].relativenumber = false
   vim.wo[winid].signcolumn = 'no'
@@ -781,9 +793,10 @@ local function ensure_panel_windows(opts)
   if is_valid_win(timeline_win) then
     vim.api.nvim_win_set_buf(timeline_win, timeline_buf)
     vim.api.nvim_win_set_config(timeline_win, timeline_config)
+    set_panel_window_options(timeline_win, true)
   else
     timeline_win = vim.api.nvim_open_win(timeline_buf, false, timeline_config)
-    set_panel_window_options(timeline_win, false)
+    set_panel_window_options(timeline_win, true)
   end
 
   if not is_valid_buf(footer_buf) then
@@ -827,43 +840,113 @@ local function ensure_panel_windows(opts)
   end
 end
 
-local function set_timeline_lines(lines)
+local function set_timeline_lines(lines, highlights)
   if not is_valid_buf(timeline_buf) then
     return
   end
 
+  vim.api.nvim_set_hl(0, 'PiCommsHumanHeader', { default = true, link = 'Title' })
+  vim.api.nvim_set_hl(0, 'PiCommsAgentHeader', { default = true, link = 'Special' })
+  vim.api.nvim_set_hl(0, 'PiCommsAgentBody', { default = true, link = 'Comment' })
+  vim.api.nvim_set_hl(0, 'PiCommsCommentMeta', { default = true, link = 'NonText' })
+  vim.api.nvim_set_hl(0, 'PiCommsFooterHint', { default = true, link = 'Comment' })
+
   vim.bo[timeline_buf].modifiable = true
   vim.bo[timeline_buf].readonly = false
   vim.api.nvim_buf_set_lines(timeline_buf, 0, -1, false, lines)
+  vim.api.nvim_buf_clear_namespace(timeline_buf, timeline_ns, 0, -1)
+
+  if type(highlights) == 'table' then
+    for _, highlight in ipairs(highlights) do
+      if type(highlight) == 'table' and type(highlight.group) == 'string' then
+        vim.api.nvim_buf_add_highlight(
+          timeline_buf,
+          timeline_ns,
+          highlight.group,
+          highlight.line,
+          0,
+          -1
+        )
+      end
+    end
+  end
+
   vim.bo[timeline_buf].modifiable = false
   vim.bo[timeline_buf].readonly = true
   vim.bo[timeline_buf].modified = false
 end
 
-local function render_comment(comment)
-  local created_at = format_timestamp(comment.createdAt)
+local function parse_agent_identity(actor_id)
+  local name, source = actor_id:match('^(.+)@(.+)$')
+  if name and source then
+    return name, source
+  end
+  return actor_id, nil
+end
+
+local function comment_style(comment)
   local actor_type = type(comment.actorType) == 'string' and comment.actorType or 'unknown'
   local actor_id = type(comment.actorId) == 'string' and comment.actorId or 'unknown'
+  local current_user = (vim.env.USER and vim.env.USER ~= '') and vim.env.USER or 'user'
+
+  if actor_type == 'human' then
+    return {
+      label = actor_id == current_user and 'you' or actor_id,
+      header_group = 'PiCommsHumanHeader',
+      meta_group = 'PiCommsCommentMeta',
+      body_group = nil,
+    }
+  end
+
+  if actor_type == 'agent' then
+    local name, source = parse_agent_identity(actor_id)
+    local label = name
+    if source then
+      label = label .. ' · ' .. source
+    end
+    return {
+      label = label,
+      header_group = 'PiCommsAgentHeader',
+      meta_group = 'PiCommsCommentMeta',
+      body_group = 'PiCommsAgentBody',
+    }
+  end
+
+  return {
+    label = string.format('%s:%s', actor_type, actor_id),
+    header_group = 'PiCommsCommentMeta',
+    meta_group = 'PiCommsCommentMeta',
+    body_group = nil,
+  }
+end
+
+local function render_comment(comment)
+  local created_at = format_timestamp(comment.createdAt)
   local context = format_context(comment.context)
   local body = type(comment.body) == 'string' and comment.body or ''
   local body_lines = body ~= '' and vim.split(body, '\n', { plain = true })
     or { '_(empty comment)_' }
+  local style = comment_style(comment)
 
   local lines = {
-    string.format('╭─ %s:%s · %s', actor_type, actor_id, created_at),
+    string.format('%s · %s', style.label, created_at),
   }
+  local line_groups = { style.header_group }
 
   for _, body_line in ipairs(body_lines) do
-    table.insert(lines, '│ ' .. body_line)
+    table.insert(lines, '  ' .. body_line)
+    table.insert(line_groups, style.body_group)
   end
 
   if context then
-    table.insert(lines, '╰─ ' .. context)
-  else
-    table.insert(lines, '╰─ ' .. derive_comment_thread_id(comment))
+    table.insert(lines, '  ' .. context)
+    table.insert(line_groups, style.meta_group)
   end
 
-  return lines
+  return {
+    lines = lines,
+    line_groups = line_groups,
+  }
 end
 
 local function render_timeline(result)
@@ -875,17 +958,30 @@ local function render_timeline(result)
     or {}
 
   local lines = {}
+  local highlights = {}
 
   if #comments == 0 then
     table.insert(lines, '_No comments yet_')
+    table.insert(highlights, {
+      line = 0,
+      group = 'PiCommsCommentMeta',
+    })
   else
     for index, comment in ipairs(comments) do
       if index > 1 then
         table.insert(lines, '')
       end
       local rendered = render_comment(comment)
-      for _, line in ipairs(rendered) do
+      local start_line = #lines
+      for i, line in ipairs(rendered.lines) do
         table.insert(lines, line)
+        local group = rendered.line_groups[i]
+        if group then
+          table.insert(highlights, {
+            line = start_line + i - 1,
+            group = group,
+          })
+        end
       end
     end
   end
@@ -893,7 +989,7 @@ local function render_timeline(result)
   timeline_content_line_count = math.max(8, #lines)
   apply_panel_layout()
   render_footer()
-  set_timeline_lines(lines)
+  set_timeline_lines(lines, highlights)
 end
 
 local function is_same_context(a, b)

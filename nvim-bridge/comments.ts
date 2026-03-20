@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -85,6 +86,34 @@ function normalizeActorType(actorType: string | undefined): CommentActorType {
   return actorType === "human" ? "human" : "agent";
 }
 
+function detectTmuxLabel(): string | null {
+  const pane = process.env.TMUX_PANE;
+  if (!pane) return null;
+
+  try {
+    const cp = childProcess;
+    const info = cp
+      .execSync("tmux display-message -p '#S:#I.#P'", {
+        encoding: "utf8",
+        timeout: 2000,
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+      .trim();
+    return info || pane;
+  } catch {
+    return pane;
+  }
+}
+
+let cachedTmuxLabel: string | null | undefined;
+
+function getTmuxLabel(): string | null {
+  if (cachedTmuxLabel === undefined) {
+    cachedTmuxLabel = detectTmuxLabel();
+  }
+  return cachedTmuxLabel;
+}
+
 function normalizeActorId(actorId: string | undefined, actorType: CommentActorType): string {
   const trimmed = actorId?.trim();
   if (trimmed && trimmed.length > 0) return trimmed;
@@ -92,7 +121,12 @@ function normalizeActorId(actorId: string | undefined, actorType: CommentActorTy
     const user = process.env.USER?.trim();
     return user && user.length > 0 ? user : "human";
   }
-  return "pi";
+
+  const nickname = process.env.PI_NICKNAME?.trim();
+  const tmux = getTmuxLabel();
+  const parts: string[] = [nickname || "pi"];
+  if (tmux) parts.push(tmux);
+  return parts.join("@");
 }
 
 function normalizePositiveInteger(value: number | undefined): number | undefined {

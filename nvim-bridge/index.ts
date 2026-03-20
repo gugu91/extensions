@@ -687,7 +687,10 @@ export default function (pi: ExtensionAPI) {
         Type.String({ description: "Actor type (agent or human). Defaults to agent" }),
       ),
       actor_id: Type.Optional(
-        Type.String({ description: "Actor identifier (default depends on actor type)" }),
+        Type.String({
+          description:
+            "Actor identifier (default depends on actor type). Agents default to PI_NICKNAME@tmux or pi@tmux.",
+        }),
       ),
       file: Type.Optional(Type.String({ description: "Optional file path for context" })),
       start_line: Type.Optional(Type.Number({ description: "Optional start line for context" })),
