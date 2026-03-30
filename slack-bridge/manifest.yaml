@@ -1,0 +1,39 @@
+display_information:
+  name: Pinet
+features:
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Pinet
+    always_online: true
+  assistant_view:
+    assistant_description: Pi coding agent
+    suggested_prompts: []
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - assistant:write
+      - channels:history
+      - channels:read
+      - chat:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - users:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - assistant_thread_started
+      - assistant_thread_context_changed
+      - message.channels
+      - message.groups
+      - message.im
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  is_hosted: false
+  token_rotation_enabled: false
