@@ -56,6 +56,7 @@ paste `manifest.yaml` from this directory.
 ```bash
 export SLACK_BOT_TOKEN="xoxb-..."   # Bot User OAuth Token
 export SLACK_APP_TOKEN="xapp-..."   # App-Level Token (Socket Mode)
+export SLACK_ALLOWED_USERS="U01ABC,U02DEF"  # Optional: comma-separated Slack user IDs
 ```
 
 Use direnv for convenience:
@@ -64,6 +65,7 @@ Use direnv for convenience:
 # .env.personal.local (gitignored)
 SLACK_BOT_TOKEN="xoxb-..."
 SLACK_APP_TOKEN="xapp-..."
+SLACK_ALLOWED_USERS="U01ABC,U02DEF"
 
 # .envrc
 dotenv_if_exists .env.personal.local
@@ -93,6 +95,18 @@ Current scopes: `app_mentions:read`, `assistant:write`, `canvases:read`,
 Current events: `app_mention`, `assistant_thread_started`,
 `assistant_thread_context_changed`, `member_joined_channel`,
 `message.channels`, `message.groups`, `message.im`
+
+## Security
+
+Set `SLACK_ALLOWED_USERS` to a comma-separated list of Slack user IDs to
+restrict who can interact with the agent. Only listed users' messages are
+queued; others receive a polite rejection reply.
+
+If the variable is not set, all users are allowed (backward compatible).
+
+Find user IDs in Slack: click a user's profile → **More** → **Copy member ID**.
+
+The `/slack` command shows the current allowlist.
 
 ## Architecture
 
