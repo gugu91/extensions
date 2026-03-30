@@ -16,13 +16,31 @@ async function slack(
   token: string,
   body?: Record<string, unknown>,
 ): Promise<SlackResult> {
+  // Use JSON only when the body contains complex values (arrays/objects);
+  // otherwise use form-encoded, which all Slack methods accept.
+  const needsJson = body && Object.values(body).some((v) => typeof v === "object" && v !== null);
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  let serialized: string | undefined;
+  if (body) {
+    if (needsJson) {
+      headers["Content-Type"] = "application/json; charset=utf-8";
+      serialized = JSON.stringify(body);
+    } else {
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+      serialized = new URLSearchParams(
+        Object.entries(body).map(([k, v]) => [k, String(v)]),
+      ).toString();
+    }
+  }
+
   const res = await fetch(`${SLACK_API}/${method}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json; charset=utf-8",
-    },
-    body: body ? JSON.stringify(body) : undefined,
+    headers,
+    body: serialized,
   });
 
   if (res.status === 429) {
