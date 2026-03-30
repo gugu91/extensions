@@ -452,8 +452,9 @@ export default function (pi: ExtensionAPI) {
 
     const isTracked = !!threadTs && threads.has(threadTs);
     const isDM = channelType === "im";
+    const isMention = botUserId != null && text.includes(`<@${botUserId}>`);
 
-    if (!isTracked && !isDM) return;
+    if (!isTracked && !isDM && !isMention) return;
 
     const effectiveTs = threadTs ?? (evt.ts as string);
 
