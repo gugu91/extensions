@@ -241,6 +241,21 @@ export default function (pi: ExtensionAPI) {
         case "message":
           if (!evt.subtype && !evt.bot_id) await onMessage(evt, ctx);
           break;
+        case "member_joined_channel":
+          if ((evt.user as string) === botUserId) {
+            const ch = evt.channel as string;
+            ctx.ui.notify(`Pinet added to channel ${ch}`, "info");
+            inbox.push({
+              channel: ch,
+              threadTs: "",
+              userId: "system",
+              text: `Pinet was added to channel <#${ch}>. You can now post messages there.`,
+              timestamp: String(Date.now() / 1000),
+            });
+            updateBadge();
+            if (ctx.isIdle?.()) drainInbox();
+          }
+          break;
       }
     } catch {
       /* malformed frame */

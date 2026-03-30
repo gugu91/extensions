@@ -33,6 +33,7 @@ settings:
       - app_mention
       - assistant_thread_started
       - assistant_thread_context_changed
+      - member_joined_channel
       - message.channels
       - message.groups
       - message.im
