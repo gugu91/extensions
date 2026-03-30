@@ -16,9 +16,17 @@ async function slack(
   token: string,
   body?: Record<string, unknown>,
 ): Promise<SlackResult> {
-  // Use JSON only when the body contains complex values (arrays/objects);
-  // otherwise use form-encoded, which all Slack methods accept.
-  const needsJson = body && Object.values(body).some((v) => typeof v === "object" && v !== null);
+  // Form-encode read methods (they reject JSON); JSON for everything else.
+  const FORM_METHODS = new Set([
+    "auth.test",
+    "users.info",
+    "conversations.list",
+    "conversations.history",
+    "conversations.replies",
+    "conversations.info",
+    "apps.connections.open",
+  ]);
+  const needsJson = !FORM_METHODS.has(method);
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
