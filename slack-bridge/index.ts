@@ -75,7 +75,8 @@ export default function (pi: ExtensionAPI) {
   let shuttingDown = false;
 
   const threads = new Map<string, ThreadInfo>();
-  const thinking = new Set<string>(); // thread_ts values showing "is thinking…"
+  const thinking = new Set<string>();
+  const pendingEyes = new Map<string, { channel: string; messageTs: string }[]>(); // thread_ts → message ts list // thread_ts values showing "is thinking…"
   const userNames = new Map<string, string>();
   let lastDmChannel: string | null = null;
 
@@ -298,7 +299,11 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
 
     // React with 👀 to acknowledge (no chat lock)
-    void addReaction(channel, (evt.ts as string) ?? effectiveTs, "eyes");
+    const messageTs = (evt.ts as string) ?? effectiveTs;
+    void addReaction(channel, messageTs, "eyes");
+    const pending = pendingEyes.get(effectiveTs) ?? [];
+    pending.push({ channel, messageTs });
+    pendingEyes.set(effectiveTs, pending);
 
     // Queue in inbox
     inbox.push({
@@ -431,9 +436,15 @@ export default function (pi: ExtensionAPI) {
         threads.set(actualTs, { channelId: channel, threadTs: actualTs, userId: "" });
       }
 
-      // Remove 👀 when we reply
+      // Remove 👀 from all messages in this thread
       if (params.thread_ts) {
-        void removeReaction(channel, params.thread_ts, "eyes");
+        const pending = pendingEyes.get(params.thread_ts);
+        if (pending) {
+          for (const p of pending) {
+            void removeReaction(p.channel, p.messageTs, "eyes");
+          }
+          pendingEyes.delete(params.thread_ts);
+        }
       }
 
       return {
