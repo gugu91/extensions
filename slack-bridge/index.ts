@@ -102,6 +102,14 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Helpers ─────────────────────────────────────────
 
+  async function addReaction(channel: string, ts: string, emoji: string): Promise<void> {
+    try {
+      await slack("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
+    } catch {
+      /* already_reacted or non-critical */
+    }
+  }
+
   async function resolveUser(userId: string): Promise<string> {
     const cached = userNames.get(userId);
     if (cached) return cached;
@@ -281,6 +289,9 @@ export default function (pi: ExtensionAPI) {
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
 
+    // React with 👀 to acknowledge (no chat lock)
+    void addReaction(channel, (evt.ts as string) ?? effectiveTs, "eyes");
+
     // Queue in inbox
     inbox.push({
       channel,
@@ -412,10 +423,9 @@ export default function (pi: ExtensionAPI) {
         threads.set(actualTs, { channelId: channel, threadTs: actualTs, userId: "" });
       }
 
-      // clear thinking status
-      if (params.thread_ts && thinking.has(params.thread_ts)) {
-        thinking.delete(params.thread_ts);
-        await clearThreadStatus(channel, params.thread_ts);
+      // React ✅ on the thread to show we replied
+      if (params.thread_ts) {
+        void addReaction(channel, params.thread_ts, "white_check_mark");
       }
 
       return {
@@ -511,12 +521,6 @@ export default function (pi: ExtensionAPI) {
 
     const pending = inbox.splice(0, inbox.length);
     updateBadge();
-
-    // Show "is thinking…" on each thread
-    for (const m of pending) {
-      thinking.add(m.threadTs);
-      void setThreadStatus(m.channel, m.threadTs, "is thinking…");
-    }
 
     const lines = pending.map((m) => {
       const n = userNames.get(m.userId) ?? m.userId;
