@@ -110,6 +110,14 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
+    try {
+      await slack("reactions.remove", botToken!, { channel, timestamp: ts, name: emoji });
+    } catch {
+      /* not_reacted or non-critical */
+    }
+  }
+
   async function resolveUser(userId: string): Promise<string> {
     const cached = userNames.get(userId);
     if (cached) return cached;
@@ -423,9 +431,9 @@ export default function (pi: ExtensionAPI) {
         threads.set(actualTs, { channelId: channel, threadTs: actualTs, userId: "" });
       }
 
-      // React ✅ on the thread to show we replied
+      // Remove 👀 when we reply
       if (params.thread_ts) {
-        void addReaction(channel, params.thread_ts, "white_check_mark");
+        void removeReaction(channel, params.thread_ts, "eyes");
       }
 
       return {
