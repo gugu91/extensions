@@ -82,11 +82,14 @@ export default function (pi: ExtensionAPI) {
     return allowedUsers === null || allowedUsers.has(userId);
   }
 
+  const agentName = process.env.PI_NICKNAME ?? "pi";
+
   interface ThreadInfo {
     channelId: string;
     threadTs: string;
     userId: string;
     context?: { channelId: string; teamId: string };
+    owner?: string; // agent name that claimed this thread (first-responder-wins)
   }
 
   let botUserId: string | null = null;
@@ -100,6 +103,7 @@ export default function (pi: ExtensionAPI) {
   const userNames = new Map<string, string>();
   let lastDmChannel: string | null = null;
   const channelCache = new Map<string, string>();
+  const unclaimedThreads = new Set<string>(); // negative cache for resolveThreadOwner
 
   // ─── State persistence ──────────────────────────────
 
@@ -243,14 +247,53 @@ export default function (pi: ExtensionAPI) {
         channel_id: channelId,
         thread_ts: threadTs,
         prompts: [
-          { title: "Status", message: "What are you working on right now?" },
-          { title: "Help", message: "I need help with something in the codebase" },
-          { title: "Review", message: "Summarise the recent changes" },
+          { title: "Status", message: `Hey ${agentName}, what are you working on right now?` },
+          { title: "Help", message: `${agentName}, I need help with something in the codebase` },
+          { title: "Review", message: `${agentName}, summarise the recent changes` },
         ],
       });
     } catch {
       /* non-critical */
     }
+  }
+
+  // ─── Thread ownership ────────────────────────────────
+  //
+  // Follows a "first responder wins" model. When an agent sends its
+  // first reply to a thread via slack_send, it embeds its identity in
+  // Slack message metadata, claiming the thread. Before queuing an
+  // incoming message, we call conversations.replies to look for bot
+  // messages with agent metadata. If another agent has already replied,
+  // we skip the message.
+  //
+  // Race condition: there is a small window between the ownership check
+  // and the actual reply where two agents could both see zero bot
+  // replies and both decide to respond. The first reply to land
+  // effectively claims the thread; the losing agent backs off on the
+  // next incoming message once it sees the winner's metadata.
+
+  async function resolveThreadOwner(channel: string, threadTs: string): Promise<string | null> {
+    try {
+      const res = await slack("conversations.replies", botToken!, {
+        channel,
+        ts: threadTs,
+        limit: 50,
+        include_all_metadata: true,
+      });
+      const msgs = (res.messages as Record<string, unknown>[]) ?? [];
+      for (const m of msgs) {
+        if (!m.bot_id) continue;
+        const meta = m.metadata as
+          | { event_type?: string; event_payload?: { agent?: string } }
+          | undefined;
+        if (meta?.event_type === "pi_agent_msg" && meta.event_payload?.agent) {
+          return meta.event_payload.agent;
+        }
+      }
+    } catch {
+      // If we can't check, allow the message through rather than blocking
+    }
+    return null;
   }
 
   // ─── Socket Mode (native WebSocket) ─────────────────
@@ -382,6 +425,31 @@ export default function (pi: ExtensionAPI) {
 
     const effectiveTs = threadTs ?? (evt.ts as string);
 
+    // track if new (needed for ownership check below)
+    if (!threads.has(effectiveTs)) {
+      threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
+    }
+
+    // ── Thread ownership check (before allowlist so only the owning agent rejects) ──
+    const localOwner = threads.get(effectiveTs)?.owner;
+    if (localOwner && localOwner !== agentName) return; // owned by another agent
+
+    if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
+      const remoteOwner = await resolveThreadOwner(channel, effectiveTs);
+      if (remoteOwner && remoteOwner !== agentName) {
+        const t = threads.get(effectiveTs);
+        if (t) t.owner = remoteOwner; // cache so we skip instantly next time
+        return;
+      }
+      if (remoteOwner === agentName) {
+        const t = threads.get(effectiveTs);
+        if (t) t.owner = agentName;
+      }
+      if (!remoteOwner) {
+        unclaimedThreads.add(effectiveTs); // negative cache: no owner found yet
+      }
+    }
+
     // ── User allowlist check ──
     if (!isUserAllowed(user)) {
       await slack("chat.postMessage", botToken!, {
@@ -392,10 +460,6 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    // track if new
-    if (!threads.has(effectiveTs)) {
-      threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
-    }
     lastDmChannel = channel;
     persistState();
 
@@ -528,17 +592,33 @@ export default function (pi: ExtensionAPI) {
         throw new Error("No active Slack thread. Wait for an incoming message first.");
       }
 
-      const body: Record<string, unknown> = { channel, text: params.text };
+      const body: Record<string, unknown> = {
+        channel,
+        text: params.text,
+        metadata: {
+          event_type: "pi_agent_msg",
+          event_payload: { agent: agentName },
+        },
+      };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
       const res = await slack("chat.postMessage", botToken!, body);
       const ts = (res.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
-      // track
+      // track + claim ownership (first-responder-wins)
       if (!threads.has(actualTs)) {
-        threads.set(actualTs, { channelId: channel, threadTs: actualTs, userId: "" });
+        threads.set(actualTs, {
+          channelId: channel,
+          threadTs: actualTs,
+          userId: "",
+          owner: agentName,
+        });
+      } else {
+        const t = threads.get(actualTs)!;
+        if (!t.owner) t.owner = agentName;
       }
+      unclaimedThreads.delete(actualTs);
       persistState();
 
       // Remove 👀 from all messages in this thread
@@ -733,14 +813,16 @@ export default function (pi: ExtensionAPI) {
     description: "Show Slack assistant status",
     handler: async (_args, ctx) => {
       const socket = ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected";
+      const ownedCount = [...threads.values()].filter((t) => t.owner === agentName).length;
       const allowlistInfo = allowedUsers
         ? `Allowed users: ${[...allowedUsers].join(", ")}`
         : "Allowed users: all (no allowlist set)";
       ctx.ui.notify(
         [
+          `Agent: ${agentName}`,
           `Bot: ${botUserId ?? "unknown"}`,
           `Socket Mode: ${socket}`,
-          `Threads: ${threads.size}`,
+          `Threads: ${threads.size} (${ownedCount} owned by ${agentName})`,
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
         ].join("\n"),
