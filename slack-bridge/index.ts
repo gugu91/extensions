@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
@@ -62,6 +65,25 @@ async function slack(
   return data;
 }
 
+// ─── Settings ────────────────────────────────────────────
+
+interface SlackBridgeSettings {
+  allowedUsers?: string[];
+  defaultChannel?: string;
+  suggestedPrompts?: { title: string; message: string }[];
+}
+
+function loadSettings(): SlackBridgeSettings {
+  const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+  try {
+    const content = fs.readFileSync(settingsPath, "utf-8");
+    const parsed = JSON.parse(content);
+    return (parsed["slack-bridge"] as SlackBridgeSettings) ?? {};
+  } catch {
+    return {};
+  }
+}
+
 // ─── Extension ───────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -70,13 +92,22 @@ export default function (pi: ExtensionAPI) {
 
   if (!botToken || !appToken) return;
 
-  const allowedUsers: Set<string> | null = process.env.SLACK_ALLOWED_USERS
-    ? new Set(
+  const settings = loadSettings();
+
+  // allowedUsers: settings.json takes priority, env var as fallback
+  const allowedUsers: Set<string> | null = (() => {
+    if (settings.allowedUsers && settings.allowedUsers.length > 0) {
+      return new Set(settings.allowedUsers);
+    }
+    if (process.env.SLACK_ALLOWED_USERS) {
+      return new Set(
         process.env.SLACK_ALLOWED_USERS.split(",")
           .map((id) => id.trim())
           .filter(Boolean),
-      )
-    : null;
+      );
+    }
+    return null;
+  })();
 
   function isUserAllowed(userId: string): boolean {
     return allowedUsers === null || allowedUsers.has(userId);
@@ -242,15 +273,16 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function setSuggestedPrompts(channelId: string, threadTs: string): Promise<void> {
+    const prompts = settings.suggestedPrompts ?? [
+      { title: "Status", message: `Hey ${agentName}, what are you working on right now?` },
+      { title: "Help", message: `${agentName}, I need help with something in the codebase` },
+      { title: "Review", message: `${agentName}, summarise the recent changes` },
+    ];
     try {
       await slack("assistant.threads.setSuggestedPrompts", botToken!, {
         channel_id: channelId,
         thread_ts: threadTs,
-        prompts: [
-          { title: "Status", message: `Hey ${agentName}, what are you working on right now?` },
-          { title: "Help", message: `${agentName}, I need help with something in the codebase` },
-          { title: "Review", message: `${agentName}, summarise the recent changes` },
-        ],
+        prompts,
       });
     } catch {
       /* non-critical */
@@ -731,15 +763,24 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "slack_post_channel",
     label: "Slack Post Channel",
-    description: "Post a message to a Slack channel (by name or ID), optionally in a thread.",
+    description:
+      "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
     promptSnippet: "Post a message to a Slack channel.",
     parameters: Type.Object({
-      channel: Type.String({ description: "Channel name or ID" }),
+      channel: Type.Optional(
+        Type.String({
+          description: "Channel name or ID (uses defaultChannel from settings if omitted)",
+        }),
+      ),
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
     }),
     async execute(_id, params) {
-      const channelId = await resolveChannel(params.channel);
+      const channelInput = params.channel ?? settings.defaultChannel;
+      if (!channelInput) {
+        throw new Error("No channel specified and no defaultChannel configured in settings.json.");
+      }
+      const channelId = await resolveChannel(channelInput);
       const body: Record<string, unknown> = {
         channel: channelId,
         text: params.text,
@@ -754,8 +795,8 @@ export default function (pi: ExtensionAPI) {
           {
             type: "text",
             text: params.thread_ts
-              ? `Replied in thread ${params.thread_ts} in channel ${params.channel}.`
-              : `Posted to #${params.channel} (ts: ${ts}).`,
+              ? `Replied in thread ${params.thread_ts} in channel ${channelInput}.`
+              : `Posted to #${channelInput} (ts: ${ts}).`,
           },
         ],
         details: { ts, channel: channelId },
@@ -821,6 +862,9 @@ export default function (pi: ExtensionAPI) {
       const allowlistInfo = allowedUsers
         ? `Allowed users: ${[...allowedUsers].join(", ")}`
         : "Allowed users: all (no allowlist set)";
+      const defaultChInfo = settings.defaultChannel
+        ? `Default channel: ${settings.defaultChannel}`
+        : "Default channel: none";
       ctx.ui.notify(
         [
           `Agent: ${agentName}`,
@@ -829,6 +873,7 @@ export default function (pi: ExtensionAPI) {
           `Threads: ${threads.size} (${ownedCount} owned by ${agentName})`,
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
+          defaultChInfo,
         ].join("\n"),
         "info",
       );
