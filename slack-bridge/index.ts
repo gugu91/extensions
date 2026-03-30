@@ -70,6 +70,18 @@ export default function (pi: ExtensionAPI) {
 
   if (!botToken || !appToken) return;
 
+  const allowedUsers: Set<string> | null = process.env.SLACK_ALLOWED_USERS
+    ? new Set(
+        process.env.SLACK_ALLOWED_USERS.split(",")
+          .map((id) => id.trim())
+          .filter(Boolean),
+      )
+    : null;
+
+  function isUserAllowed(userId: string): boolean {
+    return allowedUsers === null || allowedUsers.has(userId);
+  }
+
   interface ThreadInfo {
     channelId: string;
     threadTs: string;
@@ -312,6 +324,16 @@ export default function (pi: ExtensionAPI) {
 
     const effectiveTs = threadTs ?? (evt.ts as string);
 
+    // ── User allowlist check ──
+    if (!isUserAllowed(user)) {
+      await slack("chat.postMessage", botToken!, {
+        channel,
+        thread_ts: effectiveTs,
+        text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
+      });
+      return;
+    }
+
     // track if new
     if (!threads.has(effectiveTs)) {
       threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
@@ -528,12 +550,16 @@ export default function (pi: ExtensionAPI) {
     description: "Show Slack assistant status",
     handler: async (_args, ctx) => {
       const socket = ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected";
+      const allowlistInfo = allowedUsers
+        ? `Allowed users: ${[...allowedUsers].join(", ")}`
+        : "Allowed users: all (no allowlist set)";
       ctx.ui.notify(
         [
           `Bot: ${botUserId ?? "unknown"}`,
           `Socket Mode: ${socket}`,
           `Threads: ${threads.size}`,
           `DM channel: ${lastDmChannel ?? "none yet"}`,
+          allowlistInfo,
         ].join("\n"),
         "info",
       );
