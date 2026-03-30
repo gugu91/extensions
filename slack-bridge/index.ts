@@ -100,6 +100,16 @@ export default function (pi: ExtensionAPI) {
   const userNames = new Map<string, string>();
   let lastDmChannel: string | null = null;
 
+  // ─── State persistence ──────────────────────────────
+
+  function persistState(): void {
+    pi.appendEntry("slack-bridge-state", {
+      threads: Array.from(threads.entries()),
+      lastDmChannel,
+      userNames: Array.from(userNames.entries()),
+    });
+  }
+
   // ─── Inbox queue ────────────────────────────────────
 
   interface InboxMessage {
@@ -147,6 +157,7 @@ export default function (pi: ExtensionAPI) {
       const u = res.user as { real_name?: string; name?: string };
       const name = u.real_name ?? u.name ?? userId;
       userNames.set(userId, name);
+      persistState();
       return name;
     } catch {
       return userId;
@@ -293,6 +304,7 @@ export default function (pi: ExtensionAPI) {
 
     threads.set(info.threadTs, info);
     lastDmChannel = info.channelId;
+    persistState();
 
     await setSuggestedPrompts(info.channelId, info.threadTs);
   }
@@ -307,6 +319,7 @@ export default function (pi: ExtensionAPI) {
     const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
     if (ctx?.channel_id) {
       existing.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
+      persistState();
     }
   }
 
@@ -339,6 +352,7 @@ export default function (pi: ExtensionAPI) {
       threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
     }
     lastDmChannel = channel;
+    persistState();
 
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
@@ -480,6 +494,7 @@ export default function (pi: ExtensionAPI) {
       if (!threads.has(actualTs)) {
         threads.set(actualTs, { channelId: channel, threadTs: actualTs, userId: "" });
       }
+      persistState();
 
       // Remove 👀 from all messages in this thread
       if (params.thread_ts) {
@@ -571,6 +586,34 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     extCtx = ctx;
+
+    // Restore persisted thread state
+    interface PersistedState {
+      threads?: [string, ThreadInfo][];
+      lastDmChannel?: string | null;
+      userNames?: [string, string][];
+    }
+    let savedState: PersistedState | null = null;
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "slack-bridge-state") {
+        savedState = entry.data as PersistedState;
+      }
+    }
+    if (savedState) {
+      if (savedState.threads) {
+        for (const [k, v] of savedState.threads) {
+          if (!threads.has(k)) threads.set(k, v);
+        }
+      }
+      if (savedState.lastDmChannel && !lastDmChannel) {
+        lastDmChannel = savedState.lastDmChannel;
+      }
+      if (savedState.userNames) {
+        for (const [k, v] of savedState.userNames) {
+          if (!userNames.has(k)) userNames.set(k, v);
+        }
+      }
+    }
 
     try {
       const auth = await slack("auth.test", botToken!);

@@ -24,11 +24,26 @@ declare module "@mariozechner/pi-coding-agent" {
     setStatus(id: string, value?: any): void;
   }
 
+  export interface SessionEntry {
+    type: string;
+    customType?: string;
+    data?: unknown;
+    [k: string]: unknown;
+  }
+
+  export interface SessionManager {
+    getEntries(): SessionEntry[];
+    getBranch(): SessionEntry[];
+    getLeafId(): string | undefined;
+    getSessionFile(): string | undefined;
+  }
+
   export interface ExtensionContext {
     cwd: string;
     hasUI?: boolean;
     isIdle?: () => boolean;
     ui: ExtensionUI;
+    sessionManager: SessionManager;
   }
 
   export interface ToolUpdate {
@@ -72,5 +87,6 @@ declare module "@mariozechner/pi-coding-agent" {
       options?: { deliverAs?: string },
     ): void;
     sendMessage(message: any): void;
+    appendEntry(customType: string, data?: unknown): void;
   }
 }
