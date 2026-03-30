@@ -68,6 +68,8 @@ async function slack(
 // ─── Settings ────────────────────────────────────────────
 
 interface SlackBridgeSettings {
+  botToken?: string;
+  appToken?: string;
   allowedUsers?: string[];
   defaultChannel?: string;
   suggestedPrompts?: { title: string; message: string }[];
@@ -87,12 +89,12 @@ function loadSettings(): SlackBridgeSettings {
 // ─── Extension ───────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  const botToken = process.env.SLACK_BOT_TOKEN;
-  const appToken = process.env.SLACK_APP_TOKEN;
+  const settings = loadSettings();
+
+  const botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
+  const appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
 
   if (!botToken || !appToken) return;
-
-  const settings = loadSettings();
 
   // allowedUsers: settings.json takes priority, env var as fallback
   const allowedUsers: Set<string> | null = (() => {
