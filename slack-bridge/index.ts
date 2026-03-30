@@ -173,6 +173,7 @@ export default function (pi: ExtensionAPI) {
     userId: string;
     text: string;
     timestamp: string;
+    isChannelMention?: boolean;
   }
 
   const inbox: InboxMessage[] = [];
@@ -493,11 +494,19 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    lastDmChannel = channel;
+    if (isDM) lastDmChannel = channel;
     persistState();
 
+    // Determine if this is a new channel mention (not DM, not already tracked)
+    const isChannelMention = isMention && !isDM && !isTracked;
+
+    // Strip <@BOT_ID> from text for channel mentions
+    const cleanText = isChannelMention
+      ? text.replace(new RegExp(`<@${botUserId!}>`, "g"), "").trim()
+      : text;
+
     const name = await resolveUser(user);
-    ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
+    ctx.ui.notify(`${name}: ${cleanText.slice(0, 100)}`, "info");
 
     // React with 👀 to acknowledge (no chat lock)
     const messageTs = (evt.ts as string) ?? effectiveTs;
@@ -511,8 +520,9 @@ export default function (pi: ExtensionAPI) {
       channel,
       threadTs: effectiveTs,
       userId: user,
-      text,
+      text: cleanText,
       timestamp: (evt.ts as string) ?? effectiveTs,
+      ...(isChannelMention && { isChannelMention: true }),
     });
     updateBadge();
 
@@ -598,7 +608,10 @@ export default function (pi: ExtensionAPI) {
       const lines: string[] = [];
       for (const m of pending) {
         const name = await resolveUser(m.userId);
-        lines.push(`[thread ${m.threadTs}] ${name} (${m.timestamp}): ${m.text}`);
+        const prefix = m.isChannelMention
+          ? `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${name}`
+          : `[thread ${m.threadTs}] ${name}`;
+        lines.push(`${prefix} (${m.timestamp}): ${m.text}`);
       }
 
       return {
@@ -939,6 +952,9 @@ export default function (pi: ExtensionAPI) {
 
     const lines = pending.map((m) => {
       const n = userNames.get(m.userId) ?? m.userId;
+      if (m.isChannelMention) {
+        return `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${n}: ${m.text}`;
+      }
       return `[thread ${m.threadTs}] ${n}: ${m.text}`;
     });
 
