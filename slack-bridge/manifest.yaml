@@ -18,6 +18,7 @@ oauth_config:
       - canvases:read
       - canvases:write
       - channels:history
+      - channels:manage
       - channels:read
       - chat:write
       - groups:history
