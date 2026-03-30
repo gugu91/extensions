@@ -103,6 +103,7 @@ export default function (pi: ExtensionAPI) {
   const userNames = new Map<string, string>();
   let lastDmChannel: string | null = null;
   const channelCache = new Map<string, string>();
+  const unclaimedThreads = new Set<string>(); // negative cache for resolveThreadOwner
 
   // ─── State persistence ──────────────────────────────
 
@@ -424,28 +425,16 @@ export default function (pi: ExtensionAPI) {
 
     const effectiveTs = threadTs ?? (evt.ts as string);
 
-    // ── User allowlist check ──
-    if (!isUserAllowed(user)) {
-      await slack("chat.postMessage", botToken!, {
-        channel,
-        thread_ts: effectiveTs,
-        text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
-      });
-      return;
-    }
-
-    // track if new
+    // track if new (needed for ownership check below)
     if (!threads.has(effectiveTs)) {
       threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
     }
-    lastDmChannel = channel;
-    persistState();
 
-    // ── Thread ownership check ──
+    // ── Thread ownership check (before allowlist so only the owning agent rejects) ──
     const localOwner = threads.get(effectiveTs)?.owner;
     if (localOwner && localOwner !== agentName) return; // owned by another agent
 
-    if (!localOwner) {
+    if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
       const remoteOwner = await resolveThreadOwner(channel, effectiveTs);
       if (remoteOwner && remoteOwner !== agentName) {
         const t = threads.get(effectiveTs);
@@ -456,7 +445,23 @@ export default function (pi: ExtensionAPI) {
         const t = threads.get(effectiveTs);
         if (t) t.owner = agentName;
       }
+      if (!remoteOwner) {
+        unclaimedThreads.add(effectiveTs); // negative cache: no owner found yet
+      }
     }
+
+    // ── User allowlist check ──
+    if (!isUserAllowed(user)) {
+      await slack("chat.postMessage", botToken!, {
+        channel,
+        thread_ts: effectiveTs,
+        text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
+      });
+      return;
+    }
+
+    lastDmChannel = channel;
+    persistState();
 
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
@@ -613,6 +618,7 @@ export default function (pi: ExtensionAPI) {
         const t = threads.get(actualTs)!;
         if (!t.owner) t.owner = agentName;
       }
+      unclaimedThreads.delete(actualTs);
       persistState();
 
       // Remove 👀 from all messages in this thread
