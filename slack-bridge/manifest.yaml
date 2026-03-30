@@ -42,3 +42,7 @@ settings:
   socket_mode_enabled: true
   is_hosted: false
   token_rotation_enabled: false
+metadata:
+  event_subscriptions:
+    - event_type: pi_agent_msg
+      description: Agent identity for thread routing
