@@ -82,6 +82,7 @@ export default function (pi: ExtensionAPI) {
   const thinking = new Set<string>(); // thread_ts values showing "is thinking…"
   const userNames = new Map<string, string>();
   let lastDmChannel: string | null = null;
+  const channelCache = new Map<string, string>(); // channel name → ID
 
   // ─── Inbox queue ────────────────────────────────────
 
@@ -118,6 +119,36 @@ export default function (pi: ExtensionAPI) {
     } catch {
       return userId;
     }
+  }
+
+  async function resolveChannel(nameOrId: string): Promise<string> {
+    // Slack IDs: C (public), G (private/group), D (DM)
+    if (/^[CGD][A-Z0-9]{8,}$/.test(nameOrId)) return nameOrId;
+
+    const name = nameOrId.replace(/^#/, "");
+    const cached = channelCache.get(name);
+    if (cached) return cached;
+
+    // Paginate through conversations.list to populate cache
+    let cursor: string | undefined;
+    do {
+      const body: Record<string, unknown> = {
+        types: "public_channel,private_channel",
+        limit: 200,
+        exclude_archived: true,
+      };
+      if (cursor) body.cursor = cursor;
+      const res = await slack("conversations.list", botToken!, body);
+      const channels = res.channels as { id: string; name: string }[];
+      for (const ch of channels) {
+        channelCache.set(ch.name, ch.id);
+      }
+      // Short-circuit once we find the target
+      if (channelCache.has(name)) return channelCache.get(name)!;
+      cursor = (res.response_metadata as { next_cursor?: string })?.next_cursor || undefined;
+    } while (cursor);
+
+    throw new Error(`Channel "${nameOrId}" not found.`);
   }
 
   async function setThreadStatus(
@@ -521,12 +552,139 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ─── Channel tools ──────────────────────────────────
+
+  pi.registerTool({
+    name: "slack_create_channel",
+    label: "Slack Create Channel",
+    description: "Create a public Slack channel, optionally setting topic and purpose.",
+    promptSnippet: "Create a new Slack channel for a project.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Channel name (lowercase, no spaces, max 80 chars)" }),
+      topic: Type.Optional(Type.String({ description: "Channel topic" })),
+      purpose: Type.Optional(Type.String({ description: "Channel purpose" })),
+    }),
+    async execute(_id, params) {
+      const res = await slack("conversations.create", botToken!, {
+        name: params.name,
+        is_private: false,
+      });
+      const ch = res.channel as { id: string; name: string };
+      channelCache.set(ch.name, ch.id);
+
+      if (params.topic) {
+        await slack("conversations.setTopic", botToken!, {
+          channel: ch.id,
+          topic: params.topic,
+        });
+      }
+      if (params.purpose) {
+        await slack("conversations.setPurpose", botToken!, {
+          channel: ch.id,
+          purpose: params.purpose,
+        });
+      }
+
+      return {
+        content: [{ type: "text", text: `Created channel #${ch.name} (${ch.id})` }],
+        details: { id: ch.id, name: ch.name },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_post_channel",
+    label: "Slack Post Channel",
+    description: "Post a message to a Slack channel (by name or ID).",
+    promptSnippet: "Post a message to a Slack channel.",
+    parameters: Type.Object({
+      channel: Type.String({ description: "Channel name or ID" }),
+      text: Type.String({ description: "Message text (Slack markdown)" }),
+      thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
+    }),
+    async execute(_id, params) {
+      const channelId = await resolveChannel(params.channel);
+      const body: Record<string, unknown> = {
+        channel: channelId,
+        text: `${AGENT_TAG} ${params.text}`,
+      };
+      if (params.thread_ts) body.thread_ts = params.thread_ts;
+
+      const res = await slack("chat.postMessage", botToken!, body);
+      const ts = (res.message as { ts: string }).ts;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: params.thread_ts
+              ? `Replied in thread ${params.thread_ts} in channel ${channelId}.`
+              : `Posted to channel ${channelId} (ts: ${ts}).`,
+          },
+        ],
+        details: { ts, channel: channelId },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_read_channel",
+    label: "Slack Read Channel",
+    description: "Read messages from a Slack channel or a thread within it.",
+    promptSnippet: "Read messages from a Slack channel.",
+    parameters: Type.Object({
+      channel: Type.String({ description: "Channel name or ID" }),
+      thread_ts: Type.Optional(
+        Type.String({ description: "Thread timestamp to read replies from" }),
+      ),
+      limit: Type.Optional(Type.Number({ description: "Max messages to return (default 20)" })),
+    }),
+    async execute(_id, params) {
+      const channelId = await resolveChannel(params.channel);
+      const cap = params.limit ?? 20;
+
+      let msgs: Record<string, unknown>[];
+      if (params.thread_ts) {
+        const res = await slack("conversations.replies", botToken!, {
+          channel: channelId,
+          ts: params.thread_ts,
+          limit: cap,
+        });
+        msgs = res.messages as Record<string, unknown>[];
+      } else {
+        const res = await slack("conversations.history", botToken!, {
+          channel: channelId,
+          limit: cap,
+        });
+        msgs = res.messages as Record<string, unknown>[];
+      }
+
+      const lines: string[] = [];
+      for (const m of msgs) {
+        const uid = m.user as string | undefined;
+        const name = uid ? await resolveUser(uid) : "bot";
+        const txt = (m.text as string) ?? "";
+        const ts = m.ts as string;
+        lines.push(`[${ts}] ${name}: ${txt}`);
+      }
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
+        details: { count: msgs.length },
+      };
+    },
+  });
+
   // ─── Commands ───────────────────────────────────────
 
   pi.registerCommand("slack", {
-    description: "Show Slack assistant status",
+    description: "Show Slack assistant status and known channels",
     handler: async (_args, ctx) => {
       const socket = ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected";
+      const channelList =
+        channelCache.size > 0
+          ? [...channelCache.entries()].map(([n, id]) => `  #${n} (${id})`).join("\n")
+          : "  (none cached)";
       ctx.ui.notify(
         [
           `Agent: ${AGENT_NICKNAME}`,
@@ -534,6 +692,7 @@ export default function (pi: ExtensionAPI) {
           `Socket Mode: ${socket}`,
           `Threads: ${threads.size}`,
           `DM channel: ${lastDmChannel ?? "none yet"}`,
+          `Channels:\n${channelList}`,
         ].join("\n"),
         "info",
       );
