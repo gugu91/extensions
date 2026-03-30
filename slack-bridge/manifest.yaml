@@ -1,7 +1,11 @@
 display_information:
   name: Pinet
+  description: Hi, im Pinet (pronounce pie-net like apple-pie and basketball net)
+  background_color: "#87390c"
+  long_description: "I am a friendly one and I can wear many hats at once, ask me anything! In my free time I like to take long walks in the park and bring a picnic. My favorite food is pie of course :cake:"
 features:
   app_home:
+    home_tab_enabled: true
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
@@ -13,12 +17,10 @@ features:
 oauth_config:
   scopes:
     bot:
+      - reactions:write
       - app_mentions:read
       - assistant:write
-      - canvases:read
-      - canvases:write
       - channels:history
-      - channels:manage
       - channels:read
       - chat:write
       - groups:history
@@ -26,23 +28,22 @@ oauth_config:
       - im:history
       - im:read
       - im:write
-      - reactions:write
       - users:read
+      - reactions:read
+      - canvases:read
+      - canvases:write
+  pkce_enabled: false
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
       - assistant_thread_started
       - assistant_thread_context_changed
-      - member_joined_channel
       - message.channels
       - message.groups
       - message.im
+  interactivity:
+    is_enabled: true
   org_deploy_enabled: false
   socket_mode_enabled: true
-  is_hosted: false
   token_rotation_enabled: false
-metadata:
-  event_subscriptions:
-    - event_type: pi_agent_msg
-      description: Agent identity for thread routing
