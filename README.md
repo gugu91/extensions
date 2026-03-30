@@ -6,11 +6,13 @@ Workspace for local pi/neovim extensions.
 
 - `nvim-bridge` — syncs Neovim editor context into pi sessions.
 - `neon-psql` — config-driven Neon tunnel + `psql` tool + tunnel-aware bash for pi.
+- `slack-bridge` — Slack assistant app (Pinet) for agent ↔ human communication.
 
 See project-specific docs in:
 
 - `nvim-bridge/README.md`
 - `neon-psql/README.md`
+- `slack-bridge/README.md`
 
 ## Dev commands (repo root)
 

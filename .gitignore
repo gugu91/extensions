@@ -6,3 +6,4 @@ dist/
 .nvimlog
 neon-psql/config.json
 __pycache__/
+.env*
