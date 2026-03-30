@@ -102,12 +102,31 @@ export default function (pi: ExtensionAPI) {
 
   // ─── State persistence ──────────────────────────────
 
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function persistStateNow(): void {
+    persistTimer = null;
+    try {
+      pi.appendEntry("slack-bridge-state", {
+        threads: Array.from(threads.entries()),
+        lastDmChannel,
+        userNames: Array.from(userNames.entries()),
+      });
+    } catch (err) {
+      console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
+    }
+  }
+
   function persistState(): void {
-    pi.appendEntry("slack-bridge-state", {
-      threads: Array.from(threads.entries()),
-      lastDmChannel,
-      userNames: Array.from(userNames.entries()),
-    });
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(persistStateNow, 1_000);
+  }
+
+  function flushPersist(): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistStateNow();
+    }
   }
 
   // ─── Inbox queue ────────────────────────────────────
@@ -593,26 +612,30 @@ export default function (pi: ExtensionAPI) {
       lastDmChannel?: string | null;
       userNames?: [string, string][];
     }
-    let savedState: PersistedState | null = null;
-    for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type === "custom" && entry.customType === "slack-bridge-state") {
-        savedState = entry.data as PersistedState;
-      }
-    }
-    if (savedState) {
-      if (savedState.threads) {
-        for (const [k, v] of savedState.threads) {
-          if (!threads.has(k)) threads.set(k, v);
+    try {
+      let savedState: PersistedState | null = null;
+      for (const entry of ctx.sessionManager.getEntries()) {
+        if (entry.type === "custom" && entry.customType === "slack-bridge-state") {
+          savedState = entry.data as PersistedState;
         }
       }
-      if (savedState.lastDmChannel && !lastDmChannel) {
-        lastDmChannel = savedState.lastDmChannel;
-      }
-      if (savedState.userNames) {
-        for (const [k, v] of savedState.userNames) {
-          if (!userNames.has(k)) userNames.set(k, v);
+      if (savedState) {
+        if (savedState.threads) {
+          for (const [k, v] of savedState.threads) {
+            if (!threads.has(k)) threads.set(k, v);
+          }
+        }
+        if (savedState.lastDmChannel && !lastDmChannel) {
+          lastDmChannel = savedState.lastDmChannel;
+        }
+        if (savedState.userNames) {
+          for (const [k, v] of savedState.userNames) {
+            if (!userNames.has(k)) userNames.set(k, v);
+          }
         }
       }
+    } catch (err) {
+      console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
 
     try {
@@ -666,6 +689,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    flushPersist();
     disconnect();
     setExtStatus(ctx, "off");
   });
