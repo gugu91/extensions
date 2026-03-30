@@ -24,6 +24,7 @@ oauth_config:
       - im:history
       - im:read
       - im:write
+      - reactions:write
       - users:read
 settings:
   event_subscriptions:
@@ -33,6 +34,7 @@ settings:
       - assistant_thread_context_changed
       - message.channels
       - message.groups
+      - app_home_opened
       - message.im
   org_deploy_enabled: false
   socket_mode_enabled: true

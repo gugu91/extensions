@@ -107,6 +107,53 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Helpers ─────────────────────────────────────────
 
+  async function addReaction(channel: string, ts: string, emoji: string): Promise<void> {
+    try {
+      await slack("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
+    } catch {
+      /* non-critical – reaction may already exist */
+    }
+  }
+
+  async function publishHomeTab(userId: string): Promise<void> {
+    const connected = ws?.readyState === WebSocket.OPEN;
+    const blocks = [
+      {
+        type: "header",
+        text: { type: "plain_text", text: "Pinet \u2014 Pi Agent Assistant", emoji: true },
+      },
+      { type: "divider" },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Connection status:* ${connected ? "\u2705 Connected" : "\u274c Disconnected"}`,
+        },
+      },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `*Active threads:* ${threads.size}` },
+      },
+      { type: "divider" },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "\u{1f4ac} Start a conversation in the *Assistants* tab",
+        },
+      },
+    ];
+
+    try {
+      await slack("views.publish", botToken!, {
+        user_id: userId,
+        view: { type: "home", blocks },
+      });
+    } catch {
+      /* non-critical */
+    }
+  }
+
   async function resolveUser(userId: string): Promise<string> {
     const cached = userNames.get(userId);
     if (cached) return cached;
@@ -280,6 +327,9 @@ export default function (pi: ExtensionAPI) {
         case "message":
           if (!evt.subtype && !evt.bot_id) await onMessage(evt, ctx);
           break;
+        case "app_home_opened":
+          if (evt.tab === "home") await publishHomeTab(evt.user as string);
+          break;
       }
     } catch {
       /* malformed frame */
@@ -355,6 +405,8 @@ export default function (pi: ExtensionAPI) {
       threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
     }
     lastDmChannel = channel;
+
+    await addReaction(channel, evt.ts as string, "eyes");
 
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
@@ -473,7 +525,9 @@ export default function (pi: ExtensionAPI) {
         throw new Error("No active Slack thread. Wait for an incoming message first.");
       }
 
-      const taggedText = `${AGENT_TAG} ${params.text}`;
+      // Preserve markdown code fences for Slack (triple-backtick syntax is compatible)
+      const sanitizedText = params.text.replace(/```(\w*)\n/g, "```$1\n");
+      const taggedText = `${AGENT_TAG} ${sanitizedText}`;
       const body: Record<string, unknown> = { channel, text: taggedText };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
@@ -492,6 +546,11 @@ export default function (pi: ExtensionAPI) {
       } else {
         const t = threads.get(actualTs)!;
         if (!t.owner) t.owner = AGENT_NICKNAME;
+      }
+
+      // react to the original thread message with a checkmark
+      if (params.thread_ts) {
+        await addReaction(channel, params.thread_ts, "white_check_mark");
       }
 
       // clear thinking status
