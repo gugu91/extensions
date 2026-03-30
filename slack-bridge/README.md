@@ -56,7 +56,6 @@ paste `manifest.yaml` from this directory.
 ```bash
 export SLACK_BOT_TOKEN="xoxb-..."   # Bot User OAuth Token
 export SLACK_APP_TOKEN="xapp-..."   # App-Level Token (Socket Mode)
-export SLACK_ALLOWED_USERS="U01ABC,U02DEF"  # Optional: comma-separated Slack user IDs
 ```
 
 Use direnv for convenience:
@@ -65,11 +64,13 @@ Use direnv for convenience:
 # .env.personal.local (gitignored)
 SLACK_BOT_TOKEN="xoxb-..."
 SLACK_APP_TOKEN="xapp-..."
-SLACK_ALLOWED_USERS="U01ABC,U02DEF"
 
 # .envrc
 dotenv_if_exists .env.personal.local
 ```
+
+> **Note:** The `SLACK_ALLOWED_USERS` env var still works as a fallback for
+> `allowedUsers`, but `settings.json` is the preferred approach (see step 5).
 
 ### 4. Install extension
 
@@ -78,6 +79,31 @@ ln -s /path/to/extensions/slack-bridge ~/.pi/agent/extensions/slack-bridge
 ```
 
 Then `/reload` in pi.
+
+### 5. Configure (optional)
+
+Add a `"slack-bridge"` key to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "slack-bridge": {
+    "allowedUsers": ["U01ABC", "U02DEF"],
+    "defaultChannel": "C0APL58LB1R",
+    "suggestedPrompts": [
+      { "title": "Status", "message": "What are you working on?" },
+      { "title": "Help", "message": "I need help with something" }
+    ]
+  }
+}
+```
+
+| Key                | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| `allowedUsers`     | Slack user IDs allowed to interact with the agent               |
+| `defaultChannel`   | Default channel for `slack_post_channel` when none is specified |
+| `suggestedPrompts` | Prompts shown when a user opens a new assistant thread          |
+
+Tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) remain env vars only.
 
 That's it — Pinet appears in Slack's sidebar automatically.
 
@@ -98,11 +124,12 @@ Current events: `app_mention`, `assistant_thread_started`,
 
 ## Security
 
-Set `SLACK_ALLOWED_USERS` to a comma-separated list of Slack user IDs to
-restrict who can interact with the agent. Only listed users' messages are
-queued; others receive a polite rejection reply.
+Set `allowedUsers` in `settings.json` (preferred) or the `SLACK_ALLOWED_USERS`
+env var (fallback) to restrict who can interact with the agent. Only listed
+users' messages are queued; others receive a polite rejection reply.
 
-If the variable is not set, all users are allowed (backward compatible).
+`settings.json` takes priority over the env var. If neither is set, all users
+are allowed (backward compatible).
 
 Find user IDs in Slack: click a user's profile → **More** → **Copy member ID**.
 
