@@ -500,13 +500,37 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // safety net: clear any lingering "is thinking…" when the agent finishes
+  // When agent finishes: clear thinking status + auto-drain inbox
   pi.on("agent_end", async () => {
     for (const ts of thinking) {
       const thread = threads.get(ts);
       if (thread) await clearThreadStatus(thread.channelId, ts);
     }
     thinking.clear();
+
+    // Auto-drain: if inbox has messages, trigger a turn to handle them
+    if (inbox.length > 0) {
+      const pending = inbox.splice(0, inbox.length);
+      updateBadge();
+
+      const lines: string[] = [];
+      for (const m of pending) {
+        const name = userNames.get(m.userId) ?? m.userId;
+        lines.push(`[thread ${m.threadTs}] ${name}: ${m.text}`);
+      }
+
+      const prompt =
+        `New Slack messages:\n${lines.join("\n")}\n\n` +
+        `Respond to each via slack_send with the correct thread_ts.`;
+
+      try {
+        pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+      } catch {
+        // If followUp fails, re-queue the messages
+        inbox.push(...pending);
+        updateBadge();
+      }
+    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
