@@ -1,0 +1,901 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  getAgentDir,
+  truncateHead,
+  type TruncationResult,
+} from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TUNNEL_SCRIPT = join(__dirname, "neon_socks_tunnel.py");
+const PYTHON_SHIM_DIR = join(__dirname, "python");
+const PSQL_BIN = "/opt/homebrew/opt/libpq/bin/psql";
+
+const PROJECT_CONFIG_PATH = join(process.cwd(), ".pi", "neon-psql.json");
+const LOCAL_EXTENSION_CONFIG_PATH = join(__dirname, "config.json");
+const GLOBAL_EXTENSION_CONFIG_PATH = join(getAgentDir(), "extensions", "neon-psql", "config.json");
+const SANDBOX_RUNTIME_ENTRY = join(
+  getAgentDir(),
+  "extensions",
+  "sandbox",
+  "node_modules",
+  "@anthropic-ai",
+  "sandbox-runtime",
+  "dist",
+  "index.js",
+);
+
+const DEFAULT_LOG_RELATIVE_PATH = join(".pi", "neon-psql-tunnel.log");
+const DEFAULT_SOURCE_ENV = {
+  host: "DB_HOST",
+  port: "DB_PORT",
+  user: "DB_USER",
+  password: "DB_PASSWORD",
+  database: "DB_NAME",
+} as const;
+
+const DEFAULT_INJECT_ENV: Record<string, string> = {
+  NEON_TUNNEL_DATABASE_URL: "postgres_url",
+  NEON_TUNNEL_SQLALCHEMY_URL: "sqlalchemy_url",
+  NEON_TUNNEL_SQLALCHEMY_ASYNC_URL: "sqlalchemy_async_url",
+  NEON_TUNNEL_ASYNCPG_DSN: "asyncpg_dsn",
+  TEST_DB_URL: "sqlalchemy_url",
+  DB_URL: "sqlalchemy_url",
+  DATABASE_URL: "postgres_url",
+  DB_HOST: "tunnel_host",
+  DB_PORT: "tunnel_port",
+  DB_USER: "source_user",
+  DB_PASSWORD: "source_password",
+  DB_NAME: "source_database",
+  DB_HOST_POOLED: "",
+  DB_READ_HOST: "",
+  PGHOST: "tunnel_host",
+  PGPORT: "tunnel_port",
+  PGUSER: "source_user",
+  PGPASSWORD: "source_password",
+  PGDATABASE: "source_database",
+  PGOPTIONS: "pgoptions",
+  PGSSLMODE: "sslmode",
+  NEON_ENDPOINT: "endpoint",
+  NEON_TUNNEL_HOST: "tunnel_host",
+  NEON_TUNNEL_PORT: "tunnel_port",
+  NEON_TUNNEL_SSL_MODE: "sslmode",
+  NEON_TUNNEL_ACTIVE: "1",
+};
+
+interface SourceEnvConfig {
+  host: string;
+  port: string;
+  user: string;
+  password: string;
+  database: string;
+}
+
+interface FileConfig {
+  enabled?: boolean;
+  injectIntoBash?: boolean;
+  injectPythonShim?: boolean;
+  logPath?: string;
+  sourceEnv?: Partial<SourceEnvConfig>;
+  injectEnv?: Record<string, string>;
+}
+
+interface ResolvedConfig {
+  path: string;
+  injectIntoBash: boolean;
+  injectPythonShim: boolean;
+  logPath: string;
+  sourceEnv: SourceEnvConfig;
+  injectEnv: Record<string, string>;
+}
+
+interface SourceValues {
+  host: string;
+  port: string;
+  user: string;
+  password: string;
+  database: string;
+}
+
+interface TunnelState {
+  child: ChildProcess;
+  port: number;
+  endpoint: string;
+  logPath: string;
+  startedAt: number;
+  source: SourceValues;
+  requiresSsl: boolean;
+}
+
+interface PsqlDetails {
+  query: string;
+  format: OutputFormat;
+  tunnelPort: number;
+  endpoint: string;
+  logPath: string;
+  configPath: string;
+  streaming?: boolean;
+  truncation?: TruncationResult;
+  fullOutputPath?: string;
+  outputPreview?: string;
+}
+
+type OutputFormat = "table" | "csv" | "tsv";
+
+const PsqlParams = Type.Object({
+  query: Type.String({
+    description: "SQL query or psql meta-command to run. Read-only inspection only.",
+  }),
+  format: Type.Optional(
+    StringEnum(["table", "csv", "tsv"] as const, {
+      description: "Output format. Defaults to table.",
+    }),
+  ),
+});
+
+type SandboxManagerLike = {
+  getSocksProxyPort: () => number | undefined;
+};
+
+let tunnel: TunnelState | null = null;
+let tunnelPromise: Promise<TunnelState> | null = null;
+let injectedEnvBackup = new Map<string, string | undefined>();
+let warnedBashTunnelUnavailable = false;
+let sandboxManagerPromise: Promise<SandboxManagerLike | null> | null = null;
+
+function needsSsl(host: string): boolean {
+  return !["localhost", "127.0.0.1", "::1"].includes(host);
+}
+
+function deriveEndpoint(host: string): string {
+  if (!needsSsl(host) || !host.includes(".")) return "";
+  return host.split(".")[0] ?? "";
+}
+
+function mergePathValue(prependValue: string, existingValue: string | undefined): string {
+  if (!existingValue) return prependValue;
+  return `${prependValue}${delimiter}${existingValue}`;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function resolveConfigPath(): string | null {
+  const explicit = process.env.PI_NEON_PSQL_CONFIG;
+  const candidates = [
+    explicit,
+    PROJECT_CONFIG_PATH,
+    LOCAL_EXTENSION_CONFIG_PATH,
+    GLOBAL_EXTENSION_CONFIG_PATH,
+  ].filter(isNonEmptyString);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function loadConfig(): ResolvedConfig | null {
+  const configPath = resolveConfigPath();
+  if (!configPath) return null;
+
+  let raw: FileConfig;
+  try {
+    raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as FileConfig;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[neon-psql] Failed to parse config ${configPath}: ${message}`);
+    return null;
+  }
+
+  if (raw.enabled === false) return null;
+
+  return {
+    path: configPath,
+    injectIntoBash: raw.injectIntoBash ?? true,
+    injectPythonShim: raw.injectPythonShim ?? true,
+    logPath: raw.logPath
+      ? join(process.cwd(), raw.logPath)
+      : join(process.cwd(), DEFAULT_LOG_RELATIVE_PATH),
+    sourceEnv: {
+      host: raw.sourceEnv?.host ?? DEFAULT_SOURCE_ENV.host,
+      port: raw.sourceEnv?.port ?? DEFAULT_SOURCE_ENV.port,
+      user: raw.sourceEnv?.user ?? DEFAULT_SOURCE_ENV.user,
+      password: raw.sourceEnv?.password ?? DEFAULT_SOURCE_ENV.password,
+      database: raw.sourceEnv?.database ?? DEFAULT_SOURCE_ENV.database,
+    },
+    injectEnv: {
+      ...DEFAULT_INJECT_ENV,
+      ...(raw.injectEnv ?? {}),
+    },
+  };
+}
+
+function readRuntimeEnv(envName: string): string | undefined {
+  if (injectedEnvBackup.has(envName)) return injectedEnvBackup.get(envName);
+  return process.env[envName];
+}
+
+function requireSourceEnv(config: ResolvedConfig): SourceValues {
+  const read = (envName: string): string => {
+    const value = readRuntimeEnv(envName);
+    if (!value) throw new Error(`${envName} is required by ${config.path}`);
+    return value;
+  };
+
+  return {
+    host: read(config.sourceEnv.host),
+    port: read(config.sourceEnv.port),
+    user: read(config.sourceEnv.user),
+    password: read(config.sourceEnv.password),
+    database: read(config.sourceEnv.database),
+  };
+}
+
+function encodeConnectionUrl(
+  scheme: string,
+  source: SourceValues,
+  port: number,
+  sslValue: string | null,
+  endpoint: string,
+): string {
+  const user = encodeURIComponent(source.user);
+  const password = encodeURIComponent(source.password);
+  const database = encodeURIComponent(source.database);
+  const params = new URLSearchParams();
+  if (sslValue) {
+    if (sslValue === "require") params.set("sslmode", sslValue);
+    else params.set("ssl", sslValue);
+  }
+  if (endpoint) params.set("options", `endpoint=${endpoint}`);
+  const query = params.toString();
+  return `${scheme}://${user}:${password}@127.0.0.1:${port}/${database}${query ? `?${query}` : ""}`;
+}
+
+function buildInjectedValues(config: ResolvedConfig, state: TunnelState): Record<string, string> {
+  const source = state.source;
+  const postgresUrl = encodeConnectionUrl(
+    "postgresql",
+    source,
+    state.port,
+    state.requiresSsl ? "require" : null,
+    state.endpoint,
+  );
+  const sqlalchemyUrl = encodeConnectionUrl(
+    "postgresql+psycopg2",
+    source,
+    state.port,
+    state.requiresSsl ? "require" : null,
+    state.endpoint,
+  );
+  const asyncpgDsn = encodeConnectionUrl(
+    "postgresql",
+    source,
+    state.port,
+    state.requiresSsl ? "require" : null,
+    state.endpoint,
+  ).replace("sslmode=require", "ssl=require");
+  const sqlalchemyAsyncUrl = asyncpgDsn.replace("postgresql://", "postgresql+asyncpg://");
+
+  const tokens: Record<string, string> = {
+    postgres_url: postgresUrl,
+    psql_url: postgresUrl,
+    sqlalchemy_url: sqlalchemyUrl,
+    sqlalchemy_async_url: sqlalchemyAsyncUrl,
+    psycopg2_url: sqlalchemyUrl,
+    asyncpg_dsn: asyncpgDsn,
+    tunnel_host: "127.0.0.1",
+    tunnel_port: String(state.port),
+    endpoint: state.endpoint,
+    pgoptions: state.endpoint ? `endpoint=${state.endpoint}` : "",
+    sslmode: state.requiresSsl ? "require" : "disable",
+    source_host: source.host,
+    source_port: source.port,
+    source_user: source.user,
+    source_password: source.password,
+    source_database: source.database,
+    config_path: config.path,
+    log_path: state.logPath,
+    "1": "1",
+  };
+
+  const resolved: Record<string, string> = {};
+  for (const [envName, spec] of Object.entries(config.injectEnv)) {
+    if (spec.startsWith("source:")) {
+      resolved[envName] = readRuntimeEnv(spec.slice("source:".length)) ?? "";
+      continue;
+    }
+    resolved[envName] = tokens[spec] ?? spec;
+  }
+
+  if (config.injectPythonShim) {
+    resolved.PYTHONPATH = mergePathValue(
+      PYTHON_SHIM_DIR,
+      resolved.PYTHONPATH ?? process.env.PYTHONPATH,
+    );
+  }
+
+  return resolved;
+}
+
+function applyInjectedEnvToProcess(config: ResolvedConfig, state: TunnelState): void {
+  for (const [key, value] of Object.entries(buildInjectedValues(config, state))) {
+    if (!injectedEnvBackup.has(key)) {
+      injectedEnvBackup.set(key, process.env[key]);
+    }
+    process.env[key] = value;
+  }
+}
+
+function restoreInjectedEnv(): void {
+  for (const [key, value] of injectedEnvBackup.entries()) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  injectedEnvBackup = new Map();
+}
+
+function clearTunnelState(childPid?: number): void {
+  if (childPid !== undefined && tunnel?.child.pid !== childPid) return;
+  tunnel = null;
+  tunnelPromise = null;
+  restoreInjectedEnv();
+}
+
+async function appendTunnelLog(logPath: string, chunk: Buffer): Promise<void> {
+  await appendFile(logPath, chunk);
+}
+
+async function reservePort(): Promise<number> {
+  const net = await import("node:net");
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Failed to reserve a local tunnel port")));
+        return;
+      }
+      const { port } = address;
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve(port);
+      });
+    });
+  });
+}
+
+async function waitForPort(port: number, timeoutMs = 10_000): Promise<void> {
+  const net = await import("node:net");
+  const start = Date.now();
+  let lastError: unknown;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const socket = net.createConnection({ host: "127.0.0.1", port });
+        socket.once("connect", () => {
+          socket.destroy();
+          resolve();
+        });
+        socket.once("error", (error) => {
+          lastError = error;
+          socket.destroy();
+          reject(error);
+        });
+      });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error(
+    `Timed out waiting for Neon tunnel on 127.0.0.1:${port}${lastError ? ` (${String(lastError)})` : ""}`,
+  );
+}
+
+function tunnelAlive(): boolean {
+  return !!tunnel && !tunnel.child.killed && tunnel.child.exitCode == null;
+}
+
+async function getSandboxManager(): Promise<SandboxManagerLike | null> {
+  if (sandboxManagerPromise) return sandboxManagerPromise;
+
+  sandboxManagerPromise = (async () => {
+    try {
+      if (!fs.existsSync(SANDBOX_RUNTIME_ENTRY)) return null;
+      const module = (await import(pathToFileURL(SANDBOX_RUNTIME_ENTRY).href)) as {
+        SandboxManager?: SandboxManagerLike;
+      };
+      return module.SandboxManager ?? null;
+    } catch {
+      return null;
+    }
+  })();
+
+  return sandboxManagerPromise;
+}
+
+async function getProxyUrl(): Promise<string | null> {
+  const envProxy =
+    process.env.ALL_PROXY ??
+    process.env.all_proxy ??
+    process.env.SOCKS_PROXY ??
+    process.env.socks_proxy;
+  if (envProxy) return envProxy;
+
+  const sandboxManager = await getSandboxManager();
+  const socksPort = sandboxManager?.getSocksProxyPort();
+  if (socksPort) return `socks5h://localhost:${socksPort}`;
+  return null;
+}
+
+async function setTunnelStatus(ctx: ExtensionContext | undefined, text?: string): Promise<void> {
+  if (!ctx?.hasUI) return;
+  ctx.ui.setStatus("neon-psql", text ? ctx.ui.theme.fg("accent", text) : undefined);
+}
+
+async function ensureTunnel(config: ResolvedConfig, ctx?: ExtensionContext): Promise<TunnelState> {
+  if (tunnelAlive()) return tunnel as TunnelState;
+  if (tunnelPromise) return tunnelPromise;
+
+  tunnelPromise = (async () => {
+    const proxyUrl = await getProxyUrl();
+    if (!proxyUrl) {
+      throw new Error("Sandbox SOCKS proxy is unavailable, so the Neon tunnel cannot start.");
+    }
+
+    const source = requireSourceEnv(config);
+    await mkdir(join(process.cwd(), ".pi"), { recursive: true });
+    const port = await reservePort();
+    const endpoint = deriveEndpoint(source.host);
+    await writeFile(config.logPath, "", "utf8");
+    await setTunnelStatus(ctx, `psql tunnel starting on 127.0.0.1:${port}`);
+
+    const child = spawn("python", [TUNNEL_SCRIPT], {
+      env: {
+        ...process.env,
+        ALL_PROXY: proxyUrl,
+        TUNNEL_HOST: "127.0.0.1",
+        TUNNEL_PORT: String(port),
+        [config.sourceEnv.host]: source.host,
+        [config.sourceEnv.port]: source.port,
+        [config.sourceEnv.user]: source.user,
+        [config.sourceEnv.password]: source.password,
+        [config.sourceEnv.database]: source.database,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout.on("data", async (chunk: Buffer) => {
+      await appendTunnelLog(config.logPath, chunk);
+    });
+    child.stderr.on("data", async (chunk: Buffer) => {
+      await appendTunnelLog(config.logPath, chunk);
+    });
+    child.once("exit", () => {
+      if (tunnel?.child.pid === child.pid) tunnel = null;
+      tunnelPromise = null;
+    });
+    child.once("error", () => {
+      if (tunnel?.child.pid === child.pid) tunnel = null;
+      tunnelPromise = null;
+    });
+
+    await waitForPort(port, 10_000);
+
+    tunnel = {
+      child,
+      port,
+      endpoint,
+      logPath: config.logPath,
+      startedAt: Date.now(),
+      source,
+      requiresSsl: needsSsl(source.host),
+    };
+
+    await setTunnelStatus(ctx, `psql tunnel 127.0.0.1:${port}`);
+    return tunnel as TunnelState;
+  })();
+
+  try {
+    return await tunnelPromise!;
+  } finally {
+    tunnelPromise = null;
+  }
+}
+
+async function stopTunnel(ctx?: ExtensionContext): Promise<void> {
+  const childPid = tunnel?.child.pid;
+  if (tunnelAlive()) {
+    tunnel?.child.kill();
+  }
+  clearTunnelState(childPid);
+  await setTunnelStatus(ctx, undefined);
+}
+
+async function prepareBashTunnel(config: ResolvedConfig, ctx: ExtensionContext): Promise<void> {
+  try {
+    const state = await ensureTunnel(config, ctx);
+    applyInjectedEnvToProcess(config, state);
+    warnedBashTunnelUnavailable = false;
+  } catch (error) {
+    restoreInjectedEnv();
+    await setTunnelStatus(ctx, undefined);
+    if (!warnedBashTunnelUnavailable && ctx.hasUI) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`neon-psql: running bash without DB tunnel (${message})`, "warning");
+      warnedBashTunnelUnavailable = true;
+    }
+  }
+}
+
+function isReadOnlyQuery(query: string): boolean {
+  const stripped = query
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!stripped) return false;
+  if (stripped.startsWith("\\")) return true;
+
+  return ["select", "with", "show", "explain", "values", "table"].some((prefix) =>
+    stripped.startsWith(prefix),
+  );
+}
+
+async function writeFullOutput(output: string): Promise<string> {
+  const path = join(tmpdir(), `pi-psql-${Date.now()}.txt`);
+  await writeFile(path, output, "utf8");
+  return path;
+}
+
+function renderPreview(
+  text: string,
+  expanded: boolean,
+  theme: { fg: (...args: unknown[]) => string },
+): string {
+  const lines = text.trim() ? text.trim().split("\n") : ["(no output)"];
+  const shown = expanded ? lines.slice(0, 80) : lines.slice(0, 8);
+  let result = shown.map((line) => theme.fg("muted", line)).join("\n");
+  if (!expanded && lines.length > shown.length) {
+    result += `\n${theme.fg("dim", `... ${lines.length - shown.length} more lines`)}`;
+  }
+  return result;
+}
+
+async function runPsqlQuery(
+  config: ResolvedConfig,
+  query: string,
+  format: OutputFormat,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+  onUpdate?: (update: {
+    content?: { type: "text"; text: string }[];
+    details?: PsqlDetails;
+  }) => void,
+): Promise<{ text: string; details: PsqlDetails }> {
+  if (!isReadOnlyQuery(query)) {
+    throw new Error(
+      "The psql extension only allows read-only queries and psql inspection meta-commands (e.g. SELECT, WITH, SHOW, EXPLAIN, VALUES, TABLE, \\d, \\dt).",
+    );
+  }
+
+  const state = await ensureTunnel(config, ctx);
+  const injected = buildInjectedValues(config, state);
+  const connection = injected.NEON_TUNNEL_DATABASE_URL;
+  const args = [connection, "-v", "ON_ERROR_STOP=1", "-P", "pager=off"];
+  if (format === "csv") args.push("--csv");
+  if (format === "tsv") args.push("-A", "-F", "\t");
+  args.push("-c", query);
+
+  const details: PsqlDetails = {
+    query,
+    format,
+    tunnelPort: state.port,
+    endpoint: state.endpoint,
+    logPath: state.logPath,
+    configPath: config.path,
+    streaming: true,
+  };
+
+  let stdout = "";
+  let stderr = "";
+
+  const pushPartial = (stage: string) => {
+    if (!onUpdate) return;
+    const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+    const preview = combined
+      ? truncateHead(combined, { maxLines: 60, maxBytes: 6 * 1024 }).content
+      : `${stage}...`;
+    onUpdate({
+      content: [{ type: "text", text: preview }],
+      details: { ...details, outputPreview: preview, streaming: true },
+    });
+  };
+
+  const child = spawn(PSQL_BIN, args, {
+    env: {
+      ...process.env,
+      ...injected,
+      PGPASSWORD: state.source.password,
+      PGAPPNAME: "pi-extension-psql",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const abort = () => child.kill("SIGTERM");
+  signal?.addEventListener("abort", abort, { once: true });
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString("utf8");
+    pushPartial("Running query");
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+    pushPartial("Running query");
+  });
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 1));
+  });
+
+  signal?.removeEventListener("abort", abort);
+
+  if (signal?.aborted) throw new Error("psql query aborted");
+
+  const combined = [stdout, stderr].filter(Boolean).join("\n").trim() || "(no output)";
+  if (exitCode !== 0) {
+    throw new Error(combined);
+  }
+
+  const truncation = truncateHead(combined, {
+    maxLines: DEFAULT_MAX_LINES,
+    maxBytes: DEFAULT_MAX_BYTES,
+  });
+
+  let text = truncation.content;
+  if (truncation.truncated) {
+    const fullOutputPath = await writeFullOutput(combined);
+    details.truncation = truncation;
+    details.fullOutputPath = fullOutputPath;
+    text += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${fullOutputPath}]`;
+  }
+
+  details.streaming = false;
+  details.outputPreview = text;
+  return { text, details };
+}
+
+function redactValue(key: string, value: string): string {
+  if (key.toLowerCase().includes("password")) return "***";
+  return value.replace(/:\/\/([^:@/]+):([^@/]+)@/g, "://$1:***@");
+}
+
+function formatInjectedEnv(config: ResolvedConfig, state: TunnelState): string {
+  const injected = buildInjectedValues(config, state);
+  const lines = [
+    `config: ${config.path}`,
+    `source: ${state.source.host}:${state.source.port}/${state.source.database}`,
+    `tunnel: 127.0.0.1:${state.port}`,
+    `endpoint: ${state.endpoint || "(none)"}`,
+    `log: ${state.logPath}`,
+    "",
+    "Injected env:",
+  ];
+  for (const key of Object.keys(injected).sort()) {
+    lines.push(`${key}=${redactValue(key, injected[key])}`);
+  }
+  return lines.join("\n");
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export default function (pi: ExtensionAPI) {
+  const config = loadConfig();
+  if (!config) return;
+
+  if (config.injectIntoBash) {
+    pi.on("tool_call", async (event, ctx) => {
+      if (event.toolName !== "bash") return;
+      await prepareBashTunnel(config, ctx);
+    });
+
+    pi.on("user_bash", async (_event, ctx) => {
+      await prepareBashTunnel(config, ctx);
+      return undefined;
+    });
+  }
+
+  pi.registerTool({
+    name: "psql",
+    label: "psql",
+    description:
+      "Run read-only Postgres queries or psql inspection meta-commands against the configured database. Starts the local tunnel automatically and streams query output.",
+    promptSnippet:
+      "Run read-only Postgres queries through the configured tunnel and stream results.",
+    promptGuidelines: [
+      "Use this tool for database inspection instead of manual connection setup.",
+      "Prefer SELECT / WITH / SHOW / EXPLAIN / VALUES / TABLE queries or psql meta-commands like \\d and \\dt.",
+    ],
+    parameters: PsqlParams,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const format = params.format ?? "table";
+      const { text, details } = await runPsqlQuery(
+        config,
+        params.query,
+        format,
+        ctx,
+        signal,
+        onUpdate,
+      );
+      return {
+        content: [{ type: "text", text }],
+        details,
+      };
+    },
+    renderCall(args, theme) {
+      const firstLine = String(args.query).trim().split("\n")[0] ?? "";
+      const preview = firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+      let text =
+        theme.fg("toolTitle", theme.bold("psql ")) + theme.fg("accent", preview || "(empty query)");
+      if (args.format && args.format !== "table") text += " " + theme.fg("dim", `(${args.format})`);
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme) {
+      const details = result.details as PsqlDetails | undefined;
+      const preview =
+        details?.outputPreview ??
+        (result.content[0]?.type === "text" ? result.content[0].text : "");
+      if (isPartial) {
+        const header = theme.fg(
+          "warning",
+          `Running via tunnel 127.0.0.1:${details?.tunnelPort ?? "?"}`,
+        );
+        return new Text(`${header}\n${renderPreview(preview, false, theme)}`, 0, 0);
+      }
+
+      let text = theme.fg("success", `✓ psql via 127.0.0.1:${details?.tunnelPort ?? "?"}`);
+      if (details?.truncation?.truncated) text += " " + theme.fg("warning", "(truncated)");
+      text += `\n${renderPreview(preview, expanded, theme)}`;
+      if (expanded && details?.fullOutputPath)
+        text += `\n${theme.fg("dim", `Full output: ${details.fullOutputPath}`)}`;
+      if (expanded && details?.logPath)
+        text += `\n${theme.fg("dim", `Tunnel log: ${details.logPath}`)}`;
+      return new Text(text, 0, 0);
+    },
+  });
+
+  pi.registerCommand("psql", {
+    description: "Run a read-only psql query directly: /psql <query>",
+    handler: async (args, ctx) => {
+      try {
+        const query = args.trim();
+        if (!query) {
+          ctx.ui.notify("Usage: /psql <query>", "warning");
+          return;
+        }
+        const { text, details } = await runPsqlQuery(config, query, "table", ctx);
+        pi.sendMessage({
+          customType: "psql-command",
+          content: text,
+          display: true,
+          details,
+        });
+      } catch (error: unknown) {
+        ctx.ui.notify(`psql error: ${getErrorMessage(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("psql-tunnel", {
+    description: "Inspect or manage the tunnel: /psql-tunnel [status|start|stop|log|env]",
+    handler: async (args, ctx) => {
+      try {
+        const action = args.trim() || "status";
+        switch (action) {
+          case "status": {
+            if (!tunnelAlive()) {
+              ctx.ui.notify(`Tunnel is not running (config: ${config.path})`, "info");
+              return;
+            }
+            ctx.ui.notify(
+              `Tunnel: 127.0.0.1:${tunnel?.port} -> ${tunnel?.source.host}:${tunnel?.source.port} (${config.path})`,
+              "info",
+            );
+            return;
+          }
+          case "start": {
+            const state = await ensureTunnel(config, ctx);
+            ctx.ui.notify(`Started tunnel on 127.0.0.1:${state.port}`, "info");
+            return;
+          }
+          case "stop": {
+            await stopTunnel(ctx);
+            ctx.ui.notify("Stopped tunnel", "info");
+            return;
+          }
+          case "log": {
+            try {
+              const log = await readFile(config.logPath, "utf8");
+              const lines = log.trim().split("\n").slice(-20).join("\n") || "(log empty)";
+              pi.sendMessage({
+                customType: "psql-tunnel-log",
+                content: lines,
+                display: true,
+                details: { path: config.logPath, timestamp: Date.now() },
+              });
+              return;
+            } catch {
+              ctx.ui.notify(`No tunnel log at ${config.logPath}`, "warning");
+              return;
+            }
+          }
+          case "env": {
+            const state = await ensureTunnel(config, ctx);
+            pi.sendMessage({
+              customType: "psql-tunnel-env",
+              content: formatInjectedEnv(config, state),
+              display: true,
+              details: { path: config.path },
+            });
+            return;
+          }
+          default:
+            ctx.ui.notify("Usage: /psql-tunnel [status|start|stop|log|env]", "warning");
+            return;
+        }
+      } catch (error: unknown) {
+        ctx.ui.notify(`psql tunnel error: ${getErrorMessage(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerMessageRenderer("psql-command", (message, { expanded }, theme) => {
+    const details = message.details as PsqlDetails | undefined;
+    const query = details?.query ?? "(unknown query)";
+    let text = theme.fg("accent", "[/psql] ") + theme.fg("toolTitle", query);
+    text += `\n${renderPreview(message.content, expanded, theme)}`;
+    if (expanded && details?.logPath)
+      text += `\n${theme.fg("dim", `Tunnel log: ${details.logPath}`)}`;
+    return new Text(text, 0, 0);
+  });
+
+  pi.registerMessageRenderer("psql-tunnel-log", (message, _options, theme) => {
+    const details = message.details as { path?: string } | undefined;
+    let text = theme.fg("accent", "[psql tunnel log]");
+    if (details?.path) text += ` ${theme.fg("dim", details.path)}`;
+    text += `\n${theme.fg("muted", message.content)}`;
+    return new Text(text, 0, 0);
+  });
+
+  pi.registerMessageRenderer("psql-tunnel-env", (message, _options, theme) => {
+    return new Text(theme.fg("muted", message.content), 0, 0);
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (tunnelAlive()) {
+      await setTunnelStatus(ctx, `psql tunnel 127.0.0.1:${tunnel?.port}`);
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    await stopTunnel(ctx);
+  });
+}

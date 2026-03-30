@@ -4,3 +4,5 @@ dist/
 .DS_Store
 *.log
 .nvimlog
+neon-psql/config.json
+__pycache__/

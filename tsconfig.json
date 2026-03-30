@@ -10,5 +10,5 @@
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["nvim-bridge/**/*.ts", "types/**/*.d.ts"]
+  "include": ["nvim-bridge/**/*.ts", "neon-psql/**/*.ts", "slack-bridge/**/*.ts", "types/**/*.d.ts"]
 }

@@ -1,6 +1,6 @@
 # nvim-bridge
 
-Neovim ↔ pi bridge that sends active editor context (file, viewport, selection, comments) into pi before each agent run.
+Neovim ↔ pi bridge that sends active editor context (file, viewport, selection) into pi before each agent run, and supports persistent local PiComms comments.
 
 ## How it works
 
@@ -11,7 +11,6 @@ Neovim ↔ pi bridge that sends active editor context (file, viewport, selection
   - visible line range
   - cursor line
   - selection
-  - optional one-shot comment
 
 > Important: Neovim and pi must be in the **same git repo and same branch**.
 
@@ -42,9 +41,7 @@ Because the Neovim plugin lives in `nvim-bridge/nvim`, point lazy to that direct
   name = "pi-nvim",
   lazy = false,
   config = function()
-    require("pi-nvim").setup({
-      comment_keymap = "<leader>pc", -- optional
-    })
+    require("pi-nvim").setup()
   end,
 }
 ```
@@ -55,25 +52,59 @@ If this repo is elsewhere, change the `dir` path.
 
 After linking/configuring, restart both so socket + autocommands are initialized.
 
+### Keymaps
+
+This plugin does **not** define global keymaps by default.
+Define mappings in your Neovim config (e.g. lazy `keys` field).
+
 ## Usage
 
-Commands:
+Core bridge commands:
 
 - `:PiNvimEnable`
 - `:PiNvimDisable`
 - `:PiNvimStatus`
-- `:'<,'>PiNvimComment` (comment on selected range)
 
-Default keymap for comments (if enabled in setup):
+PiComms commands (stored under `.pi/a2a/comments`):
 
-- Visual mode: `<leader>pc`
-- Normal mode: `<leader>pc` (current line)
+- `:PiCommsOpen [thread]` — open the PiComms panel for the current context thread
+- `:PiCommsAdd [thread]` — open the same panel and focus the reply composer for the current context thread
+- `:PiCommsNext` — jump to the next PiComms thread in the current file
+- `:PiCommsClose` — close the PiComms panel
+- `:PiCommsRefresh [thread]` — refresh the open panel from pi
+- `:PiCommsRead` — trigger `/picomms:read`
+- `:PiCommsClean` — trigger `/picomms:clean`
 
-Comment window controls:
+Pi slash commands:
 
-- `Enter` → send comment
-- `Shift-Enter` / `Ctrl-j` → newline
-- `Esc` → cancel
+- `/picomms:read` — load all repository comments and queue them as guidance for the agent
+- `/picomms:clean` — wipe all repository comments
+
+Inline composer controls:
+
+- panel opens in normal mode
+- `i` → jump into the reply composer and enter insert mode
+- `Enter` → submit comment
+- `Shift-Enter` → newline
+- `q` or `<C-w>q` (normal mode) → close panel
+
+Panel notes:
+
+- `:PiCommsOpen` is the primary entrypoint and resolves the current context thread
+- `:PiCommsAdd` opens the same thread view but focuses the composer area
+- `:PiCommsNext` jumps to the next thread anchor in the current file
+- the panel shows the current thread above and the reply box at the bottom
+- advanced actions stay available as commands: `:PiCommsRefresh`, `:PiCommsClose`, `:PiCommsRead`, `:PiCommsClean`
+
+Line indicators:
+
+- File lines with comment context show a stronger speech-bubble virtual text marker with a count (e.g. `1`, `3`)
+- Range comments mark the start line only
+- Uses virtual text, not sign column, to avoid conflicts with git gutter plugins
+
+Global wipe is also available via skill:
+
+- `/skill:wipe-a2a-comments`
 
 ## Development tooling
 

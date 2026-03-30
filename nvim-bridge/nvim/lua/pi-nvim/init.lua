@@ -1,38 +1,129 @@
-local socket = require('pi-nvim.socket')
+local comments = require('pi-nvim.comments')
 local events = require('pi-nvim.events')
+local socket = require('pi-nvim.socket')
 
 local M = {}
 
 local enabled = false
 
-function M.setup(opts)
-  opts = vim.tbl_deep_extend('force', {
-    comment_keymap = '<leader>pc',
-  }, opts or {})
+function M.setup(_opts)
   enabled = true
 
   -- Connect socket on startup
   socket.connect()
+  comments.setup()
 
-  -- Command: add a free-form comment for a selected range.
-  if vim.fn.exists(':PiNvimComment') == 0 then
-    vim.api.nvim_create_user_command('PiNvimComment', function(cmd_opts)
+  -- PiComms timeline commands.
+  if vim.fn.exists(':PiCommsOpen') == 0 then
+    vim.api.nvim_create_user_command('PiCommsOpen', function(cmd_opts)
       if not enabled then
         vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
         return
       end
-      events.open_comment_window(cmd_opts.line1, cmd_opts.line2)
+
+      local thread_id = cmd_opts.args ~= '' and cmd_opts.args or nil
+      local has_range = (cmd_opts.range or 0) > 0
+
+      comments.open({
+        thread_id = thread_id,
+        start_line = has_range and cmd_opts.line1 or nil,
+        end_line = has_range and cmd_opts.line2 or nil,
+        focus_composer = false,
+      })
     end, {
-      desc = 'Open a comment window for the selected range and send to pi',
+      desc = 'Open PiComms panel for the current thread',
       range = true,
+      nargs = '?',
     })
   end
 
-  -- Optional shortcut (default: <leader>pc)
-  if opts.comment_keymap and opts.comment_keymap ~= '' then
-    local map_opts = { silent = true, desc = 'pi-nvim: comment selected range' }
-    vim.keymap.set('x', opts.comment_keymap, ":<C-u>'<,'>PiNvimComment<CR>", map_opts)
-    vim.keymap.set('n', opts.comment_keymap, ':<C-u>.,.PiNvimComment<CR>', map_opts)
+  if vim.fn.exists(':PiCommsRefresh') == 0 then
+    vim.api.nvim_create_user_command('PiCommsRefresh', function(cmd_opts)
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      local thread_id = cmd_opts.args ~= '' and cmd_opts.args or nil
+      comments.refresh({
+        thread_id = thread_id,
+        open_if_missing = true,
+        focus_composer = false,
+      })
+    end, {
+      desc = 'Refresh PiComms timeline',
+      nargs = '?',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsAdd') == 0 then
+    vim.api.nvim_create_user_command('PiCommsAdd', function(cmd_opts)
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+
+      local thread_id = cmd_opts.args ~= '' and cmd_opts.args or nil
+      local has_range = (cmd_opts.range or 0) > 0
+
+      comments.open({
+        thread_id = thread_id,
+        start_line = has_range and cmd_opts.line1 or nil,
+        end_line = has_range and cmd_opts.line2 or nil,
+        focus_composer = true,
+      })
+    end, {
+      desc = 'Open PiComms and focus the inline composer',
+      range = true,
+      nargs = '?',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsNext') == 0 then
+    vim.api.nvim_create_user_command('PiCommsNext', function()
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      comments.next_thread()
+    end, {
+      desc = 'Jump to the next PiComms thread in this file',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsClose') == 0 then
+    vim.api.nvim_create_user_command('PiCommsClose', function()
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      comments.close()
+    end, {
+      desc = 'Close the PiComms panel',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsRead') == 0 then
+    vim.api.nvim_create_user_command('PiCommsRead', function()
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      comments.trigger_read()
+    end, {
+      desc = 'Trigger /picomms:read',
+    })
+  end
+
+  if vim.fn.exists(':PiCommsClean') == 0 then
+    vim.api.nvim_create_user_command('PiCommsClean', function()
+      if not enabled then
+        vim.notify('pi-nvim: bridge is disabled', vim.log.levels.WARN)
+        return
+      end
+      comments.trigger_clean()
+    end, {
+      desc = 'Trigger /picomms:clean',
+    })
   end
 
   -- BufEnter: send buffer_focus (no debounce)
@@ -88,11 +179,12 @@ end
 function M.enable()
   enabled = true
   socket.connect()
+  comments.setup()
 end
 
 function M.disable()
   enabled = false
-  socket.disconnect()
+  socket.disconnect({ no_reconnect = true })
 end
 
 function M.is_enabled()
