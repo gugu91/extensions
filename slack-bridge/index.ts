@@ -79,6 +79,27 @@ export default function (pi: ExtensionAPI) {
   const userNames = new Map<string, string>();
   let lastDmChannel: string | null = null;
 
+  // ─── Inbox queue ────────────────────────────────────
+
+  interface InboxMessage {
+    channel: string;
+    threadTs: string;
+    userId: string;
+    text: string;
+    timestamp: string;
+  }
+
+  const inbox: InboxMessage[] = [];
+  let extCtx: ExtensionContext | null = null; // cached for badge updates
+
+  function updateBadge(): void {
+    if (!extCtx?.hasUI) return;
+    const t = extCtx.ui.theme;
+    const n = inbox.length;
+    const label = n > 0 ? t.fg("accent", `slack ✦ ${n}`) : t.fg("accent", "slack ✦");
+    extCtx.ui.setStatus("slack-bridge", label);
+  }
+
   // ─── Helpers ─────────────────────────────────────────
 
   async function resolveUser(userId: string): Promise<string> {
@@ -257,26 +278,18 @@ export default function (pi: ExtensionAPI) {
     }
     lastDmChannel = channel;
 
-    // show "is thinking…"
-    await setThreadStatus(channel, effectiveTs, "is thinking…");
-    thinking.add(effectiveTs);
-
-    // forward to pi
     const name = await resolveUser(user);
-    let prompt = `[Slack from ${name}] ${text}`;
-    prompt += `\n\n(Respond with slack_send, thread_ts "${effectiveTs}".)`;
-
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
 
-    try {
-      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-    } catch {
-      try {
-        pi.sendUserMessage(prompt);
-      } catch {
-        /* ignore */
-      }
-    }
+    // Queue in inbox instead of interrupting the agent
+    inbox.push({
+      channel,
+      threadTs: effectiveTs,
+      userId: user,
+      text,
+      timestamp: (evt.ts as string) ?? effectiveTs,
+    });
+    updateBadge();
   }
 
   // ─── Reconnect / status ─────────────────────────────
@@ -307,19 +320,59 @@ export default function (pi: ExtensionAPI) {
     state: "ok" | "reconnecting" | "error" | "off",
   ): void {
     if (!ctx.hasUI) return;
+    extCtx = ctx;
     const t = ctx.ui.theme;
+    if (state === "ok") {
+      // delegate to updateBadge so unread count is shown
+      updateBadge();
+      return;
+    }
     const text =
-      state === "ok"
-        ? t.fg("accent", "slack ✦")
-        : state === "reconnecting"
-          ? t.fg("warning", "slack ⟳")
-          : state === "error"
-            ? t.fg("error", "slack ✗")
-            : "";
+      state === "reconnecting"
+        ? t.fg("warning", "slack ⟳")
+        : state === "error"
+          ? t.fg("error", "slack ✗")
+          : "";
     ctx.ui.setStatus("slack-bridge", text);
   }
 
   // ─── Tools ──────────────────────────────────────────
+
+  pi.registerTool({
+    name: "slack_inbox",
+    label: "Slack Inbox",
+    description:
+      "Return pending Slack messages that arrived since the last check, then clear the queue.",
+    promptSnippet: "Check for new incoming Slack messages.",
+    promptGuidelines: [
+      "You are connected to Slack via the slack-bridge extension.",
+      "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
+      "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
+    ],
+    parameters: Type.Object({}),
+    async execute() {
+      if (inbox.length === 0) {
+        return {
+          content: [{ type: "text", text: "(no new messages)" }],
+          details: { count: 0 },
+        };
+      }
+
+      const pending = inbox.splice(0, inbox.length);
+      updateBadge();
+
+      const lines: string[] = [];
+      for (const m of pending) {
+        const name = await resolveUser(m.userId);
+        lines.push(`[thread ${m.threadTs}] ${name} (${m.timestamp}): ${m.text}`);
+      }
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { count: pending.length },
+      };
+    },
+  });
 
   pi.registerTool({
     name: "slack_send",
@@ -434,6 +487,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
+    extCtx = ctx;
 
     try {
       const auth = await slack("auth.test", botToken!);
