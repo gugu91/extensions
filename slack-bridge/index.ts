@@ -281,7 +281,7 @@ export default function (pi: ExtensionAPI) {
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
 
-    // Queue in inbox instead of interrupting the agent
+    // Queue in inbox
     inbox.push({
       channel,
       threadTs: effectiveTs,
@@ -290,6 +290,28 @@ export default function (pi: ExtensionAPI) {
       timestamp: (evt.ts as string) ?? effectiveTs,
     });
     updateBadge();
+
+    // If agent is idle, trigger immediately — otherwise agent_end drains it
+    if (ctx.isIdle?.()) {
+      const pending = inbox.splice(0, inbox.length);
+      updateBadge();
+
+      const lines = pending.map((m) => {
+        const n = userNames.get(m.userId) ?? m.userId;
+        return `[thread ${m.threadTs}] ${n}: ${m.text}`;
+      });
+
+      const prompt =
+        `New Slack messages:\n${lines.join("\n")}\n\n` +
+        `Respond to each via slack_send with the correct thread_ts.`;
+
+      try {
+        pi.sendUserMessage(prompt);
+      } catch {
+        inbox.push(...pending);
+        updateBadge();
+      }
+    }
   }
 
   // ─── Reconnect / status ─────────────────────────────
