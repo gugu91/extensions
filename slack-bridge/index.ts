@@ -2,6 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 
 const SLACK_API = "https://slack.com/api";
+const AGENT_NICKNAME = process.env.PI_NICKNAME ?? "pi";
+const AGENT_TAG = `[${AGENT_NICKNAME}]`;
+const AGENT_TAG_RE = /^\[([^\]]+)\]/;
 
 // ─── Slack API (raw fetch, zero deps) ────────────────────
 
@@ -66,6 +69,7 @@ export default function (pi: ExtensionAPI) {
     channelId: string;
     threadTs: string;
     userId: string;
+    owner?: string;
     context?: { channelId: string; teamId: string };
   }
 
@@ -144,6 +148,31 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  function extractAgentTag(text: string): string | null {
+    const m = AGENT_TAG_RE.exec(text);
+    return m ? m[1] : null;
+  }
+
+  async function detectThreadOwner(channelId: string, threadTs: string): Promise<string | null> {
+    try {
+      const res = await slack("conversations.replies", botToken!, {
+        channel: channelId,
+        ts: threadTs,
+        limit: 50,
+      });
+      const msgs = res.messages as Record<string, unknown>[];
+      for (const m of msgs) {
+        if (!m.bot_id) continue;
+        const text = (m.text as string) ?? "";
+        const agent = extractAgentTag(text);
+        if (agent) return agent;
+      }
+    } catch {
+      /* non-critical */
+    }
+    return null;
+  }
+
   async function setSuggestedPrompts(channelId: string, threadTs: string): Promise<void> {
     try {
       await slack("assistant.threads.setSuggestedPrompts", botToken!, {
@@ -153,6 +182,10 @@ export default function (pi: ExtensionAPI) {
           { title: "Status", message: "What are you working on right now?" },
           { title: "Help", message: "I need help with something in the codebase" },
           { title: "Review", message: "Summarise the recent changes" },
+          {
+            title: `Talk to ${AGENT_NICKNAME}`,
+            message: `Talk to ${AGENT_NICKNAME}`,
+          },
         ],
       });
     } catch {
@@ -271,6 +304,20 @@ export default function (pi: ExtensionAPI) {
     if (!isTracked && !isDM) return;
 
     const effectiveTs = threadTs ?? (evt.ts as string);
+
+    // ── Thread ownership check ─────────────────────────
+    const existingThread = threads.get(effectiveTs);
+    if (existingThread?.owner && existingThread.owner !== AGENT_NICKNAME) {
+      return; // owned by a different agent
+    }
+    if (!existingThread?.owner) {
+      const detectedOwner = await detectThreadOwner(channel, effectiveTs);
+      if (detectedOwner && detectedOwner !== AGENT_NICKNAME) {
+        if (existingThread) existingThread.owner = detectedOwner;
+        return;
+      }
+      if (existingThread && detectedOwner) existingThread.owner = detectedOwner;
+    }
 
     // track if new
     if (!threads.has(effectiveTs)) {
@@ -395,16 +442,25 @@ export default function (pi: ExtensionAPI) {
         throw new Error("No active Slack thread. Wait for an incoming message first.");
       }
 
-      const body: Record<string, unknown> = { channel, text: params.text };
+      const taggedText = `${AGENT_TAG} ${params.text}`;
+      const body: Record<string, unknown> = { channel, text: taggedText };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
       const res = await slack("chat.postMessage", botToken!, body);
       const ts = (res.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
-      // track
+      // track & claim ownership
       if (!threads.has(actualTs)) {
-        threads.set(actualTs, { channelId: channel, threadTs: actualTs, userId: "" });
+        threads.set(actualTs, {
+          channelId: channel,
+          threadTs: actualTs,
+          userId: "",
+          owner: AGENT_NICKNAME,
+        });
+      } else {
+        const t = threads.get(actualTs)!;
+        if (!t.owner) t.owner = AGENT_NICKNAME;
       }
 
       // clear thinking status
@@ -473,6 +529,7 @@ export default function (pi: ExtensionAPI) {
       const socket = ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected";
       ctx.ui.notify(
         [
+          `Agent: ${AGENT_NICKNAME}`,
           `Bot: ${botUserId ?? "unknown"}`,
           `Socket Mode: ${socket}`,
           `Threads: ${threads.size}`,
