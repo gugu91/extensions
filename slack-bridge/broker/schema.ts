@@ -248,6 +248,25 @@ export class BrokerDB implements BrokerDBInterface {
 
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void {
     const db = this.getDb();
+    const now = new Date().toISOString();
+
+    // Upsert: create the thread if it doesn't exist yet
+    const existing = this.getThread(threadId);
+    if (!existing) {
+      db.prepare(
+        `INSERT INTO threads (thread_id, source, channel, owner_agent, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        threadId,
+        updates.source ?? "slack",
+        updates.channel ?? "",
+        updates.ownerAgent !== undefined ? updates.ownerAgent : null,
+        now,
+        now,
+      );
+      return;
+    }
+
     const sets: string[] = [];
     const values: (string | null)[] = [];
 
@@ -265,7 +284,7 @@ export class BrokerDB implements BrokerDBInterface {
     }
 
     sets.push("updated_at = ?");
-    values.push(new Date().toISOString());
+    values.push(now);
     values.push(threadId);
 
     db.prepare(`UPDATE threads SET ${sets.join(", ")} WHERE thread_id = ?`).run(...values);

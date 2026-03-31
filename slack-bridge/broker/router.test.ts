@@ -39,9 +39,20 @@ class StubBrokerDBInterface implements BrokerDBInterface {
 
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void {
     const existing = this.threads.get(threadId);
-    if (existing) {
-      this.threads.set(threadId, { ...existing, ...updates });
+    if (!existing) {
+      // Upsert: create with defaults
+      const now = new Date().toISOString();
+      this.threads.set(threadId, {
+        threadId,
+        source: updates.source ?? "slack",
+        channel: updates.channel ?? "",
+        ownerAgent: updates.ownerAgent !== undefined ? updates.ownerAgent : null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return;
     }
+    this.threads.set(threadId, { ...existing, ...updates });
   }
 
   queueMessage(agentId: string, message: InboundMessage): void {
@@ -283,6 +294,39 @@ describe("MessageRouter — getThreadOwner", () => {
 
   it("returns null for nonexistent thread", () => {
     expect(router.getThreadOwner("t-unknown")).toBeNull();
+  });
+});
+
+describe("MessageRouter — claimThread with upsert", () => {
+  let db: StubBrokerDBInterface;
+  let router: MessageRouter;
+
+  beforeEach(() => {
+    db = new StubBrokerDBInterface();
+    router = new MessageRouter(db);
+  });
+
+  it("updateThread upserts a non-existent thread", () => {
+    db.updateThread("t-new", { ownerAgent: "a1" });
+
+    const thread = db.threads.get("t-new");
+    expect(thread).toBeDefined();
+    expect(thread?.ownerAgent).toBe("a1");
+    expect(thread?.source).toBe("slack");
+  });
+
+  it("updateThread upsert preserves provided channel", () => {
+    db.updateThread("t-new", { ownerAgent: "a1", channel: "C999" });
+
+    const thread = db.threads.get("t-new");
+    expect(thread?.channel).toBe("C999");
+  });
+
+  it("claimThread works via updateThread upsert path", () => {
+    // Thread doesn't exist — claimThread creates it
+    const claimed = router.claimThread("t-fresh", "a1");
+    expect(claimed).toBe(true);
+    expect(db.threads.get("t-fresh")?.ownerAgent).toBe("a1");
   });
 });
 

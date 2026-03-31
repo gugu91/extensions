@@ -84,9 +84,10 @@ export class MessageRouter {
 
   /**
    * Claim a thread for an agent (first-responder-wins).
+   * Optionally provide a channel to set when creating a new thread.
    * Returns true if the claim succeeded, false if another agent already owns it.
    */
-  claimThread(threadId: string, agentId: string): boolean {
+  claimThread(threadId: string, agentId: string, channel?: string): boolean {
     const existing = this.db.getThread(threadId);
 
     if (existing) {
@@ -104,7 +105,7 @@ export class MessageRouter {
     this.db.createThread({
       threadId,
       source: "slack",
-      channel: "",
+      channel: channel ?? "",
       ownerAgent: agentId,
       createdAt: now,
       updatedAt: now,

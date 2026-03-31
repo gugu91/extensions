@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
 import type { BrokerDB } from "./schema.js";
+import { MessageRouter } from "./router.js";
 import type { JsonRpcRequest, JsonRpcResponse, JsonRpcError } from "./types.js";
 import {
   RPC_PARSE_ERROR,
@@ -61,12 +62,14 @@ export class BrokerSocketServer {
   private server: net.Server | null = null;
   private readonly target: ListenTarget;
   private readonly db: BrokerDB;
+  private readonly router: MessageRouter;
   private readonly slackProxyFn: SlackProxyFn | null;
   private readonly connections = new Map<net.Socket, ConnectionState>();
   private assignedPort: number | null = null;
 
   constructor(db: BrokerDB, target?: ListenTarget | string, slackProxyFn?: SlackProxyFn) {
     this.db = db;
+    this.router = new MessageRouter(db);
     this.slackProxyFn = slackProxyFn ?? null;
     if (typeof target === "string") {
       this.target = { type: "unix", path: target };
@@ -255,8 +258,10 @@ export class BrokerSocketServer {
           return this.handleThreadsList(req, state);
         case "agents.list":
           return this.handleAgentsList(req);
+        case "thread.claim":
+          return this.handleThreadClaim(req, state);
         case "slack.proxy":
-          return await this.handleSlackProxy(req);
+          return await this.handleSlackProxy(req, state);
         default:
           return rpcError(req.id, RPC_METHOD_NOT_FOUND, `Unknown method: ${req.method}`);
       }
@@ -387,9 +392,30 @@ export class BrokerSocketServer {
     return rpcOk(req.id, agents);
   }
 
+  // ─── Thread claim handler ─────────────────────────────
+
+  private handleThreadClaim(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const threadId = typeof params.threadId === "string" ? params.threadId : null;
+    if (!threadId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "threadId is required");
+    }
+
+    const channel = typeof params.channel === "string" ? params.channel : undefined;
+    const claimed = this.router.claimThread(threadId, state.agentId, channel);
+    return rpcOk(req.id, { claimed });
+  }
+
   // ─── Slack proxy handler ──────────────────────────────
 
-  private async handleSlackProxy(req: JsonRpcRequest): Promise<JsonRpcResponse> {
+  private async handleSlackProxy(
+    req: JsonRpcRequest,
+    state: ConnectionState,
+  ): Promise<JsonRpcResponse> {
     if (!this.slackProxyFn) {
       return rpcError(req.id, RPC_METHOD_NOT_FOUND, "slack.proxy is not configured on this broker");
     }
@@ -407,6 +433,17 @@ export class BrokerSocketServer {
 
     try {
       const result = await this.slackProxyFn(method, apiParams);
+
+      // Auto-claim thread ownership when a registered agent posts a message
+      if (method === "chat.postMessage" && state.agentId) {
+        const threadTs = typeof apiParams.thread_ts === "string" ? apiParams.thread_ts : null;
+        const messageTs = typeof result.ts === "string" ? (result.ts as string) : null;
+        const effectiveTs = threadTs ?? messageTs;
+        if (effectiveTs) {
+          this.router.claimThread(effectiveTs, state.agentId);
+        }
+      }
+
       return rpcOk(req.id, result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

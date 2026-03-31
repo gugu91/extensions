@@ -176,6 +176,15 @@ export class BrokerClient {
     await this.request("send", { threadId, body: text, ...(metadata ? { metadata } : {}) });
   }
 
+  // ─── Thread ownership ─────────────────────────────────
+
+  async claimThread(threadId: string, channel?: string): Promise<{ claimed: boolean }> {
+    const params: Record<string, unknown> = { threadId };
+    if (channel) params.channel = channel;
+    const result = (await this.request("thread.claim", params)) as { claimed: boolean };
+    return result;
+  }
+
   // ─── Queries ─────────────────────────────────────────
 
   async listThreads(): Promise<ThreadInfo[]> {

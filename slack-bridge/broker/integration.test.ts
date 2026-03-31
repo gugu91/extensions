@@ -152,6 +152,149 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(result.method).toBe("conversations.history");
     expect((result.echo as Record<string, unknown>).channel).toBe("C123");
   });
+
+  it("thread.claim claims ownership for the calling agent", async () => {
+    await client.register("claimer-agent", "🏷️");
+
+    const result = await client.claimThread("t-claim-rpc");
+    expect(result.claimed).toBe(true);
+
+    const thread = db.getThread("t-claim-rpc");
+    expect(thread).not.toBeNull();
+    expect(thread!.ownerAgent).toBeDefined();
+  });
+
+  it("thread.claim rejects when another agent already owns", async () => {
+    const reg1 = await client.register("first-agent", "1️⃣");
+
+    // First agent claims
+    const first = await client.claimThread("t-contested");
+    expect(first.claimed).toBe(true);
+
+    // Second agent tries to claim the same thread
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("second-agent", "2️⃣");
+
+    const second = await client2.claimThread("t-contested");
+    expect(second.claimed).toBe(false);
+
+    // Original owner unchanged
+    const thread = db.getThread("t-contested");
+    expect(thread!.ownerAgent).toBe(reg1.agentId);
+
+    client2.disconnect();
+  });
+
+  it("thread.claim with channel stores channel on new thread", async () => {
+    await client.register("ch-claimer", "📺");
+
+    await client.claimThread("t-with-channel", "C-TEST-123");
+
+    const thread = db.getThread("t-with-channel");
+    expect(thread).not.toBeNull();
+    expect(thread!.channel).toBe("C-TEST-123");
+  });
+
+  it("slack.proxy chat.postMessage auto-claims thread for calling agent", async () => {
+    client.disconnect();
+    await server.stop();
+
+    const slackProxy = async (_method: string, params: Record<string, unknown>) => {
+      // Simulate Slack chat.postMessage response
+      return {
+        ok: true,
+        ts: "new-msg-ts",
+        channel: params.channel,
+        message: { ts: "new-msg-ts", text: params.text },
+      };
+    };
+
+    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, slackProxy);
+    await server.start();
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    client = new BrokerClient({ host: info.host, port: info.port });
+    await client.connect();
+
+    const reg = await client.register("auto-claimer", "🤖");
+
+    // Post a new message (no thread_ts) — the response ts becomes the thread
+    await client.slackProxy("chat.postMessage", {
+      channel: "C-AUTO",
+      text: "starting a thread",
+    });
+
+    const thread = db.getThread("new-msg-ts");
+    expect(thread).not.toBeNull();
+    expect(thread!.ownerAgent).toBe(reg.agentId);
+  });
+
+  it("slack.proxy chat.postMessage with thread_ts claims the existing thread", async () => {
+    client.disconnect();
+    await server.stop();
+
+    const slackProxy = async (_method: string, params: Record<string, unknown>) => {
+      return {
+        ok: true,
+        ts: "reply-ts",
+        channel: params.channel,
+        message: { ts: "reply-ts", text: params.text },
+      };
+    };
+
+    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, slackProxy);
+    await server.start();
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    client = new BrokerClient({ host: info.host, port: info.port });
+    await client.connect();
+
+    const reg = await client.register("thread-replier", "💬");
+
+    // Reply to an existing thread
+    await client.slackProxy("chat.postMessage", {
+      channel: "C-REPLY",
+      text: "replying here",
+      thread_ts: "existing-thread-ts",
+    });
+
+    // Should claim the parent thread, not the reply ts
+    const thread = db.getThread("existing-thread-ts");
+    expect(thread).not.toBeNull();
+    expect(thread!.ownerAgent).toBe(reg.agentId);
+
+    // The reply ts itself should NOT create a separate thread
+    expect(db.getThread("reply-ts")).toBeNull();
+  });
+
+  it("slack.proxy non-postMessage methods do not claim threads", async () => {
+    client.disconnect();
+    await server.stop();
+
+    const slackProxy = async (method: string, _params: Record<string, unknown>) => {
+      return { ok: true, method, ts: "some-ts" };
+    };
+
+    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, slackProxy);
+    await server.start();
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    client = new BrokerClient({ host: info.host, port: info.port });
+    await client.connect();
+
+    await client.register("readonly-agent", "👀");
+
+    await client.slackProxy("conversations.history", { channel: "C1" });
+
+    // No thread should be created
+    expect(db.getThread("some-ts")).toBeNull();
+  });
 });
 
 // ─── Integration: router with real DB ────────────────────
@@ -301,5 +444,37 @@ describe("broker integration — router with real DB", () => {
 
   it("getChannelAssignment returns null (unconfigured)", () => {
     expect(db.getChannelAssignment("C123")).toBeNull();
+  });
+
+  it("updateThread upserts when thread does not exist", () => {
+    // Thread does not exist yet — updateThread should create it
+    db.updateThread("t-upsert", { ownerAgent: "agent-1", channel: "C-UPSERT" });
+
+    const thread = db.getThread("t-upsert");
+    expect(thread).not.toBeNull();
+    expect(thread!.ownerAgent).toBe("agent-1");
+    expect(thread!.channel).toBe("C-UPSERT");
+    expect(thread!.source).toBe("slack");
+  });
+
+  it("updateThread upsert defaults source to slack and channel to empty", () => {
+    db.updateThread("t-upsert-defaults", { ownerAgent: "agent-2" });
+
+    const thread = db.getThread("t-upsert-defaults");
+    expect(thread).not.toBeNull();
+    expect(thread!.source).toBe("slack");
+    expect(thread!.channel).toBe("");
+    expect(thread!.ownerAgent).toBe("agent-2");
+  });
+
+  it("updateThread still works normally for existing threads", () => {
+    db.createThread("t-existing", "slack", "C1", "agent-x");
+
+    db.updateThread("t-existing", { ownerAgent: "agent-y" });
+
+    const thread = db.getThread("t-existing");
+    expect(thread!.ownerAgent).toBe("agent-y");
+    // channel should be unchanged
+    expect(thread!.channel).toBe("C1");
   });
 });

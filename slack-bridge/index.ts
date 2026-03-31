@@ -626,6 +626,13 @@ export default function (pi: ExtensionAPI) {
       unclaimedThreads.delete(actualTs);
       persistState();
 
+      // Claim in broker DB so inbound replies route back to us
+      if (brokerRole === "broker" && activeRouter && activeSelfId) {
+        activeRouter.claimThread(actualTs, activeSelfId);
+      } else if (brokerRole === "follower" && brokerClient?.client) {
+        void (brokerClient.client as BrokerClient).claimThread(actualTs, channel);
+      }
+
       // Remove 👀 from all messages in this thread
       if (params.thread_ts) {
         const pending = pendingEyes.get(params.thread_ts);
@@ -753,11 +760,37 @@ export default function (pi: ExtensionAPI) {
       const body: Record<string, unknown> = {
         channel: channelId,
         text: params.text,
+        metadata: {
+          event_type: "pi_agent_msg",
+          event_payload: { agent: agentName },
+        },
       };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
       const res = await slack("chat.postMessage", botToken!, body);
       const ts = (res.message as { ts: string }).ts;
+      const actualTs = params.thread_ts ?? ts;
+
+      // Track + claim ownership so inbound replies route back to us
+      if (!threads.has(actualTs)) {
+        threads.set(actualTs, {
+          channelId,
+          threadTs: actualTs,
+          userId: "",
+          owner: agentName,
+        });
+      } else {
+        const t = threads.get(actualTs)!;
+        if (!t.owner) t.owner = agentName;
+      }
+      unclaimedThreads.delete(actualTs);
+      persistState();
+
+      if (brokerRole === "broker" && activeRouter && activeSelfId) {
+        activeRouter.claimThread(actualTs, activeSelfId);
+      } else if (brokerRole === "follower" && brokerClient?.client) {
+        void (brokerClient.client as BrokerClient).claimThread(actualTs, channelId);
+      }
 
       return {
         content: [
@@ -829,6 +862,8 @@ export default function (pi: ExtensionAPI) {
   let activeBroker: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let brokerClient: any = null;
+  let activeRouter: MessageRouter | null = null;
+  let activeSelfId: string | null = null;
 
   pi.registerCommand("pinet-start", {
     description: "Start Pinet as the broker (Slack connection + message routing)",
@@ -873,6 +908,8 @@ export default function (pi: ExtensionAPI) {
         botUserId = adapter.getBotUserId();
 
         activeBroker = broker;
+        activeRouter = router;
+        activeSelfId = selfId;
         brokerRole = "broker";
         pinetEnabled = true;
         setExtStatus(ctx, "ok");
@@ -1068,6 +1105,8 @@ export default function (pi: ExtensionAPI) {
       }
       activeBroker = null;
     }
+    activeRouter = null;
+    activeSelfId = null;
     if (brokerClient) {
       try {
         clearInterval(brokerClient.pollInterval);
