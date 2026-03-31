@@ -141,7 +141,10 @@ export default function (pi: ExtensionAPI) {
     if (!extCtx?.hasUI) return;
     const t = extCtx.ui.theme;
     const n = inbox.length;
-    const label = n > 0 ? t.fg("accent", `slack ✦ ${n}`) : t.fg("accent", "slack ✦");
+    const label =
+      n > 0
+        ? t.fg("accent", `${agentEmoji} ${agentName} ✦ ${n}`)
+        : t.fg("accent", `${agentEmoji} ${agentName} ✦`);
     extCtx.ui.setStatus("slack-bridge", label);
   }
 
@@ -509,9 +512,9 @@ export default function (pi: ExtensionAPI) {
     }
     const text =
       state === "reconnecting"
-        ? t.fg("warning", "slack ⟳")
+        ? t.fg("warning", `${agentEmoji} ${agentName} ⟳`)
         : state === "error"
-          ? t.fg("error", "slack ✗")
+          ? t.fg("error", `${agentEmoji} ${agentName} ✗`)
           : "";
     ctx.ui.setStatus("slack-bridge", text);
   }
