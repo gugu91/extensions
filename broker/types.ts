@@ -13,7 +13,7 @@ export interface ThreadInfo {
   threadId: string;
   source: string;
   channel: string;
-  ownerAgent: string;
+  ownerAgent: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +36,19 @@ export interface InboxEntry {
   delivered: boolean;
   createdAt: string;
 }
+
+export interface ChannelAssignment {
+  channel: string;
+  agentId: string;
+}
+
+// ─── Routing ──────────────────────────────────────────────
+
+export type RoutingDecision =
+  | { action: "deliver"; agentId: string }
+  | { action: "broadcast"; agentIds: string[] }
+  | { action: "unrouted" }
+  | { action: "reject"; reason: string };
 
 // ─── JSON-RPC protocol ───────────────────────────────────
 
@@ -72,8 +85,13 @@ export interface InboundMessage {
   source: string;
   threadId: string;
   channel: string;
-  sender: string;
-  body: string;
+  userId: string;
+  userName?: string;
+  text: string;
+  timestamp: string;
+  sender?: string;
+  body?: string;
+  isChannelMention?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -83,4 +101,18 @@ export interface MessageAdapter {
   disconnect(): Promise<void>;
   onInbound(handler: (msg: InboundMessage) => void): void;
   send(threadId: string, text: string, metadata?: Record<string, unknown>): Promise<void>;
+}
+
+// ─── BrokerDB interface (subset used by the router) ──────
+
+export interface BrokerDBInterface {
+  getThread(threadId: string): ThreadInfo | null;
+  getAgents(): AgentInfo[];
+  getChannelAssignment(channel: string): ChannelAssignment | null;
+  getAllowedUsers(): Set<string> | null;
+
+  createThread(thread: ThreadInfo): void;
+  updateThread(threadId: string, updates: Partial<ThreadInfo>): void;
+
+  queueMessage(agentId: string, message: InboundMessage): void;
 }
