@@ -308,47 +308,54 @@ export class SqliteCommentStore implements ICommentStore {
         }>;
       };
 
-      if (index && Array.isArray(index.comments)) {
-        const insert = db.prepare(
-          `INSERT OR IGNORE INTO comments
-             (id, thread_id, actor_type, actor_id, created_at, body, body_path,
-              context_file, context_start_line, context_end_line)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-
-        for (const meta of index.comments) {
-          if (!meta || typeof meta.id !== "string") continue;
-          if (!meta.bodyPath) continue;
-
-          const bodyFile = path.resolve(this.legacyDir, meta.bodyPath);
-          let body: string;
-          try {
-            body = fs.readFileSync(bodyFile, "utf-8").replace(/\r\n/g, "\n").replace(/\n$/, "");
-          } catch {
-            continue;
-          }
-
-          insert.run(
-            meta.id,
-            meta.threadId ?? "global",
-            meta.actorType ?? "agent",
-            meta.actorId ?? "pi",
-            meta.createdAt ?? new Date().toISOString(),
-            body,
-            meta.bodyPath,
-            meta.context?.file ?? null,
-            meta.context?.startLine ?? null,
-            meta.context?.endLine ?? null,
+      db.exec("BEGIN");
+      try {
+        if (index && Array.isArray(index.comments)) {
+          const insert = db.prepare(
+            `INSERT OR IGNORE INTO comments
+               (id, thread_id, actor_type, actor_id, created_at, body, body_path,
+                context_file, context_start_line, context_end_line)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           );
-        }
-      }
 
-      db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
-        "migrated_from_json",
-        "1",
-      );
-    } catch {
-      // Migration failed; will retry on next initialize.
+          for (const meta of index.comments) {
+            if (!meta || typeof meta.id !== "string") continue;
+            if (!meta.bodyPath) continue;
+
+            const bodyFile = path.resolve(this.legacyDir, meta.bodyPath);
+            let body: string;
+            try {
+              body = fs.readFileSync(bodyFile, "utf-8").replace(/\r\n/g, "\n").replace(/\n$/, "");
+            } catch {
+              continue;
+            }
+
+            insert.run(
+              meta.id,
+              meta.threadId ?? "global",
+              meta.actorType ?? "agent",
+              meta.actorId ?? "pi",
+              meta.createdAt ?? new Date().toISOString(),
+              body,
+              meta.bodyPath,
+              meta.context?.file ?? null,
+              meta.context?.startLine ?? null,
+              meta.context?.endLine ?? null,
+            );
+          }
+        }
+
+        db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
+          "migrated_from_json",
+          "1",
+        );
+        db.exec("COMMIT");
+      } catch (txErr) {
+        db.exec("ROLLBACK");
+        throw txErr;
+      }
+    } catch (error) {
+      console.error("[picomms] JSON\u2192SQLite migration failed:", error);
     }
   }
 }

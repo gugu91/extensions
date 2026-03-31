@@ -574,12 +574,22 @@ export function formatCommentPreview(comment: CommentRecord, maxChars = 280): st
 }
 
 export async function createCommentStore(repoRoot: string): Promise<ICommentStore> {
+  let mod: { SqliteCommentStore: new (repoRoot: string) => ICommentStore };
   try {
-    const mod = await import("./comments-sqlite.js");
+    mod = await import("./comments-sqlite.js");
+  } catch {
+    // node:sqlite not available — fall back to JSON store
+    const store = new CommentStore(repoRoot);
+    store.initialize();
+    return store;
+  }
+
+  try {
     const store = new mod.SqliteCommentStore(repoRoot);
     store.initialize();
     return store;
-  } catch {
+  } catch (err) {
+    console.error("[picomms] SQLite store init failed, falling back to JSON:", err);
     const store = new CommentStore(repoRoot);
     store.initialize();
     return store;
