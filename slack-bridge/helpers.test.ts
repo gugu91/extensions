@@ -11,6 +11,7 @@ import {
   stripBotMention,
   isChannelId,
   FORM_METHODS,
+  resolveAgentIdentity,
   type InboxMessage,
 } from "./helpers.js";
 
@@ -286,5 +287,46 @@ describe("isChannelId", () => {
 
   it("rejects empty string", () => {
     expect(isChannelId("")).toBe(false);
+  });
+});
+
+// ─── resolveAgentIdentity ───────────────────────────
+
+describe("resolveAgentIdentity", () => {
+  it("returns settings name/emoji when both are configured", () => {
+    const result = resolveAgentIdentity({ agentName: "Config Bot", agentEmoji: "🤖" });
+    expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
+  });
+
+  it("settings take priority over env nickname", () => {
+    const result = resolveAgentIdentity({ agentName: "Config Bot", agentEmoji: "🤖" }, "env-nick");
+    expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
+  });
+
+  it("falls back to env var PI_NICKNAME with generated emoji", () => {
+    const result = resolveAgentIdentity({}, "my-agent");
+    expect(result.name).toBe("my-agent");
+    expect(typeof result.emoji).toBe("string");
+    expect(result.emoji.length).toBeGreaterThan(0);
+  });
+
+  it("generates a random name when nothing else is available", () => {
+    const result = resolveAgentIdentity({});
+    expect(typeof result.name).toBe("string");
+    expect(result.name.length).toBeGreaterThan(0);
+    expect(result.name).toMatch(/^\w+ \w+$/); // "Adjective Animal"
+    expect(typeof result.emoji).toBe("string");
+  });
+
+  it("ignores settings when only agentName is set (no emoji)", () => {
+    const result = resolveAgentIdentity({ agentName: "Half Config" });
+    // Should fall through to generated name since agentEmoji is missing
+    expect(result.name).not.toBe("Half Config");
+  });
+
+  it("ignores settings when only agentEmoji is set (no name)", () => {
+    const result = resolveAgentIdentity({ agentEmoji: "🤖" });
+    // Should fall through to generated name since agentName is missing
+    expect(result.emoji).not.toBe("🤖");
   });
 });

@@ -12,6 +12,8 @@ export interface SlackBridgeSettings {
   suggestedPrompts?: { title: string; message: string }[];
   autoConnect?: boolean;
   autoFollow?: boolean;
+  agentName?: string;
+  agentEmoji?: string;
 }
 
 export function loadSettings(settingsPath?: string): SlackBridgeSettings {
@@ -220,4 +222,25 @@ export function generateAgentName(): { name: string; emoji: string } {
     name: `${ADJECTIVES[ai]} ${ANIMALS[ni]}`,
     emoji: EMOJIS[ni],
   };
+}
+
+// ─── Agent identity persistence ─────────────────────────
+
+export function resolveAgentIdentity(
+  settings: SlackBridgeSettings,
+  envNickname?: string,
+): { name: string; emoji: string } {
+  // 1. Explicit config (both must be present)
+  if (settings.agentName && settings.agentEmoji) {
+    return { name: settings.agentName, emoji: settings.agentEmoji };
+  }
+
+  // 2. PI_NICKNAME env var (emoji generated)
+  if (envNickname) {
+    const generated = generateAgentName();
+    return { name: envNickname, emoji: generated.emoji };
+  }
+
+  // 3. Fully generated
+  return generateAgentName();
 }

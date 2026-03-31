@@ -13,6 +13,7 @@ import {
   isChannelId,
   buildSlackRequest,
   generateAgentName,
+  resolveAgentIdentity,
 } from "./helpers.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
@@ -66,9 +67,9 @@ export default function (pi: ExtensionAPI) {
     return checkUserAllowed(allowedUsers, userId);
   }
 
-  const generated = generateAgentName();
-  let agentName = process.env.PI_NICKNAME ?? generated.name;
-  let agentEmoji = generated.emoji;
+  const identity = resolveAgentIdentity(settings, process.env.PI_NICKNAME);
+  let agentName = identity.name;
+  let agentEmoji = identity.emoji;
 
   function inboundToInbox(inMsg: BrokerInboundMessage): InboxMessage {
     return {
@@ -127,6 +128,8 @@ export default function (pi: ExtensionAPI) {
         threads: Array.from(threads.entries()),
         lastDmChannel,
         userNames: Array.from(userNames.entries()),
+        agentName,
+        agentEmoji,
       });
     } catch (err) {
       console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
@@ -539,21 +542,23 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Inbox",
     description:
       "Return pending Slack messages that arrived since the last check, then clear the queue.",
-    promptSnippet: "Check for new incoming Slack messages.",
+    promptSnippet: `Check for new incoming Slack messages. You are ${agentEmoji} ${agentName}.`,
     promptGuidelines: [
       "You are connected to Slack via the slack-bridge extension.",
+      `Your Slack identity is ${agentEmoji} ${agentName} — use this name and emoji when replying in Slack threads.`,
       "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      "Pick a fun, creative agent name based on your current task (e.g. 'Refactor Raccoon', 'Bug Squasher 3000', 'CSS Wizard'). Choose a matching emoji.",
-      "First message in a new thread: use full format — '🦝 (Refactor Raccoon) Just finished splitting the auth module.'",
-      "Follow-up messages in the same thread: just prefix with the emoji — '🦝 Found two more files to split.'",
-      "Keep the same name and emoji for the duration of the task. Pick a new one when the task changes.",
+      `First message in a new thread: use full format — '${agentEmoji} (${agentName}) Just finished splitting the auth module.'`,
+      `Follow-up messages in the same thread: just prefix with the emoji — '${agentEmoji} Found two more files to split.'`,
+      "Always use this name and emoji — do not invent a new one.",
     ],
     parameters: Type.Object({}),
     async execute() {
       if (inbox.length === 0) {
         return {
-          content: [{ type: "text", text: "(no new messages)" }],
+          content: [
+            { type: "text", text: `(no new messages) — you are ${agentEmoji} ${agentName}` },
+          ],
           details: { count: 0 },
         };
       }
@@ -571,7 +576,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       return {
-        content: [{ type: "text", text: lines.join("\n") }],
+        content: [
+          { type: "text", text: `You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}` },
+        ],
         details: { count: pending.length },
       };
     },
@@ -1132,6 +1139,7 @@ export default function (pi: ExtensionAPI) {
       } else {
         agentName = newName;
       }
+      persistState();
       ctx.ui.notify(`${agentEmoji} Agent renamed to: ${agentName}`, "info");
     },
   });
@@ -1147,6 +1155,8 @@ export default function (pi: ExtensionAPI) {
       threads?: [string, ThreadInfo][];
       lastDmChannel?: string | null;
       userNames?: [string, string][];
+      agentName?: string;
+      agentEmoji?: string;
     }
     try {
       let savedState: PersistedState | null = null;
@@ -1168,6 +1178,10 @@ export default function (pi: ExtensionAPI) {
           for (const [k, v] of savedState.userNames) {
             if (!userNames.has(k)) userNames.set(k, v);
           }
+        }
+        if (savedState.agentName && savedState.agentEmoji) {
+          agentName = savedState.agentName;
+          agentEmoji = savedState.agentEmoji;
         }
       }
     } catch (err) {
