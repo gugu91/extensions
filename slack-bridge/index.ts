@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -17,7 +18,7 @@ import { startBroker } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
 import { MessageRouter } from "./broker/router.js";
-import { BrokerClient } from "./broker/client.js";
+import { BrokerClient, DEFAULT_SOCKET_PATH } from "./broker/client.js";
 
 // ─── Slack API (raw fetch, zero deps) ────────────────────
 
@@ -884,6 +885,44 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
+    const client = new BrokerClient();
+    await client.connect();
+    await client.register(agentName, agentEmoji);
+
+    const pollInterval = setInterval(async () => {
+      if (!pinetEnabled) return;
+      try {
+        const entries = await client.pollInbox();
+        if (entries.length === 0) return;
+        const ids: number[] = [];
+        for (const entry of entries) {
+          const meta = entry.message.metadata ?? {};
+          inbox.push({
+            channel: (meta.channel as string) ?? "",
+            threadTs: entry.message.threadId ?? "",
+            userId: entry.message.sender ?? "",
+            text: entry.message.body ?? "",
+            timestamp: entry.message.createdAt ?? "",
+          });
+          ids.push(entry.inboxId);
+        }
+        if (ids.length > 0) await client.ackMessages(ids);
+        updateBadge();
+        if (ctx.isIdle?.()) drainInbox();
+      } catch {
+        /* broker may be restarting */
+      }
+    }, 2000);
+
+    client.onDisconnect(() => clearInterval(pollInterval));
+
+    brokerClient = { client, pollInterval };
+    brokerRole = "follower";
+    pinetEnabled = true;
+    setExtStatus(ctx, "ok");
+  }
+
   pi.registerCommand("pinet-follow", {
     description: "Connect to an existing Pinet broker as a follower",
     handler: async (_args, ctx) => {
@@ -894,41 +933,7 @@ export default function (pi: ExtensionAPI) {
       extCtx = ctx;
 
       try {
-        const client = new BrokerClient();
-        await client.connect();
-        await client.register(agentName, agentEmoji);
-
-        const pollInterval = setInterval(async () => {
-          if (!pinetEnabled) return;
-          try {
-            const entries = await client.pollInbox();
-            if (entries.length === 0) return;
-            const ids: number[] = [];
-            for (const entry of entries) {
-              const meta = entry.message.metadata ?? {};
-              inbox.push({
-                channel: (meta.channel as string) ?? "",
-                threadTs: entry.message.threadId ?? "",
-                userId: entry.message.sender ?? "",
-                text: entry.message.body ?? "",
-                timestamp: entry.message.createdAt ?? "",
-              });
-              ids.push(entry.inboxId);
-            }
-            if (ids.length > 0) await client.ackMessages(ids);
-            updateBadge();
-            if (ctx.isIdle?.()) drainInbox();
-          } catch {
-            /* broker may be restarting */
-          }
-        }, 2000);
-
-        client.onDisconnect(() => clearInterval(pollInterval));
-
-        brokerClient = { client, pollInterval };
-        brokerRole = "follower";
-        pinetEnabled = true;
-        setExtStatus(ctx, "ok");
+        await connectAsFollower(ctx);
         ctx.ui.notify(`${agentEmoji} ${agentName} — following broker`, "info");
       } catch (err) {
         ctx.ui.notify(`Pinet follow failed: ${msg(err)}`, "error");
@@ -1022,8 +1027,19 @@ export default function (pi: ExtensionAPI) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
 
-    // Use /pinet-start or /pinet-follow to connect
-    setExtStatus(ctx, "off");
+    // Auto-follow: if enabled and broker socket exists, connect as follower
+    if (settings.autoFollow && fs.existsSync(DEFAULT_SOCKET_PATH)) {
+      try {
+        await connectAsFollower(ctx);
+        console.log(`[slack-bridge] autoFollow: connected as follower`);
+      } catch (err) {
+        console.error(`[slack-bridge] autoFollow failed: ${msg(err)}`);
+        setExtStatus(ctx, "off");
+      }
+    } else {
+      // Use /pinet-start or /pinet-follow to connect
+      setExtStatus(ctx, "off");
+    }
   });
 
   // Drain inbox: set thinking status, send to agent
