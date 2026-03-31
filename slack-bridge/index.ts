@@ -14,7 +14,6 @@ import {
   buildSlackRequest,
   generateAgentName,
   resolveAgentIdentity,
-  persistName,
 } from "./helpers.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
@@ -129,6 +128,8 @@ export default function (pi: ExtensionAPI) {
         threads: Array.from(threads.entries()),
         lastDmChannel,
         userNames: Array.from(userNames.entries()),
+        agentName,
+        agentEmoji,
       });
     } catch (err) {
       console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
@@ -1134,7 +1135,7 @@ export default function (pi: ExtensionAPI) {
       } else {
         agentName = newName;
       }
-      persistName(agentName, agentEmoji);
+      persistState();
       ctx.ui.notify(`${agentEmoji} Agent renamed to: ${agentName}`, "info");
     },
   });
@@ -1150,6 +1151,8 @@ export default function (pi: ExtensionAPI) {
       threads?: [string, ThreadInfo][];
       lastDmChannel?: string | null;
       userNames?: [string, string][];
+      agentName?: string;
+      agentEmoji?: string;
     }
     try {
       let savedState: PersistedState | null = null;
@@ -1171,6 +1174,10 @@ export default function (pi: ExtensionAPI) {
           for (const [k, v] of savedState.userNames) {
             if (!userNames.has(k)) userNames.set(k, v);
           }
+        }
+        if (savedState.agentName && savedState.agentEmoji) {
+          agentName = savedState.agentName;
+          agentEmoji = savedState.agentEmoji;
         }
       }
     } catch (err) {

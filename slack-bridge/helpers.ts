@@ -226,56 +226,21 @@ export function generateAgentName(): { name: string; emoji: string } {
 
 // ─── Agent identity persistence ─────────────────────────
 
-const DEFAULT_PERSIST_DIR = path.join(os.homedir(), ".pi", "agent");
-const IDENTITY_FILE = "slack-bridge-identity.json";
-
-export function loadPersistedName(dir?: string): { name: string; emoji: string } | null {
-  const filePath = path.join(dir ?? DEFAULT_PERSIST_DIR, IDENTITY_FILE);
-  try {
-    const content = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(content) as { name?: string; emoji?: string };
-    if (typeof parsed.name === "string" && typeof parsed.emoji === "string") {
-      return { name: parsed.name, emoji: parsed.emoji };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export function persistName(name: string, emoji: string, dir?: string): void {
-  const targetDir = dir ?? DEFAULT_PERSIST_DIR;
-  fs.mkdirSync(targetDir, { recursive: true });
-  const filePath = path.join(targetDir, IDENTITY_FILE);
-  fs.writeFileSync(filePath, JSON.stringify({ name, emoji }, null, 2) + "\n");
-}
-
 export function resolveAgentIdentity(
   settings: SlackBridgeSettings,
   envNickname?: string,
-  persistDir?: string,
 ): { name: string; emoji: string } {
   // 1. Explicit config (both must be present)
   if (settings.agentName && settings.agentEmoji) {
     return { name: settings.agentName, emoji: settings.agentEmoji };
   }
 
-  // 2. Persisted identity
-  const persisted = loadPersistedName(persistDir);
-  if (persisted) {
-    return persisted;
-  }
-
-  // 3. PI_NICKNAME env var (emoji generated)
+  // 2. PI_NICKNAME env var (emoji generated)
   if (envNickname) {
     const generated = generateAgentName();
-    const identity = { name: envNickname, emoji: generated.emoji };
-    persistName(identity.name, identity.emoji, persistDir);
-    return identity;
+    return { name: envNickname, emoji: generated.emoji };
   }
 
-  // 4. Fully generated
-  const generated = generateAgentName();
-  persistName(generated.name, generated.emoji, persistDir);
-  return generated;
+  // 3. Fully generated
+  return generateAgentName();
 }
