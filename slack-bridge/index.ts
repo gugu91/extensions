@@ -8,10 +8,8 @@ import {
   formatInboxMessages,
   stripBotMention,
   isChannelId,
-  FORM_METHODS,
+  buildSlackRequest,
 } from "./helpers.js";
-
-const SLACK_API = "https://slack.com/api";
 
 // ─── Slack API (raw fetch, zero deps) ────────────────────
 
@@ -26,31 +24,8 @@ async function slack(
   token: string,
   body?: Record<string, unknown>,
 ): Promise<SlackResult> {
-  // Form-encode read methods (they reject JSON); JSON for everything else.
-  const needsJson = !FORM_METHODS.has(method);
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-  };
-
-  let serialized: string | undefined;
-  if (body) {
-    if (needsJson) {
-      headers["Content-Type"] = "application/json; charset=utf-8";
-      serialized = JSON.stringify(body);
-    } else {
-      headers["Content-Type"] = "application/x-www-form-urlencoded";
-      serialized = new URLSearchParams(
-        Object.entries(body).map(([k, v]) => [k, String(v)]),
-      ).toString();
-    }
-  }
-
-  const res = await fetch(`${SLACK_API}/${method}`, {
-    method: "POST",
-    headers,
-    body: serialized,
-  });
+  const { url, init } = buildSlackRequest(method, token, body);
+  const res = await fetch(url, init);
 
   if (res.status === 429) {
     const wait = Number(res.headers.get("retry-after") ?? "3");
