@@ -859,7 +859,8 @@ export default function (pi: ExtensionAPI) {
       activeBroker = broker;
       brokerRole = "leader";
       return true;
-    } catch {
+    } catch (err) {
+      console.error(`[pinet] broker leader failed: ${msg(err)}`);
       return false;
     }
   }
@@ -905,7 +906,8 @@ export default function (pi: ExtensionAPI) {
       brokerClient = { client, pollInterval };
       brokerRole = "client";
       return true;
-    } catch {
+    } catch (err) {
+      console.error(`[pinet] broker client failed: ${msg(err)}`);
       return false;
     }
   }
