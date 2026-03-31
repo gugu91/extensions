@@ -174,11 +174,12 @@ describe("BrokerClient — register", () => {
     const req = JSON.parse(mock.received[0]) as {
       id: number;
       method: string;
-      params: { name: string; emoji: string };
+      params: { name: string; emoji: string; pid: number };
     };
     expect(req.method).toBe("register");
     expect(req.params.name).toBe("TestAgent");
     expect(req.params.emoji).toBe("🤖");
+    expect(req.params.pid).toBe(process.pid);
 
     // Respond
     mock.respondTo(mock.connections[0], req.id, { agentId: "agent-001" });
