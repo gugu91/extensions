@@ -21,11 +21,14 @@ If the agent is idle, incoming messages are processed immediately.
 
 ## Tools
 
-| Tool                            | Description                     |
-| ------------------------------- | ------------------------------- |
-| `slack_send(text, thread_ts?)`  | Reply in a thread or start new  |
-| `slack_read(thread_ts, limit?)` | Read thread messages            |
-| `slack_inbox()`                 | Check pending messages manually |
+| Tool                                              | Description                     |
+| ------------------------------------------------- | ------------------------------- |
+| `slack_send(text, thread_ts?)`                    | Reply in a thread or start new  |
+| `slack_read(thread_ts, limit?)`                   | Read thread messages            |
+| `slack_inbox()`                                   | Check pending messages manually |
+| `slack_create_channel(name, topic?, purpose?)`    | Create a project channel        |
+| `slack_post_channel(channel?, text, thread_ts?)`  | Post to a channel               |
+| `slack_read_channel(channel, thread_ts?, limit?)` | Read channel history or thread  |
 
 ## Features
 
@@ -35,7 +38,11 @@ If the agent is idle, incoming messages are processed immediately.
 - **Reactions** — 👀 on receive, removed on reply
 - **Suggested prompts** — shown when a user opens a new conversation
 - **Multi-user** — handles concurrent conversations from different users
-- **Channel awareness** — notified when added to channels
+- **@mentions** — tag Pinet in any channel and it responds in-thread
+- **Channel tools** — create, post to, and read from channels
+- **Agent identity** — agents pick a fun name + emoji per task
+- **Thread persistence** — thread state survives `/reload`
+- **User allowlist** — restrict who can interact with the agent
 
 ## Setup
 
@@ -51,43 +58,16 @@ paste `manifest.yaml` from this directory.
 - **Bot Token:** OAuth & Permissions → Install to Workspace → copy the
   `xoxb-...` token
 
-### 3. Set env vars
+### 3. Configure
 
-```bash
-export SLACK_BOT_TOKEN="xoxb-..."   # Bot User OAuth Token
-export SLACK_APP_TOKEN="xapp-..."   # App-Level Token (Socket Mode)
-```
-
-Use direnv for convenience:
-
-```bash
-# .env.personal.local (gitignored)
-SLACK_BOT_TOKEN="xoxb-..."
-SLACK_APP_TOKEN="xapp-..."
-
-# .envrc
-dotenv_if_exists .env.personal.local
-```
-
-> **Note:** The `SLACK_ALLOWED_USERS` env var still works as a fallback for
-> `allowedUsers`, but `settings.json` is the preferred approach (see step 5).
-
-### 4. Install extension
-
-```bash
-ln -s /path/to/extensions/slack-bridge ~/.pi/agent/extensions/slack-bridge
-```
-
-Then `/reload` in pi.
-
-### 5. Configure (optional)
-
-Add a `"slack-bridge"` key to `~/.pi/agent/settings.json`:
+Add to `~/.pi/agent/settings.json`:
 
 ```json
 {
   "slack-bridge": {
-    "allowedUsers": ["U01ABC", "U02DEF"],
+    "botToken": "xoxb-...",
+    "appToken": "xapp-...",
+    "allowedUsers": ["U09GWL270LA"],
     "defaultChannel": "C0APL58LB1R",
     "suggestedPrompts": [
       { "title": "Status", "message": "What are you working on?" },
@@ -97,15 +77,24 @@ Add a `"slack-bridge"` key to `~/.pi/agent/settings.json`:
 }
 ```
 
-| Key                | Description                                                     |
-| ------------------ | --------------------------------------------------------------- |
-| `allowedUsers`     | Slack user IDs allowed to interact with the agent               |
-| `defaultChannel`   | Default channel for `slack_post_channel` when none is specified |
-| `suggestedPrompts` | Prompts shown when a user opens a new assistant thread          |
+| Key                | Required | Description                                  |
+| ------------------ | -------- | -------------------------------------------- |
+| `botToken`         | yes      | Bot User OAuth Token (`xoxb-...`)            |
+| `appToken`         | yes      | App-Level Token for Socket Mode (`xapp-...`) |
+| `allowedUsers`     | no       | Slack user IDs allowed to interact           |
+| `defaultChannel`   | no       | Default channel for `slack_post_channel`     |
+| `suggestedPrompts` | no       | Prompts shown on new assistant thread        |
 
-Tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) remain env vars only.
+> Tokens can also be set via `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` env vars
+> (settings.json takes priority).
 
-That's it — Pinet appears in Slack's sidebar automatically.
+### 4. Install extension
+
+```bash
+ln -s /path/to/extensions/slack-bridge ~/.pi/agent/extensions/slack-bridge
+```
+
+Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 
 ## Manifest
 
@@ -113,27 +102,13 @@ The `manifest.yaml` includes all required scopes and events. Use it when
 creating the app (**From a manifest**) or paste it into **App Manifest** in
 settings.
 
-Current scopes: `app_mentions:read`, `assistant:write`, `canvases:read`,
-`canvases:write`, `channels:history`, `channels:read`, `chat:write`,
-`groups:history`, `groups:read`, `im:history`, `im:read`, `im:write`,
-`reactions:write`, `users:read`
-
-Current events: `app_mention`, `assistant_thread_started`,
-`assistant_thread_context_changed`, `member_joined_channel`,
-`message.channels`, `message.groups`, `message.im`
-
 ## Security
 
-Set `allowedUsers` in `settings.json` (preferred) or the `SLACK_ALLOWED_USERS`
-env var (fallback) to restrict who can interact with the agent. Only listed
-users' messages are queued; others receive a polite rejection reply.
-
-`settings.json` takes priority over the env var. If neither is set, all users
-are allowed (backward compatible).
+Set `allowedUsers` in settings.json to restrict who can interact with the
+agent. Only listed users' messages are queued; others receive a polite
+rejection. If not set, all users are allowed.
 
 Find user IDs in Slack: click a user's profile → **More** → **Copy member ID**.
-
-The `/slack` command shows the current allowlist.
 
 ## Architecture
 
@@ -141,6 +116,7 @@ The `/slack` command shows the current allowlist.
 - **Zero npm deps** — native `fetch` + `WebSocket` (Node 22+)
 - **Hybrid inbox** — queue when busy, auto-process when idle
 - **Reactions** — 👀 as lightweight "thinking" indicator (no chat lock)
+- **Agent naming** — LLM picks a fun name + emoji per task
 
 ## Status
 

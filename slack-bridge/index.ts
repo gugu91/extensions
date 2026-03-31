@@ -247,22 +247,6 @@ export default function (pi: ExtensionAPI) {
     throw new Error(`Channel "${name}" not found.`);
   }
 
-  async function setThreadStatus(
-    channelId: string,
-    threadTs: string,
-    status: string,
-  ): Promise<void> {
-    try {
-      await slack("assistant.threads.setStatus", botToken!, {
-        channel_id: channelId,
-        thread_ts: threadTs,
-        status,
-      });
-    } catch {
-      /* non-critical */
-    }
-  }
-
   async function clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
     try {
       await slack("assistant.threads.setStatus", botToken!, {
