@@ -854,8 +854,8 @@ export default function (pi: ExtensionAPI) {
         const db = activeBroker.db as BrokerDB;
         const allAgents = db.getAgents();
         const target =
-          allAgents.find((a: { name: string }) => a.name === params.to) ??
-          allAgents.find((a: { id: string }) => a.id === params.to);
+          allAgents.find((a: { id: string }) => a.id === params.to) ??
+          allAgents.find((a: { name: string }) => a.name === params.to);
 
         if (!target) {
           throw new Error(`Agent not found: ${params.to}`);
@@ -912,39 +912,25 @@ export default function (pi: ExtensionAPI) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
 
+      let agents: Array<{ emoji: string; name: string; id: string }>;
       if (brokerRole === "broker" && activeBroker) {
-        const db = activeBroker.db as BrokerDB;
-        const agents = db.getAgents();
-        const lines = agents.map(
-          (a: { emoji: string; name: string; id: string }) => `${a.emoji} ${a.name} (${a.id})`,
-        );
-        return {
-          content: [
-            {
-              type: "text",
-              text: lines.length > 0 ? lines.join("\n") : "(no agents connected)",
-            },
-          ],
-          details: { agents },
-        };
+        agents = (activeBroker.db as BrokerDB).getAgents();
       } else if (brokerRole === "follower" && brokerClient) {
-        const client = brokerClient.client as BrokerClient;
-        const agents = await client.listAgents();
-        const lines = agents.map(
-          (a: { emoji: string; name: string; id: string }) => `${a.emoji} ${a.name} (${a.id})`,
-        );
-        return {
-          content: [
-            {
-              type: "text",
-              text: lines.length > 0 ? lines.join("\n") : "(no agents connected)",
-            },
-          ],
-          details: { agents },
-        };
+        agents = await (brokerClient.client as BrokerClient).listAgents();
+      } else {
+        throw new Error("Pinet is in an unexpected state.");
       }
 
-      throw new Error("Pinet is in an unexpected state.");
+      const lines = agents.map((a) => `${a.emoji} ${a.name} (${a.id})`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: lines.length > 0 ? lines.join("\n") : "(no agents connected)",
+          },
+        ],
+        details: { agents },
+      };
     },
   });
 
