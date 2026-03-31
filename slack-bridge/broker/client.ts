@@ -155,7 +155,7 @@ export class BrokerClient {
   // ─── Registration ────────────────────────────────────
 
   async register(name: string, emoji: string): Promise<{ agentId: string }> {
-    const result = (await this.request("register", { name, emoji })) as {
+    const result = (await this.request("register", { name, emoji, pid: process.pid })) as {
       agentId: string;
     };
     return result;

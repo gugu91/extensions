@@ -277,9 +277,10 @@ export class BrokerSocketServer {
     const params = req.params ?? {};
     const name = typeof params.name === "string" ? params.name : "anonymous";
     const emoji = typeof params.emoji === "string" ? params.emoji : "";
+    const pid = typeof params.pid === "number" ? params.pid : 0;
 
     const agentId = state.agentId ?? crypto.randomUUID();
-    const agent = this.db.registerAgent(agentId, name, emoji, process.pid);
+    const agent = this.db.registerAgent(agentId, name, emoji, pid);
     state.agentId = agentId;
 
     return rpcOk(req.id, { agentId: agent.id, name: agent.name, emoji: agent.emoji });

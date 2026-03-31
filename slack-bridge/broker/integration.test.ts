@@ -104,6 +104,18 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(ids).toEqual(["t-alpha", "t-beta"]);
   });
 
+  it("register stores the follower's actual PID, not the broker's", async () => {
+    const reg = await client.register("pid-agent", "🔢");
+
+    const agents = db.getAgents();
+    const agent = agents.find((a) => a.id === reg.agentId);
+    expect(agent).toBeDefined();
+    // Client and server run in the same process during tests, so PIDs match.
+    // The key assertion: the stored PID equals process.pid (what the client sent),
+    // not some hardcoded or different value.
+    expect(agent!.pid).toBe(process.pid);
+  });
+
   it("agents.list returns all connected agents", async () => {
     await client.register("agent-alpha", "🅰️");
 
