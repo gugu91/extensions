@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
@@ -65,6 +67,20 @@ export default function (pi: ExtensionAPI) {
   const generated = generateAgentName();
   let agentName = process.env.PI_NICKNAME ?? generated.name;
   let agentEmoji = generated.emoji;
+
+  function getAgentMetadata(): Record<string, unknown> {
+    let branch = "";
+    try {
+      branch = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
+    } catch {
+      /* not in a git repo */
+    }
+    return {
+      cwd: process.cwd(),
+      branch,
+      host: os.hostname(),
+    };
+  }
 
   interface ThreadInfo {
     channelId: string;
@@ -813,7 +829,7 @@ export default function (pi: ExtensionAPI) {
 
       // Register this agent in the broker DB
       const selfId = `leader-${process.pid}`;
-      broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid);
+      broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid, getAgentMetadata());
 
       // Wire inbound messages through the router
       adapter.onInbound((inMsg) => {
@@ -920,7 +936,7 @@ export default function (pi: ExtensionAPI) {
     brokerRole = "direct";
   }
 
-  pi.registerCommand("pinet", {
+  pi.registerCommand("pinet-start", {
     description: "Start Pinet Slack connection",
     handler: async (_args, ctx) => {
       if (pinetEnabled) {
@@ -951,11 +967,11 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("slack", {
-    description: "Show Slack assistant status",
+  pi.registerCommand("pinet-status", {
+    description: "Show Pinet status",
     handler: async (_args, ctx) => {
       if (!pinetEnabled) {
-        ctx.ui.notify("Pinet not running. Use /pinet to start.", "info");
+        ctx.ui.notify("Pinet not running. Use /pinet-start to start.", "info");
         return;
       }
       const mode =
@@ -993,7 +1009,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("rename", {
+  pi.registerCommand("pinet-rename", {
     description: "Rename this Pinet agent",
     handler: async (args, ctx) => {
       const newName = args.trim();
