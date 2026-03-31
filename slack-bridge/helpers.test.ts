@@ -11,6 +11,9 @@ import {
   stripBotMention,
   isChannelId,
   FORM_METHODS,
+  loadPersistedName,
+  persistName,
+  resolveAgentIdentity,
   type InboxMessage,
 } from "./helpers.js";
 
@@ -286,5 +289,124 @@ describe("isChannelId", () => {
 
   it("rejects empty string", () => {
     expect(isChannelId("")).toBe(false);
+  });
+});
+
+// ─── persistName / loadPersistedName ───────────────────
+
+describe("persistName / loadPersistedName", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pinet-identity-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("round-trips correctly", () => {
+    persistName("Cosmic Fox", "🦊", tmpDir);
+    const result = loadPersistedName(tmpDir);
+    expect(result).toEqual({ name: "Cosmic Fox", emoji: "🦊" });
+  });
+
+  it("returns null for missing file", () => {
+    expect(loadPersistedName(tmpDir)).toBeNull();
+  });
+
+  it("returns null for invalid JSON", () => {
+    fs.writeFileSync(path.join(tmpDir, "slack-bridge-identity.json"), "not json");
+    expect(loadPersistedName(tmpDir)).toBeNull();
+  });
+
+  it("returns null when fields are missing", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "slack-bridge-identity.json"),
+      JSON.stringify({ name: "X" }),
+    );
+    expect(loadPersistedName(tmpDir)).toBeNull();
+  });
+
+  it("creates directory if needed", () => {
+    const nested = path.join(tmpDir, "sub", "dir");
+    persistName("Neon Owl", "🦉", nested);
+    expect(loadPersistedName(nested)).toEqual({ name: "Neon Owl", emoji: "🦉" });
+  });
+});
+
+// ─── resolveAgentIdentity ───────────────────────────
+
+describe("resolveAgentIdentity", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pinet-resolve-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns settings name/emoji when both are configured", () => {
+    const result = resolveAgentIdentity(
+      { agentName: "Config Bot", agentEmoji: "🤖" },
+      undefined,
+      tmpDir,
+    );
+    expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
+  });
+
+  it("settings take priority over persisted name", () => {
+    persistName("Old Name", "🐻", tmpDir);
+    const result = resolveAgentIdentity(
+      { agentName: "Config Bot", agentEmoji: "🤖" },
+      undefined,
+      tmpDir,
+    );
+    expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
+  });
+
+  it("returns persisted name when file exists", () => {
+    persistName("Saved Fox", "🦊", tmpDir);
+    const result = resolveAgentIdentity({}, undefined, tmpDir);
+    expect(result).toEqual({ name: "Saved Fox", emoji: "🦊" });
+  });
+
+  it("persisted name takes priority over env var", () => {
+    persistName("Saved Fox", "🦊", tmpDir);
+    const result = resolveAgentIdentity({}, "env-nick", tmpDir);
+    expect(result).toEqual({ name: "Saved Fox", emoji: "🦊" });
+  });
+
+  it("falls back to env var PI_NICKNAME", () => {
+    const result = resolveAgentIdentity({}, "my-agent", tmpDir);
+    expect(result.name).toBe("my-agent");
+    expect(typeof result.emoji).toBe("string");
+    expect(result.emoji.length).toBeGreaterThan(0);
+    // Should also persist
+    const persisted = loadPersistedName(tmpDir);
+    expect(persisted).toEqual(result);
+  });
+
+  it("generates and persists a new name when nothing else is available", () => {
+    const result = resolveAgentIdentity({}, undefined, tmpDir);
+    expect(typeof result.name).toBe("string");
+    expect(result.name.length).toBeGreaterThan(0);
+    expect(typeof result.emoji).toBe("string");
+    // Should be persisted
+    const persisted = loadPersistedName(tmpDir);
+    expect(persisted).toEqual(result);
+  });
+
+  it("does not persist when using settings config", () => {
+    resolveAgentIdentity({ agentName: "Config Bot", agentEmoji: "🤖" }, undefined, tmpDir);
+    expect(loadPersistedName(tmpDir)).toBeNull();
+  });
+
+  it("ignores settings when only agentName is set (no emoji)", () => {
+    const result = resolveAgentIdentity({ agentName: "Half Config" }, undefined, tmpDir);
+    // Should fall through to generated name since agentEmoji is missing
+    expect(result.name).not.toBe("Half Config");
   });
 });

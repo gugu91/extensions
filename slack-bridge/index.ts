@@ -13,6 +13,8 @@ import {
   isChannelId,
   buildSlackRequest,
   generateAgentName,
+  resolveAgentIdentity,
+  persistName,
 } from "./helpers.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
@@ -66,9 +68,9 @@ export default function (pi: ExtensionAPI) {
     return checkUserAllowed(allowedUsers, userId);
   }
 
-  const generated = generateAgentName();
-  let agentName = process.env.PI_NICKNAME ?? generated.name;
-  let agentEmoji = generated.emoji;
+  const identity = resolveAgentIdentity(settings, process.env.PI_NICKNAME);
+  let agentName = identity.name;
+  let agentEmoji = identity.emoji;
 
   function inboundToInbox(inMsg: BrokerInboundMessage): InboxMessage {
     return {
@@ -539,14 +541,14 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Inbox",
     description:
       "Return pending Slack messages that arrived since the last check, then clear the queue.",
-    promptSnippet: "Check for new incoming Slack messages.",
+    promptSnippet: `Check for new incoming Slack messages. You are ${agentEmoji} ${agentName}.`,
     promptGuidelines: [
       "You are connected to Slack via the slack-bridge extension.",
+      `Your Slack identity is ${agentEmoji} ${agentName} — use this name and emoji when replying in Slack threads.`,
       "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      "Pick a fun, creative agent name based on your current task (e.g. 'Refactor Raccoon', 'Bug Squasher 3000', 'CSS Wizard'). Choose a matching emoji.",
-      "First message in a new thread: use full format — '🦝 (Refactor Raccoon) Just finished splitting the auth module.'",
-      "Follow-up messages in the same thread: just prefix with the emoji — '🦝 Found two more files to split.'",
+      `First message in a new thread: use full format — '${agentEmoji} (${agentName}) Just finished splitting the auth module.'`,
+      `Follow-up messages in the same thread: just prefix with the emoji — '${agentEmoji} Found two more files to split.'`,
       "Keep the same name and emoji for the duration of the task. Pick a new one when the task changes.",
     ],
     parameters: Type.Object({}),
@@ -1128,6 +1130,7 @@ export default function (pi: ExtensionAPI) {
       } else {
         agentName = newName;
       }
+      persistName(agentName, agentEmoji);
       ctx.ui.notify(`${agentEmoji} Agent renamed to: ${agentName}`, "info");
     },
   });
