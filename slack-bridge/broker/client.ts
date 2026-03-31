@@ -57,6 +57,17 @@ interface JsonRpcResponse {
 export const DEFAULT_SOCKET_PATH = path.join(os.homedir(), ".pi", "pinet.sock");
 export const REQUEST_TIMEOUT_MS = 5000;
 export const RECONNECT_DELAY_MS = 3000;
+export const INITIAL_RECONNECT_DELAY_MS = 1000;
+export const MAX_RECONNECT_DELAY_MS = 30000;
+
+/** Compute reconnect delay with exponential backoff and jitter. */
+export function computeReconnectDelay(attempt: number, random = Math.random()): number {
+  const baseDelay = INITIAL_RECONNECT_DELAY_MS * Math.pow(2, attempt);
+  const capped = Math.min(baseDelay, MAX_RECONNECT_DELAY_MS);
+  // Add jitter: ±25%
+  const jitter = capped * (0.75 + random * 0.5);
+  return Math.round(jitter);
+}
 
 // ─── Pending request tracker ─────────────────────────────
 
@@ -79,6 +90,8 @@ export class BrokerClient {
   private shuttingDown = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disconnectHandler: (() => void) | null = null;
+  private reconnectHandler: (() => void) | null = null;
+  private reconnectAttempt = 0;
 
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
@@ -226,6 +239,14 @@ export class BrokerClient {
     this.disconnectHandler = handler;
   }
 
+  onReconnect(handler: () => void): void {
+    this.reconnectHandler = handler;
+  }
+
+  getReconnectAttempt(): number {
+    return this.reconnectAttempt;
+  }
+
   // ─── JSON-RPC transport ──────────────────────────────
 
   private request(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -295,12 +316,19 @@ export class BrokerClient {
 
   private scheduleReconnect(): void {
     if (this.shuttingDown || this.reconnectTimer) return;
+    const delay = computeReconnectDelay(this.reconnectAttempt);
+    this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.connect().catch(() => {
-        /* reconnect failed — will retry on next close */
-      });
-    }, RECONNECT_DELAY_MS);
+      void this.connect()
+        .then(() => {
+          this.reconnectAttempt = 0;
+          this.reconnectHandler?.();
+        })
+        .catch(() => {
+          /* reconnect failed — will retry on next close */
+        });
+    }, delay);
   }
 
   private rejectAllPending(err: Error): void {

@@ -1044,33 +1044,73 @@ export default function (pi: ExtensionAPI) {
     await client.connect();
     await client.register(agentName, agentEmoji);
 
-    const pollInterval = setInterval(async () => {
-      if (!pinetEnabled) return;
-      try {
-        const entries = await client.pollInbox();
-        if (entries.length === 0) return;
-        const ids: number[] = [];
-        for (const entry of entries) {
-          const meta = entry.message.metadata ?? {};
-          inbox.push({
-            channel: (meta.channel as string) ?? "",
-            threadTs: entry.message.threadId ?? "",
-            userId: entry.message.sender ?? "",
-            text: entry.message.body ?? "",
-            timestamp: entry.message.createdAt ?? "",
-          });
-          ids.push(entry.inboxId);
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+    function startPolling(): void {
+      if (pollInterval) return;
+      pollInterval = setInterval(async () => {
+        if (!pinetEnabled) return;
+        try {
+          const entries = await client.pollInbox();
+          if (entries.length === 0) return;
+          const ids: number[] = [];
+          for (const entry of entries) {
+            const meta = entry.message.metadata ?? {};
+            inbox.push({
+              channel: (meta.channel as string) ?? "",
+              threadTs: entry.message.threadId ?? "",
+              userId: entry.message.sender ?? "",
+              text: entry.message.body ?? "",
+              timestamp: entry.message.createdAt ?? "",
+            });
+            ids.push(entry.inboxId);
+          }
+          if (ids.length > 0) await client.ackMessages(ids);
+          updateBadge();
+          if (ctx.isIdle?.()) drainInbox();
+        } catch {
+          /* broker may be restarting */
         }
-        if (ids.length > 0) await client.ackMessages(ids);
-        updateBadge();
-        if (ctx.isIdle?.()) drainInbox();
-      } catch {
-        /* broker may be restarting */
+      }, 2000);
+    }
+
+    function stopPolling(): void {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
       }
-    }, 2000);
+    }
 
-    client.onDisconnect(() => clearInterval(pollInterval));
+    client.onDisconnect(() => {
+      stopPolling();
+      setExtStatus(ctx, "reconnecting");
+      ctx.ui.notify("Pinet broker disconnected — reconnecting...", "warning");
+      // Push system message so the LLM knows connectivity was lost
+      inbox.push({
+        channel: "",
+        threadTs: "",
+        userId: "system",
+        text: "Pinet broker connection lost. Auto-reconnecting...",
+        timestamp: String(Date.now() / 1000),
+      });
+      updateBadge();
+      if (ctx.isIdle?.()) drainInbox();
+    });
 
+    client.onReconnect(() => {
+      void (async () => {
+        try {
+          await client.register(agentName, agentEmoji);
+          startPolling();
+          setExtStatus(ctx, "ok");
+          ctx.ui.notify("Pinet broker reconnected", "info");
+        } catch {
+          // Re-registration failed; the next close event will trigger another reconnect
+        }
+      })();
+    });
+
+    startPolling();
     brokerClient = { client, pollInterval };
     brokerRole = "follower";
     pinetEnabled = true;

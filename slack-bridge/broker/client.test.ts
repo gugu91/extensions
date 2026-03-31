@@ -7,6 +7,9 @@ import {
   DEFAULT_SOCKET_PATH,
   REQUEST_TIMEOUT_MS,
   RECONNECT_DELAY_MS,
+  INITIAL_RECONNECT_DELAY_MS,
+  MAX_RECONNECT_DELAY_MS,
+  computeReconnectDelay,
 } from "./client.js";
 import type { BrokerConnectOpts } from "./client.js";
 
@@ -93,6 +96,14 @@ describe("BrokerClient — constants", () => {
 
   it("RECONNECT_DELAY_MS is 3000", () => {
     expect(RECONNECT_DELAY_MS).toBe(3000);
+  });
+
+  it("INITIAL_RECONNECT_DELAY_MS is 1000", () => {
+    expect(INITIAL_RECONNECT_DELAY_MS).toBe(1000);
+  });
+
+  it("MAX_RECONNECT_DELAY_MS is 30000", () => {
+    expect(MAX_RECONNECT_DELAY_MS).toBe(30000);
   });
 });
 
@@ -703,6 +714,124 @@ describe("BrokerClient — multiple concurrent requests", () => {
 
     client.disconnect();
   });
+});
+
+describe("BrokerClient — exponential backoff", () => {
+  it("computeReconnectDelay doubles each attempt up to max", () => {
+    // With random=0.5, jitter multiplier is 1.0 (no jitter), so delay = base
+    expect(computeReconnectDelay(0, 0.5)).toBe(1000);
+    expect(computeReconnectDelay(1, 0.5)).toBe(2000);
+    expect(computeReconnectDelay(2, 0.5)).toBe(4000);
+    expect(computeReconnectDelay(3, 0.5)).toBe(8000);
+    expect(computeReconnectDelay(4, 0.5)).toBe(16000);
+    // Capped at MAX
+    expect(computeReconnectDelay(5, 0.5)).toBe(MAX_RECONNECT_DELAY_MS);
+    expect(computeReconnectDelay(10, 0.5)).toBe(MAX_RECONNECT_DELAY_MS);
+  });
+
+  it("computeReconnectDelay applies jitter of ±25%", () => {
+    // random=0 → multiplier=0.75, random=1 → multiplier=1.25
+    const minDelay = computeReconnectDelay(0, 0); // 1000 * 0.75 = 750
+    const maxDelay = computeReconnectDelay(0, 1); // 1000 * 1.25 = 1250
+    expect(minDelay).toBe(750);
+    expect(maxDelay).toBe(1250);
+  });
+
+  it("computeReconnectDelay caps jitter at MAX", () => {
+    // Even with max jitter, should not exceed MAX * 1.25
+    const maxWithJitter = computeReconnectDelay(20, 1);
+    expect(maxWithJitter).toBeLessThanOrEqual(MAX_RECONNECT_DELAY_MS * 1.25);
+    expect(maxWithJitter).toBeGreaterThanOrEqual(MAX_RECONNECT_DELAY_MS * 0.75);
+  });
+
+  it("reconnectAttempt starts at 0 and increments after disconnect", async () => {
+    const mock = await createMockServer();
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+    expect(client.getReconnectAttempt()).toBe(0);
+
+    // Close server entirely so reconnects fail
+    // scheduleReconnect increments the counter synchronously before the timer
+    await mock.close();
+
+    await waitFor(() => client.getReconnectAttempt() > 0);
+    expect(client.getReconnectAttempt()).toBeGreaterThanOrEqual(1);
+
+    client.disconnect();
+  });
+});
+
+describe("BrokerClient — onReconnect callback", () => {
+  it("onReconnect does not fire from manual connect()", async () => {
+    const mock = await createMockServer();
+    const client = new BrokerClient(mock.connectOpts);
+    let reconnectFired = false;
+
+    client.onReconnect(() => {
+      reconnectFired = true;
+    });
+
+    await client.connect();
+    expect(client.isConnected()).toBe(true);
+
+    // Manual disconnect + reconnect (not via scheduleReconnect)
+    client.disconnect();
+    expect(client.isConnected()).toBe(false);
+
+    await client.connect();
+    expect(client.isConnected()).toBe(true);
+
+    // onReconnect is only called from scheduleReconnect's internal .then()
+    expect(reconnectFired).toBe(false);
+
+    client.disconnect();
+    await mock.close();
+  });
+
+  it("scheduleReconnect fires onDisconnect then onReconnect after server restart", async () => {
+    const mock = await createMockServer();
+    const port = mock.port;
+    const client = new BrokerClient(mock.connectOpts);
+    let disconnectFired = false;
+    let reconnectFired = false;
+
+    client.onDisconnect(() => {
+      disconnectFired = true;
+    });
+    client.onReconnect(() => {
+      reconnectFired = true;
+    });
+
+    await client.connect();
+    expect(client.isConnected()).toBe(true);
+
+    // Close the server completely (this reliably triggers client close event)
+    await mock.close();
+
+    // Wait for disconnect to be detected
+    await waitFor(() => disconnectFired);
+    expect(disconnectFired).toBe(true);
+    expect(client.isConnected()).toBe(false);
+
+    // Restart a new server on the same port so the auto-reconnect succeeds
+    await new Promise<void>((resolve, reject) => {
+      const server2 = net.createServer();
+      server2.on("error", reject);
+      server2.listen(port, "127.0.0.1", () => resolve());
+      // Store for cleanup
+      (client as unknown as { _testServer2: net.Server })._testServer2 = server2;
+    });
+
+    // Wait for auto-reconnect to succeed
+    await waitFor(() => reconnectFired, 10000);
+    expect(reconnectFired).toBe(true);
+    expect(client.isConnected()).toBe(true);
+    expect(client.getReconnectAttempt()).toBe(0); // reset after success
+
+    client.disconnect();
+    const server2 = (client as unknown as { _testServer2: net.Server })._testServer2;
+    await new Promise<void>((res) => server2.close(() => res()));
+  }, 20000);
 });
 
 describe("BrokerClient — newline-delimited framing", () => {
