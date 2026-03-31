@@ -201,15 +201,17 @@ describe("MessageRouter — route", () => {
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
   });
 
-  it("delivers to disconnected thread owner (queued in inbox)", () => {
+  it("falls back to unrouted when thread owner is gone", () => {
     // Agent a1 owns the thread but is NOT in the agents list (disconnected)
     db.agents = [];
     db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "a1" }));
 
     const decision = router.route(makeMessage({ threadId: "t-100" }));
 
-    // Still delivers — broker will queue in inbox until agent reconnects
-    expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+    // Owner is gone — clears ownership and falls through to unrouted
+    expect(decision).toEqual({ action: "unrouted" });
+    // Ownership should be cleared
+    expect(db.threads.get("t-100")?.ownerAgent).toBeNull();
   });
 });
 
@@ -358,17 +360,17 @@ describe("MessageRouter — multi-agent scenarios", () => {
     expect(d2).toEqual({ action: "deliver", agentId: "a3" });
   });
 
-  it("route after agent disconnect — thread owner offline delivers to queue", () => {
-    // a2 owns the thread
+  it("route after agent disconnect — clears ownership and re-routes", () => {
+    // a2 owns the thread but is disconnected
     db.threads.set("t-owned", makeThread({ threadId: "t-owned", ownerAgent: "a2" }));
-
-    // Remove a2 from connected agents (simulating disconnect)
     db.agents = db.agents.filter((a) => a.id !== "a2");
 
     const decision = router.route(makeMessage({ threadId: "t-owned" }));
 
-    // Still delivers — message held in inbox for when a2 reconnects
-    expect(decision).toEqual({ action: "deliver", agentId: "a2" });
+    // Owner gone — ownership cleared, falls through to agent mention or unrouted
+    expect(db.threads.get("t-owned")?.ownerAgent).toBeNull();
+    // a1 is still connected but not mentioned — unrouted
+    expect(decision).toEqual({ action: "unrouted" });
   });
 
   it("allowlist rejection happens before any routing", () => {

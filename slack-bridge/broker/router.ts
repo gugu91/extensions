@@ -58,8 +58,8 @@ export class MessageRouter {
       if (owner) {
         return { action: "deliver", agentId: owner.id };
       }
-      // Owner agent is disconnected — still deliver (broker queues in inbox)
-      return { action: "deliver", agentId: thread.ownerAgent };
+      // Owner agent is gone — clear ownership and fall through to re-route
+      this.db.updateThread(msg.threadId, { ownerAgent: null });
     }
 
     // 2. Channel assignment — if channel is mapped to a specific agent

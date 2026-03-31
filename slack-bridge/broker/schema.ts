@@ -135,6 +135,24 @@ export class BrokerDB implements BrokerDBInterface {
     } catch {
       /* exists */
     }
+
+    // Clean up stale agents (dead PIDs) and release their thread ownership
+    this.cleanStaleAgents();
+  }
+
+  /**
+   * Remove agents whose PID is no longer running and
+   * release ownership of their threads.
+   */
+  cleanStaleAgents(): void {
+    const db = this.getDb();
+    const agents = this.getAgents();
+    for (const agent of agents) {
+      if (!isProcessRunning(agent.pid)) {
+        db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?").run(agent.id);
+        db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
+      }
+    }
   }
 
   close(): void {
@@ -432,5 +450,14 @@ export class BrokerDB implements BrokerDBInterface {
       throw new Error("BrokerDB not initialized — call initialize() first");
     }
     return this.db;
+  }
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
