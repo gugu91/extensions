@@ -408,14 +408,14 @@ describe("SlackAdapter — allowlist filtering", () => {
 
     // But the adapter with an allowlist would filter it out
     // (We test the helper directly since the adapter's onMessage is private)
-    const { isUserAllowed, buildAllowlist } = await import("../../slack-bridge/helpers.js");
+    const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
     const allowlist = buildAllowlist({ allowedUsers: ["U_AUTHORIZED"] }, undefined);
     expect(isUserAllowed(allowlist, "U_UNAUTHORIZED")).toBe(false);
     expect(isUserAllowed(allowlist, "U_AUTHORIZED")).toBe(true);
   });
 
   it("allows all users when no allowlist is configured", async () => {
-    const { isUserAllowed, buildAllowlist } = await import("../../slack-bridge/helpers.js");
+    const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
     const allowlist = buildAllowlist({}, undefined);
     expect(allowlist).toBeNull();
     expect(isUserAllowed(null, "U_ANYONE")).toBe(true);

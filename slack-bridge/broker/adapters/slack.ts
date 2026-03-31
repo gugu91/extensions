@@ -3,7 +3,7 @@ import {
   buildAllowlist,
   isUserAllowed,
   stripBotMention,
-} from "../../slack-bridge/helpers.js";
+} from "../../helpers.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
 // ─── Config ──────────────────────────────────────────────

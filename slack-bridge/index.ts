@@ -10,8 +10,10 @@ import {
   isChannelId,
   buildSlackRequest,
 } from "./helpers.js";
-
-// Broker modules loaded dynamically to allow graceful fallback
+import { startBroker } from "./broker/index.js";
+import { SlackAdapter } from "./broker/adapters/slack.js";
+import { MessageRouter } from "./broker/router.js";
+import { BrokerClient } from "./broker/client.js";
 
 // ─── Slack API (raw fetch, zero deps) ────────────────────
 
@@ -796,19 +798,15 @@ export default function (pi: ExtensionAPI) {
 
   async function startAsBrokerLeader(ctx: ExtensionContext): Promise<boolean> {
     try {
-      const brokerMod = await import("../broker/index.js");
-      const slackMod = await import("../broker/adapters/slack.js");
-      const routerMod = await import("../broker/router.js");
-
-      const broker = await brokerMod.startBroker();
-      const adapter = new slackMod.SlackAdapter({
+      const broker = await startBroker();
+      const adapter = new SlackAdapter({
         botToken: botToken!,
         appToken: appToken!,
         allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
         suggestedPrompts: settings.suggestedPrompts,
       });
 
-      const router = new routerMod.MessageRouter(broker.db);
+      const router = new MessageRouter(broker.db);
 
       // Register this agent in the broker DB
       const selfId = `leader-${process.pid}`;
@@ -867,8 +865,7 @@ export default function (pi: ExtensionAPI) {
 
   async function startAsBrokerClient(ctx: ExtensionContext): Promise<boolean> {
     try {
-      const clientMod = await import("../broker/client.js");
-      const client = new clientMod.BrokerClient();
+      const client = new BrokerClient();
       await client.connect();
       await client.register(agentName, "🔧");
 

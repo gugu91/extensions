@@ -14,7 +14,6 @@
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",
     "slack-bridge/**/*.ts",
-    "broker/**/*.ts",
     "types/**/*.d.ts",
     "vitest.config.ts"
   ]
