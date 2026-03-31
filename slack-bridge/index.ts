@@ -14,7 +14,7 @@ import {
   buildSlackRequest,
   generateAgentName,
 } from "./helpers.js";
-import { startBroker } from "./broker/index.js";
+import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
 import { MessageRouter } from "./broker/router.js";
@@ -855,8 +855,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─── Commands ───────────────────────────────────────
+  // ─── Agent-to-agent messaging tools ──────────────────
 
+  // These are registered unconditionally but only work when pinet is active.
+  // The variables they reference (pinetEnabled, brokerRole, activeBroker,
+  // brokerClient) are declared in the Commands section just below.
+
+  // Forward-declared — assigned in the Commands section below.
   let pinetEnabled = false;
   let brokerRole: "broker" | "follower" | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -865,6 +870,107 @@ export default function (pi: ExtensionAPI) {
   let brokerClient: any = null;
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
+
+  pi.registerTool({
+    name: "pinet_message",
+    label: "Pinet Message",
+    description: "Send a message to another connected Pinet agent.",
+    promptSnippet: "Send a message to another connected Pinet agent.",
+    parameters: Type.Object({
+      to: Type.String({ description: "Target agent name or ID" }),
+      message: Type.String({ description: "Message body" }),
+    }),
+    async execute(_id, params) {
+      if (!pinetEnabled) {
+        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      }
+
+      if (brokerRole === "broker" && activeBroker) {
+        // Direct DB access for broker mode
+        const db = activeBroker.db as BrokerDB;
+        const allAgents = db.getAgents();
+        const target =
+          allAgents.find((a: { id: string }) => a.id === params.to) ??
+          allAgents.find((a: { name: string }) => a.name === params.to);
+
+        if (!target) {
+          throw new Error(`Agent not found: ${params.to}`);
+        }
+
+        const selfId = `broker-${process.pid}`;
+        const threadId = `a2a:${selfId}:${target.id}`;
+
+        if (!db.getThread(threadId)) {
+          db.createThread(threadId, "agent", "", selfId);
+        }
+
+        const msg = db.insertMessage(
+          threadId,
+          "agent",
+          "inbound",
+          selfId,
+          params.message,
+          [target.id],
+          { senderAgent: agentName, a2a: true },
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Message sent to ${target.name} (id: ${msg.id}).`,
+            },
+          ],
+          details: { messageId: msg.id, target: target.name },
+        };
+      } else if (brokerRole === "follower" && brokerClient) {
+        const client = brokerClient.client as BrokerClient;
+        const messageId = await client.sendAgentMessage(params.to, params.message);
+
+        return {
+          content: [{ type: "text", text: `Message sent to ${params.to} (id: ${messageId}).` }],
+          details: { messageId, target: params.to },
+        };
+      }
+
+      throw new Error("Pinet is in an unexpected state.");
+    },
+  });
+
+  pi.registerTool({
+    name: "pinet_agents",
+    label: "Pinet Agents",
+    description: "List all connected Pinet agents.",
+    promptSnippet: "List all connected Pinet agents.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!pinetEnabled) {
+        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      }
+
+      let agents: Array<{ emoji: string; name: string; id: string }>;
+      if (brokerRole === "broker" && activeBroker) {
+        agents = (activeBroker.db as BrokerDB).getAgents();
+      } else if (brokerRole === "follower" && brokerClient) {
+        agents = await (brokerClient.client as BrokerClient).listAgents();
+      } else {
+        throw new Error("Pinet is in an unexpected state.");
+      }
+
+      const lines = agents.map((a) => `${a.emoji} ${a.name} (${a.id})`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: lines.length > 0 ? lines.join("\n") : "(no agents connected)",
+          },
+        ],
+        details: { agents },
+      };
+    },
+  });
+
+  // ─── Commands ───────────────────────────────────────
 
   pi.registerCommand("pinet-start", {
     description: "Start Pinet as the broker (Slack connection + message routing)",

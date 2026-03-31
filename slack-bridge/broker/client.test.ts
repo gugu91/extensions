@@ -447,6 +447,58 @@ describe("BrokerClient — listThreads / listAgents", () => {
   });
 });
 
+describe("BrokerClient — sendAgentMessage", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends agent.message RPC and returns messageId", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const msgPromise = client.sendAgentMessage("target-agent", "Hello agent");
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { targetAgent: string; body: string };
+    };
+    expect(req.method).toBe("agent.message");
+    expect(req.params.targetAgent).toBe("target-agent");
+    expect(req.params.body).toBe("Hello agent");
+
+    mock.respondTo(mock.connections[0], req.id, { ok: true, messageId: 42 });
+
+    const result = await msgPromise;
+    expect(result).toBe(42);
+
+    client.disconnect();
+  });
+
+  it("rejects when target agent not found", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const msgPromise = client.sendAgentMessage("ghost", "Hello?");
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as { id: number };
+
+    mock.respondError(mock.connections[0], req.id, -32602, "Agent not found: ghost");
+
+    await expect(msgPromise).rejects.toThrow("Agent not found: ghost");
+
+    client.disconnect();
+  });
+});
+
 describe("BrokerClient — slackProxy", () => {
   let mock: MockServer;
 
