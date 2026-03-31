@@ -64,6 +64,20 @@ describe("loadSettings", () => {
     expect(result.defaultChannel).toBe("C456");
   });
 
+  it("returns autoFollow setting", () => {
+    const p = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(p, JSON.stringify({ "slack-bridge": { autoFollow: true } }));
+    const result = loadSettings(p);
+    expect(result.autoFollow).toBe(true);
+  });
+
+  it("returns autoFollow as undefined when not set", () => {
+    const p = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(p, JSON.stringify({ "slack-bridge": { botToken: "xoxb-test" } }));
+    const result = loadSettings(p);
+    expect(result.autoFollow).toBeUndefined();
+  });
+
   it("returns suggested prompts", () => {
     const p = path.join(tmpDir, "settings.json");
     const settings = {

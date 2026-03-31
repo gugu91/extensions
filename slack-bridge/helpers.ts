@@ -11,6 +11,7 @@ export interface SlackBridgeSettings {
   defaultChannel?: string;
   suggestedPrompts?: { title: string; message: string }[];
   autoConnect?: boolean;
+  autoFollow?: boolean;
 }
 
 export function loadSettings(settingsPath?: string): SlackBridgeSettings {
