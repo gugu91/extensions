@@ -7,6 +7,8 @@ export interface AgentInfo {
   pid: number;
   connectedAt: string;
   lastSeen: string;
+  metadata: Record<string, unknown> | null;
+  status: "working" | "idle";
 }
 
 export interface ThreadInfo {

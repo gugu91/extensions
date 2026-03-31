@@ -21,6 +21,8 @@ interface AgentRow {
   pid: number;
   connected_at: string;
   last_seen: string;
+  metadata: string | null;
+  status: string;
 }
 
 interface ThreadRow {
@@ -42,6 +44,8 @@ function rowToAgent(row: AgentRow): AgentInfo {
     pid: row.pid,
     connectedAt: row.connected_at,
     lastSeen: row.last_seen,
+    metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+    status: row.status === "working" ? "working" : "idle",
   };
 }
 
@@ -135,6 +139,11 @@ export class BrokerDB implements BrokerDBInterface {
     } catch {
       /* exists */
     }
+    try {
+      this.db.exec("ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
+    } catch {
+      /* exists */
+    }
 
     // Clean up stale agents (dead PIDs) and release their thread ownership
     this.cleanStaleAgents();
@@ -186,7 +195,16 @@ export class BrokerDB implements BrokerDBInterface {
          metadata = excluded.metadata`,
     ).run(id, name, emoji, pid, now, now, meta);
 
-    return { id, name, emoji, pid, connectedAt: now, lastSeen: now };
+    return {
+      id,
+      name,
+      emoji,
+      pid,
+      connectedAt: now,
+      lastSeen: now,
+      metadata: metadata ?? null,
+      status: "idle" as const,
+    };
   }
 
   unregisterAgent(id: string): void {
@@ -205,6 +223,15 @@ export class BrokerDB implements BrokerDBInterface {
   touchAgent(id: string): void {
     const db = this.getDb();
     db.prepare("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), id);
+  }
+
+  updateAgentStatus(id: string, status: "working" | "idle"): void {
+    const db = this.getDb();
+    db.prepare("UPDATE agents SET status = ?, last_seen = ? WHERE id = ?").run(
+      status,
+      new Date().toISOString(),
+      id,
+    );
   }
 
   // ─── Threads ─────────────────────────────────────────

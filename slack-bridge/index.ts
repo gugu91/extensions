@@ -5,10 +5,12 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import {
   type InboxMessage,
+  type AgentDisplayInfo,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   isUserAllowed as checkUserAllowed,
   formatInboxMessages,
+  formatAgentList,
   stripBotMention,
   isChannelId,
   buildSlackRequest,
@@ -955,23 +957,31 @@ export default function (pi: ExtensionAPI) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
 
-      let agents: Array<{ emoji: string; name: string; id: string }>;
+      let agents: AgentDisplayInfo[];
       if (brokerRole === "broker" && activeBroker) {
-        agents = (activeBroker.db as BrokerDB).getAgents();
+        agents = (activeBroker.db as BrokerDB).getAgents().map((a) => ({
+          emoji: a.emoji,
+          name: a.name,
+          id: a.id,
+          status: a.status,
+          metadata: a.metadata as AgentDisplayInfo["metadata"],
+        }));
       } else if (brokerRole === "follower" && brokerClient) {
-        agents = await (brokerClient.client as BrokerClient).listAgents();
+        const raw = await (brokerClient.client as BrokerClient).listAgents();
+        agents = raw.map((a) => ({
+          emoji: a.emoji,
+          name: a.name,
+          id: a.id,
+          status: a.status ?? "idle",
+          metadata: a.metadata as AgentDisplayInfo["metadata"],
+        }));
       } else {
         throw new Error("Pinet is in an unexpected state.");
       }
 
-      const lines = agents.map((a) => `${a.emoji} ${a.name} (${a.id})`);
+      const text = formatAgentList(agents, os.homedir());
       return {
-        content: [
-          {
-            type: "text",
-            text: lines.length > 0 ? lines.join("\n") : "(no agents connected)",
-          },
-        ],
+        content: [{ type: "text", text }],
         details: { agents },
       };
     },
@@ -1042,7 +1052,7 @@ export default function (pi: ExtensionAPI) {
   async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
     const client = new BrokerClient();
     await client.connect();
-    await client.register(agentName, agentEmoji);
+    await client.register(agentName, agentEmoji, getAgentMetadata());
 
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -1100,7 +1110,7 @@ export default function (pi: ExtensionAPI) {
     client.onReconnect(() => {
       void (async () => {
         try {
-          await client.register(agentName, agentEmoji);
+          await client.register(agentName, agentEmoji, getAgentMetadata());
           startPolling();
           setExtStatus(ctx, "ok");
           ctx.ui.notify("Pinet broker reconnected", "info");
@@ -1243,12 +1253,28 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // ─── Agent status reporting ──────────────────────────
+
+  function reportStatus(status: "working" | "idle"): void {
+    if (!pinetEnabled) return;
+    try {
+      if (brokerRole === "broker" && activeBroker && activeSelfId) {
+        (activeBroker.db as BrokerDB).updateAgentStatus(activeSelfId, status);
+      } else if (brokerRole === "follower" && brokerClient) {
+        void (brokerClient.client as BrokerClient).updateStatus(status);
+      }
+    } catch {
+      /* best effort */
+    }
+  }
+
   // Drain inbox: set thinking status, send to agent
   function drainInbox(): void {
     if (inbox.length === 0) return;
 
     const pending = inbox.splice(0, inbox.length);
     updateBadge();
+    reportStatus("working");
 
     const prompt = formatInboxMessages(pending, userNames);
 
@@ -1272,6 +1298,7 @@ export default function (pi: ExtensionAPI) {
     }
     thinking.clear();
 
+    reportStatus("idle");
     drainInbox();
   });
 
