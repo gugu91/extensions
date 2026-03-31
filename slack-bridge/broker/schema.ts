@@ -128,6 +128,13 @@ export class BrokerDB implements BrokerDBInterface {
       CREATE INDEX IF NOT EXISTS idx_inbox_message
         ON inbox(message_id);
     `);
+
+    // Migrations
+    try {
+      this.db.exec("ALTER TABLE agents ADD COLUMN metadata TEXT");
+    } catch {
+      /* exists */
+    }
   }
 
   close(): void {
