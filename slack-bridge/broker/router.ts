@@ -69,9 +69,13 @@ export class MessageRouter {
     }
 
     // 3. Direct address — message mentions an agent by name
-    const mentioned = findAgentMention(msg.text, agents);
-    if (mentioned) {
-      return { action: "deliver", agentId: mentioned.id };
+    //    Only for NEW threads (no existing record), so we don't
+    //    steal threads that already have history with another agent.
+    if (!thread) {
+      const mentioned = findAgentMention(msg.text, agents);
+      if (mentioned) {
+        return { action: "deliver", agentId: mentioned.id };
+      }
     }
 
     // 4. No match
