@@ -121,6 +121,64 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("agent.message delivers to target by name", async () => {
+    // Register sender
+    await client.register("sender-agent", "📤");
+
+    // Connect and register receiver
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("receiver-agent", "📥");
+
+    // Send agent message by name
+    const messageId = await client.sendAgentMessage("receiver-agent", "Hello from agent");
+    expect(messageId).toBeGreaterThan(0);
+
+    // Receiver should see the message in inbox
+    const inbox = await client2.pollInbox();
+    expect(inbox.length).toBe(1);
+    expect(inbox[0].message.body).toBe("Hello from agent");
+    expect(inbox[0].message.source).toBe("agent");
+    expect(inbox[0].message.metadata).toBeTruthy();
+    expect((inbox[0].message.metadata as Record<string, unknown>).senderAgent).toBe("sender-agent");
+    expect((inbox[0].message.metadata as Record<string, unknown>).a2a).toBe(true);
+
+    // Sender should NOT see the message
+    const senderInbox = await client.pollInbox();
+    expect(senderInbox.length).toBe(0);
+
+    client2.disconnect();
+  });
+
+  it("agent.message resolves target by ID", async () => {
+    await client.register("alpha", "🅰️");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    const reg2 = await client2.register("beta", "🅱️");
+
+    // Send by ID instead of name
+    const messageId = await client.sendAgentMessage(reg2.agentId, "Hello by ID");
+    expect(messageId).toBeGreaterThan(0);
+
+    const inbox = await client2.pollInbox();
+    expect(inbox.length).toBe(1);
+    expect(inbox[0].message.body).toBe("Hello by ID");
+
+    client2.disconnect();
+  });
+
+  it("agent.message returns error for unknown target", async () => {
+    await client.register("lonely-agent", "😢");
+    await expect(client.sendAgentMessage("ghost-agent", "Hello?")).rejects.toThrow(
+      "Agent not found: ghost-agent",
+    );
+  });
+
   it("slack.proxy returns error when not configured", async () => {
     await client.register("proxy-tester", "🔌");
     await expect(client.slackProxy("chat.postMessage", { channel: "C1" })).rejects.toThrow(

@@ -255,6 +255,8 @@ export class BrokerSocketServer {
           return this.handleThreadsList(req, state);
         case "agents.list":
           return this.handleAgentsList(req);
+        case "agent.message":
+          return this.handleAgentMessage(req, state);
         case "slack.proxy":
           return await this.handleSlackProxy(req);
         default:
@@ -385,6 +387,62 @@ export class BrokerSocketServer {
   private handleAgentsList(req: JsonRpcRequest): JsonRpcResponse {
     const agents = this.db.getAgents();
     return rpcOk(req.id, agents);
+  }
+
+  // ─── Agent-to-agent messaging ─────────────────────────
+
+  private handleAgentMessage(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const targetAgent = typeof params.targetAgent === "string" ? params.targetAgent : null;
+    const body = typeof params.body === "string" ? params.body : null;
+
+    if (!targetAgent || !body) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "targetAgent and body are required");
+    }
+
+    const metadata =
+      params.metadata && typeof params.metadata === "object"
+        ? (params.metadata as Record<string, unknown>)
+        : undefined;
+
+    // Resolve target: try by ID first, then by name
+    const allAgents = this.db.getAgents();
+    const target =
+      allAgents.find((a) => a.id === targetAgent) ?? allAgents.find((a) => a.name === targetAgent);
+
+    if (!target) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, `Agent not found: ${targetAgent}`);
+    }
+
+    // Look up sender name for metadata
+    const sender = allAgents.find((a) => a.id === state.agentId);
+    const senderName = sender?.name ?? state.agentId;
+
+    // Use a synthetic thread ID for agent-to-agent messages
+    const threadId = `a2a:${state.agentId}:${target.id}`;
+
+    // Ensure thread exists
+    if (!this.db.getThread(threadId)) {
+      this.db.createThread(threadId, "agent", "", state.agentId);
+    }
+
+    const enrichedMeta = { ...metadata, senderAgent: senderName, a2a: true };
+
+    const msg = this.db.insertMessage(
+      threadId,
+      "agent",
+      "inbound",
+      state.agentId,
+      body,
+      [target.id],
+      enrichedMeta,
+    );
+
+    return rpcOk(req.id, { ok: true, messageId: msg.id });
   }
 
   // ─── Slack proxy handler ──────────────────────────────

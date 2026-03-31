@@ -176,6 +176,16 @@ export class BrokerClient {
     await this.request("send", { threadId, body: text, ...(metadata ? { metadata } : {}) });
   }
 
+  // ─── Agent-to-agent messaging ─────────────────────────
+
+  async sendAgentMessage(target: string, body: string): Promise<number> {
+    const result = (await this.request("agent.message", {
+      targetAgent: target,
+      body,
+    })) as { ok: boolean; messageId: number };
+    return result.messageId;
+  }
+
   // ─── Queries ─────────────────────────────────────────
 
   async listThreads(): Promise<ThreadInfo[]> {
