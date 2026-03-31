@@ -6,9 +6,10 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import {
-  CommentStore,
+  createCommentStore,
   buildContextThreadId,
   formatCommentPreview,
+  type ICommentStore,
   type CommentRecord,
 } from "./comments.js";
 
@@ -408,7 +409,7 @@ export default function (pi: ExtensionAPI) {
   let server: net.Server | null = null;
   let socketPath: string | null = null;
   let dirty = false;
-  let commentStore: CommentStore | null = null;
+  let commentStore: ICommentStore | null = null;
   const clients: Set<net.Socket> = new Set();
 
   const editorState: EditorState = {
@@ -811,8 +812,7 @@ export default function (pi: ExtensionAPI) {
     const storageRoot = repoInfo?.repoRoot ?? ctx.cwd;
 
     try {
-      commentStore = new CommentStore(storageRoot);
-      commentStore.initialize();
+      commentStore = await createCommentStore(storageRoot);
     } catch (error) {
       commentStore = null;
       const message = error instanceof Error ? error.message : "unknown error";
@@ -946,7 +946,10 @@ export default function (pi: ExtensionAPI) {
       socketPath = null;
     }
 
-    commentStore = null;
+    if (commentStore) {
+      commentStore.close();
+      commentStore = null;
+    }
     ctx.ui.setStatus("nvim-bridge", "");
   });
 }

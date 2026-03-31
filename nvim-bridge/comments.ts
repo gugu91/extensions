@@ -77,12 +77,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function normalizeThreadId(threadId: string | undefined): string {
+export function normalizeThreadId(threadId: string | undefined): string {
   const trimmed = threadId?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_THREAD_ID;
 }
 
-function normalizeActorType(actorType: string | undefined): CommentActorType {
+export function normalizeActorType(actorType: string | undefined): CommentActorType {
   return actorType === "human" ? "human" : "agent";
 }
 
@@ -114,7 +114,7 @@ function getTmuxLabel(): string | null {
   return cachedTmuxLabel;
 }
 
-function normalizeActorId(actorId: string | undefined, actorType: CommentActorType): string {
+export function normalizeActorId(actorId: string | undefined, actorType: CommentActorType): string {
   const trimmed = actorId?.trim();
   if (trimmed && trimmed.length > 0) return trimmed;
   if (actorType === "human") {
@@ -137,7 +137,7 @@ function normalizePositiveInteger(value: number | undefined): number | undefined
   return int;
 }
 
-function normalizeContext(
+export function normalizeContext(
   context:
     | {
         file?: string;
@@ -168,7 +168,7 @@ function normalizeContext(
   return normalized;
 }
 
-function normalizeLimit(limit: number | undefined): number | undefined {
+export function normalizeLimit(limit: number | undefined): number | undefined {
   if (limit == null) return undefined;
   if (!Number.isFinite(limit)) return undefined;
   const int = Math.floor(limit);
@@ -195,7 +195,7 @@ export function buildContextThreadId(
   return `${CONTEXT_THREAD_PREFIX}${normalized.file}:${normalized.startLine}-${normalized.endLine}`;
 }
 
-function resolveThreadId(
+export function resolveThreadId(
   threadId: string | undefined,
   context: CommentContext | undefined,
 ): string {
@@ -218,7 +218,7 @@ function compareComments(a: CommentMeta, b: CommentMeta): number {
   return a.id.localeCompare(b.id);
 }
 
-function createCommentId(): string {
+export function createCommentId(): string {
   const time = new Date().toISOString().replace(/[-:.TZ]/g, "");
   const random = crypto.randomBytes(4).toString("hex");
   return `c_${time}_${random}`;
@@ -230,7 +230,21 @@ function isSafeRelativePath(filePath: string): boolean {
   return !normalized.startsWith("..") && !normalized.includes(`${path.sep}..${path.sep}`);
 }
 
-export class CommentStore {
+export interface ICommentStore {
+  initialize(): void;
+  close(): void;
+  addComment(input: CommentAddInput): Promise<CommentRecord>;
+  listComments(input?: CommentListInput): CommentListResult;
+  listAllComments(input?: CommentListAllInput): CommentListAllResult;
+  wipeAllComments(): Promise<CommentWipeResult>;
+  getThreadSummary(threadId?: string): {
+    threadId: string;
+    total: number;
+    latestId: string | null;
+  };
+}
+
+export class CommentStore implements ICommentStore {
   private readonly baseDir: string;
   private readonly indexPath: string;
   private readonly itemsDir: string;
@@ -248,6 +262,10 @@ export class CommentStore {
   initialize(): void {
     this.ensureLayout();
     this.indexCache = this.loadIndexOrRebuild();
+  }
+
+  close(): void {
+    this.indexCache = null;
   }
 
   getThreadSummary(threadId?: string): {
@@ -553,4 +571,17 @@ export function formatCommentPreview(comment: CommentRecord, maxChars = 280): st
   const flattened = comment.body.replace(/\s+/g, " ").trim();
   if (flattened.length <= maxChars) return flattened;
   return `${flattened.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+export async function createCommentStore(repoRoot: string): Promise<ICommentStore> {
+  try {
+    const mod = await import("./comments-sqlite.js");
+    const store = new mod.SqliteCommentStore(repoRoot);
+    store.initialize();
+    return store;
+  } catch {
+    const store = new CommentStore(repoRoot);
+    store.initialize();
+    return store;
+  }
 }
