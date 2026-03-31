@@ -73,6 +73,7 @@ interface SlackBridgeSettings {
   allowedUsers?: string[];
   defaultChannel?: string;
   suggestedPrompts?: { title: string; message: string }[];
+  autoConnect?: boolean;
 }
 
 function loadSettings(): SlackBridgeSettings {
@@ -854,9 +855,39 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Commands ───────────────────────────────────────
 
+  let pinetEnabled = false;
+
+  pi.registerCommand("pinet", {
+    description: "Start Pinet Slack connection",
+    handler: async (_args, ctx) => {
+      if (pinetEnabled) {
+        const socket = ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected";
+        ctx.ui.notify(`Pinet already running (${socket})`, "info");
+        return;
+      }
+      pinetEnabled = true;
+      extCtx = ctx;
+      try {
+        const auth = await slack("auth.test", botToken!);
+        botUserId = auth.user_id as string;
+        setExtStatus(ctx, "reconnecting");
+        await connectSocketMode(ctx);
+        ctx.ui.notify(`Pinet connected as <@${botUserId}>`, "info");
+      } catch (err) {
+        pinetEnabled = false;
+        ctx.ui.notify(`Pinet failed: ${msg(err)}`, "error");
+        setExtStatus(ctx, "error");
+      }
+    },
+  });
+
   pi.registerCommand("slack", {
     description: "Show Slack assistant status",
     handler: async (_args, ctx) => {
+      if (!pinetEnabled) {
+        ctx.ui.notify("Pinet not running. Use /pinet to start.", "info");
+        return;
+      }
       const socket = ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected";
       const ownedCount = [...threads.values()].filter((t) => t.owner === agentName).length;
       const allowlistInfo = allowedUsers
@@ -886,7 +917,7 @@ export default function (pi: ExtensionAPI) {
     shuttingDown = false;
     extCtx = ctx;
 
-    // Restore persisted thread state
+    // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
       threads?: [string, ThreadInfo][];
       lastDmChannel?: string | null;
@@ -918,14 +949,21 @@ export default function (pi: ExtensionAPI) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
 
-    try {
-      const auth = await slack("auth.test", botToken!);
-      botUserId = auth.user_id as string;
-      setExtStatus(ctx, "reconnecting");
-      await connectSocketMode(ctx);
-    } catch (err) {
-      ctx.ui.notify(`slack-bridge: ${msg(err)}`, "error");
-      setExtStatus(ctx, "error");
+    // Auto-connect if configured, otherwise use /pinet to start
+    if (settings.autoConnect) {
+      pinetEnabled = true;
+      try {
+        const auth = await slack("auth.test", botToken!);
+        botUserId = auth.user_id as string;
+        setExtStatus(ctx, "reconnecting");
+        await connectSocketMode(ctx);
+      } catch (err) {
+        pinetEnabled = false;
+        ctx.ui.notify(`slack-bridge: ${msg(err)}`, "error");
+        setExtStatus(ctx, "error");
+      }
+    } else {
+      setExtStatus(ctx, "off");
     }
   });
 
