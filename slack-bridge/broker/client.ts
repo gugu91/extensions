@@ -34,6 +34,8 @@ export interface AgentInfo {
   pid: number;
   connectedAt: string;
   lastSeen: string;
+  metadata: Record<string, unknown> | null;
+  status: "working" | "idle";
 }
 
 // ─── JSON-RPC types ──────────────────────────────────────
@@ -167,8 +169,17 @@ export class BrokerClient {
 
   // ─── Registration ────────────────────────────────────
 
-  async register(name: string, emoji: string): Promise<{ agentId: string }> {
-    const result = (await this.request("register", { name, emoji, pid: process.pid })) as {
+  async register(
+    name: string,
+    emoji: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<{ agentId: string }> {
+    const result = (await this.request("register", {
+      name,
+      emoji,
+      pid: process.pid,
+      ...(metadata ? { metadata } : {}),
+    })) as {
       agentId: string;
     };
     return result;
@@ -196,6 +207,12 @@ export class BrokerClient {
     if (channel) params.channel = channel;
     const result = (await this.request("thread.claim", params)) as { claimed: boolean };
     return result;
+  }
+
+  // ─── Status ────────────────────────────────────────────
+
+  async updateStatus(status: "working" | "idle"): Promise<void> {
+    await this.request("status.update", { status });
   }
 
   // ─── Agent-to-agent messaging ─────────────────────────

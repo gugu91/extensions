@@ -7,12 +7,15 @@ import {
   buildAllowlist,
   isUserAllowed,
   formatInboxMessages,
+  formatAgentList,
+  shortenPath,
   buildSlackRequest,
   stripBotMention,
   isChannelId,
   FORM_METHODS,
   resolveAgentIdentity,
   type InboxMessage,
+  type AgentDisplayInfo,
 } from "./helpers.js";
 
 // ─── loadSettings ─────────────────────────────────────────
@@ -287,6 +290,126 @@ describe("isChannelId", () => {
 
   it("rejects empty string", () => {
     expect(isChannelId("")).toBe(false);
+  });
+});
+
+// ─── shortenPath ──────────────────────────────────────────
+
+describe("shortenPath", () => {
+  it("replaces homedir prefix with ~", () => {
+    expect(shortenPath("/Users/alice/src/project", "/Users/alice")).toBe("~/src/project");
+  });
+
+  it("leaves path unchanged when homedir does not match", () => {
+    expect(shortenPath("/opt/data/project", "/Users/alice")).toBe("/opt/data/project");
+  });
+
+  it("handles exact homedir match", () => {
+    expect(shortenPath("/Users/alice", "/Users/alice")).toBe("~");
+  });
+
+  it("does not match partial directory names", () => {
+    expect(shortenPath("/Users/alicewonder/src", "/Users/alice")).toBe("/Users/alicewonder/src");
+  });
+});
+
+// ─── formatAgentList ──────────────────────────────────────
+
+describe("formatAgentList", () => {
+  const homedir = "/Users/alice";
+
+  it("returns placeholder when no agents", () => {
+    expect(formatAgentList([], homedir)).toBe("(no agents connected)");
+  });
+
+  it("formats a single agent with full metadata", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "\u{1F9A6}",
+        name: "Stellar Otter",
+        id: "broker-97446",
+        status: "working",
+        metadata: { cwd: "/Users/alice/src/extensions", branch: "main", host: "macbook" },
+      },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toBe(
+      "\u{1F9A6} Stellar Otter (broker-97446) \u2014 working\n   ~/src/extensions (main) @ macbook",
+    );
+  });
+
+  it("formats multiple agents", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "\u{1F9A6}",
+        name: "Stellar Otter",
+        id: "broker-97446",
+        status: "working",
+        metadata: { cwd: "/Users/alice/src/extensions", branch: "main", host: "macbook" },
+      },
+      {
+        emoji: "\u{1F43A}",
+        name: "Crystal Wolf",
+        id: "6e3e51ca",
+        status: "idle",
+        metadata: {
+          cwd: "/Users/alice/src/extensions",
+          branch: "feat/broker-reconnect",
+          host: "macbook",
+        },
+      },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toContain("\u{1F9A6} Stellar Otter (broker-97446) \u2014 working");
+    expect(result).toContain("~/src/extensions (main) @ macbook");
+    expect(result).toContain("\u{1F43A} Crystal Wolf (6e3e51ca) \u2014 idle");
+    expect(result).toContain("~/src/extensions (feat/broker-reconnect) @ macbook");
+  });
+
+  it("handles agent with null metadata", () => {
+    const agents: AgentDisplayInfo[] = [
+      { emoji: "\u{1F916}", name: "Bot", id: "abc", status: "idle", metadata: null },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toBe("\u{1F916} Bot (abc) \u2014 idle");
+    expect(result).not.toContain("\n");
+  });
+
+  it("handles agent with empty metadata", () => {
+    const agents: AgentDisplayInfo[] = [
+      { emoji: "\u{1F916}", name: "Bot", id: "abc", status: "working", metadata: {} },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toBe("\u{1F916} Bot (abc) \u2014 working");
+  });
+
+  it("handles partial metadata (only cwd)", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "\u{1F916}",
+        name: "Bot",
+        id: "abc",
+        status: "idle",
+        metadata: { cwd: "/opt/project" },
+      },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toContain("/opt/project");
+    expect(result).not.toContain("@");
+  });
+
+  it("shortens cwd using homedir", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "\u{1F916}",
+        name: "Bot",
+        id: "abc",
+        status: "idle",
+        metadata: { cwd: "/Users/alice/work", branch: "dev", host: "srv" },
+      },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toContain("~/work (dev) @ srv");
   });
 });
 

@@ -68,6 +68,8 @@ function makeAgent(overrides: Partial<AgentInfo> & { id: string; name: string })
     pid: 1000,
     connectedAt: "2026-01-01T00:00:00Z",
     lastSeen: "2026-01-01T00:00:00Z",
+    metadata: null,
+    status: "idle",
     ...overrides,
   };
 }
