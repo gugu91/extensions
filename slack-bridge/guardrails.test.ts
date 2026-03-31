@@ -89,6 +89,13 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("edit", g)).toBe(false);
   });
 
+  it("classifies create/post channel tools as write-only", () => {
+    expect(WRITE_TOOLS.has("slack_create_channel")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_post_channel")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack_create_channel")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_post_channel")).toBe(false);
+  });
+
   it("combines readOnly and blockedTools", () => {
     const g: SecurityGuardrails = { readOnly: true, blockedTools: ["slack_create_channel"] };
     expect(isToolBlocked("bash", g)).toBe(true); // write tool + readOnly

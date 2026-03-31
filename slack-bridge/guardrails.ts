@@ -14,7 +14,6 @@ export const READ_ONLY_TOOLS = new Set([
   "slack_send",
   "slack_read",
   "slack_read_channel",
-  "slack_create_channel",
   "pinet_agents",
   "pinet_message",
   "memory_read",
@@ -33,6 +32,8 @@ export const WRITE_TOOLS = new Set([
   "memory_write",
   "memory_sync",
   "memory_init",
+  "slack_create_channel",
+  "slack_post_channel",
 ]);
 
 /**

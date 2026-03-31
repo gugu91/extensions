@@ -15,7 +15,15 @@ import {
   generateAgentName,
   resolveAgentIdentity,
 } from "./helpers.js";
-import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
+import {
+  buildSecurityPrompt,
+  isConfirmationApproval,
+  isConfirmationRejection,
+  isToolBlocked,
+  matchesToolPattern,
+  toolNeedsConfirmation,
+  type SecurityGuardrails,
+} from "./guardrails.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
@@ -121,6 +129,37 @@ export default function (pi: ExtensionAPI) {
   let lastDmChannel: string | null = null;
   const channelCache = new Map<string, string>();
   const unclaimedThreads = new Set<string>(); // negative cache for resolveThreadOwner
+
+  interface ConfirmationRequest {
+    toolPattern: string;
+    action: string;
+    requestedAt: number;
+  }
+
+  interface ThreadConfirmationState {
+    pending: ConfirmationRequest[];
+    approved: ConfirmationRequest[];
+    rejected: ConfirmationRequest[];
+  }
+
+  const threadConfirmationStates = new Map<string, ThreadConfirmationState>();
+
+  function getThreadConfirmationState(threadTs: string): ThreadConfirmationState {
+    let state = threadConfirmationStates.get(threadTs);
+    if (!state) {
+      state = { pending: [], approved: [], rejected: [] };
+      threadConfirmationStates.set(threadTs, state);
+    }
+    return state;
+  }
+
+  function cleanupThreadConfirmationState(threadTs: string): void {
+    const state = threadConfirmationStates.get(threadTs);
+    if (!state) return;
+    if (state.pending.length === 0 && state.approved.length === 0 && state.rejected.length === 0) {
+      threadConfirmationStates.delete(threadTs);
+    }
+  }
 
   // ─── State persistence ──────────────────────────────
 
@@ -254,6 +293,100 @@ export default function (pi: ExtensionAPI) {
     } catch {
       /* non-critical */
     }
+  }
+
+  function removeMatchingToolPattern(
+    list: ConfirmationRequest[],
+    toolName: string,
+  ): ConfirmationRequest | null {
+    const idx = list.findIndex((req) => matchesToolPattern(toolName, [req.toolPattern]));
+    if (idx === -1) return null;
+    const [match] = list.splice(idx, 1);
+    return match;
+  }
+
+  function registerConfirmationRequest(threadTs: string, tool: string, action: string): void {
+    getThreadConfirmationState(threadTs).pending.push({
+      toolPattern: tool,
+      action,
+      requestedAt: Date.now(),
+    });
+  }
+
+  function consumeConfirmationReply(threadTs: string, text: string): { approved: boolean } | null {
+    const state = threadConfirmationStates.get(threadTs);
+    if (!state || state.pending.length === 0) return null;
+
+    const trimmed = text.trim();
+    const isApproval = isConfirmationApproval(trimmed);
+    const isRejection = isConfirmationRejection(trimmed);
+    if (!isApproval && !isRejection) return null;
+
+    const request = state.pending.shift();
+    if (!request) return null;
+
+    if (isApproval) {
+      state.approved.push(request);
+      cleanupThreadConfirmationState(threadTs);
+      return { approved: true };
+    }
+
+    state.rejected.push(request);
+    cleanupThreadConfirmationState(threadTs);
+    return { approved: false };
+  }
+
+  function getConfirmationDecision(threadTs: string, toolName: string): boolean | null {
+    const state = threadConfirmationStates.get(threadTs);
+    if (!state) return null;
+
+    const approved = removeMatchingToolPattern(state.approved, toolName);
+    if (approved) {
+      cleanupThreadConfirmationState(threadTs);
+      return true;
+    }
+
+    const rejected = removeMatchingToolPattern(state.rejected, toolName);
+    if (rejected) {
+      cleanupThreadConfirmationState(threadTs);
+      return false;
+    }
+
+    return null;
+  }
+
+  function requireToolPolicy(toolName: string, threadTs: string | undefined): void {
+    if (isToolBlocked(toolName, guardrails)) {
+      throw new Error(`Tool "${toolName}" is blocked by Slack security guardrails.`);
+    }
+
+    if (!toolNeedsConfirmation(toolName, guardrails)) {
+      return;
+    }
+
+    if (!threadTs) {
+      throw new Error(
+        `Tool "${toolName}" requires confirmation. Include a thread_ts and call slack_confirm_action before executing this tool.`,
+      );
+    }
+
+    const decision = getConfirmationDecision(threadTs, toolName);
+    if (decision === true) return;
+    if (decision === false) {
+      throw new Error(`Tool "${toolName}" was denied by Slack user confirmation.`);
+    }
+
+    const state = threadConfirmationStates.get(threadTs);
+    const pending = !!state?.pending.some((req) => matchesToolPattern(toolName, [req.toolPattern]));
+    if (!pending) {
+      throw new Error(
+        `Tool "${toolName}" requires confirmation. Call slack_confirm_action in thread ${threadTs} and wait for the user's approval first.`,
+      );
+    }
+
+    throw new Error(
+      `Tool "${toolName}" requires confirmation. Call slack_confirm_action in thread ${threadTs} and wait for the user's approval first.`,
+    );
   }
 
   // ─── Thread ownership ────────────────────────────────
@@ -468,6 +601,13 @@ export default function (pi: ExtensionAPI) {
 
     // Strip <@BOT_ID> from text for channel mentions
     const cleanText = isChannelMention ? stripBotMention(text, botUserId!) : text;
+    const confirmationResult = consumeConfirmationReply(effectiveTs, cleanText);
+    const messageText =
+      confirmationResult === null
+        ? cleanText
+        : confirmationResult.approved
+          ? `${cleanText}\n\n✅ User approved security confirmation request in this thread.`
+          : `${cleanText}\n\n❌ User denied security confirmation request in this thread.`;
 
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${cleanText.slice(0, 100)}`, "info");
@@ -484,7 +624,7 @@ export default function (pi: ExtensionAPI) {
       channel,
       threadTs: effectiveTs,
       userId: user,
-      text: cleanText,
+      text: messageText,
       timestamp: (evt.ts as string) ?? effectiveTs,
       ...(isChannelMention && { isChannelMention: true }),
     });
@@ -574,10 +714,15 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({}),
     async execute() {
+      const securityHeader = securityPrompt ? `${securityPrompt}\n\n` : "";
+
       if (inbox.length === 0) {
         return {
           content: [
-            { type: "text", text: `(no new messages) — you are ${agentEmoji} ${agentName}` },
+            {
+              type: "text",
+              text: `${securityHeader}(no new messages) — you are ${agentEmoji} ${agentName}`,
+            },
           ],
           details: { count: 0 },
         };
@@ -597,7 +742,10 @@ export default function (pi: ExtensionAPI) {
 
       return {
         content: [
-          { type: "text", text: `You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}` },
+          {
+            type: "text",
+            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}`,
+          },
         ],
         details: { count: pending.length },
       };
@@ -618,6 +766,8 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_send", params.thread_ts);
+
       const thread = params.thread_ts ? threads.get(params.thread_ts) : undefined;
       const channel = thread?.channelId ?? lastDmChannel;
 
@@ -696,6 +846,8 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max messages (default 20)" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_read", params.thread_ts);
+
       const thread = threads.get(params.thread_ts);
       const channel = thread?.channelId ?? lastDmChannel;
       if (!channel) throw new Error("Unknown thread.");
@@ -737,6 +889,8 @@ export default function (pi: ExtensionAPI) {
       purpose: Type.Optional(Type.String({ description: "Channel purpose" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_create_channel", undefined);
+
       const res = await slack("conversations.create", botToken!, {
         name: params.name,
       });
@@ -780,6 +934,8 @@ export default function (pi: ExtensionAPI) {
       thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_post_channel", params.thread_ts);
+
       const channelInput = params.channel ?? settings.defaultChannel;
       if (!channelInput) {
         throw new Error("No channel specified and no defaultChannel configured in settings.json.");
@@ -847,6 +1003,8 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max messages to return (default 20)" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_read_channel", params.thread_ts);
+
       const channelId = await resolveChannel(params.channel);
       const limit = params.limit ?? 20;
 
@@ -897,17 +1055,20 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       const thread = threads.get(params.thread_ts);
-      const channel = thread?.channelId ?? lastDmChannel;
-      if (!channel) throw new Error("No active Slack thread.");
+      if (!thread) {
+        throw new Error(`No active Slack thread for thread_ts: ${params.thread_ts}`);
+      }
 
       const confirmMsg =
-        `\u26A0\uFE0F *Action requires confirmation*\n\n` +
+        `⚠️ *Action requires confirmation*\n\n` +
         `Tool: \`${params.tool}\`\n` +
         `Action: ${params.action}\n\n` +
         `Reply *yes* to approve or *no* to reject.`;
 
+      registerConfirmationRequest(params.thread_ts, params.tool, params.action);
+
       await slack("chat.postMessage", botToken!, {
-        channel,
+        channel: thread.channelId,
         thread_ts: params.thread_ts,
         text: confirmMsg,
         metadata: {
@@ -954,6 +1115,8 @@ export default function (pi: ExtensionAPI) {
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_id, params) {
+      requireToolPolicy("pinet_message", undefined);
+
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
@@ -1017,6 +1180,8 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "List all connected Pinet agents.",
     parameters: Type.Object({}),
     async execute() {
+      requireToolPolicy("pinet_agents", undefined);
+
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
