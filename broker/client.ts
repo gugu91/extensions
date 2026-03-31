@@ -1,0 +1,287 @@
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
+
+// ─── Types ───────────────────────────────────────────────
+
+export interface InboxEntry {
+  id: number;
+  threadId: string;
+  channel: string;
+  userId: string;
+  userName?: string;
+  text: string;
+  timestamp: string;
+  isChannelMention?: boolean;
+}
+
+export interface ThreadInfo {
+  threadId: string;
+  channel: string;
+  agentId?: string;
+  agentName?: string;
+}
+
+export interface AgentInfo {
+  agentId: string;
+  name: string;
+  emoji: string;
+  connected: boolean;
+}
+
+// ─── JSON-RPC types ──────────────────────────────────────
+
+interface JsonRpcRequest {
+  jsonrpc: "2.0";
+  id: number;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+interface JsonRpcResponse {
+  jsonrpc: "2.0";
+  id: number;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
+
+// ─── Constants (exported for testing) ────────────────────
+
+export const DEFAULT_SOCKET_PATH = path.join(os.homedir(), ".pi", "pinet.sock");
+export const REQUEST_TIMEOUT_MS = 5000;
+export const RECONNECT_DELAY_MS = 3000;
+
+// ─── Pending request tracker ─────────────────────────────
+
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (reason: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+// ─── Connection options ──────────────────────────────────
+
+export type BrokerConnectOpts = { path: string } | { host: string; port: number };
+
+// ─── BrokerClient ────────────────────────────────────────
+
+export class BrokerClient {
+  private readonly connectOpts: BrokerConnectOpts;
+  private socket: net.Socket | null = null;
+  private connected = false;
+  private shuttingDown = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectHandler: (() => void) | null = null;
+
+  private nextId = 1;
+  private readonly pending = new Map<number, PendingRequest>();
+  private buffer = "";
+
+  constructor(opts?: string | BrokerConnectOpts) {
+    if (opts === undefined) {
+      this.connectOpts = { path: DEFAULT_SOCKET_PATH };
+    } else if (typeof opts === "string") {
+      this.connectOpts = { path: opts };
+    } else {
+      this.connectOpts = opts;
+    }
+  }
+
+  // ─── Connection ──────────────────────────────────────
+
+  connect(): Promise<void> {
+    this.shuttingDown = false;
+    return new Promise<void>((resolve, reject) => {
+      const sock = net.createConnection(this.connectOpts);
+
+      sock.on("connect", () => {
+        this.socket = sock;
+        this.connected = true;
+        this.buffer = "";
+        resolve();
+      });
+
+      sock.on("data", (chunk: Buffer) => {
+        this.onData(chunk.toString("utf-8"));
+      });
+
+      sock.on("close", () => {
+        const wasConnected = this.connected;
+        this.connected = false;
+        this.socket = null;
+        this.rejectAllPending(new Error("Socket closed"));
+        if (wasConnected && !this.shuttingDown) {
+          this.disconnectHandler?.();
+          this.scheduleReconnect();
+        }
+      });
+
+      sock.on("error", (err: Error) => {
+        if (!this.connected) {
+          reject(err);
+        }
+        // If already connected, the close event handles cleanup
+      });
+    });
+  }
+
+  disconnect(): void {
+    this.shuttingDown = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.rejectAllPending(new Error("Client disconnected"));
+    try {
+      this.socket?.destroy();
+    } catch {
+      /* ignore */
+    }
+    this.socket = null;
+    this.connected = false;
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  // ─── Registration ────────────────────────────────────
+
+  async register(name: string, emoji: string): Promise<{ agentId: string }> {
+    const result = (await this.request("agent.register", { name, emoji })) as {
+      agentId: string;
+    };
+    return result;
+  }
+
+  // ─── Messaging ───────────────────────────────────────
+
+  async pollInbox(): Promise<InboxEntry[]> {
+    const result = (await this.request("inbox.poll")) as { messages: InboxEntry[] };
+    return result.messages;
+  }
+
+  async ackMessages(ids: number[]): Promise<void> {
+    await this.request("inbox.ack", { ids });
+  }
+
+  async send(threadId: string, text: string, metadata?: Record<string, unknown>): Promise<void> {
+    await this.request("message.send", { threadId, text, ...(metadata ? { metadata } : {}) });
+  }
+
+  // ─── Queries ─────────────────────────────────────────
+
+  async listThreads(): Promise<ThreadInfo[]> {
+    const result = (await this.request("threads.list")) as { threads: ThreadInfo[] };
+    return result.threads;
+  }
+
+  async listAgents(): Promise<AgentInfo[]> {
+    const result = (await this.request("agents.list")) as { agents: AgentInfo[] };
+    return result.agents;
+  }
+
+  // ─── Slack proxy (read-through) ──────────────────────
+
+  async slackProxy(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const result = (await this.request("slack.proxy", { method, params })) as Record<
+      string,
+      unknown
+    >;
+    return result;
+  }
+
+  // ─── Events ──────────────────────────────────────────
+
+  onDisconnect(handler: () => void): void {
+    this.disconnectHandler = handler;
+  }
+
+  // ─── JSON-RPC transport ──────────────────────────────
+
+  private request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    if (!this.connected || !this.socket) {
+      return Promise.reject(new Error("Not connected to broker"));
+    }
+
+    const id = this.nextId++;
+    const msg: JsonRpcRequest = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      ...(params ? { params } : {}),
+    };
+
+    return new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Request timed out: ${method}`));
+      }, REQUEST_TIMEOUT_MS);
+
+      this.pending.set(id, { resolve, reject, timer });
+
+      const line = JSON.stringify(msg) + "\n";
+      this.socket!.write(line, "utf-8", (err) => {
+        if (err) {
+          clearTimeout(timer);
+          this.pending.delete(id);
+          reject(err);
+        }
+      });
+    });
+  }
+
+  private onData(chunk: string): void {
+    this.buffer += chunk;
+    const lines = this.buffer.split("\n");
+    // Keep the last incomplete line in the buffer
+    this.buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line) as JsonRpcResponse;
+        this.handleResponse(msg);
+      } catch {
+        /* malformed JSON — skip */
+      }
+    }
+  }
+
+  private handleResponse(msg: JsonRpcResponse): void {
+    const entry = this.pending.get(msg.id);
+    if (!entry) return;
+
+    clearTimeout(entry.timer);
+    this.pending.delete(msg.id);
+
+    if (msg.error) {
+      entry.reject(new Error(msg.error.message));
+    } else {
+      entry.resolve(msg.result);
+    }
+  }
+
+  // ─── Reconnect ──────────────────────────────────────
+
+  private scheduleReconnect(): void {
+    if (this.shuttingDown || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect().catch(() => {
+        /* reconnect failed — will retry on next close */
+      });
+    }, RECONNECT_DELAY_MS);
+  }
+
+  private rejectAllPending(err: Error): void {
+    for (const [id, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(err);
+      this.pending.delete(id);
+    }
+  }
+}
