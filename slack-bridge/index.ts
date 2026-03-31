@@ -15,6 +15,7 @@ import {
 } from "./helpers.js";
 import { startBroker } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
+import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
 import { MessageRouter } from "./broker/router.js";
 import { BrokerClient } from "./broker/client.js";
 
@@ -67,6 +68,17 @@ export default function (pi: ExtensionAPI) {
   const generated = generateAgentName();
   let agentName = process.env.PI_NICKNAME ?? generated.name;
   let agentEmoji = generated.emoji;
+
+  function inboundToInbox(inMsg: BrokerInboundMessage): InboxMessage {
+    return {
+      channel: inMsg.channel,
+      threadTs: inMsg.threadId,
+      userId: inMsg.userId ?? "",
+      text: inMsg.text ?? "",
+      timestamp: inMsg.timestamp ?? "",
+      isChannelMention: inMsg.isChannelMention,
+    };
+  }
 
   function getAgentMetadata(): Record<string, unknown> {
     let branch = "";
@@ -812,160 +824,115 @@ export default function (pi: ExtensionAPI) {
   // ─── Commands ───────────────────────────────────────
 
   let pinetEnabled = false;
-  let brokerRole: "leader" | "client" | "direct" | null = null;
+  let brokerRole: "broker" | "follower" | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let activeBroker: any = null; // Broker instance when leader
+  let activeBroker: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let brokerClient: any = null; // BrokerClient instance when client
-
-  async function startAsBrokerLeader(ctx: ExtensionContext): Promise<boolean> {
-    try {
-      const broker = await startBroker();
-      const adapter = new SlackAdapter({
-        botToken: botToken!,
-        appToken: appToken!,
-        allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
-        suggestedPrompts: settings.suggestedPrompts,
-      });
-
-      const router = new MessageRouter(broker.db);
-
-      // Register this agent in the broker DB
-      const selfId = `leader-${process.pid}`;
-      broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid, getAgentMetadata());
-
-      // Wire inbound messages through the router
-      adapter.onInbound((inMsg) => {
-        const decision = router.route(inMsg);
-        if (decision.action === "deliver" && decision.agentId === selfId) {
-          // Deliver to local inbox
-          const im: InboxMessage = {
-            channel: inMsg.channel,
-            threadTs: inMsg.threadId,
-            userId: inMsg.userId ?? "",
-            text: inMsg.text ?? "",
-            timestamp: inMsg.timestamp ?? "",
-            isChannelMention: inMsg.isChannelMention,
-          };
-          inbox.push(im);
-          updateBadge();
-          if (ctx.isIdle?.()) drainInbox();
-        } else if (decision.action === "deliver") {
-          // Queue for another agent
-          broker.db.queueMessage(decision.agentId, inMsg);
-        } else if (decision.action === "unrouted") {
-          // No owner — deliver to self (leader handles unrouted)
-          const im: InboxMessage = {
-            channel: inMsg.channel,
-            threadTs: inMsg.threadId,
-            userId: inMsg.userId ?? "",
-            text: inMsg.text ?? "",
-            timestamp: inMsg.timestamp ?? "",
-            isChannelMention: inMsg.isChannelMention,
-          };
-          inbox.push(im);
-          updateBadge();
-          // Auto-claim for self
-          router.claimThread(inMsg.threadId, selfId);
-          if (ctx.isIdle?.()) drainInbox();
-        }
-        // "reject" — silently drop
-      });
-
-      broker.addAdapter(adapter);
-      await adapter.connect();
-      botUserId = adapter.getBotUserId();
-
-      activeBroker = broker;
-      brokerRole = "leader";
-      return true;
-    } catch (err) {
-      console.error(`[pinet] broker leader failed: ${msg(err)}`);
-      return false;
-    }
-  }
-
-  async function startAsBrokerClient(ctx: ExtensionContext): Promise<boolean> {
-    try {
-      const client = new BrokerClient();
-      await client.connect();
-      await client.register(agentName, agentEmoji);
-
-      // Poll broker inbox periodically
-      const pollInterval = setInterval(async () => {
-        if (!pinetEnabled) return;
-        try {
-          const entries = await client.pollInbox();
-          if (entries.length === 0) return;
-          const ids: number[] = [];
-          for (const entry of entries) {
-            const meta = entry.message.metadata ?? {};
-            const im: InboxMessage = {
-              channel: (meta.channel as string) ?? "",
-              threadTs: entry.message.threadId ?? "",
-              userId: entry.message.sender ?? "",
-              text: entry.message.body ?? "",
-              timestamp: entry.message.createdAt ?? "",
-            };
-            inbox.push(im);
-            ids.push(entry.inboxId);
-          }
-          if (ids.length > 0) await client.ackMessages(ids);
-          updateBadge();
-          if (ctx.isIdle?.()) drainInbox();
-        } catch {
-          /* broker may be restarting */
-        }
-      }, 2000);
-
-      client.onDisconnect(() => {
-        clearInterval(pollInterval);
-      });
-
-      brokerClient = { client, pollInterval };
-      brokerRole = "client";
-      return true;
-    } catch (err) {
-      console.error(`[pinet] broker client failed: ${msg(err)}`);
-      return false;
-    }
-  }
-
-  async function startDirect(ctx: ExtensionContext): Promise<void> {
-    const auth = await slack("auth.test", botToken!);
-    botUserId = auth.user_id as string;
-    setExtStatus(ctx, "reconnecting");
-    await connectSocketMode(ctx);
-    brokerRole = "direct";
-  }
+  let brokerClient: any = null;
 
   pi.registerCommand("pinet-start", {
-    description: "Start Pinet Slack connection",
+    description: "Start Pinet as the broker (Slack connection + message routing)",
     handler: async (_args, ctx) => {
       if (pinetEnabled) {
         ctx.ui.notify(`Pinet already running (${brokerRole})`, "info");
         return;
       }
-      pinetEnabled = true;
       extCtx = ctx;
 
-      // Try broker leader → broker client → direct connection
-      if (await startAsBrokerLeader(ctx)) {
+      try {
+        const broker = await startBroker();
+        const adapter = new SlackAdapter({
+          botToken: botToken!,
+          appToken: appToken!,
+          allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
+          suggestedPrompts: settings.suggestedPrompts,
+        });
+
+        const router = new MessageRouter(broker.db);
+        const selfId = `broker-${process.pid}`;
+        broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid, getAgentMetadata());
+
+        adapter.onInbound((inMsg) => {
+          const decision = router.route(inMsg);
+          if (decision.action === "deliver" && decision.agentId === selfId) {
+            inbox.push(inboundToInbox(inMsg));
+            updateBadge();
+            if (ctx.isIdle?.()) drainInbox();
+          } else if (decision.action === "deliver") {
+            broker.db.queueMessage(decision.agentId, inMsg);
+          } else if (decision.action === "unrouted") {
+            inbox.push(inboundToInbox(inMsg));
+            updateBadge();
+            router.claimThread(inMsg.threadId, selfId);
+            if (ctx.isIdle?.()) drainInbox();
+          }
+        });
+
+        broker.addAdapter(adapter);
+        await adapter.connect();
+        botUserId = adapter.getBotUserId();
+
+        activeBroker = broker;
+        brokerRole = "broker";
+        pinetEnabled = true;
         setExtStatus(ctx, "ok");
-        ctx.ui.notify(`Pinet started as broker leader (${botUserId})`, "info");
-      } else if (await startAsBrokerClient(ctx)) {
+        ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
+      } catch (err) {
+        ctx.ui.notify(`Pinet broker failed: ${msg(err)}`, "error");
+        setExtStatus(ctx, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("pinet-follow", {
+    description: "Connect to an existing Pinet broker as a follower",
+    handler: async (_args, ctx) => {
+      if (pinetEnabled) {
+        ctx.ui.notify(`Pinet already running (${brokerRole})`, "info");
+        return;
+      }
+      extCtx = ctx;
+
+      try {
+        const client = new BrokerClient();
+        await client.connect();
+        await client.register(agentName, agentEmoji);
+
+        const pollInterval = setInterval(async () => {
+          if (!pinetEnabled) return;
+          try {
+            const entries = await client.pollInbox();
+            if (entries.length === 0) return;
+            const ids: number[] = [];
+            for (const entry of entries) {
+              const meta = entry.message.metadata ?? {};
+              inbox.push({
+                channel: (meta.channel as string) ?? "",
+                threadTs: entry.message.threadId ?? "",
+                userId: entry.message.sender ?? "",
+                text: entry.message.body ?? "",
+                timestamp: entry.message.createdAt ?? "",
+              });
+              ids.push(entry.inboxId);
+            }
+            if (ids.length > 0) await client.ackMessages(ids);
+            updateBadge();
+            if (ctx.isIdle?.()) drainInbox();
+          } catch {
+            /* broker may be restarting */
+          }
+        }, 2000);
+
+        client.onDisconnect(() => clearInterval(pollInterval));
+
+        brokerClient = { client, pollInterval };
+        brokerRole = "follower";
+        pinetEnabled = true;
         setExtStatus(ctx, "ok");
-        ctx.ui.notify("Pinet connected as broker client", "info");
-      } else {
-        try {
-          await startDirect(ctx);
-          ctx.ui.notify(`Pinet connected directly as <@${botUserId}>`, "info");
-        } catch (err) {
-          pinetEnabled = false;
-          brokerRole = null;
-          ctx.ui.notify(`Pinet failed: ${msg(err)}`, "error");
-          setExtStatus(ctx, "error");
-        }
+        ctx.ui.notify(`${agentEmoji} ${agentName} — following broker`, "info");
+      } catch (err) {
+        ctx.ui.notify(`Pinet follow failed: ${msg(err)}`, "error");
+        setExtStatus(ctx, "error");
       }
     },
   });
@@ -974,21 +941,11 @@ export default function (pi: ExtensionAPI) {
     description: "Show Pinet status",
     handler: async (_args, ctx) => {
       if (!pinetEnabled) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start to start.", "info");
+        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
         return;
       }
-      const mode =
-        brokerRole === "leader"
-          ? "broker leader"
-          : brokerRole === "client"
-            ? "broker client"
-            : "direct";
-      const socket =
-        brokerRole === "direct"
-          ? ws?.readyState === WebSocket.OPEN
-            ? "connected"
-            : "disconnected"
-          : mode;
+      const mode = brokerRole === "broker" ? "broker" : "follower";
+      const socket = mode;
       const ownedCount = [...threads.values()].filter((t) => t.owner === agentName).length;
       const allowlistInfo = allowedUsers
         ? `Allowed users: ${[...allowedUsers].join(", ")}`
@@ -1065,25 +1022,8 @@ export default function (pi: ExtensionAPI) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
 
-    // Auto-connect if configured, otherwise use /pinet to start
-    if (settings.autoConnect) {
-      pinetEnabled = true;
-      if (await startAsBrokerLeader(ctx)) {
-        setExtStatus(ctx, "ok");
-      } else if (await startAsBrokerClient(ctx)) {
-        setExtStatus(ctx, "ok");
-      } else {
-        try {
-          await startDirect(ctx);
-        } catch (err) {
-          pinetEnabled = false;
-          ctx.ui.notify(`slack-bridge: ${msg(err)}`, "error");
-          setExtStatus(ctx, "error");
-        }
-      }
-    } else {
-      setExtStatus(ctx, "off");
-    }
+    // Use /pinet-start or /pinet-follow to connect
+    setExtStatus(ctx, "off");
   });
 
   // Drain inbox: set thinking status, send to agent

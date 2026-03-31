@@ -1,11 +1,10 @@
+import * as fs from "node:fs";
 import { BrokerDB } from "./schema.js";
-import { BrokerSocketServer } from "./socket-server.js";
-import { LeaderLock } from "./leader.js";
+import { BrokerSocketServer, defaultSocketPath } from "./socket-server.js";
 import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
 export { BrokerSocketServer } from "./socket-server.js";
-export { LeaderLock } from "./leader.js";
 export type {
   AgentInfo,
   ThreadInfo,
@@ -23,43 +22,38 @@ export type {
 export interface BrokerOptions {
   dbPath?: string;
   socketPath?: string;
-  lockPath?: string;
 }
 
 export interface Broker {
   db: BrokerDB;
   server: BrokerSocketServer;
-  leader: LeaderLock;
   adapters: MessageAdapter[];
   addAdapter(adapter: MessageAdapter): void;
   stop(): Promise<void>;
 }
 
 /**
- * Start the broker: acquire leader lock, initialize SQLite, start
- * the Unix socket server. Throws if another broker is already running.
+ * Start the broker: initialize SQLite, start the Unix socket server.
+ * Only one broker should run at a time — use /pinet-start explicitly.
  */
 export async function startBroker(options: BrokerOptions = {}): Promise<Broker> {
-  const leader = new LeaderLock(options.lockPath);
-
-  if (!leader.tryAcquire()) {
-    throw new Error("Another broker is already running (lock file held by active process)");
-  }
-
   const db = new BrokerDB(options.dbPath);
+  db.initialize();
+
+  // Clean up stale socket file
+  const socketPath = options.socketPath ?? defaultSocketPath();
   try {
-    db.initialize();
-  } catch (err) {
-    leader.release();
-    throw err;
+    const stat = fs.statSync(socketPath);
+    if (stat.isSocket()) fs.unlinkSync(socketPath);
+  } catch {
+    /* doesn't exist — fine */
   }
 
-  const server = new BrokerSocketServer(db, options.socketPath);
+  const server = new BrokerSocketServer(db, socketPath);
   try {
     await server.start();
   } catch (err) {
     db.close();
-    leader.release();
     throw err;
   }
 
@@ -68,7 +62,6 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
   const broker: Broker = {
     db,
     server,
-    leader,
     adapters,
 
     addAdapter(adapter: MessageAdapter): void {
@@ -76,7 +69,6 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
     },
 
     async stop(): Promise<void> {
-      // Disconnect adapters
       for (const adapter of adapters) {
         try {
           await adapter.disconnect();
@@ -85,10 +77,8 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
         }
       }
       adapters.length = 0;
-
       await server.stop();
       db.close();
-      leader.release();
     },
   };
 

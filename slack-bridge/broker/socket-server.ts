@@ -22,6 +22,9 @@ export function defaultSocketPath(): string {
   return path.join(os.homedir(), ".pi", "pinet.sock");
 }
 
+// Re-export as static for easier access
+export const DEFAULT_SOCKET_PATH = defaultSocketPath();
+
 // ─── Listen target: Unix socket path or TCP host:port ────
 
 export type ListenTarget =
