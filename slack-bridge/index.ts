@@ -549,13 +549,15 @@ export default function (pi: ExtensionAPI) {
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
       `First message in a new thread: use full format — '${agentEmoji} (${agentName}) Just finished splitting the auth module.'`,
       `Follow-up messages in the same thread: just prefix with the emoji — '${agentEmoji} Found two more files to split.'`,
-      "Keep the same name and emoji for the duration of the task. Pick a new one when the task changes.",
+      "Always use this name and emoji — do not invent a new one.",
     ],
     parameters: Type.Object({}),
     async execute() {
       if (inbox.length === 0) {
         return {
-          content: [{ type: "text", text: "(no new messages)" }],
+          content: [
+            { type: "text", text: `(no new messages) — you are ${agentEmoji} ${agentName}` },
+          ],
           details: { count: 0 },
         };
       }
@@ -573,7 +575,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       return {
-        content: [{ type: "text", text: lines.join("\n") }],
+        content: [
+          { type: "text", text: `You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}` },
+        ],
         details: { count: pending.length },
       };
     },
