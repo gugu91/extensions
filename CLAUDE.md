@@ -1,0 +1,89 @@
+# Extensions Repo — Agent Guidelines
+
+Pi extensions for Slack, Neovim, and Neon Postgres.
+
+## Structure
+
+```
+extensions/
+├── slack-bridge/    # Pinet — Slack assistant integration
+├── nvim-bridge/     # Neovim bridge + PiComms comments
+├── neon-psql/       # Neon Postgres CLI
+├── types/           # Shared type declarations
+├── plans/           # Architecture docs
+└── .pi/             # Pi config (skills, agents)
+```
+
+## Commands
+
+```bash
+pnpm lint          # ESLint across all extensions
+pnpm typecheck     # TypeScript strict check
+pnpm test          # Vitest — all tests
+pnpm prepush       # lint + typecheck + test (runs on git push)
+pnpm format        # Prettier + Stylua
+```
+
+## Development workflow
+
+1. **Branch** from `main` — use `feat/`, `fix/`, `chore/` prefixes
+2. **Write tests** for any new logic — extract pure functions into `helpers.ts` files and test them
+3. **Check locally**: `pnpm lint && pnpm typecheck && pnpm test`
+4. **Create a PR** — base on `main` (or stack on a feature branch)
+5. **Request review** — use the `code-reviewer` subagent (see below)
+6. **Address feedback**, then merge
+
+## Code review
+
+Always request a review before merging:
+
+```
+Use the code-reviewer subagent to review PR #N
+```
+
+The reviewer posts findings to PiComms and GitHub. Fix any critical/warning issues before merging.
+
+## Testing
+
+- Test runner: **Vitest**
+- Tests live next to source: `foo.ts` → `foo.test.ts`
+- Extract testable logic into `helpers.ts` — keep `index.ts` for extension wiring
+- Tests run on **pre-push** hook (via husky)
+- Use temp directories for filesystem tests, clean up in `afterEach`
+
+## Conventions
+
+- **Zero npm runtime deps** — use native Node.js APIs (`node:fs`, `node:sqlite`, `fetch`, `WebSocket`)
+- **TypeScript strict mode** — no `any`, no implicit returns
+- **Prettier** for formatting (auto-runs via lint-staged on commit)
+- **ESLint** with `typescript-eslint`
+- Config in `~/.pi/agent/settings.json` under extension name key
+- Env vars as fallback for secrets
+
+## GitHub
+
+- Remote: `github.com:gugu91/extensions.git`
+- Auth: `GH_TOKEN=$(gh auth token --user gugu91)` prefix for `gh` commands
+- Create PRs with `gh pr create`
+- Merge with `gh pr merge`
+
+## Extension patterns
+
+Each extension is a directory with an `index.ts` that exports a default function:
+
+```typescript
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  // Register tools, commands, event handlers
+  pi.registerTool("tool_name", { ... });
+  pi.registerCommand("cmd", { ... });
+  pi.on("session_start", async (event, ctx) => { ... });
+}
+```
+
+## Key architecture decisions
+
+- **Pinet (slack-bridge)**: Opt-in via `/pinet` command or `autoConnect: true` in settings
+- **PiComms**: SQLite-backed (`node:sqlite`), falls back to JSON files
+- **Socket Mode**: Single WebSocket per Slack app token — only one pi session connects

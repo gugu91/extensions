@@ -1,8 +1,15 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import {
+  type InboxMessage,
+  loadSettings as loadSettingsFromFile,
+  buildAllowlist,
+  isUserAllowed as checkUserAllowed,
+  formatInboxMessages,
+  stripBotMention,
+  isChannelId,
+  FORM_METHODS,
+} from "./helpers.js";
 
 const SLACK_API = "https://slack.com/api";
 
@@ -20,15 +27,6 @@ async function slack(
   body?: Record<string, unknown>,
 ): Promise<SlackResult> {
   // Form-encode read methods (they reject JSON); JSON for everything else.
-  const FORM_METHODS = new Set([
-    "auth.test",
-    "users.info",
-    "conversations.list",
-    "conversations.history",
-    "conversations.replies",
-    "conversations.info",
-    "apps.connections.open",
-  ]);
   const needsJson = !FORM_METHODS.has(method);
 
   const headers: Record<string, string> = {
@@ -65,32 +63,12 @@ async function slack(
   return data;
 }
 
-// ─── Settings ────────────────────────────────────────────
-
-interface SlackBridgeSettings {
-  botToken?: string;
-  appToken?: string;
-  allowedUsers?: string[];
-  defaultChannel?: string;
-  suggestedPrompts?: { title: string; message: string }[];
-  autoConnect?: boolean;
-}
-
-function loadSettings(): SlackBridgeSettings {
-  const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
-  try {
-    const content = fs.readFileSync(settingsPath, "utf-8");
-    const parsed = JSON.parse(content);
-    return (parsed["slack-bridge"] as SlackBridgeSettings) ?? {};
-  } catch {
-    return {};
-  }
-}
+// Settings and helpers imported from ./helpers.js
 
 // ─── Extension ───────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  const settings = loadSettings();
+  const settings = loadSettingsFromFile();
 
   const botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
   const appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
@@ -98,22 +76,10 @@ export default function (pi: ExtensionAPI) {
   if (!botToken || !appToken) return;
 
   // allowedUsers: settings.json takes priority, env var as fallback
-  const allowedUsers: Set<string> | null = (() => {
-    if (settings.allowedUsers && settings.allowedUsers.length > 0) {
-      return new Set(settings.allowedUsers);
-    }
-    if (process.env.SLACK_ALLOWED_USERS) {
-      return new Set(
-        process.env.SLACK_ALLOWED_USERS.split(",")
-          .map((id) => id.trim())
-          .filter(Boolean),
-      );
-    }
-    return null;
-  })();
+  const allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
 
   function isUserAllowed(userId: string): boolean {
-    return allowedUsers === null || allowedUsers.has(userId);
+    return checkUserAllowed(allowedUsers, userId);
   }
 
   const agentName = process.env.PI_NICKNAME ?? "pi";
@@ -170,15 +136,6 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Inbox queue ────────────────────────────────────
 
-  interface InboxMessage {
-    channel: string;
-    threadTs: string;
-    userId: string;
-    text: string;
-    timestamp: string;
-    isChannelMention?: boolean;
-  }
-
   const inbox: InboxMessage[] = [];
   let extCtx: ExtensionContext | null = null; // cached for badge updates
 
@@ -224,7 +181,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function resolveChannel(nameOrId: string): Promise<string> {
-    if (/^[CGD][A-Z0-9]+$/.test(nameOrId)) return nameOrId;
+    if (isChannelId(nameOrId)) return nameOrId;
     const name = nameOrId.replace(/^#/, "");
     const cached = channelCache.get(name);
     if (cached) return cached;
@@ -488,9 +445,7 @@ export default function (pi: ExtensionAPI) {
     const isChannelMention = isMention && !isDM && !isTracked;
 
     // Strip <@BOT_ID> from text for channel mentions
-    const cleanText = isChannelMention
-      ? text.replace(new RegExp(`<@${botUserId!}>`, "g"), "").trim()
-      : text;
+    const cleanText = isChannelMention ? stripBotMention(text, botUserId!) : text;
 
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${cleanText.slice(0, 100)}`, "info");
@@ -974,17 +929,7 @@ export default function (pi: ExtensionAPI) {
     const pending = inbox.splice(0, inbox.length);
     updateBadge();
 
-    const lines = pending.map((m) => {
-      const n = userNames.get(m.userId) ?? m.userId;
-      if (m.isChannelMention) {
-        return `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${n}: ${m.text}`;
-      }
-      return `[thread ${m.threadTs}] ${n}: ${m.text}`;
-    });
-
-    const prompt =
-      `New Slack messages:\n${lines.join("\n")}\n\n` +
-      `Respond to each via slack_send with the correct thread_ts.`;
+    const prompt = formatInboxMessages(pending, userNames);
 
     try {
       pi.sendUserMessage(prompt, { deliverAs: "followUp" });
