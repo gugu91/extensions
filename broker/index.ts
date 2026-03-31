@@ -12,6 +12,7 @@ export type {
   BrokerMessage,
   InboxEntry,
   InboundMessage,
+  OutboundMessage,
   MessageAdapter,
   JsonRpcRequest,
   JsonRpcResponse,

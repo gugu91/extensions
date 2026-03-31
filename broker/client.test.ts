@@ -176,7 +176,7 @@ describe("BrokerClient — register", () => {
       method: string;
       params: { name: string; emoji: string };
     };
-    expect(req.method).toBe("agent.register");
+    expect(req.method).toBe("register");
     expect(req.params.name).toBe("TestAgent");
     expect(req.params.emoji).toBe("🤖");
 
@@ -212,33 +212,42 @@ describe("BrokerClient — pollInbox", () => {
     const req = JSON.parse(mock.received[0]) as { id: number; method: string };
     expect(req.method).toBe("inbox.poll");
 
-    const messages = [
+    const items = [
       {
-        id: 1,
-        threadId: "100.200",
-        channel: "D123",
-        userId: "U456",
-        userName: "Alice",
-        text: "Hello",
-        timestamp: "100.200",
+        inboxId: 1,
+        message: {
+          id: 1,
+          threadId: "100.200",
+          source: "slack",
+          direction: "inbound",
+          sender: "U456",
+          body: "Hello",
+          metadata: { userName: "Alice", channel: "D123" },
+          createdAt: "2026-01-01T00:00:00Z",
+        },
       },
       {
-        id: 2,
-        threadId: "100.200",
-        channel: "D123",
-        userId: "U789",
-        text: "Hi there",
-        timestamp: "100.300",
+        inboxId: 2,
+        message: {
+          id: 2,
+          threadId: "100.200",
+          source: "slack",
+          direction: "inbound",
+          sender: "U789",
+          body: "Hi there",
+          metadata: { channel: "D123" },
+          createdAt: "2026-01-01T00:00:00Z",
+        },
       },
     ];
 
-    mock.respondTo(mock.connections[0], req.id, { messages });
+    mock.respondTo(mock.connections[0], req.id, items);
 
     const result = await pollPromise;
     expect(result).toHaveLength(2);
-    expect(result[0].threadId).toBe("100.200");
-    expect(result[0].userName).toBe("Alice");
-    expect(result[1].text).toBe("Hi there");
+    expect(result[0].message.threadId).toBe("100.200");
+    expect(result[0].message.metadata?.userName).toBe("Alice");
+    expect(result[1].message.body).toBe("Hi there");
 
     client.disconnect();
   });
@@ -251,7 +260,7 @@ describe("BrokerClient — pollInbox", () => {
 
     await waitFor(() => mock.received.length > 0);
     const req = JSON.parse(mock.received[0]) as { id: number };
-    mock.respondTo(mock.connections[0], req.id, { messages: [] });
+    mock.respondTo(mock.connections[0], req.id, []);
 
     const result = await pollPromise;
     expect(result).toEqual([]);
@@ -315,11 +324,11 @@ describe("BrokerClient — send", () => {
     const req = JSON.parse(mock.received[0]) as {
       id: number;
       method: string;
-      params: { threadId: string; text: string };
+      params: { threadId: string; body: string };
     };
-    expect(req.method).toBe("message.send");
+    expect(req.method).toBe("send");
     expect(req.params.threadId).toBe("100.200");
-    expect(req.params.text).toBe("Hello world");
+    expect(req.params.body).toBe("Hello world");
 
     mock.respondTo(mock.connections[0], req.id, {});
 
@@ -390,8 +399,17 @@ describe("BrokerClient — listThreads / listAgents", () => {
     const req = JSON.parse(mock.received[0]) as { id: number; method: string };
     expect(req.method).toBe("threads.list");
 
-    const threads = [{ threadId: "100.200", channel: "C1" }];
-    mock.respondTo(mock.connections[0], req.id, { threads });
+    const threads = [
+      {
+        threadId: "100.200",
+        source: "slack",
+        channel: "C1",
+        ownerAgent: null,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mock.respondTo(mock.connections[0], req.id, threads);
 
     const result = await threadsPromise;
     expect(result).toEqual(threads);
@@ -409,8 +427,17 @@ describe("BrokerClient — listThreads / listAgents", () => {
     const req = JSON.parse(mock.received[0]) as { id: number; method: string };
     expect(req.method).toBe("agents.list");
 
-    const agents = [{ agentId: "a1", name: "Bot1", emoji: "🤖", connected: true }];
-    mock.respondTo(mock.connections[0], req.id, { agents });
+    const agents = [
+      {
+        id: "a1",
+        name: "Bot1",
+        emoji: "🤖",
+        pid: 1000,
+        connectedAt: "2026-01-01T00:00:00Z",
+        lastSeen: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mock.respondTo(mock.connections[0], req.id, agents);
 
     const result = await agentsPromise;
     expect(result).toEqual(agents);
@@ -515,7 +542,7 @@ describe("BrokerClient — request timeout", () => {
     // Advance past the timeout without responding
     vi.advanceTimersByTime(REQUEST_TIMEOUT_MS + 100);
 
-    await expect(registerPromise).rejects.toThrow("Request timed out: agent.register");
+    await expect(registerPromise).rejects.toThrow("Request timed out: register");
 
     vi.useRealTimers();
     client.disconnect();
@@ -589,18 +616,35 @@ describe("BrokerClient — multiple concurrent requests", () => {
     const req2 = JSON.parse(mock.received[1]) as { id: number; method: string };
 
     // Respond in reverse order
-    mock.respondTo(mock.connections[0], req2.id, {
-      agents: [{ agentId: "a1", name: "Bot", emoji: "🤖", connected: true }],
-    });
-    mock.respondTo(mock.connections[0], req1.id, {
-      messages: [
-        { id: 1, threadId: "t1", channel: "C1", userId: "U1", text: "hi", timestamp: "1.0" },
-      ],
-    });
+    mock.respondTo(mock.connections[0], req2.id, [
+      {
+        id: "a1",
+        name: "Bot",
+        emoji: "🤖",
+        pid: 1000,
+        connectedAt: "2026-01-01T00:00:00Z",
+        lastSeen: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    mock.respondTo(mock.connections[0], req1.id, [
+      {
+        inboxId: 1,
+        message: {
+          id: 1,
+          threadId: "t1",
+          source: "slack",
+          direction: "inbound",
+          sender: "U1",
+          body: "hi",
+          metadata: null,
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      },
+    ]);
 
     const [inbox, agents] = await Promise.all([p1, p2]);
     expect(inbox).toHaveLength(1);
-    expect(inbox[0].text).toBe("hi");
+    expect(inbox[0].message.body).toBe("hi");
     expect(agents).toHaveLength(1);
     expect(agents[0].name).toBe("Bot");
 
@@ -633,7 +677,7 @@ describe("BrokerClient — newline-delimited framing", () => {
       JSON.stringify({
         jsonrpc: "2.0",
         id: req.id,
-        result: { messages: [] },
+        result: [],
       }) + "\n";
 
     const mid = Math.floor(fullResponse.length / 2);
@@ -663,12 +707,8 @@ describe("BrokerClient — newline-delimited framing", () => {
     const req2 = JSON.parse(mock.received[1]) as { id: number };
 
     // Send both responses in a single write
-    const resp1 = JSON.stringify({ jsonrpc: "2.0", id: req1.id, result: { messages: [] } });
-    const resp2 = JSON.stringify({
-      jsonrpc: "2.0",
-      id: req2.id,
-      result: { agents: [] },
-    });
+    const resp1 = JSON.stringify({ jsonrpc: "2.0", id: req1.id, result: [] });
+    const resp2 = JSON.stringify({ jsonrpc: "2.0", id: req2.id, result: [] });
     mock.connections[0].write(resp1 + "\n" + resp2 + "\n");
 
     const [inbox, agents] = await Promise.all([p1, p2]);

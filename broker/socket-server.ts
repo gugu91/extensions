@@ -13,6 +13,11 @@ import {
   RPC_INTERNAL_ERROR,
 } from "./types.js";
 
+export type SlackProxyFn = (
+  method: string,
+  params: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
 export function defaultSocketPath(): string {
   return path.join(os.homedir(), ".pi", "pinet.sock");
 }
@@ -53,11 +58,13 @@ export class BrokerSocketServer {
   private server: net.Server | null = null;
   private readonly target: ListenTarget;
   private readonly db: BrokerDB;
+  private readonly slackProxyFn: SlackProxyFn | null;
   private readonly connections = new Map<net.Socket, ConnectionState>();
   private assignedPort: number | null = null;
 
-  constructor(db: BrokerDB, target?: ListenTarget | string) {
+  constructor(db: BrokerDB, target?: ListenTarget | string, slackProxyFn?: SlackProxyFn) {
     this.db = db;
+    this.slackProxyFn = slackProxyFn ?? null;
     if (typeof target === "string") {
       this.target = { type: "unix", path: target };
     } else if (target) {
@@ -157,7 +164,7 @@ export class BrokerSocketServer {
 
     socket.on("data", (chunk) => {
       state.buffer += chunk.toString("utf-8");
-      this.processBuffer(socket, state);
+      void this.processBuffer(socket, state);
     });
 
     socket.on("close", () => {
@@ -197,8 +204,21 @@ export class BrokerSocketServer {
         continue;
       }
 
-      const response = this.handleRequest(request, state);
+      void this.dispatchRequest(request, state, socket);
+    }
+  }
+
+  private async dispatchRequest(
+    req: JsonRpcRequest,
+    state: ConnectionState,
+    socket: net.Socket,
+  ): Promise<void> {
+    try {
+      const response = await this.handleRequest(req, state);
       this.send(socket, response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.send(socket, rpcError(req.id, RPC_INTERNAL_ERROR, message));
     }
   }
 
@@ -212,7 +232,10 @@ export class BrokerSocketServer {
 
   // ─── Request dispatch ────────────────────────────────
 
-  private handleRequest(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+  private async handleRequest(
+    req: JsonRpcRequest,
+    state: ConnectionState,
+  ): Promise<JsonRpcResponse> {
     try {
       switch (req.method) {
         case "register":
@@ -229,6 +252,8 @@ export class BrokerSocketServer {
           return this.handleThreadsList(req, state);
         case "agents.list":
           return this.handleAgentsList(req);
+        case "slack.proxy":
+          return await this.handleSlackProxy(req);
         default:
           return rpcError(req.id, RPC_METHOD_NOT_FOUND, `Unknown method: ${req.method}`);
       }
@@ -294,7 +319,7 @@ export class BrokerSocketServer {
       return rpcError(req.id, RPC_INVALID_PARAMS, "ids must be an array of numbers");
     }
 
-    this.db.markDelivered(ids as number[]);
+    this.db.markDelivered(ids as number[], state.agentId);
     return rpcOk(req.id, { ok: true });
   }
 
@@ -332,7 +357,7 @@ export class BrokerSocketServer {
     const allAgents = this.db.getAgents();
     const targetIds = allAgents.filter((a) => a.id !== state.agentId).map((a) => a.id);
 
-    const msg = this.db.queueMessage(
+    const msg = this.db.insertMessage(
       threadId,
       source,
       direction,
@@ -357,5 +382,32 @@ export class BrokerSocketServer {
   private handleAgentsList(req: JsonRpcRequest): JsonRpcResponse {
     const agents = this.db.getAgents();
     return rpcOk(req.id, agents);
+  }
+
+  // ─── Slack proxy handler ──────────────────────────────
+
+  private async handleSlackProxy(req: JsonRpcRequest): Promise<JsonRpcResponse> {
+    if (!this.slackProxyFn) {
+      return rpcError(req.id, RPC_METHOD_NOT_FOUND, "slack.proxy is not configured on this broker");
+    }
+
+    const params = req.params ?? {};
+    const method = typeof params.method === "string" ? params.method : null;
+    if (!method) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "method is required for slack.proxy");
+    }
+
+    const apiParams =
+      params.params && typeof params.params === "object"
+        ? (params.params as Record<string, unknown>)
+        : {};
+
+    try {
+      const result = await this.slackProxyFn(method, apiParams);
+      return rpcOk(req.id, result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INTERNAL_ERROR, `slack.proxy ${method}: ${message}`);
+    }
   }
 }

@@ -28,9 +28,9 @@ export function registerBrokerTools(
     ],
     parameters: Type.Object({}),
     async execute() {
-      const messages = await client.pollInbox();
+      const items = await client.pollInbox();
 
-      if (messages.length === 0) {
+      if (items.length === 0) {
         return {
           content: [{ type: "text", text: "(no new messages)" }],
           details: { count: 0 },
@@ -38,20 +38,26 @@ export function registerBrokerTools(
       }
 
       // Auto-ack all received messages
-      const ids = messages.map((m) => m.id);
+      const ids = items.map((item) => item.inboxId);
       await client.ackMessages(ids);
 
-      const lines = messages.map((m) => {
-        const name = m.userName ?? m.userId;
-        const prefix = m.isChannelMention
-          ? `[thread ${m.threadId}] (channel mention in <#${m.channel}>) ${name}`
-          : `[thread ${m.threadId}] ${name}`;
-        return `${prefix} (${m.timestamp}): ${m.text}`;
+      const lines = items.map((item) => {
+        const msg = item.message;
+        const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+        const name = (meta.userName as string) ?? (meta.userId as string) ?? msg.sender;
+        const threadId = msg.threadId;
+        const channel = (meta.channel as string) ?? "";
+        const isChannelMention = meta.isChannelMention === true;
+        const timestamp = (meta.timestamp as string) ?? msg.createdAt;
+        const prefix = isChannelMention
+          ? `[thread ${threadId}] (channel mention in <#${channel}>) ${name}`
+          : `[thread ${threadId}] ${name}`;
+        return `${prefix} (${timestamp}): ${msg.body}`;
       });
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { count: messages.length },
+        details: { count: items.length },
       };
     },
   });

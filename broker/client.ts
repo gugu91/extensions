@@ -4,29 +4,36 @@ import * as path from "node:path";
 
 // ─── Types ───────────────────────────────────────────────
 
-export interface InboxEntry {
-  id: number;
-  threadId: string;
-  channel: string;
-  userId: string;
-  userName?: string;
-  text: string;
-  timestamp: string;
-  isChannelMention?: boolean;
+export interface InboxItem {
+  inboxId: number;
+  message: {
+    id: number;
+    threadId: string;
+    source: string;
+    direction: string;
+    sender: string;
+    body: string;
+    metadata: Record<string, unknown> | null;
+    createdAt: string;
+  };
 }
 
 export interface ThreadInfo {
   threadId: string;
+  source: string;
   channel: string;
-  agentId?: string;
-  agentName?: string;
+  ownerAgent: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentInfo {
-  agentId: string;
+  id: string;
   name: string;
   emoji: string;
-  connected: boolean;
+  pid: number;
+  connectedAt: string;
+  lastSeen: string;
 }
 
 // ─── JSON-RPC types ──────────────────────────────────────
@@ -148,7 +155,7 @@ export class BrokerClient {
   // ─── Registration ────────────────────────────────────
 
   async register(name: string, emoji: string): Promise<{ agentId: string }> {
-    const result = (await this.request("agent.register", { name, emoji })) as {
+    const result = (await this.request("register", { name, emoji })) as {
       agentId: string;
     };
     return result;
@@ -156,9 +163,9 @@ export class BrokerClient {
 
   // ─── Messaging ───────────────────────────────────────
 
-  async pollInbox(): Promise<InboxEntry[]> {
-    const result = (await this.request("inbox.poll")) as { messages: InboxEntry[] };
-    return result.messages;
+  async pollInbox(): Promise<InboxItem[]> {
+    const result = (await this.request("inbox.poll")) as InboxItem[];
+    return result;
   }
 
   async ackMessages(ids: number[]): Promise<void> {
@@ -166,19 +173,19 @@ export class BrokerClient {
   }
 
   async send(threadId: string, text: string, metadata?: Record<string, unknown>): Promise<void> {
-    await this.request("message.send", { threadId, text, ...(metadata ? { metadata } : {}) });
+    await this.request("send", { threadId, body: text, ...(metadata ? { metadata } : {}) });
   }
 
   // ─── Queries ─────────────────────────────────────────
 
   async listThreads(): Promise<ThreadInfo[]> {
-    const result = (await this.request("threads.list")) as { threads: ThreadInfo[] };
-    return result.threads;
+    const result = (await this.request("threads.list")) as ThreadInfo[];
+    return result;
   }
 
   async listAgents(): Promise<AgentInfo[]> {
-    const result = (await this.request("agents.list")) as { agents: AgentInfo[] };
-    return result.agents;
+    const result = (await this.request("agents.list")) as AgentInfo[];
+    return result;
   }
 
   // ─── Slack proxy (read-through) ──────────────────────

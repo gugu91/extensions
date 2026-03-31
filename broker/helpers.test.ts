@@ -178,12 +178,12 @@ describe("BrokerDB", () => {
     expect(allThreads).toHaveLength(3);
   });
 
-  it("queueMessage and getInbox", () => {
+  it("insertMessage and getInbox", () => {
     db.registerAgent("a1", "Agent1", "🔵", 1);
     db.registerAgent("a2", "Agent2", "🔴", 2);
     db.createThread("t1", "slack", "#general", "a1");
 
-    const msg = db.queueMessage("t1", "slack", "inbound", "user1", "hello", ["a1", "a2"]);
+    const msg = db.insertMessage("t1", "slack", "inbound", "user1", "hello", ["a1", "a2"]);
     expect(msg.id).toBeGreaterThan(0);
     expect(msg.body).toBe("hello");
 
@@ -199,22 +199,42 @@ describe("BrokerDB", () => {
   it("markDelivered removes from pending inbox", () => {
     db.registerAgent("a1", "Agent1", "🔵", 1);
     db.createThread("t1", "slack", "#general", "a1");
-    db.queueMessage("t1", "slack", "inbound", "user1", "hello", ["a1"]);
+    db.insertMessage("t1", "slack", "inbound", "user1", "hello", ["a1"]);
 
     const before = db.getInbox("a1");
     expect(before).toHaveLength(1);
 
-    db.markDelivered([before[0].entry.id]);
+    db.markDelivered([before[0].entry.id], "a1");
 
     const after = db.getInbox("a1");
     expect(after).toHaveLength(0);
   });
 
-  it("queueMessage with metadata round-trips JSON", () => {
+  it("markDelivered scoped to agent does not affect other agents", () => {
+    db.registerAgent("a1", "Agent1", "🔵", 1);
+    db.registerAgent("a2", "Agent2", "🔴", 2);
+    db.createThread("t1", "slack", "#general", "a1");
+    db.insertMessage("t1", "slack", "inbound", "user1", "hello", ["a1", "a2"]);
+
+    const inbox1 = db.getInbox("a1");
+    const inbox2 = db.getInbox("a2");
+
+    // Ack only for agent a1
+    db.markDelivered([inbox1[0].entry.id], "a1");
+
+    expect(db.getInbox("a1")).toHaveLength(0);
+    expect(db.getInbox("a2")).toHaveLength(1);
+
+    // Attempting to ack a2's inbox entry with a1 should be a no-op
+    db.markDelivered([inbox2[0].entry.id], "a1");
+    expect(db.getInbox("a2")).toHaveLength(1);
+  });
+
+  it("insertMessage with metadata round-trips JSON", () => {
     db.registerAgent("a1", "Agent", "🔵", 1);
     db.createThread("t1", "slack", "#general", "a1");
 
-    db.queueMessage("t1", "slack", "inbound", "user1", "hi", ["a1"], {
+    db.insertMessage("t1", "slack", "inbound", "user1", "hi", ["a1"], {
       priority: "high",
       tags: ["urgent"],
     });
@@ -226,11 +246,11 @@ describe("BrokerDB", () => {
     });
   });
 
-  it("queueMessage without metadata stores null", () => {
+  it("insertMessage without metadata stores null", () => {
     db.registerAgent("a1", "Agent", "🔵", 1);
     db.createThread("t1", "slack", "#general", "a1");
 
-    db.queueMessage("t1", "slack", "inbound", "user1", "hi", ["a1"]);
+    db.insertMessage("t1", "slack", "inbound", "user1", "hi", ["a1"]);
 
     const inbox = db.getInbox("a1");
     expect(inbox[0].message.metadata).toBeNull();
@@ -239,7 +259,7 @@ describe("BrokerDB", () => {
   it("direction CHECK constraint rejects invalid values", () => {
     db.createThread("t1", "slack", "#general", "a1");
     expect(() => {
-      db.queueMessage("t1", "slack", "invalid" as "inbound", "u", "x", []);
+      db.insertMessage("t1", "slack", "invalid" as "inbound", "u", "x", []);
     }).toThrow();
   });
 

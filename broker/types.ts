@@ -79,29 +79,17 @@ export const RPC_METHOD_NOT_FOUND = -32601;
 export const RPC_INVALID_PARAMS = -32602;
 export const RPC_INTERNAL_ERROR = -32603;
 
-// ─── Message adapter (for future Slack/Discord adapters) ──
+// ─── Message adapter (canonical types from adapters) ─────
 
-export interface InboundMessage {
-  source: string;
-  threadId: string;
-  channel: string;
-  userId: string;
-  userName?: string;
-  text: string;
-  timestamp: string;
-  sender?: string;
-  body?: string;
-  isChannelMention?: boolean;
-  metadata?: Record<string, unknown>;
-}
+import type {
+  InboundMessage as _InboundMessage,
+  OutboundMessage as _OutboundMessage,
+  MessageAdapter as _MessageAdapter,
+} from "./adapters/types.js";
 
-export interface MessageAdapter {
-  name: string;
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  onInbound(handler: (msg: InboundMessage) => void): void;
-  send(threadId: string, text: string, metadata?: Record<string, unknown>): Promise<void>;
-}
+export type InboundMessage = _InboundMessage;
+export type OutboundMessage = _OutboundMessage;
+export type MessageAdapter = _MessageAdapter;
 
 // ─── BrokerDB interface (subset used by the router) ──────
 

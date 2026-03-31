@@ -34,18 +34,24 @@ interface SlackThreadInfo {
 
 // ─── Slack API wrapper ───────────────────────────────────
 
+const SLACK_MAX_RETRIES = 3;
+
 async function callSlack(
   method: string,
   token: string,
   body?: Record<string, unknown>,
+  _retryCount = 0,
 ): Promise<SlackResult> {
   const { url, init } = buildSlackRequest(method, token, body);
   const res = await fetch(url, init);
 
   if (res.status === 429) {
+    if (_retryCount >= SLACK_MAX_RETRIES) {
+      throw new Error(`Slack ${method}: rate limited after ${SLACK_MAX_RETRIES} retries`);
+    }
     const wait = Number(res.headers.get("retry-after") ?? "3");
     await new Promise((r) => setTimeout(r, wait * 1000));
-    return callSlack(method, token, body);
+    return callSlack(method, token, body, _retryCount + 1);
   }
 
   const data = (await res.json()) as SlackResult;

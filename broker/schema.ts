@@ -2,7 +2,15 @@ import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import type { AgentInfo, ThreadInfo, BrokerMessage, InboxEntry } from "./types.js";
+import type {
+  AgentInfo,
+  ThreadInfo,
+  BrokerMessage,
+  InboxEntry,
+  BrokerDBInterface,
+  InboundMessage,
+  ChannelAssignment,
+} from "./types.js";
 
 // ─── Row types (raw SQLite rows) ─────────────────────────
 
@@ -19,7 +27,7 @@ interface ThreadRow {
   thread_id: string;
   source: string;
   channel: string;
-  owner_agent: string;
+  owner_agent: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,7 +64,7 @@ export function defaultDbPath(): string {
 
 // ─── BrokerDB ────────────────────────────────────────────
 
-export class BrokerDB {
+export class BrokerDB implements BrokerDBInterface {
   private db: DatabaseSync | null = null;
   private readonly dbPath: string;
 
@@ -88,7 +96,7 @@ export class BrokerDB {
         thread_id TEXT PRIMARY KEY NOT NULL,
         source TEXT NOT NULL,
         channel TEXT NOT NULL,
-        owner_agent TEXT NOT NULL,
+        owner_agent TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -167,23 +175,74 @@ export class BrokerDB {
 
   // ─── Threads ─────────────────────────────────────────
 
-  createThread(threadId: string, source: string, channel: string, ownerAgent: string): ThreadInfo {
+  createThread(thread: ThreadInfo): ThreadInfo;
+  createThread(
+    threadId: string,
+    source: string,
+    channel: string,
+    ownerAgent: string | null,
+  ): ThreadInfo;
+  createThread(
+    threadOrId: ThreadInfo | string,
+    source?: string,
+    channel?: string,
+    ownerAgent?: string | null,
+  ): ThreadInfo {
     const db = this.getDb();
     const now = new Date().toISOString();
+
+    const tId = typeof threadOrId === "string" ? threadOrId : threadOrId.threadId;
+    const src = typeof threadOrId === "string" ? source! : threadOrId.source;
+    const ch = typeof threadOrId === "string" ? channel! : threadOrId.channel;
+    const owner = typeof threadOrId === "string" ? (ownerAgent ?? null) : threadOrId.ownerAgent;
+
     db.prepare(
       `INSERT INTO threads (thread_id, source, channel, owner_agent, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(thread_id) DO UPDATE SET updated_at = excluded.updated_at`,
-    ).run(threadId, source, channel, ownerAgent, now, now);
+    ).run(tId, src, ch, owner, now, now);
 
     return {
-      threadId,
-      source,
-      channel,
-      ownerAgent,
+      threadId: tId,
+      source: src,
+      channel: ch,
+      ownerAgent: owner,
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  updateThread(threadId: string, updates: Partial<ThreadInfo>): void {
+    const db = this.getDb();
+    const sets: string[] = [];
+    const values: (string | null)[] = [];
+
+    if (updates.ownerAgent !== undefined) {
+      sets.push("owner_agent = ?");
+      values.push(updates.ownerAgent);
+    }
+    if (updates.channel !== undefined) {
+      sets.push("channel = ?");
+      values.push(updates.channel);
+    }
+    if (updates.source !== undefined) {
+      sets.push("source = ?");
+      values.push(updates.source);
+    }
+
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(threadId);
+
+    db.prepare(`UPDATE threads SET ${sets.join(", ")} WHERE thread_id = ?`).run(...values);
+  }
+
+  getAllowedUsers(): Set<string> | null {
+    return null;
+  }
+
+  getChannelAssignment(_channel: string): ChannelAssignment | null {
+    return null;
   }
 
   getThread(threadId: string): ThreadInfo | null {
@@ -210,7 +269,31 @@ export class BrokerDB {
 
   // ─── Messages + Inbox ────────────────────────────────
 
-  queueMessage(
+  // ─── Interface-compatible queueMessage (single agent) ──
+
+  queueMessage(agentId: string, message: InboundMessage): void {
+    const metadata: Record<string, unknown> = {
+      ...message.metadata,
+      channel: message.channel,
+      userName: message.userName,
+      userId: message.userId,
+      timestamp: message.timestamp,
+      ...(message.isChannelMention ? { isChannelMention: true } : {}),
+    };
+    this.insertMessage(
+      message.threadId,
+      message.source,
+      "inbound",
+      message.userId,
+      message.text,
+      [agentId],
+      metadata,
+    );
+  }
+
+  // ─── Detailed message insert (used by socket server) ──
+
+  insertMessage(
     threadId: string,
     source: string,
     direction: "inbound" | "outbound",
@@ -310,12 +393,19 @@ export class BrokerDB {
     }));
   }
 
-  markDelivered(inboxIds: number[]): void {
+  markDelivered(inboxIds: number[], agentId?: string): void {
     if (inboxIds.length === 0) return;
     const db = this.getDb();
-    const stmt = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
-    for (const id of inboxIds) {
-      stmt.run(id);
+    if (agentId) {
+      const stmt = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ? AND agent_id = ?");
+      for (const id of inboxIds) {
+        stmt.run(id, agentId);
+      }
+    } else {
+      const stmt = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
+      for (const id of inboxIds) {
+        stmt.run(id);
+      }
     }
   }
 
