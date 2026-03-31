@@ -988,6 +988,10 @@ export default function (pi: ExtensionAPI) {
           appToken: appToken!,
           allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
           suggestedPrompts: settings.suggestedPrompts,
+          isOwnedThread: (threadTs: string) => {
+            const thread = broker.db.getThread(threadTs);
+            return thread?.ownerAgent != null;
+          },
         });
 
         const router = new MessageRouter(broker.db);

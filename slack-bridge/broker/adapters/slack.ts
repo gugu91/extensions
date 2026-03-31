@@ -13,6 +13,8 @@ export interface SlackAdapterConfig {
   appToken: string;
   allowedUsers?: string[];
   suggestedPrompts?: { title: string; message: string }[];
+  /** Check whether a thread_ts belongs to a thread the bot owns in the broker DB. */
+  isOwnedThread?: (threadTs: string) => boolean;
 }
 
 // ─── Slack API result ────────────────────────────────────
@@ -145,6 +147,7 @@ export function classifyMessage(
   evt: Record<string, unknown>,
   botUserId: string | null,
   trackedThreadIds: Set<string>,
+  isOwnedThread?: (threadTs: string) => boolean,
 ): MessageClassification {
   // Skip bot messages and messages with subtypes (joins, edits, etc.)
   if (evt.subtype || evt.bot_id) return { relevant: false };
@@ -156,13 +159,14 @@ export function classifyMessage(
   const channelType = evt.channel_type as string | undefined;
 
   const isTracked = !!threadTs && trackedThreadIds.has(threadTs);
+  const isOwned = !isTracked && !!threadTs && (isOwnedThread?.(threadTs) ?? false);
   const isDM = channelType === "im";
   const isMention = botUserId != null && text.includes(`<@${botUserId}>`);
 
-  if (!isTracked && !isDM && !isMention) return { relevant: false };
+  if (!isTracked && !isOwned && !isDM && !isMention) return { relevant: false };
 
   const effectiveTs = threadTs ?? (evt.ts as string);
-  const isChannelMention = isMention && !isDM && !isTracked;
+  const isChannelMention = isMention && !isDM && !isTracked && !isOwned;
 
   const cleanText = isChannelMention && botUserId ? stripBotMention(text, botUserId) : text;
 
@@ -389,7 +393,12 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   private async onMessage(evt: Record<string, unknown>): Promise<void> {
-    const classified = classifyMessage(evt, this.botUserId, this.getTrackedThreadIds());
+    const classified = classifyMessage(
+      evt,
+      this.botUserId,
+      this.getTrackedThreadIds(),
+      this.config.isOwnedThread,
+    );
     if (!classified.relevant) return;
 
     const { threadTs, channel, userId, text, isChannelMention, messageTs } = classified;

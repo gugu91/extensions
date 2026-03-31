@@ -305,6 +305,112 @@ describe("classifyMessage", () => {
     }
   });
 
+  // ─── isOwnedThread callback ─────────────────────────────
+
+  it("accepts thread replies in broker-owned threads without @mention", () => {
+    const isOwnedThread = (ts: string) => ts === "500.600";
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "follow up in owned thread",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "500.600",
+      ts: "500.700",
+    };
+    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    expect(result.relevant).toBe(true);
+    if (result.relevant) {
+      expect(result.threadTs).toBe("500.600");
+      expect(result.isChannelMention).toBe(false);
+      expect(result.text).toBe("follow up in owned thread");
+      expect(result.isDM).toBe(false);
+    }
+  });
+
+  it("rejects thread replies in non-owned threads without @mention", () => {
+    const isOwnedThread = () => false;
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "random thread reply",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "600.700",
+      ts: "600.800",
+    };
+    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    expect(result).toEqual({ relevant: false });
+  });
+
+  it("does not set isChannelMention for @mention in broker-owned thread", () => {
+    const isOwnedThread = (ts: string) => ts === "700.800";
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "<@U_BOT> check this",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "700.800",
+      ts: "700.900",
+    };
+    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    expect(result.relevant).toBe(true);
+    if (result.relevant) {
+      expect(result.isChannelMention).toBe(false);
+      // Text is NOT stripped since it's not a channel mention
+      expect(result.text).toBe("<@U_BOT> check this");
+    }
+  });
+
+  it("prefers local tracked set over isOwnedThread callback", () => {
+    const isOwnedThread = vi.fn(() => true);
+    const tracked = new Set(["800.900"]);
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "reply in tracked thread",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "800.900",
+      ts: "800.950",
+    };
+    const result = classifyMessage(evt, botId, tracked, isOwnedThread);
+    expect(result.relevant).toBe(true);
+    // isOwnedThread should NOT be called because isTracked was true first
+    expect(isOwnedThread).not.toHaveBeenCalled();
+  });
+
+  it("does not call isOwnedThread for messages without thread_ts", () => {
+    const isOwnedThread = vi.fn(() => true);
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "top-level channel message",
+      channel: "C1",
+      channel_type: "channel",
+      ts: "900.100",
+    };
+    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    expect(result).toEqual({ relevant: false });
+    expect(isOwnedThread).not.toHaveBeenCalled();
+  });
+
+  it("works without isOwnedThread callback (backward compatible)", () => {
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "reply in unknown thread",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "999.111",
+      ts: "999.222",
+    };
+    // No callback passed — same behavior as before
+    const result = classifyMessage(evt, botId, emptyTracked);
+    expect(result).toEqual({ relevant: false });
+  });
+
   it("handles null botUserId (no mention detection)", () => {
     const evt = {
       type: "message",
@@ -375,6 +481,14 @@ describe("SlackAdapter", () => {
     const adapter = new SlackAdapter({
       ...baseConfig,
       suggestedPrompts: [{ title: "Hello", message: "Hi there" }],
+    });
+    expect(adapter.name).toBe("slack");
+  });
+
+  it("can be constructed with isOwnedThread callback", () => {
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      isOwnedThread: () => false,
     });
     expect(adapter.name).toBe("slack");
   });
