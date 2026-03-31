@@ -9,6 +9,7 @@ import {
   stripBotMention,
   isChannelId,
   buildSlackRequest,
+  generateAgentName,
 } from "./helpers.js";
 import { startBroker } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
@@ -61,7 +62,9 @@ export default function (pi: ExtensionAPI) {
     return checkUserAllowed(allowedUsers, userId);
   }
 
-  const agentName = process.env.PI_NICKNAME ?? "pi";
+  const generated = generateAgentName();
+  let agentName = process.env.PI_NICKNAME ?? generated.name;
+  let agentEmoji = generated.emoji;
 
   interface ThreadInfo {
     channelId: string;
@@ -810,7 +813,7 @@ export default function (pi: ExtensionAPI) {
 
       // Register this agent in the broker DB
       const selfId = `leader-${process.pid}`;
-      broker.db.registerAgent(selfId, agentName, "🔧", process.pid);
+      broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid);
 
       // Wire inbound messages through the router
       adapter.onInbound((inMsg) => {
@@ -867,7 +870,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const client = new BrokerClient();
       await client.connect();
-      await client.register(agentName, "🔧");
+      await client.register(agentName, agentEmoji);
 
       // Poll broker inbox periodically
       const pollInterval = setInterval(async () => {
@@ -977,7 +980,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(
         [
           `Mode: ${mode}`,
-          `Agent: ${agentName}`,
+          `Agent: ${agentEmoji} ${agentName}`,
           `Bot: ${botUserId ?? "unknown"}`,
           `Connection: ${socket}`,
           `Threads: ${threads.size} (${ownedCount} owned by ${agentName})`,
@@ -987,6 +990,21 @@ export default function (pi: ExtensionAPI) {
         ].join("\n"),
         "info",
       );
+    },
+  });
+
+  pi.registerCommand("rename", {
+    description: "Rename this Pinet agent",
+    handler: async (args, ctx) => {
+      const newName = args.trim();
+      if (!newName) {
+        const fresh = generateAgentName();
+        agentName = fresh.name;
+        agentEmoji = fresh.emoji;
+      } else {
+        agentName = newName;
+      }
+      ctx.ui.notify(`${agentEmoji} Agent renamed to: ${agentName}`, "info");
     },
   });
 

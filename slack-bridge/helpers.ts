@@ -128,3 +128,95 @@ export function stripBotMention(text: string, botUserId: string): string {
 export function isChannelId(nameOrId: string): boolean {
   return /^[CGD][A-Z0-9]+$/.test(nameOrId);
 }
+
+// ─── Random agent names ──────────────────────────────────
+
+const ADJECTIVES = [
+  "Cosmic",
+  "Turbo",
+  "Neon",
+  "Solar",
+  "Quantum",
+  "Pixel",
+  "Cyber",
+  "Atomic",
+  "Stellar",
+  "Thunder",
+  "Crystal",
+  "Mystic",
+  "Hyper",
+  "Ultra",
+  "Mega",
+  "Super",
+  "Electric",
+  "Galactic",
+  "Sonic",
+  "Laser",
+  "Rocket",
+  "Shadow",
+  "Blazing",
+  "Frozen",
+];
+
+const ANIMALS = [
+  "Badger",
+  "Penguin",
+  "Falcon",
+  "Otter",
+  "Raccoon",
+  "Fox",
+  "Panda",
+  "Wolf",
+  "Eagle",
+  "Dolphin",
+  "Lynx",
+  "Cobra",
+  "Raven",
+  "Gecko",
+  "Mantis",
+  "Osprey",
+  "Jaguar",
+  "Heron",
+  "Bison",
+  "Viper",
+  "Hawk",
+  "Crane",
+  "Moose",
+  "Owl",
+];
+
+const EMOJIS = [
+  "🦡",
+  "🐧",
+  "🦅",
+  "🦦",
+  "🦝",
+  "🦊",
+  "🐼",
+  "🐺",
+  "🦅",
+  "🐬",
+  "🐱",
+  "🐍",
+  "🐦‍⬛",
+  "🦎",
+  "🦗",
+  "🦅",
+  "🐆",
+  "🪿",
+  "🦬",
+  "🐍",
+  "🦅",
+  "🦩",
+  "🫎",
+  "🦉",
+];
+
+export function generateAgentName(): { name: string; emoji: string } {
+  const ai = Math.floor(Math.random() * ADJECTIVES.length);
+  const ni = Math.floor(Math.random() * ANIMALS.length);
+  return {
+    name: `${ADJECTIVES[ai]} ${ANIMALS[ni]}`,
+    emoji: EMOJIS[ni],
+  };
+}
