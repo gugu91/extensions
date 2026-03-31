@@ -15,6 +15,7 @@ import {
   generateAgentName,
   resolveAgentIdentity,
 } from "./helpers.js";
+import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
@@ -70,6 +71,10 @@ export default function (pi: ExtensionAPI) {
   const identity = resolveAgentIdentity(settings, process.env.PI_NICKNAME);
   let agentName = identity.name;
   let agentEmoji = identity.emoji;
+
+  // Security guardrails
+  const guardrails: SecurityGuardrails = settings.security ?? {};
+  const securityPrompt = buildSecurityPrompt(guardrails);
 
   function inboundToInbox(inMsg: BrokerInboundMessage): InboxMessage {
     return {
@@ -551,6 +556,21 @@ export default function (pi: ExtensionAPI) {
       `First message in a new thread: use full format — '${agentEmoji} (${agentName}) Just finished splitting the auth module.'`,
       `Follow-up messages in the same thread: just prefix with the emoji — '${agentEmoji} Found two more files to split.'`,
       "Always use this name and emoji — do not invent a new one.",
+      ...(securityPrompt
+        ? [
+            "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
+            ...(guardrails.requireConfirmation?.length
+              ? [
+                  `Before using tools matching these patterns: [${guardrails.requireConfirmation.join(", ")}], you MUST call slack_confirm_action first and wait for approval.`,
+                ]
+              : []),
+            ...(guardrails.readOnly
+              ? [
+                  "READ-ONLY MODE is active. Do NOT use write, edit, bash, or any tool that modifies files or state.",
+                ]
+              : []),
+          ]
+        : []),
     ],
     parameters: Type.Object({}),
     async execute() {
@@ -858,6 +878,52 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: msgs.length, channel: channelId },
+      };
+    },
+  });
+
+  // ─── Security confirmation tool ─────────────────────
+
+  pi.registerTool({
+    name: "slack_confirm_action",
+    label: "Slack Confirm Action",
+    description:
+      "Request user confirmation in a Slack thread before performing a dangerous action. Use when security guardrails require confirmation for a tool.",
+    promptSnippet: "Request confirmation in Slack before dangerous actions.",
+    parameters: Type.Object({
+      thread_ts: Type.String({ description: "Thread to post confirmation request in" }),
+      action: Type.String({ description: "Description of the action needing approval" }),
+      tool: Type.String({ description: "Name of the tool that requires confirmation" }),
+    }),
+    async execute(_id, params) {
+      const thread = threads.get(params.thread_ts);
+      const channel = thread?.channelId ?? lastDmChannel;
+      if (!channel) throw new Error("No active Slack thread.");
+
+      const confirmMsg =
+        `\u26A0\uFE0F *Action requires confirmation*\n\n` +
+        `Tool: \`${params.tool}\`\n` +
+        `Action: ${params.action}\n\n` +
+        `Reply *yes* to approve or *no* to reject.`;
+
+      await slack("chat.postMessage", botToken!, {
+        channel,
+        thread_ts: params.thread_ts,
+        text: confirmMsg,
+        metadata: {
+          event_type: "pi_agent_msg",
+          event_payload: { agent: agentName },
+        },
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
+          },
+        ],
+        details: { thread_ts: params.thread_ts, tool: params.tool },
       };
     },
   });
@@ -1250,7 +1316,12 @@ export default function (pi: ExtensionAPI) {
     const pending = inbox.splice(0, inbox.length);
     updateBadge();
 
-    const prompt = formatInboxMessages(pending, userNames);
+    let prompt = formatInboxMessages(pending, userNames);
+
+    // Prepend security guardrails if configured
+    if (securityPrompt) {
+      prompt = securityPrompt + "\n\n" + prompt;
+    }
 
     try {
       pi.sendUserMessage(prompt, { deliverAs: "followUp" });
