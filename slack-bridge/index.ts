@@ -579,7 +579,10 @@ export default function (pi: ExtensionAPI) {
 
       return {
         content: [
-          { type: "text", text: `You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}` },
+          { type: "text", text: `You are ${agentEmoji} ${agentName}.
+
+${lines.join("
+")}` },
         ],
         details: { count: pending.length },
       };
@@ -700,7 +703,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       return {
-        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
+        content: [{ type: "text", text: lines.join("
+") || "(no messages)" }],
         details: { count: msgs.length },
       };
     },
@@ -858,7 +862,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       return {
-        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
+        content: [{ type: "text", text: lines.join("
+") || "(no messages)" }],
         details: { count: msgs.length, channel: channelId },
       };
     },
@@ -1172,7 +1177,8 @@ export default function (pi: ExtensionAPI) {
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
-        ].join("\n"),
+        ].join("
+"),
         "info",
       );
     },
@@ -1261,7 +1267,7 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeBroker && activeSelfId) {
         (activeBroker.db as BrokerDB).updateAgentStatus(activeSelfId, status);
       } else if (brokerRole === "follower" && brokerClient) {
-        void (brokerClient.client as BrokerClient).updateStatus(status);
+        (brokerClient.client as BrokerClient).updateStatus(status).catch(() => { /* best effort */ });
       }
     } catch {
       /* best effort */

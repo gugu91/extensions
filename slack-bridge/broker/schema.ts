@@ -184,15 +184,16 @@ export class BrokerDB implements BrokerDBInterface {
     const now = new Date().toISOString();
     const meta = metadata ? JSON.stringify(metadata) : null;
     db.prepare(
-      `INSERT INTO agents (id, name, emoji, pid, connected_at, last_seen, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO agents (id, name, emoji, pid, connected_at, last_seen, metadata, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'idle')
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          emoji = excluded.emoji,
          pid = excluded.pid,
          connected_at = excluded.connected_at,
          last_seen = excluded.last_seen,
-         metadata = excluded.metadata`,
+         metadata = excluded.metadata,
+         status = 'idle'`,
     ).run(id, name, emoji, pid, now, now, meta);
 
     return {
