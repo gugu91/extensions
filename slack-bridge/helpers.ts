@@ -14,6 +14,11 @@ export interface SlackBridgeSettings {
   autoFollow?: boolean;
   agentName?: string;
   agentEmoji?: string;
+  security?: {
+    readOnly?: boolean;
+    requireConfirmation?: string[];
+    blockedTools?: string[];
+  };
 }
 
 export function loadSettings(settingsPath?: string): SlackBridgeSettings {

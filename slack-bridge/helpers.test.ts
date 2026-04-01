@@ -82,6 +82,33 @@ describe("loadSettings", () => {
     expect(result.autoFollow).toBeUndefined();
   });
 
+  it("returns security settings", () => {
+    const p = path.join(tmpDir, "settings.json");
+    const settings = {
+      "slack-bridge": {
+        security: {
+          readOnly: true,
+          requireConfirmation: ["bash", "edit"],
+          blockedTools: ["comment_wipe_all"],
+        },
+      },
+    };
+    fs.writeFileSync(p, JSON.stringify(settings));
+    const result = loadSettings(p);
+    expect(result.security).toEqual({
+      readOnly: true,
+      requireConfirmation: ["bash", "edit"],
+      blockedTools: ["comment_wipe_all"],
+    });
+  });
+
+  it("returns security as undefined when not set", () => {
+    const p = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(p, JSON.stringify({ "slack-bridge": { botToken: "xoxb-test" } }));
+    const result = loadSettings(p);
+    expect(result.security).toBeUndefined();
+  });
+
   it("returns suggested prompts", () => {
     const p = path.join(tmpDir, "settings.json");
     const settings = {

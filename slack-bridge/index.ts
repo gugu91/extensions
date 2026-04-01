@@ -17,6 +17,15 @@ import {
   generateAgentName,
   resolveAgentIdentity,
 } from "./helpers.js";
+import {
+  buildSecurityPrompt,
+  isConfirmationApproval,
+  isConfirmationRejection,
+  isToolBlocked,
+  matchesToolPattern,
+  toolNeedsConfirmation,
+  type SecurityGuardrails,
+} from "./guardrails.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
@@ -73,6 +82,10 @@ export default function (pi: ExtensionAPI) {
   let agentName = identity.name;
   let agentEmoji = identity.emoji;
 
+  // Security guardrails
+  const guardrails: SecurityGuardrails = settings.security ?? {};
+  const securityPrompt = buildSecurityPrompt(guardrails);
+
   function inboundToInbox(inMsg: BrokerInboundMessage): InboxMessage {
     return {
       channel: inMsg.channel,
@@ -118,6 +131,37 @@ export default function (pi: ExtensionAPI) {
   let lastDmChannel: string | null = null;
   const channelCache = new Map<string, string>();
   const unclaimedThreads = new Set<string>(); // negative cache for resolveThreadOwner
+
+  interface ConfirmationRequest {
+    toolPattern: string;
+    action: string;
+    requestedAt: number;
+  }
+
+  interface ThreadConfirmationState {
+    pending: ConfirmationRequest[];
+    approved: ConfirmationRequest[];
+    rejected: ConfirmationRequest[];
+  }
+
+  const threadConfirmationStates = new Map<string, ThreadConfirmationState>();
+
+  function getThreadConfirmationState(threadTs: string): ThreadConfirmationState {
+    let state = threadConfirmationStates.get(threadTs);
+    if (!state) {
+      state = { pending: [], approved: [], rejected: [] };
+      threadConfirmationStates.set(threadTs, state);
+    }
+    return state;
+  }
+
+  function cleanupThreadConfirmationState(threadTs: string): void {
+    const state = threadConfirmationStates.get(threadTs);
+    if (!state) return;
+    if (state.pending.length === 0 && state.approved.length === 0 && state.rejected.length === 0) {
+      threadConfirmationStates.delete(threadTs);
+    }
+  }
 
   // ─── State persistence ──────────────────────────────
 
@@ -251,6 +295,100 @@ export default function (pi: ExtensionAPI) {
     } catch {
       /* non-critical */
     }
+  }
+
+  function removeMatchingToolPattern(
+    list: ConfirmationRequest[],
+    toolName: string,
+  ): ConfirmationRequest | null {
+    const idx = list.findIndex((req) => matchesToolPattern(toolName, [req.toolPattern]));
+    if (idx === -1) return null;
+    const [match] = list.splice(idx, 1);
+    return match;
+  }
+
+  function registerConfirmationRequest(threadTs: string, tool: string, action: string): void {
+    getThreadConfirmationState(threadTs).pending.push({
+      toolPattern: tool,
+      action,
+      requestedAt: Date.now(),
+    });
+  }
+
+  function consumeConfirmationReply(threadTs: string, text: string): { approved: boolean } | null {
+    const state = threadConfirmationStates.get(threadTs);
+    if (!state || state.pending.length === 0) return null;
+
+    const trimmed = text.trim();
+    const isApproval = isConfirmationApproval(trimmed);
+    const isRejection = isConfirmationRejection(trimmed);
+    if (!isApproval && !isRejection) return null;
+
+    const request = state.pending.shift();
+    if (!request) return null;
+
+    if (isApproval) {
+      state.approved.push(request);
+      cleanupThreadConfirmationState(threadTs);
+      return { approved: true };
+    }
+
+    state.rejected.push(request);
+    cleanupThreadConfirmationState(threadTs);
+    return { approved: false };
+  }
+
+  function getConfirmationDecision(threadTs: string, toolName: string): boolean | null {
+    const state = threadConfirmationStates.get(threadTs);
+    if (!state) return null;
+
+    const approved = removeMatchingToolPattern(state.approved, toolName);
+    if (approved) {
+      cleanupThreadConfirmationState(threadTs);
+      return true;
+    }
+
+    const rejected = removeMatchingToolPattern(state.rejected, toolName);
+    if (rejected) {
+      cleanupThreadConfirmationState(threadTs);
+      return false;
+    }
+
+    return null;
+  }
+
+  function requireToolPolicy(toolName: string, threadTs: string | undefined): void {
+    if (isToolBlocked(toolName, guardrails)) {
+      throw new Error(`Tool "${toolName}" is blocked by Slack security guardrails.`);
+    }
+
+    if (!toolNeedsConfirmation(toolName, guardrails)) {
+      return;
+    }
+
+    if (!threadTs) {
+      throw new Error(
+        `Tool "${toolName}" requires confirmation. Include a thread_ts and call slack_confirm_action before executing this tool.`,
+      );
+    }
+
+    const decision = getConfirmationDecision(threadTs, toolName);
+    if (decision === true) return;
+    if (decision === false) {
+      throw new Error(`Tool "${toolName}" was denied by Slack user confirmation.`);
+    }
+
+    const state = threadConfirmationStates.get(threadTs);
+    const pending = !!state?.pending.some((req) => matchesToolPattern(toolName, [req.toolPattern]));
+    if (!pending) {
+      throw new Error(
+        `Tool "${toolName}" requires confirmation. Call slack_confirm_action in thread ${threadTs} and wait for the user's approval first.`,
+      );
+    }
+
+    throw new Error(
+      `Tool "${toolName}" requires confirmation. Call slack_confirm_action in thread ${threadTs} and wait for the user's approval first.`,
+    );
   }
 
   // ─── Thread ownership ────────────────────────────────
@@ -465,6 +603,13 @@ export default function (pi: ExtensionAPI) {
 
     // Strip <@BOT_ID> from text for channel mentions
     const cleanText = isChannelMention ? stripBotMention(text, botUserId!) : text;
+    const confirmationResult = consumeConfirmationReply(effectiveTs, cleanText);
+    const messageText =
+      confirmationResult === null
+        ? cleanText
+        : confirmationResult.approved
+          ? `${cleanText}\n\n✅ User approved security confirmation request in this thread.`
+          : `${cleanText}\n\n❌ User denied security confirmation request in this thread.`;
 
     const name = await resolveUser(user);
     ctx.ui.notify(`${name}: ${cleanText.slice(0, 100)}`, "info");
@@ -481,7 +626,7 @@ export default function (pi: ExtensionAPI) {
       channel,
       threadTs: effectiveTs,
       userId: user,
-      text: cleanText,
+      text: messageText,
       timestamp: (evt.ts as string) ?? effectiveTs,
       ...(isChannelMention && { isChannelMention: true }),
     });
@@ -553,13 +698,33 @@ export default function (pi: ExtensionAPI) {
       `First message in a new thread: use full format — '${agentEmoji} (${agentName}) Just finished splitting the auth module.'`,
       `Follow-up messages in the same thread: just prefix with the emoji — '${agentEmoji} Found two more files to split.'`,
       "Always use this name and emoji — do not invent a new one.",
+      ...(securityPrompt
+        ? [
+            "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
+            ...(guardrails.requireConfirmation?.length
+              ? [
+                  `Before using tools matching these patterns: [${guardrails.requireConfirmation.join(", ")}], you MUST call slack_confirm_action first and wait for approval.`,
+                ]
+              : []),
+            ...(guardrails.readOnly
+              ? [
+                  "READ-ONLY MODE is active. Do NOT use write, edit, bash, or any tool that modifies files or state.",
+                ]
+              : []),
+          ]
+        : []),
     ],
     parameters: Type.Object({}),
     async execute() {
+      const securityHeader = securityPrompt ? `${securityPrompt}\n\n` : "";
+
       if (inbox.length === 0) {
         return {
           content: [
-            { type: "text", text: `(no new messages) — you are ${agentEmoji} ${agentName}` },
+            {
+              type: "text",
+              text: `${securityHeader}(no new messages) — you are ${agentEmoji} ${agentName}`,
+            },
           ],
           details: { count: 0 },
         };
@@ -579,10 +744,10 @@ export default function (pi: ExtensionAPI) {
 
       return {
         content: [
-          { type: "text", text: `You are ${agentEmoji} ${agentName}.
-
-${lines.join("
-")}` },
+          {
+            type: "text",
+            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}`,
+          },
         ],
         details: { count: pending.length },
       };
@@ -603,6 +768,8 @@ ${lines.join("
       ),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_send", params.thread_ts);
+
       const thread = params.thread_ts ? threads.get(params.thread_ts) : undefined;
       const channel = thread?.channelId ?? lastDmChannel;
 
@@ -681,6 +848,8 @@ ${lines.join("
       limit: Type.Optional(Type.Number({ description: "Max messages (default 20)" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_read", params.thread_ts);
+
       const thread = threads.get(params.thread_ts);
       const channel = thread?.channelId ?? lastDmChannel;
       if (!channel) throw new Error("Unknown thread.");
@@ -703,8 +872,7 @@ ${lines.join("
       }
 
       return {
-        content: [{ type: "text", text: lines.join("
-") || "(no messages)" }],
+        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: msgs.length },
       };
     },
@@ -723,6 +891,8 @@ ${lines.join("
       purpose: Type.Optional(Type.String({ description: "Channel purpose" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_create_channel", undefined);
+
       const res = await slack("conversations.create", botToken!, {
         name: params.name,
       });
@@ -766,6 +936,8 @@ ${lines.join("
       thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_post_channel", params.thread_ts);
+
       const channelInput = params.channel ?? settings.defaultChannel;
       if (!channelInput) {
         throw new Error("No channel specified and no defaultChannel configured in settings.json.");
@@ -833,6 +1005,8 @@ ${lines.join("
       limit: Type.Optional(Type.Number({ description: "Max messages to return (default 20)" })),
     }),
     async execute(_id, params) {
+      requireToolPolicy("slack_read_channel", params.thread_ts);
+
       const channelId = await resolveChannel(params.channel);
       const limit = params.limit ?? 20;
 
@@ -862,9 +1036,57 @@ ${lines.join("
       }
 
       return {
-        content: [{ type: "text", text: lines.join("
-") || "(no messages)" }],
+        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: msgs.length, channel: channelId },
+      };
+    },
+  });
+
+  // ─── Security confirmation tool ─────────────────────
+
+  pi.registerTool({
+    name: "slack_confirm_action",
+    label: "Slack Confirm Action",
+    description:
+      "Request user confirmation in a Slack thread before performing a dangerous action. Use when security guardrails require confirmation for a tool.",
+    promptSnippet: "Request confirmation in Slack before dangerous actions.",
+    parameters: Type.Object({
+      thread_ts: Type.String({ description: "Thread to post confirmation request in" }),
+      action: Type.String({ description: "Description of the action needing approval" }),
+      tool: Type.String({ description: "Name of the tool that requires confirmation" }),
+    }),
+    async execute(_id, params) {
+      const thread = threads.get(params.thread_ts);
+      if (!thread) {
+        throw new Error(`No active Slack thread for thread_ts: ${params.thread_ts}`);
+      }
+
+      const confirmMsg =
+        `⚠️ *Action requires confirmation*\n\n` +
+        `Tool: \`${params.tool}\`\n` +
+        `Action: ${params.action}\n\n` +
+        `Reply *yes* to approve or *no* to reject.`;
+
+      registerConfirmationRequest(params.thread_ts, params.tool, params.action);
+
+      await slack("chat.postMessage", botToken!, {
+        channel: thread.channelId,
+        thread_ts: params.thread_ts,
+        text: confirmMsg,
+        metadata: {
+          event_type: "pi_agent_msg",
+          event_payload: { agent: agentName },
+        },
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
+          },
+        ],
+        details: { thread_ts: params.thread_ts, tool: params.tool },
       };
     },
   });
@@ -895,6 +1117,8 @@ ${lines.join("
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_id, params) {
+      requireToolPolicy("pinet_message", undefined);
+
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
@@ -958,6 +1182,8 @@ ${lines.join("
     promptSnippet: "List all connected Pinet agents.",
     parameters: Type.Object({}),
     async execute() {
+      requireToolPolicy("pinet_agents", undefined);
+
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
@@ -1177,8 +1403,7 @@ ${lines.join("
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
-        ].join("
-"),
+        ].join("\\n"),
         "info",
       );
     },
@@ -1267,7 +1492,9 @@ ${lines.join("
       if (brokerRole === "broker" && activeBroker && activeSelfId) {
         (activeBroker.db as BrokerDB).updateAgentStatus(activeSelfId, status);
       } else if (brokerRole === "follower" && brokerClient) {
-        (brokerClient.client as BrokerClient).updateStatus(status).catch(() => { /* best effort */ });
+        (brokerClient.client as BrokerClient).updateStatus(status).catch(() => {
+          /* best effort */
+        });
       }
     } catch {
       /* best effort */
@@ -1282,7 +1509,12 @@ ${lines.join("
     updateBadge();
     reportStatus("working");
 
-    const prompt = formatInboxMessages(pending, userNames);
+    let prompt = formatInboxMessages(pending, userNames);
+
+    // Prepend security guardrails if configured
+    if (securityPrompt) {
+      prompt = securityPrompt + "\n\n" + prompt;
+    }
 
     try {
       pi.sendUserMessage(prompt, { deliverAs: "followUp" });
