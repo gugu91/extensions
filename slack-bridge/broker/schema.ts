@@ -106,6 +106,182 @@ export function defaultDbPath(): string {
 }
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
+export const CURRENT_BROKER_SCHEMA_VERSION = 3;
+
+const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
+  "stable_id",
+  "metadata",
+  "status",
+  "last_heartbeat",
+  "disconnected_at",
+  "resumable_until",
+] as const;
+
+function getUserVersion(db: DatabaseSync): number {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+  return Number(row?.user_version ?? 0);
+}
+
+function setUserVersion(db: DatabaseSync, version: number): void {
+  db.exec(`PRAGMA user_version = ${version}`);
+}
+
+function getTableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, sql: string): void {
+  if (!getTableColumns(db, tableName).has(columnName)) {
+    db.exec(sql);
+  }
+}
+
+function createCoreTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      pid INTEGER NOT NULL,
+      connected_at TEXT NOT NULL,
+      last_seen TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS threads (
+      thread_id TEXT PRIMARY KEY NOT NULL,
+      source TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      owner_agent TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
+      sender TEXT NOT NULL,
+      body TEXT NOT NULL,
+      metadata TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS inbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      message_id INTEGER NOT NULL,
+      delivered INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_thread
+      ON messages(thread_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inbox_agent_delivered
+      ON inbox(agent_id, delivered, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inbox_message
+      ON inbox(message_id);
+  `);
+}
+
+function createBacklogTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS unrouted_backlog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      message_id INTEGER NOT NULL UNIQUE,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
+      assigned_agent_id TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_backlog_status_created
+      ON unrouted_backlog(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_backlog_thread_status
+      ON unrouted_backlog(thread_id, status);
+  `);
+}
+
+function addAgentLifecycleColumns(db: DatabaseSync): void {
+  ensureColumn(db, "agents", "stable_id", "ALTER TABLE agents ADD COLUMN stable_id TEXT");
+  ensureColumn(db, "agents", "metadata", "ALTER TABLE agents ADD COLUMN metadata TEXT");
+  ensureColumn(
+    db,
+    "agents",
+    "status",
+    "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'",
+  );
+  ensureColumn(db, "agents", "last_heartbeat", "ALTER TABLE agents ADD COLUMN last_heartbeat TEXT");
+  ensureColumn(
+    db,
+    "agents",
+    "disconnected_at",
+    "ALTER TABLE agents ADD COLUMN disconnected_at TEXT",
+  );
+  ensureColumn(
+    db,
+    "agents",
+    "resumable_until",
+    "ALTER TABLE agents ADD COLUMN resumable_until TEXT",
+  );
+
+  db.exec(`
+    UPDATE agents
+    SET last_heartbeat = COALESCE(last_heartbeat, last_seen)
+    WHERE last_heartbeat IS NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_agents_last_heartbeat
+      ON agents(last_heartbeat);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_stable_id
+      ON agents(stable_id)
+      WHERE stable_id IS NOT NULL;
+  `);
+}
+
+function runSchemaMigrations(db: DatabaseSync): void {
+  const currentVersion = getUserVersion(db);
+  if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
+    return;
+  }
+
+  for (
+    let nextVersion = currentVersion + 1;
+    nextVersion <= CURRENT_BROKER_SCHEMA_VERSION;
+    nextVersion += 1
+  ) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      switch (nextVersion) {
+        case 1:
+          createCoreTables(db);
+          break;
+        case 2:
+          createBacklogTable(db);
+          break;
+        case 3:
+          addAgentLifecycleColumns(db);
+          break;
+        default:
+          throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
+      }
+      setUserVersion(db, nextVersion);
+      db.exec("COMMIT");
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* best effort */
+      }
+      throw new Error(`Broker schema migration v${nextVersion} failed`, { cause: error });
+    }
+  }
+}
 
 // ─── BrokerDB ────────────────────────────────────────────
 
@@ -123,127 +299,23 @@ export class BrokerDB implements BrokerDBInterface {
     const dir = path.dirname(this.dbPath);
     fs.mkdirSync(dir, { recursive: true });
 
-    this.db = new DatabaseSync(this.dbPath, { timeout: 5000 });
-    this.db.exec("PRAGMA journal_mode=WAL");
-    this.db.exec("PRAGMA busy_timeout=5000");
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS agents (
-        id TEXT PRIMARY KEY NOT NULL,
-        stable_id TEXT,
-        name TEXT NOT NULL,
-        emoji TEXT NOT NULL,
-        pid INTEGER NOT NULL,
-        connected_at TEXT NOT NULL,
-        last_seen TEXT NOT NULL,
-        last_heartbeat TEXT NOT NULL,
-        metadata TEXT,
-        status TEXT NOT NULL DEFAULT 'idle',
-        disconnected_at TEXT,
-        resumable_until TEXT
+    try {
+      this.openAndMigrate();
+    } catch (error) {
+      console.error(
+        `[BrokerDB] Failed to open or migrate ${this.dbPath}; recreating from scratch`,
+        error,
       );
+      this.resetDatabaseFiles();
 
-      CREATE TABLE IF NOT EXISTS threads (
-        thread_id TEXT PRIMARY KEY NOT NULL,
-        source TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        owner_agent TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_id TEXT NOT NULL,
-        source TEXT NOT NULL,
-        direction TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
-        sender TEXT NOT NULL,
-        body TEXT NOT NULL,
-        metadata TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS inbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id TEXT NOT NULL,
-        message_id INTEGER NOT NULL,
-        delivered INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS unrouted_backlog (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_id TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        message_id INTEGER NOT NULL UNIQUE,
-        reason TEXT NOT NULL,
-        status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
-        assigned_agent_id TEXT,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_messages_thread
-        ON messages(thread_id, created_at);
-      CREATE INDEX IF NOT EXISTS idx_inbox_agent_delivered
-        ON inbox(agent_id, delivered, created_at);
-      CREATE INDEX IF NOT EXISTS idx_inbox_message
-        ON inbox(message_id);
-      CREATE INDEX IF NOT EXISTS idx_backlog_status_created
-        ON unrouted_backlog(status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_backlog_thread_status
-        ON unrouted_backlog(thread_id, status);
-      CREATE INDEX IF NOT EXISTS idx_agents_last_heartbeat
-        ON agents(last_heartbeat);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_stable_id
-        ON agents(stable_id)
-        WHERE stable_id IS NOT NULL;
-    `);
-
-    // Migrations
-    try {
-      this.db.exec("ALTER TABLE agents ADD COLUMN stable_id TEXT");
-    } catch {
-      /* exists */
+      try {
+        this.openAndMigrate();
+      } catch (recreateError) {
+        console.error(`[BrokerDB] Failed to recreate ${this.dbPath} from scratch`, recreateError);
+        this.close();
+        throw recreateError;
+      }
     }
-    try {
-      this.db.exec("ALTER TABLE agents ADD COLUMN metadata TEXT");
-    } catch {
-      /* exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
-    } catch {
-      /* exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE agents ADD COLUMN last_heartbeat TEXT");
-    } catch {
-      /* exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE agents ADD COLUMN disconnected_at TEXT");
-    } catch {
-      /* exists */
-    }
-    try {
-      this.db.exec("ALTER TABLE agents ADD COLUMN resumable_until TEXT");
-    } catch {
-      /* exists */
-    }
-
-    this.db.exec(`
-      UPDATE agents
-      SET last_heartbeat = COALESCE(last_heartbeat, last_seen)
-      WHERE last_heartbeat IS NULL
-    `);
-    this.db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_stable_id
-      ON agents(stable_id)
-      WHERE stable_id IS NOT NULL
-    `);
 
     // Broker startup reconciliation: any connected rows belong to a previous
     // broker session, so mark them resumably disconnected and wait for workers
@@ -258,6 +330,14 @@ export class BrokerDB implements BrokerDBInterface {
    */
   reconcileStartupAgents(resumableForMs = DEFAULT_RESUMABLE_WINDOW_MS): void {
     const db = this.getDb();
+    const missingColumns = this.getMissingRequiredAgentLifecycleColumns(db);
+    if (missingColumns.length > 0) {
+      console.error(
+        `[BrokerDB] Skipping startup reconciliation; agents table is missing columns: ${missingColumns.join(", ")}`,
+      );
+      return;
+    }
+
     const now = new Date();
     const disconnectedAt = now.toISOString();
     const resumableUntil = new Date(now.getTime() + resumableForMs).toISOString();
@@ -975,6 +1055,43 @@ export class BrokerDB implements BrokerDBInterface {
         /* best effort */
       }
       throw err;
+    }
+  }
+
+  private openAndMigrate(): void {
+    const db = this.openDatabase();
+    this.db = db;
+    runSchemaMigrations(db);
+    this.ensureRequiredAgentLifecycleColumns(db);
+  }
+
+  private openDatabase(): DatabaseSync {
+    const db = new DatabaseSync(this.dbPath, { timeout: 5000 });
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA busy_timeout=5000");
+    return db;
+  }
+
+  private resetDatabaseFiles(): void {
+    this.close();
+    for (const file of [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`]) {
+      try {
+        fs.rmSync(file, { force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
+  private getMissingRequiredAgentLifecycleColumns(db: DatabaseSync): string[] {
+    const columns = getTableColumns(db, "agents");
+    return REQUIRED_AGENT_LIFECYCLE_COLUMNS.filter((column) => !columns.has(column));
+  }
+
+  private ensureRequiredAgentLifecycleColumns(db: DatabaseSync): void {
+    const missingColumns = this.getMissingRequiredAgentLifecycleColumns(db);
+    if (missingColumns.length > 0) {
+      throw new Error(`agents table missing required columns: ${missingColumns.join(", ")}`);
     }
   }
 

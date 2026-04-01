@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as net from "node:net";
-import { BrokerDB } from "./schema.js";
+import { BrokerDB, CURRENT_BROKER_SCHEMA_VERSION } from "./schema.js";
 import { LeaderLock } from "./leader.js";
 import { runBrokerMaintenancePass } from "./maintenance.js";
 import { BrokerSocketServer } from "./socket-server.js";
@@ -106,6 +107,80 @@ describe("BrokerDB", () => {
   it("creates tables without error", () => {
     // initialize() already ran — just verify we can query
     expect(db.getAgents()).toEqual([]);
+  });
+
+  it("migrates a legacy agents table and stamps the schema version", () => {
+    const dbPath = path.join(dir, "legacy.db");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      );
+    `);
+    legacyDb
+      .prepare(
+        `INSERT INTO agents (id, name, emoji, pid, connected_at, last_seen)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-1",
+        "Legacy Agent",
+        "🧓",
+        42,
+        "2026-04-01T10:00:00.000Z",
+        "2026-04-01T10:05:00.000Z",
+      );
+    legacyDb.close();
+
+    const migratedDb = new BrokerDB(dbPath);
+    expect(() => migratedDb.initialize()).not.toThrow();
+
+    const migratedAgent = migratedDb.getAgentById("legacy-1");
+    expect(migratedAgent?.lastHeartbeat).toBe("2026-04-01T10:05:00.000Z");
+    expect(migratedAgent?.disconnectedAt).toBeTruthy();
+    expect(migratedDb.getAgents()).toEqual([]);
+    migratedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    const columns = inspectDb.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+    inspectDb.close();
+
+    expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "stable_id",
+        "metadata",
+        "status",
+        "last_heartbeat",
+        "disconnected_at",
+        "resumable_until",
+      ]),
+    );
+  });
+
+  it("recreates an invalid database file from scratch instead of crashing", () => {
+    const dbPath = path.join(dir, "invalid.db");
+    fs.writeFileSync(dbPath, "not a sqlite database", "utf-8");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const recreatedDb = new BrokerDB(dbPath);
+    expect(() => recreatedDb.initialize()).not.toThrow();
+    expect(recreatedDb.getAgents()).toEqual([]);
+    recreatedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    inspectDb.close();
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    errorSpy.mockRestore();
   });
 
   it("registerAgent and getAgents", () => {
