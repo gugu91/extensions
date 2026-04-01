@@ -22,6 +22,7 @@ import {
   shortenPath,
   buildIdentityReplyGuidelines,
   buildBrokerPromptGuidelines,
+  buildWorkerPromptGuidelines,
   buildAgentStableId,
   syncFollowerInboxEntries,
   getFollowerReconnectUiUpdate,
@@ -1833,8 +1834,14 @@ export default function (pi: ExtensionAPI) {
 
   // Inject broker-specific prompt guidelines when running as broker
   pi.on("before_agent_start", async (event) => {
-    if (brokerRole !== "broker") return;
-    const guidelines = buildBrokerPromptGuidelines(agentEmoji, agentName);
+    let guidelines: string[];
+    if (brokerRole === "broker") {
+      guidelines = buildBrokerPromptGuidelines(agentEmoji, agentName);
+    } else if (brokerRole === "follower") {
+      guidelines = buildWorkerPromptGuidelines();
+    } else {
+      return;
+    }
     return {
       systemPrompt: event.systemPrompt + "\n\n" + guidelines.join("\n"),
     };
