@@ -1,5 +1,5 @@
 {
-  "name": "nvim-bridge",
+  "name": "pi-extensions",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,10 +11,10 @@
     "format:check": "pnpm format:check:ts && pnpm format:check:lua",
     "format:check:ts": "prettier --check .",
     "format:check:lua": "stylua --check nvim-bridge/nvim",
-    "lint": "eslint nvim-bridge neon-psql slack-bridge --ext .ts",
-    "typecheck": "tsc --noEmit",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
     "check": "pnpm lint && pnpm typecheck && pnpm format:check",
-    "test": "vitest run",
     "prepush": "pnpm lint && pnpm typecheck && pnpm test",
     "lint-staged": "lint-staged",
     "prepare": "husky"
@@ -31,6 +31,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "prettier": "^3.5.1",
+    "turbo": "^2.5.4",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.22.0",
     "vitest": "^4.1.2"

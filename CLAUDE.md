@@ -6,23 +6,28 @@ Pi extensions for Slack, Neovim, and Neon Postgres.
 
 ```
 extensions/
-├── slack-bridge/    # Pinet — Slack assistant integration
-├── nvim-bridge/     # Neovim bridge + PiComms comments
-├── neon-psql/       # Neon Postgres CLI
-├── types/           # Shared type declarations
+├── slack-bridge/    # Pinet — Slack assistant integration (workspace)
+├── nvim-bridge/     # Neovim bridge + PiComms comments (workspace)
+├── neon-psql/       # Neon Postgres CLI (workspace)
+├── types/           # Shared type declarations (workspace)
 ├── plans/           # Architecture docs
-└── .pi/             # Pi config (skills, agents)
+├── .pi/             # Pi config (skills, agents)
+├── turbo.json       # Turborepo task orchestration
+└── pnpm-workspace.yaml
 ```
 
 ## Commands
 
 ```bash
-pnpm lint          # ESLint across all extensions
-pnpm typecheck     # TypeScript strict check
-pnpm test          # Vitest — all tests
+pnpm lint          # ESLint across all extensions (turbo-cached)
+pnpm typecheck     # TypeScript strict check (turbo-cached)
+pnpm test          # Vitest — all tests (turbo-cached)
 pnpm prepush       # lint + typecheck + test (runs on git push)
 pnpm format        # Prettier + Stylua
 ```
+
+Turbo caches lint/typecheck/test results per-package. Unchanged packages
+are skipped on re-runs.
 
 ## Development workflow
 
@@ -50,6 +55,7 @@ The reviewer posts findings to PiComms and GitHub. Fix any critical/warning issu
 - Extract testable logic into `helpers.ts` — keep `index.ts` for extension wiring
 - Tests run on **pre-push** hook (via husky)
 - Use temp directories for filesystem tests, clean up in `afterEach`
+- Per-package test scripts run via Turborepo
 
 ## Conventions
 
@@ -69,7 +75,8 @@ The reviewer posts findings to PiComms and GitHub. Fix any critical/warning issu
 
 ## Extension patterns
 
-Each extension is a directory with an `index.ts` that exports a default function:
+Each extension is a workspace package with a `package.json` that declares the
+`pi` manifest and an `index.ts` entry point:
 
 ```typescript
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -82,8 +89,19 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
+```json
+// package.json
+{
+  "name": "@gugu91/pi-slack-bridge",
+  "keywords": ["pi-package"],
+  "pi": { "extensions": ["./index.ts"] }
+}
+```
+
 ## Key architecture decisions
 
 - **Pinet (slack-bridge)**: Opt-in via `/pinet` command or `autoConnect: true` in settings
 - **PiComms**: SQLite-backed (`node:sqlite`), falls back to JSON files
 - **Socket Mode**: Single WebSocket per Slack app token — only one pi session connects
+- **Turborepo**: Per-package lint/typecheck/test with local caching
+- **pnpm workspaces**: Each extension is an independent workspace package

@@ -1,0 +1,22 @@
+{
+  "name": "@gugu91/pi-neon-psql",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Neon Postgres tunnel + psql tool for pi",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@gugu91/pi-ext-types": "workspace:*"
+  },
+  "scripts": {
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

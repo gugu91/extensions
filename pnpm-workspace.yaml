@@ -1,0 +1,5 @@
+packages:
+  - slack-bridge
+  - nvim-bridge
+  - neon-psql
+  - types
