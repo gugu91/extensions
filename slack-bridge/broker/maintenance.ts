@@ -11,7 +11,7 @@ export interface ThreadRepairResult {
 
 export interface BrokerMaintenanceDB {
   pruneStaleAgents(staleAfterMs: number): string[];
-  purgeDisconnectedAgents(): string[];
+  purgeDisconnectedAgents(graceMs?: number): string[];
   repairThreadOwnership(): ThreadRepairResult;
   requeueUndeliveredMessages(agentId: string, reason?: string): number;
   getPendingBacklog(limit?: number): BacklogEntry[];

@@ -106,6 +106,7 @@ export function defaultDbPath(): string {
 }
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
+export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
 export const CURRENT_BROKER_SCHEMA_VERSION = 3;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
@@ -503,28 +504,35 @@ export class BrokerDB implements BrokerDBInterface {
     });
   }
 
-  purgeDisconnectedAgents(): string[] {
+  purgeDisconnectedAgents(graceMs = DEFAULT_DISCONNECTED_PURGE_GRACE_MS): string[] {
     const db = this.getDb();
-    const now = new Date().toISOString();
-    const rows = db
-      .prepare(
-        `SELECT id FROM agents
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const cutoff = new Date(now - graceMs).toISOString();
+
+    return this.withTransaction(() => {
+      const rows = db
+        .prepare(
+          `SELECT id FROM agents
+           WHERE disconnected_at IS NOT NULL
+             AND disconnected_at <= ?
+             AND (resumable_until IS NULL OR resumable_until <= ?)`
+        )
+        .all(cutoff, nowIso) as Array<{ id: string }>;
+
+      if (rows.length === 0) {
+        return [];
+      }
+
+      db.prepare(
+        `DELETE FROM agents
          WHERE disconnected_at IS NOT NULL
+           AND disconnected_at <= ?
            AND (resumable_until IS NULL OR resumable_until <= ?)`
-      )
-      .all(now) as Array<{ id: string }>;
+      ).run(cutoff, nowIso);
 
-    if (rows.length === 0) {
-      return [];
-    }
-
-    db.prepare(
-      `DELETE FROM agents
-       WHERE disconnected_at IS NOT NULL
-         AND (resumable_until IS NULL OR resumable_until <= ?)`
-    ).run(now);
-
-    return rows.map((row) => row.id);
+      return rows.map((row) => row.id);
+    });
   }
 
   updateAgentStatus(id: string, status: "working" | "idle"): void {

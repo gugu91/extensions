@@ -350,7 +350,7 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")).not.toBeNull();
   });
 
-  it("purgeDisconnectedAgents deletes only expired disconnected agents", () => {
+  it("purgeDisconnectedAgents waits for the grace window before deleting ghosts", () => {
     db.registerAgent("active", "Active", "🟢", 1);
     db.registerAgent("resumable", "Resumable", "🟡", 2);
     db.registerAgent("ghost", "Ghost", "⚫️", 3);
@@ -360,7 +360,9 @@ describe("BrokerDB", () => {
     db.disconnectAgent("ghost", 0);
     db.unregisterAgent("gone");
 
-    const purged = db.purgeDisconnectedAgents();
+    expect(db.purgeDisconnectedAgents()).toEqual([]);
+
+    const purged = db.purgeDisconnectedAgents(0);
 
     expect(purged.sort()).toEqual(["ghost", "gone"]);
     expect(db.getAgentById("active")).not.toBeNull();
@@ -430,7 +432,7 @@ describe("BrokerDB", () => {
     });
 
     expect(result.reapedAgentIds).toContain("worker-1");
-    expect(db.getAgentById("worker-1")).toBeNull();
+    expect(db.getAgentById("worker-1")).not.toBeNull();
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-orphan");

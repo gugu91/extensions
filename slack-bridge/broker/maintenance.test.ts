@@ -24,7 +24,7 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
     return [...this.staleAgents];
   }
 
-  purgeDisconnectedAgents(): string[] {
+  purgeDisconnectedAgents(_graceMs?: number): string[] {
     this.methodCalls.push("purge");
     return [];
   }
