@@ -129,10 +129,30 @@ describe("BrokerDB", () => {
     expect(agents[0].pid).toBe(200);
   });
 
-  it("unregisterAgent removes agent", () => {
+  it("registerAgent resumes previous identity by stableId", () => {
+    const first = db.registerAgent("a1", "Original", "🧠", 100, undefined, "host:session:/tmp/a");
+    db.unregisterAgent(first.id);
+
+    const resumed = db.registerAgent(
+      "a2",
+      "Different",
+      "🤖",
+      200,
+      undefined,
+      "host:session:/tmp/a",
+    );
+
+    expect(resumed.id).toBe(first.id);
+    expect(resumed.name).toBe("Original");
+    expect(resumed.emoji).toBe("🧠");
+    expect(db.getAgents()).toHaveLength(1);
+  });
+
+  it("unregisterAgent hides agent from connected list but keeps the record", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
     db.unregisterAgent("a1");
     expect(db.getAgents()).toEqual([]);
+    expect(db.getAgentById("a1")?.name).toBe("Agent");
   });
 
   it("touchAgent updates last_seen", () => {
@@ -148,6 +168,33 @@ describe("BrokerDB", () => {
     db.touchAgent("a1");
     const after = db.getAgents()[0].lastSeen;
     expect(after >= before).toBe(true);
+  });
+
+  it("heartbeatAgent updates last_heartbeat", () => {
+    db.registerAgent("a1", "Agent", "🤖", 1);
+    const before = db.getAgents()[0].lastHeartbeat;
+
+    const start = Date.now();
+    while (Date.now() - start < 10) {
+      /* spin */
+    }
+
+    db.heartbeatAgent("a1");
+    const after = db.getAgentById("a1")?.lastHeartbeat;
+    expect(after).toBeDefined();
+    expect(after! >= before).toBe(true);
+  });
+
+  it("pruneStaleAgents disconnects stale agents and releases their thread claims", () => {
+    db.registerAgent("a1", "Agent", "🤖", 1);
+    db.createThread("t1", "slack", "#general", "a1");
+
+    const pruned = db.pruneStaleAgents(0);
+
+    expect(pruned).toContain("a1");
+    expect(db.getAgents()).toEqual([]);
+    expect(db.getThread("t1")?.ownerAgent).toBeNull();
+    expect(db.getAgentById("a1")).not.toBeNull();
   });
 
   it("createThread and getThread", () => {
@@ -441,6 +488,29 @@ describe("BrokerSocketServer", () => {
 
     expect(res.error).toBeDefined();
     expect(res.error!.message).toContain("Not registered");
+
+    client.destroy();
+  });
+
+  it("heartbeat updates last_heartbeat for registered agents", async () => {
+    const client = await connectClient(getInfo());
+    const registerRes = await client.call("register", { name: "Pulse", emoji: "💓", pid: 1 });
+    const agentId = (registerRes.result as { agentId: string }).agentId;
+    const before = db.getAgentById(agentId)?.lastHeartbeat;
+    expect(before).toBeDefined();
+
+    const start = Date.now();
+    while (Date.now() - start < 10) {
+      /* spin */
+    }
+
+    const heartbeatRes = await client.call("heartbeat");
+    expect(heartbeatRes.error).toBeUndefined();
+    expect((heartbeatRes.result as { ok: boolean }).ok).toBe(true);
+
+    const after = db.getAgentById(agentId)?.lastHeartbeat;
+    expect(after).toBeDefined();
+    expect(after! >= before!).toBe(true);
 
     client.destroy();
   });

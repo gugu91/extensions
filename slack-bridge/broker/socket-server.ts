@@ -25,12 +25,19 @@ export function defaultSocketPath(): string {
 
 // Re-export as static for easier access
 export const DEFAULT_SOCKET_PATH = defaultSocketPath();
+export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 15_000;
+export const DEFAULT_PRUNE_INTERVAL_MS = 5_000;
 
 // ─── Listen target: Unix socket path or TCP host:port ────
 
 export type ListenTarget =
   | { type: "unix"; path: string }
   | { type: "tcp"; host: string; port: number };
+
+export interface BrokerSocketServerOptions {
+  heartbeatTimeoutMs?: number;
+  pruneIntervalMs?: number;
+}
 
 // ─── Connection state ────────────────────────────────────
 
@@ -65,12 +72,22 @@ export class BrokerSocketServer {
   private readonly router: MessageRouter;
   private readonly slackProxyFn: SlackProxyFn | null;
   private readonly connections = new Map<net.Socket, ConnectionState>();
+  private readonly heartbeatTimeoutMs: number;
+  private readonly pruneIntervalMs: number;
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private assignedPort: number | null = null;
 
-  constructor(db: BrokerDB, target?: ListenTarget | string, slackProxyFn?: SlackProxyFn) {
+  constructor(
+    db: BrokerDB,
+    target?: ListenTarget | string,
+    slackProxyFn?: SlackProxyFn,
+    options: BrokerSocketServerOptions = {},
+  ) {
     this.db = db;
     this.router = new MessageRouter(db);
     this.slackProxyFn = slackProxyFn ?? null;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+    this.pruneIntervalMs = options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
     if (typeof target === "string") {
       this.target = { type: "unix", path: target };
     } else if (target) {
@@ -98,6 +115,7 @@ export class BrokerSocketServer {
 
       if (this.target.type === "unix") {
         this.server.listen(this.target.path, () => {
+          this.startPruning();
           resolve();
         });
       } else {
@@ -106,6 +124,7 @@ export class BrokerSocketServer {
           if (addr && typeof addr === "object") {
             this.assignedPort = addr.port;
           }
+          this.startPruning();
           resolve();
         });
       }
@@ -113,6 +132,8 @@ export class BrokerSocketServer {
   }
 
   async stop(): Promise<void> {
+    this.stopPruning();
+
     // Clean up all connected agents. Clear agentId so the async
     // close handler won't try to unregister after db is closed.
     for (const [socket, state] of this.connections) {
@@ -160,6 +181,34 @@ export class BrokerSocketServer {
       host: this.target.host,
       port: this.assignedPort ?? this.target.port,
     };
+  }
+
+  private startPruning(): void {
+    this.stopPruning();
+    this.pruneTimer = setInterval(() => {
+      try {
+        this.db.pruneStaleAgents(this.heartbeatTimeoutMs);
+      } catch {
+        /* best effort */
+      }
+    }, this.pruneIntervalMs);
+    this.pruneTimer.unref?.();
+  }
+
+  private stopPruning(): void {
+    if (!this.pruneTimer) return;
+    clearInterval(this.pruneTimer);
+    this.pruneTimer = null;
+  }
+
+  private disconnectDuplicateConnections(agentId: string, currentSocket: net.Socket): void {
+    for (const [socket, state] of this.connections) {
+      if (socket === currentSocket || state.agentId !== agentId) {
+        continue;
+      }
+      state.agentId = null;
+      socket.destroy();
+    }
   }
 
   // ─── Connection handling ─────────────────────────────
@@ -220,7 +269,7 @@ export class BrokerSocketServer {
     socket: net.Socket,
   ): Promise<void> {
     try {
-      const response = await this.handleRequest(req, state);
+      const response = await this.handleRequest(req, state, socket);
       this.send(socket, response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -241,13 +290,16 @@ export class BrokerSocketServer {
   private async handleRequest(
     req: JsonRpcRequest,
     state: ConnectionState,
+    socket: net.Socket,
   ): Promise<JsonRpcResponse> {
     try {
       switch (req.method) {
         case "register":
-          return this.handleRegister(req, state);
+          return this.handleRegister(req, state, socket);
         case "unregister":
           return this.handleUnregister(req, state);
+        case "heartbeat":
+          return this.handleHeartbeat(req, state);
         case "inbox.poll":
           return this.handleInboxPoll(req, state);
         case "inbox.ack":
@@ -277,19 +329,25 @@ export class BrokerSocketServer {
 
   // ─── Method handlers ─────────────────────────────────
 
-  private handleRegister(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+  private handleRegister(
+    req: JsonRpcRequest,
+    state: ConnectionState,
+    socket: net.Socket,
+  ): JsonRpcResponse {
     const params = req.params ?? {};
     const name = typeof params.name === "string" ? params.name : "anonymous";
     const emoji = typeof params.emoji === "string" ? params.emoji : "";
     const pid = typeof params.pid === "number" ? params.pid : 0;
+    const stableId = typeof params.stableId === "string" ? params.stableId : undefined;
     const metadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
         : undefined;
 
-    const agentId = state.agentId ?? crypto.randomUUID();
-    const agent = this.db.registerAgent(agentId, name, emoji, pid, metadata);
-    state.agentId = agentId;
+    const candidateId = state.agentId ?? crypto.randomUUID();
+    const agent = this.db.registerAgent(candidateId, name, emoji, pid, metadata, stableId);
+    this.disconnectDuplicateConnections(agent.id, socket);
+    state.agentId = agent.id;
 
     return rpcOk(req.id, { agentId: agent.id, name: agent.name, emoji: agent.emoji });
   }
@@ -302,6 +360,15 @@ export class BrokerSocketServer {
     this.db.unregisterAgent(state.agentId);
     state.agentId = null;
 
+    return rpcOk(req.id, { ok: true });
+  }
+
+  private handleHeartbeat(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    this.db.heartbeatAgent(state.agentId);
     return rpcOk(req.id, { ok: true });
   }
 

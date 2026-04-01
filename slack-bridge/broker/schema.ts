@@ -16,13 +16,16 @@ import type {
 
 interface AgentRow {
   id: string;
+  stable_id: string | null;
   name: string;
   emoji: string;
   pid: number;
   connected_at: string;
   last_seen: string;
+  last_heartbeat: string;
   metadata: string | null;
   status: string;
+  disconnected_at: string | null;
 }
 
 interface ThreadRow {
@@ -44,6 +47,7 @@ function rowToAgent(row: AgentRow): AgentInfo {
     pid: row.pid,
     connectedAt: row.connected_at,
     lastSeen: row.last_seen,
+    lastHeartbeat: row.last_heartbeat,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     status: row.status === "working" ? "working" : "idle",
   };
@@ -89,12 +93,16 @@ export class BrokerDB implements BrokerDBInterface {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
         name TEXT NOT NULL,
         emoji TEXT NOT NULL,
         pid INTEGER NOT NULL,
         connected_at TEXT NOT NULL,
         last_seen TEXT NOT NULL,
-        metadata TEXT
+        last_heartbeat TEXT NOT NULL,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT
       );
 
       CREATE TABLE IF NOT EXISTS threads (
@@ -131,9 +139,19 @@ export class BrokerDB implements BrokerDBInterface {
         ON inbox(agent_id, delivered, created_at);
       CREATE INDEX IF NOT EXISTS idx_inbox_message
         ON inbox(message_id);
+      CREATE INDEX IF NOT EXISTS idx_agents_last_heartbeat
+        ON agents(last_heartbeat);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_stable_id
+        ON agents(stable_id)
+        WHERE stable_id IS NOT NULL;
     `);
 
     // Migrations
+    try {
+      this.db.exec("ALTER TABLE agents ADD COLUMN stable_id TEXT");
+    } catch {
+      /* exists */
+    }
     try {
       this.db.exec("ALTER TABLE agents ADD COLUMN metadata TEXT");
     } catch {
@@ -144,22 +162,43 @@ export class BrokerDB implements BrokerDBInterface {
     } catch {
       /* exists */
     }
+    try {
+      this.db.exec("ALTER TABLE agents ADD COLUMN last_heartbeat TEXT");
+    } catch {
+      /* exists */
+    }
+    try {
+      this.db.exec("ALTER TABLE agents ADD COLUMN disconnected_at TEXT");
+    } catch {
+      /* exists */
+    }
 
-    // Clean up stale agents (dead PIDs) and release their thread ownership
+    this.db.exec(`
+      UPDATE agents
+      SET last_heartbeat = COALESCE(last_heartbeat, last_seen)
+      WHERE last_heartbeat IS NULL
+    `);
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_stable_id
+      ON agents(stable_id)
+      WHERE stable_id IS NOT NULL
+    `);
+
+    // Startup cleanup: mark rows with dead PIDs as disconnected, but keep
+    // their identity so they can resume briefly on reconnect.
     this.cleanStaleAgents();
   }
 
   /**
-   * Remove agents whose PID is no longer running and
-   * release ownership of their threads.
+   * Mark agents whose PID is no longer running as disconnected.
+   * Thread claims are kept for a short resumption window and released later
+   * by heartbeat-based stale pruning.
    */
   cleanStaleAgents(): void {
-    const db = this.getDb();
     const agents = this.getAgents();
     for (const agent of agents) {
       if (!isProcessRunning(agent.pid)) {
-        db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?").run(agent.id);
-        db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
+        this.unregisterAgent(agent.id);
       }
     }
   }
@@ -179,44 +218,63 @@ export class BrokerDB implements BrokerDBInterface {
     emoji: string,
     pid: number,
     metadata?: Record<string, unknown>,
+    stableId?: string,
   ): AgentInfo {
     const db = this.getDb();
     const now = new Date().toISOString();
+    const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
+    const agentId = existing?.id ?? id;
+    const finalName = existing?.name ?? name;
+    const finalEmoji = existing?.emoji ?? emoji;
+    const persistedStableId = stableId ?? existing?.stable_id ?? null;
     const meta = metadata ? JSON.stringify(metadata) : null;
+
     db.prepare(
-      `INSERT INTO agents (id, name, emoji, pid, connected_at, last_seen, metadata, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'idle')
+      `INSERT INTO agents (
+         id, stable_id, name, emoji, pid,
+         connected_at, last_seen, last_heartbeat,
+         metadata, status, disconnected_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', NULL)
        ON CONFLICT(id) DO UPDATE SET
+         stable_id = COALESCE(excluded.stable_id, agents.stable_id),
          name = excluded.name,
          emoji = excluded.emoji,
          pid = excluded.pid,
          connected_at = excluded.connected_at,
          last_seen = excluded.last_seen,
+         last_heartbeat = excluded.last_heartbeat,
          metadata = excluded.metadata,
-         status = 'idle'`,
-    ).run(id, name, emoji, pid, now, now, meta);
+         status = 'idle',
+         disconnected_at = NULL`,
+    ).run(agentId, persistedStableId, finalName, finalEmoji, pid, now, now, now, meta);
 
     return {
-      id,
-      name,
-      emoji,
+      id: agentId,
+      name: finalName,
+      emoji: finalEmoji,
       pid,
       connectedAt: now,
       lastSeen: now,
+      lastHeartbeat: now,
       metadata: metadata ?? null,
       status: "idle" as const,
     };
   }
 
   unregisterAgent(id: string): void {
-    const db = this.getDb();
-    db.prepare("DELETE FROM agents WHERE id = ?").run(id);
+    this.markAgentDisconnected(id);
+  }
+
+  getAgentById(id: string): AgentInfo | null {
+    const row = this.getAgentRowById(id);
+    return row ? rowToAgent(row) : null;
   }
 
   getAgents(): AgentInfo[] {
     const db = this.getDb();
     const rows = db
-      .prepare("SELECT * FROM agents ORDER BY connected_at ASC")
+      .prepare("SELECT * FROM agents WHERE disconnected_at IS NULL ORDER BY connected_at ASC")
       .all() as unknown as AgentRow[];
     return rows.map(rowToAgent);
   }
@@ -226,6 +284,39 @@ export class BrokerDB implements BrokerDBInterface {
     db.prepare("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), id);
   }
 
+  heartbeatAgent(id: string): void {
+    const db = this.getDb();
+    db.prepare("UPDATE agents SET last_heartbeat = ?, disconnected_at = NULL WHERE id = ?").run(
+      new Date().toISOString(),
+      id,
+    );
+  }
+
+  pruneStaleAgents(staleAfterMs: number): string[] {
+    const db = this.getDb();
+    const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
+    const now = new Date().toISOString();
+    const staleRows = db.prepare("SELECT id FROM agents WHERE last_heartbeat <= ?").all(cutoff) as
+      | Array<{ id: string }>
+      | undefined;
+
+    if (!staleRows || staleRows.length === 0) {
+      return [];
+    }
+
+    const disconnectAgent = db.prepare(
+      "UPDATE agents SET disconnected_at = COALESCE(disconnected_at, ?) WHERE id = ?",
+    );
+    const releaseClaims = db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?");
+
+    for (const row of staleRows) {
+      disconnectAgent.run(now, row.id);
+      releaseClaims.run(row.id);
+    }
+
+    return staleRows.map((row) => row.id);
+  }
+
   updateAgentStatus(id: string, status: "working" | "idle"): void {
     const db = this.getDb();
     db.prepare("UPDATE agents SET status = ?, last_seen = ? WHERE id = ?").run(
@@ -233,6 +324,28 @@ export class BrokerDB implements BrokerDBInterface {
       new Date().toISOString(),
       id,
     );
+  }
+
+  private markAgentDisconnected(id: string): void {
+    const db = this.getDb();
+    db.prepare("UPDATE agents SET disconnected_at = ? WHERE id = ?").run(
+      new Date().toISOString(),
+      id,
+    );
+  }
+
+  private getAgentRowById(id: string): AgentRow | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow | undefined;
+    return row ?? null;
+  }
+
+  private getAgentRowByStableId(stableId: string): AgentRow | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT * FROM agents WHERE stable_id = ?").get(stableId) as
+      | AgentRow
+      | undefined;
+    return row ?? null;
   }
 
   // ─── Threads ─────────────────────────────────────────
