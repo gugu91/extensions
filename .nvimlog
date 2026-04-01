@@ -3,3 +3,4 @@ WRN 2026-03-18T14:00:58.078 ?.12758    server_start:193: Failed to start server:
 WRN 2026-03-18T17:15:27.848 ?.75043    server_start:193: Failed to start server: operation not permitted: /tmp/claude/nvim.guglielmoporcellini/VQPseS/nvim.75043.0
 WRN 2026-03-18T17:25:49.603 ?.95825    server_start:193: Failed to start server: operation not permitted: /tmp/claude/nvim.guglielmoporcellini/OJUsMQ/nvim.95825.0
 WRN 2026-03-18T17:28:36.733 ?.3387     server_start:193: Failed to start server: operation not permitted: /tmp/claude/nvim.guglielmoporcellini/D9cSZ2/nvim.3387.0
+WRN 2026-04-01T17:12:02.619 ?.26445    server_start:193: Failed to start server: operation not permitted: /tmp/claude/nvim.guglielmoporcellini/u7CSKJ/nvim.26445.0

@@ -245,23 +245,29 @@ export class BrokerDB implements BrokerDBInterface {
       WHERE stable_id IS NOT NULL
     `);
 
-    // Startup cleanup: mark rows with dead PIDs as disconnected, but keep
-    // their identity so they can resume briefly on reconnect.
-    this.cleanStaleAgents();
+    // Broker startup reconciliation: any connected rows belong to a previous
+    // broker session, so mark them resumably disconnected and wait for workers
+    // to reconnect by stableId.
+    this.reconcileStartupAgents();
   }
 
   /**
-   * Mark agents whose PID is no longer running as resumably disconnected.
-   * Thread claims are kept for a short resumption window and released later
-   * by heartbeat-based stale pruning.
+   * Mark all previously connected agents as resumably disconnected on broker
+   * startup. Their inbox/thread ownership stays intact during the lease window
+   * so reconnecting workers can resume by stableId.
    */
-  cleanStaleAgents(): void {
-    const agents = this.getAgents();
-    for (const agent of agents) {
-      if (!isProcessRunning(agent.pid)) {
-        this.disconnectAgent(agent.id);
-      }
-    }
+  reconcileStartupAgents(resumableForMs = DEFAULT_RESUMABLE_WINDOW_MS): void {
+    const db = this.getDb();
+    const now = new Date();
+    const disconnectedAt = now.toISOString();
+    const resumableUntil = new Date(now.getTime() + resumableForMs).toISOString();
+
+    db.prepare(
+      `UPDATE agents
+       SET disconnected_at = ?,
+           resumable_until = COALESCE(resumable_until, ?)
+       WHERE disconnected_at IS NULL`,
+    ).run(disconnectedAt, resumableUntil);
   }
 
   close(): void {
@@ -284,10 +290,11 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const now = new Date().toISOString();
     const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
+    const existingById = this.getAgentRowById(existing?.id ?? id);
     const agentId = existing?.id ?? id;
-    const finalName = existing?.name ?? name;
+    const finalName = existing?.name ?? this.ensureUniqueAgentName(name, agentId);
     const finalEmoji = existing?.emoji ?? emoji;
-    const persistedStableId = stableId ?? existing?.stable_id ?? null;
+    const persistedStableId = stableId ?? existing?.stable_id ?? existingById?.stable_id ?? null;
     const meta = metadata ? JSON.stringify(metadata) : null;
 
     db.prepare(
@@ -423,6 +430,25 @@ export class BrokerDB implements BrokerDBInterface {
       new Date().toISOString(),
       id,
     );
+  }
+
+  private ensureUniqueAgentName(name: string, agentId: string): string {
+    const db = this.getDb();
+    const baseName = name.trim() || "Agent";
+    let candidate = baseName;
+    let suffix = 2;
+
+    while (true) {
+      const row = db.prepare("SELECT id FROM agents WHERE lower(name) = lower(?) AND id != ? LIMIT 1").get(
+        candidate,
+        agentId,
+      ) as { id: string } | undefined;
+      if (!row) {
+        return candidate;
+      }
+      candidate = `${baseName} ${suffix}`;
+      suffix += 1;
+    }
   }
 
   private getAgentRowById(id: string): AgentRow | null {
@@ -961,11 +987,3 @@ export class BrokerDB implements BrokerDBInterface {
   }
 }
 
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
