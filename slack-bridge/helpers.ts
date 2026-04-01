@@ -601,6 +601,21 @@ export function buildRalphLoopNudgeMessage(
   return `RALPH LOOP nudge: you appear idle but still have ${workload}. Please pick it up, post a status update, or release ownership so the broker can reassign it.`;
 }
 
+export function buildRalphLoopFollowUpMessage(
+  evaluation: RalphLoopEvaluationResult,
+): string | null {
+  if (evaluation.anomalies.length === 0) {
+    return null;
+  }
+
+  return [
+    "RALPH LOOP CYCLE:",
+    ...evaluation.anomalies.map((anomaly) => `- ${anomaly}`),
+    "",
+    "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+  ].join("\n");
+}
+
 export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: string): string[] {
   return [
     `You are ${agentEmoji} ${agentName}, the Pinet BROKER. Your role is coordination, not coding.`,

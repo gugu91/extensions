@@ -13,6 +13,7 @@ import {
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   buildRalphLoopNudgeMessage,
+  buildRalphLoopFollowUpMessage,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
   resolvePersistedAgentIdentity,
@@ -780,6 +781,43 @@ describe("evaluateRalphLoopCycle", () => {
 describe("buildRalphLoopNudgeMessage", () => {
   it("formats pending inbox and claimed thread counts", () => {
     expect(buildRalphLoopNudgeMessage(2, 1)).toContain("2 inbox items and 1 claimed thread");
+  });
+});
+
+describe("buildRalphLoopFollowUpMessage", () => {
+  it("formats actionable anomalies into a broker follow-up prompt", () => {
+    expect(
+      buildRalphLoopFollowUpMessage({
+        ghostAgentIds: ["ghost-1"],
+        nudgeAgentIds: ["idle-1"],
+        idleDrainAgentIds: ["ready-1"],
+        anomalies: [
+          "ghost agents detected: ghost-1",
+          "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+          "main checkout is on `feat/not-main`, expected `main`",
+        ],
+      }),
+    ).toBe(
+      [
+        "RALPH LOOP CYCLE:",
+        "- ghost agents detected: ghost-1",
+        "- Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+        "- main checkout is on `feat/not-main`, expected `main`",
+        "",
+        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+      ].join("\n"),
+    );
+  });
+
+  it("returns null when there is nothing actionable", () => {
+    expect(
+      buildRalphLoopFollowUpMessage({
+        ghostAgentIds: [],
+        nudgeAgentIds: [],
+        idleDrainAgentIds: [],
+        anomalies: [],
+      }),
+    ).toBeNull();
   });
 });
 

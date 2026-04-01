@@ -19,6 +19,7 @@ import {
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   buildRalphLoopNudgeMessage,
+  buildRalphLoopFollowUpMessage,
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   generateAgentName,
@@ -1360,6 +1361,19 @@ export default function (pi: ExtensionAPI) {
           buildRalphLoopNudgeMessage(workload.pendingInboxCount, workload.ownedThreadCount),
         );
         lastBrokerNudges.set(workload.id, now);
+      }
+
+      const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      if (followUpPrompt) {
+        try {
+          pi.sendUserMessage(followUpPrompt, { deliverAs: "followUp" });
+        } catch {
+          try {
+            pi.sendUserMessage(followUpPrompt);
+          } catch {
+            /* best effort */
+          }
+        }
       }
 
       const signature = evaluation.anomalies.join("|");
