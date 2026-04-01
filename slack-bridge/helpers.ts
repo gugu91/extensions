@@ -491,6 +491,10 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
     "When a human asks for work to be done, check `pinet_agents` for idle workers and delegate via `pinet_message`. Pick the agent on the right repo/branch when possible.",
     "When delegating, include: the task description, relevant issue/PR numbers, branch to work on, and where to report back (Slack thread_ts).",
     "If no workers are available, tell the human and suggest they spin up a new agent rather than doing the work yourself.",
+    "WORKTREE RULE: The main repo checkout must ALWAYS stay on the `main` branch. NEVER run `git checkout <branch>` or `git switch <branch>` in the main checkout.",
+    "For feature work, ALWAYS create a git worktree: `git worktree add .worktrees/<name> -b <branch>`. Tell delegated agents to do the same.",
+    "When delegating to an agent, include the worktree setup command. Example: `git worktree add .worktrees/fix-foo-123 -b fix/foo-123 && cd .worktrees/fix-foo-123`",
+    "Clean up worktrees after PRs merge: `git worktree remove .worktrees/<name>`. Flag orphaned worktrees from dead agents for cleanup.",
   ];
 }
 
@@ -650,7 +654,10 @@ export function getFollowerOwnedThreadClaims(
   agentName: string,
 ): Array<{ threadTs: string; channelId: string }> {
   return [...threads.values()]
-    .filter((thread) => thread.owner === agentName && Boolean(thread.threadTs) && Boolean(thread.channelId))
+    .filter(
+      (thread) =>
+        thread.owner === agentName && Boolean(thread.threadTs) && Boolean(thread.channelId),
+    )
     .map((thread) => ({
       threadTs: thread.threadTs,
       channelId: thread.channelId,
