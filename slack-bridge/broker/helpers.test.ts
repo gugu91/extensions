@@ -151,14 +151,7 @@ describe("BrokerDB", () => {
 
   it("registerAgent enforces unique names for different identities", () => {
     const first = db.registerAgent("a1", "Hyper Owl", "🦉", 100, undefined, "host:session:/tmp/a");
-    const second = db.registerAgent(
-      "a2",
-      "Hyper Owl",
-      "🦎",
-      200,
-      undefined,
-      "host:session:/tmp/b",
-    );
+    const second = db.registerAgent("a2", "Hyper Owl", "🦎", 200, undefined, "host:session:/tmp/b");
 
     expect(first.name).toBe("Hyper Owl");
     expect(second.name).toBe("Hyper Owl 2");

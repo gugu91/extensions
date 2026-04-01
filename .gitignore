@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .pnpm-store/
+.turbo/
 .DS_Store
 *.log
 .nvimlog

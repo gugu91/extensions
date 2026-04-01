@@ -1,3 +1,4 @@
 node_modules
 dist
+.turbo
 nvim-bridge/nvim/**/*.lua

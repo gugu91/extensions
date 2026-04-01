@@ -165,7 +165,12 @@ export class BrokerClient {
     metadata?: Record<string, unknown>,
     stableId?: string,
   ): Promise<{ agentId: string; name: string; emoji: string }> {
-    this.registrationSnapshot = { name, emoji, ...(metadata ? { metadata } : {}), ...(stableId ? { stableId } : {}) };
+    this.registrationSnapshot = {
+      name,
+      emoji,
+      ...(metadata ? { metadata } : {}),
+      ...(stableId ? { stableId } : {}),
+    };
     return this.performRegister(this.registrationSnapshot);
   }
 

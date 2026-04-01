@@ -28,6 +28,9 @@ importers:
       prettier:
         specifier: ^3.5.1
         version: 3.8.1
+      turbo:
+        specifier: ^2.5.4
+        version: 2.9.3
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
@@ -37,6 +40,14 @@ importers:
       vitest:
         specifier: ^4.1.2
         version: 4.1.2(@types/node@22.19.11)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.11)(yaml@2.8.2))
+
+  neon-psql: {}
+
+  nvim-bridge: {}
+
+  slack-bridge: {}
+
+  types: {}
 
 packages:
   "@emnapi/core@1.9.1":
@@ -316,6 +327,54 @@ packages:
       {
         integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==,
       }
+
+  "@turbo/darwin-64@2.9.3":
+    resolution:
+      {
+        integrity: sha512-P8foouaP+y/p+hhEGBoZpzMbpVvUMwPjDpcy6wN7EYfvvyISD1USuV27qWkczecihwuPJzQ1lDBuL8ERcavTyg==,
+      }
+    cpu: [x64]
+    os: [darwin]
+
+  "@turbo/darwin-arm64@2.9.3":
+    resolution:
+      {
+        integrity: sha512-SIzEkvtNdzdI50FJDaIQ6kQGqgSSdFPcdn0wqmmONN6iGKjy6hsT+EH99GP65FsfV7DLZTh2NmtTIRl2kdoz5Q==,
+      }
+    cpu: [arm64]
+    os: [darwin]
+
+  "@turbo/linux-64@2.9.3":
+    resolution:
+      {
+        integrity: sha512-pLRwFmcHHNBvsCySLS6OFabr/07kDT2pxEt/k6eBf/3asiVQZKJ7Rk88AafQx2aYA641qek4RsXvYO3JYpiBug==,
+      }
+    cpu: [x64]
+    os: [linux]
+
+  "@turbo/linux-arm64@2.9.3":
+    resolution:
+      {
+        integrity: sha512-gy6ApUroC2Nzv+qjGtE/uPNkhHAFU4c8God+zd5Aiv9L9uBgHlxVJpHT3XWl5xwlJZ2KWuMrlHTaS5kmNB+q1Q==,
+      }
+    cpu: [arm64]
+    os: [linux]
+
+  "@turbo/windows-64@2.9.3":
+    resolution:
+      {
+        integrity: sha512-d0YelTX6hAsB7kIEtGB3PzIzSfAg3yDoUlHwuwJc3adBXUsyUIs0YLG+1NNtuhcDOUGnWQeKUoJ2pGWvbpRj7w==,
+      }
+    cpu: [x64]
+    os: [win32]
+
+  "@turbo/windows-arm64@2.9.3":
+    resolution:
+      {
+        integrity: sha512-/08CwpKJl3oRY8nOlh2YgilZVJDHsr60XTNxRhuDeuFXONpUZ5X+Nv65izbG/xBew9qxcJFbDX9/sAmAX+ITcQ==,
+      }
+    cpu: [arm64]
+    os: [win32]
 
   "@tybys/wasm-util@0.10.1":
     resolution:
@@ -1520,6 +1579,13 @@ packages:
         integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==,
       }
 
+  turbo@2.9.3:
+    resolution:
+      {
+        integrity: sha512-J/VUvsGRykPb9R8Kh8dHVBOqioDexLk9BhLCU/ZybRR+HN9UR3cURdazFvNgMDt9zPP8TF6K73Z+tplfmi0PqQ==,
+      }
+    hasBin: true
+
   type-check@0.4.0:
     resolution:
       {
@@ -1824,6 +1890,24 @@ snapshots:
   "@rolldown/pluginutils@1.0.0-rc.12": {}
 
   "@standard-schema/spec@1.1.0": {}
+
+  "@turbo/darwin-64@2.9.3":
+    optional: true
+
+  "@turbo/darwin-arm64@2.9.3":
+    optional: true
+
+  "@turbo/linux-64@2.9.3":
+    optional: true
+
+  "@turbo/linux-arm64@2.9.3":
+    optional: true
+
+  "@turbo/windows-64@2.9.3":
+    optional: true
+
+  "@turbo/windows-arm64@2.9.3":
+    optional: true
 
   "@tybys/wasm-util@0.10.1":
     dependencies:
@@ -2504,6 +2588,15 @@ snapshots:
 
   tslib@2.8.1:
     optional: true
+
+  turbo@2.9.3:
+    optionalDependencies:
+      "@turbo/darwin-64": 2.9.3
+      "@turbo/darwin-arm64": 2.9.3
+      "@turbo/linux-64": 2.9.3
+      "@turbo/linux-arm64": 2.9.3
+      "@turbo/windows-64": 2.9.3
+      "@turbo/windows-arm64": 2.9.3
 
   type-check@0.4.0:
     dependencies:

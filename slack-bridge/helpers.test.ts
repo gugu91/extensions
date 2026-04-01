@@ -771,7 +771,11 @@ describe("resolveAgentIdentity", () => {
   });
 
   it("ignores settings when only agentName is set (no emoji)", () => {
-    const result = resolveAgentIdentity({ agentName: "Half Config" }, undefined, "/tmp/pi/session-a.json");
+    const result = resolveAgentIdentity(
+      { agentName: "Half Config" },
+      undefined,
+      "/tmp/pi/session-a.json",
+    );
     // Should fall through to generated name since agentEmoji is missing
     expect(result.name).not.toBe("Half Config");
   });

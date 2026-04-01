@@ -1,0 +1,24 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "lint": {
+      "inputs": ["**/*.ts", "eslint.config.mjs", "../eslint.config.mjs"],
+      "outputs": []
+    },
+    "typecheck": {
+      "inputs": ["**/*.ts", "tsconfig.json", "../tsconfig.json", "../types/**/*.d.ts"],
+      "outputs": []
+    },
+    "test": {
+      "inputs": [
+        "**/*.ts",
+        "**/*.test.ts",
+        "vitest.config.ts",
+        "../vitest.config.ts",
+        "../pnpm-lock.yaml"
+      ],
+      "outputs": [],
+      "passThroughEnv": ["TMPDIR"]
+    }
+  }
+}

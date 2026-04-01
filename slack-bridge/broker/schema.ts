@@ -439,10 +439,9 @@ export class BrokerDB implements BrokerDBInterface {
     let suffix = 2;
 
     while (true) {
-      const row = db.prepare("SELECT id FROM agents WHERE lower(name) = lower(?) AND id != ? LIMIT 1").get(
-        candidate,
-        agentId,
-      ) as { id: string } | undefined;
+      const row = db
+        .prepare("SELECT id FROM agents WHERE lower(name) = lower(?) AND id != ? LIMIT 1")
+        .get(candidate, agentId) as { id: string } | undefined;
       if (!row) {
         return candidate;
       }
@@ -986,4 +985,3 @@ export class BrokerDB implements BrokerDBInterface {
     return this.db;
   }
 }
-
