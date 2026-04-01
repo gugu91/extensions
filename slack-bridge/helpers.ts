@@ -495,6 +495,19 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
     "For feature work, ALWAYS create a git worktree: `git worktree add .worktrees/<name> -b <branch>`. Tell delegated agents to do the same.",
     "When delegating to an agent, include the worktree setup command. Example: `git worktree add .worktrees/fix-foo-123 -b fix/foo-123 && cd .worktrees/fix-foo-123`",
     "Clean up worktrees after PRs merge: `git worktree remove .worktrees/<name>`. Flag orphaned worktrees from dead agents for cleanup.",
+    "RALPH LOOP: Run autonomous maintenance every cycle. Don't wait to be asked. Proactively: (1) REAP — ping idle agents, mark non-responders as ghost. (2) NUDGE — check assigned work, poll branches for commits, escalate stalled agents. (3) REASSIGN — if an assigned agent is dead, reassign to next idle agent immediately. (4) DRAIN — find idle agents with no work, assign queued tasks. (5) SELF-REPAIR — verify main is on `main`, check mesh health, report anomalies.",
+  ];
+}
+
+export function buildWorkerPromptGuidelines(): string[] {
+  return [
+    "WORKTREE RULE: NEVER work directly on the `main` branch or checkout feature branches in the main repo directory.",
+    "ALWAYS create a git worktree for your work: `git worktree add .worktrees/<name> -b <branch>` and `cd` into it before making changes.",
+    "If you are already in a worktree, stay there. Do not `cd` back to the main checkout to run git commands.",
+    "When your PR is merged, clean up: `git worktree remove .worktrees/<name>` from the main checkout.",
+    "NEVER run `git checkout <branch>` or `git switch <branch>` in the main repo checkout. The main checkout must always be on `main`.",
+    "Always run validation before pushing: `pnpm lint && pnpm typecheck && pnpm test`.",
+    "Report progress in your assigned Slack thread. If you hit a blocker, say so immediately — don't go silent.",
   ];
 }
 
