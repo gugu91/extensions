@@ -20,3 +20,7 @@ See project-specific docs in:
 pnpm install
 pnpm check
 ```
+
+## Test policy
+
+See [`plans/test-policy.md`](plans/test-policy.md) for merge-ready test expectations and the required smoke checklist.
