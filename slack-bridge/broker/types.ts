@@ -45,6 +45,20 @@ export interface ChannelAssignment {
   agentId: string;
 }
 
+export interface BacklogEntry {
+  id: number;
+  threadId: string;
+  channel: string;
+  messageId: number;
+  reason: string;
+  status: "pending" | "assigned" | "dropped";
+  assignedAgentId: string | null;
+  attemptCount: number;
+  lastAttemptAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Routing ──────────────────────────────────────────────
 
 export type RoutingDecision =

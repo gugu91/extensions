@@ -197,6 +197,40 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")).not.toBeNull();
   });
 
+  it("queueUnroutedMessage persists pending backlog without assigning an owner", () => {
+    const backlog = db.queueUnroutedMessage(
+      {
+        source: "slack",
+        threadId: "t-unrouted",
+        channel: "C1",
+        userId: "U1",
+        text: "hello backlog",
+        timestamp: "100.200",
+      },
+      "no_route",
+    );
+
+    expect(backlog.threadId).toBe("t-unrouted");
+    expect(backlog.status).toBe("pending");
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getThread("t-unrouted")?.ownerAgent).toBeNull();
+  });
+
+  it("requeueUndeliveredMessages moves pending slack work back into backlog", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    db.createThread("t-requeue", "slack", "C1", "worker-1");
+    db.insertMessage("t-requeue", "slack", "inbound", "U1", "hello", ["worker-1"], {
+      channel: "C1",
+    });
+
+    const moved = db.requeueUndeliveredMessages("worker-1");
+
+    expect(moved).toBe(1);
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue");
+  });
+
   it("createThread and getThread", () => {
     const thread = db.createThread("t1", "slack", "#general", "a1");
     expect(thread.threadId).toBe("t1");

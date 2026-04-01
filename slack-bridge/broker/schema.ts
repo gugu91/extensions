@@ -7,6 +7,7 @@ import type {
   ThreadInfo,
   BrokerMessage,
   InboxEntry,
+  BacklogEntry,
   BrokerDBInterface,
   InboundMessage,
   ChannelAssignment,
@@ -37,6 +38,20 @@ interface ThreadRow {
   updated_at: string;
 }
 
+interface BacklogRow {
+  id: number;
+  thread_id: string;
+  channel: string;
+  message_id: number;
+  reason: string;
+  status: string;
+  assigned_agent_id: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Mappers ─────────────────────────────────────────────
 
 function rowToAgent(row: AgentRow): AgentInfo {
@@ -59,6 +74,23 @@ function rowToThread(row: ThreadRow): ThreadInfo {
     source: row.source,
     channel: row.channel,
     ownerAgent: row.owner_agent,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToBacklog(row: BacklogRow): BacklogEntry {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    channel: row.channel,
+    messageId: row.message_id,
+    reason: row.reason,
+    status:
+      row.status === "assigned" ? "assigned" : row.status === "dropped" ? "dropped" : "pending",
+    assignedAgentId: row.assigned_agent_id,
+    attemptCount: row.attempt_count,
+    lastAttemptAt: row.last_attempt_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -133,12 +165,30 @@ export class BrokerDB implements BrokerDBInterface {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS unrouted_backlog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        message_id INTEGER NOT NULL UNIQUE,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
+        assigned_agent_id TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_thread
         ON messages(thread_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_inbox_agent_delivered
         ON inbox(agent_id, delivered, created_at);
       CREATE INDEX IF NOT EXISTS idx_inbox_message
         ON inbox(message_id);
+      CREATE INDEX IF NOT EXISTS idx_backlog_status_created
+        ON unrouted_backlog(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_backlog_thread_status
+        ON unrouted_backlog(thread_id, status);
       CREATE INDEX IF NOT EXISTS idx_agents_last_heartbeat
         ON agents(last_heartbeat);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_stable_id
@@ -296,11 +346,11 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
     const now = new Date().toISOString();
-    const staleRows = db.prepare("SELECT id FROM agents WHERE last_heartbeat <= ?").all(cutoff) as
-      | Array<{ id: string }>
-      | undefined;
+    const staleRows = db
+      .prepare("SELECT id FROM agents WHERE disconnected_at IS NULL AND last_heartbeat <= ?")
+      .all(cutoff) as Array<{ id: string }>;
 
-    if (!staleRows || staleRows.length === 0) {
+    if (staleRows.length === 0) {
       return [];
     }
 
@@ -310,6 +360,7 @@ export class BrokerDB implements BrokerDBInterface {
     const releaseClaims = db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?");
 
     for (const row of staleRows) {
+      this.requeueUndeliveredMessages(row.id, "agent_disconnected");
       disconnectAgent.run(now, row.id);
       releaseClaims.run(row.id);
     }
@@ -461,6 +512,161 @@ export class BrokerDB implements BrokerDBInterface {
     return rows.map(rowToThread);
   }
 
+  getPendingBacklog(limit = 50): BacklogEntry[] {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT * FROM unrouted_backlog
+         WHERE status = 'pending'
+         ORDER BY created_at ASC
+         LIMIT ?`,
+      )
+      .all(limit) as unknown as BacklogRow[];
+    return rows.map(rowToBacklog);
+  }
+
+  getBacklogCount(status: BacklogEntry["status"] = "pending"): number {
+    const db = this.getDb();
+    const row = db
+      .prepare("SELECT COUNT(*) AS count FROM unrouted_backlog WHERE status = ?")
+      .get(status) as { count: number };
+    return row.count;
+  }
+
+  queueUnroutedMessage(message: InboundMessage, reason = "no_route"): BacklogEntry {
+    const metadata: Record<string, unknown> = {
+      ...message.metadata,
+      channel: message.channel,
+      userName: message.userName,
+      userId: message.userId,
+      timestamp: message.timestamp,
+      ...(message.isChannelMention ? { isChannelMention: true } : {}),
+    };
+
+    const existingThread = this.getThread(message.threadId);
+    if (!existingThread) {
+      this.createThread(message.threadId, message.source, message.channel, null);
+    } else {
+      this.updateThread(message.threadId, {
+        channel: message.channel,
+        source: message.source,
+        ownerAgent: null,
+      });
+    }
+
+    const brokerMessage = this.insertMessage(
+      message.threadId,
+      message.source,
+      "inbound",
+      message.userId,
+      message.text,
+      [],
+      metadata,
+    );
+
+    return this.upsertBacklogEntry(
+      brokerMessage.id,
+      message.threadId,
+      message.channel,
+      reason,
+      "pending",
+      null,
+    );
+  }
+
+  assignBacklogEntry(id: number, agentId: string): BacklogEntry | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT * FROM unrouted_backlog WHERE id = ?").get(id) as
+      | BacklogRow
+      | undefined;
+    if (!row) return null;
+
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
+       VALUES (?, ?, 0, ?)`,
+    ).run(agentId, row.message_id, now);
+
+    db.prepare(
+      `UPDATE unrouted_backlog
+       SET status = 'assigned',
+           assigned_agent_id = ?,
+           attempt_count = attempt_count + 1,
+           last_attempt_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(agentId, now, now, id);
+
+    this.updateThread(row.thread_id, { ownerAgent: agentId, channel: row.channel });
+
+    return this.getBacklogById(id);
+  }
+
+  requeueUndeliveredMessages(agentId: string, reason = "agent_disconnected"): number {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT
+           i.id AS inbox_id,
+           m.id AS message_id,
+           m.thread_id AS thread_id,
+           m.metadata AS metadata
+         FROM inbox i
+         JOIN messages m ON m.id = i.message_id
+         WHERE i.agent_id = ?
+           AND i.delivered = 0
+           AND m.direction = 'inbound'
+           AND m.source = 'slack'`,
+      )
+      .all(agentId) as Array<{
+      inbox_id: number;
+      message_id: number;
+      thread_id: string;
+      metadata: string | null;
+    }>;
+
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const markDelivered = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
+    for (const row of rows) {
+      const metadata = row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {};
+      const channel = typeof metadata.channel === "string" ? metadata.channel : "";
+      this.upsertBacklogEntry(row.message_id, row.thread_id, channel, reason, "pending", null);
+      markDelivered.run(row.inbox_id);
+    }
+
+    return rows.length;
+  }
+
+  getPendingInboxCount(agentId: string): number {
+    const db = this.getDb();
+    const row = db
+      .prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ? AND delivered = 0")
+      .get(agentId) as { count: number };
+    return row.count;
+  }
+
+  releaseThreadClaims(agentId: string): number {
+    const db = this.getDb();
+    const result = db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?").run(agentId);
+    return Number(result.changes ?? 0);
+  }
+
+  repairThreadOwnership(): number {
+    const db = this.getDb();
+    const result = db.prepare(
+      `UPDATE threads
+       SET owner_agent = NULL
+       WHERE owner_agent IS NOT NULL
+         AND owner_agent NOT IN (
+           SELECT id FROM agents WHERE disconnected_at IS NULL
+         )`,
+    ).run();
+    return Number(result.changes ?? 0);
+  }
+
   // ─── Messages + Inbox ────────────────────────────────
 
   // ─── Interface-compatible queueMessage (single agent) ──
@@ -604,6 +810,56 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   // ─── Internal ────────────────────────────────────────
+
+  private getBacklogById(id: number): BacklogEntry | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT * FROM unrouted_backlog WHERE id = ?").get(id) as
+      | BacklogRow
+      | undefined;
+    return row ? rowToBacklog(row) : null;
+  }
+
+  private upsertBacklogEntry(
+    messageId: number,
+    threadId: string,
+    channel: string,
+    reason: string,
+    status: BacklogEntry["status"],
+    assignedAgentId: string | null,
+  ): BacklogEntry {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO unrouted_backlog (
+         thread_id,
+         channel,
+         message_id,
+         reason,
+         status,
+         assigned_agent_id,
+         attempt_count,
+         last_attempt_at,
+         created_at,
+         updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+       ON CONFLICT(message_id) DO UPDATE SET
+         thread_id = excluded.thread_id,
+         channel = excluded.channel,
+         reason = excluded.reason,
+         status = excluded.status,
+         assigned_agent_id = excluded.assigned_agent_id,
+         updated_at = excluded.updated_at`,
+    ).run(threadId, channel, messageId, reason, status, assignedAgentId, now, now);
+
+    const row = db.prepare("SELECT * FROM unrouted_backlog WHERE message_id = ?").get(messageId) as
+      | BacklogRow
+      | undefined;
+    if (!row) {
+      throw new Error(`Failed to upsert backlog entry for message ${messageId}`);
+    }
+    return rowToBacklog(row);
+  }
 
   private getDb(): DatabaseSync {
     if (!this.db) {

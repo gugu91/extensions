@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BrokerDB } from "./schema.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import { BrokerClient } from "./client.js";
+import { runBrokerMaintenancePass } from "./maintenance.js";
 import { MessageRouter } from "./router.js";
 
 // ─── Helpers ─────────────────────────────────────────────
@@ -139,6 +140,45 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(agents.length).toBe(2);
     const names = agents.map((a) => a.name).sort();
     expect(names).toEqual(["agent-alpha", "agent-beta"]);
+
+    client2.disconnect();
+  });
+
+  it("maintenance assigns unrouted backlog into a follower inbox", async () => {
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+
+    const brokerReg = await client.register("broker-agent", "🛰️", { role: "broker" });
+
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("worker-agent", "🛠️");
+
+    db.queueUnroutedMessage(
+      {
+        source: "slack",
+        threadId: "t-backlog",
+        channel: "C-BACKLOG",
+        userId: "U1",
+        text: "please help",
+        timestamp: "200.1",
+      },
+      "no_route",
+    );
+
+    const result = runBrokerMaintenancePass(db, {
+      brokerAgentId: brokerReg.agentId,
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(1);
+
+    const inbox = await client2.pollInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].message.threadId).toBe("t-backlog");
+    expect(inbox[0].message.body).toBe("please help");
+    expect(db.getThread("t-backlog")?.ownerAgent).not.toBeNull();
 
     client2.disconnect();
   });
