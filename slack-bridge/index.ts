@@ -17,6 +17,7 @@ import {
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
+  buildIdentityReplyGuidelines,
 } from "./helpers.js";
 import {
   buildSecurityPrompt,
@@ -113,6 +114,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
+  const identityGuidelines = buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
 
   interface ThreadInfo {
     channelId: string;
@@ -698,10 +700,8 @@ export default function (pi: ExtensionAPI) {
       `Your Slack identity is ${agentEmoji} ${agentName} — use this name and emoji when replying in Slack threads.`,
       "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      `First message in a new thread: use exact format — '${agentEmoji} \`${agentName}\` reporting from \`${selfLocation}\`\\n\\n<message body>'`,
-      `Follow-up messages in the same thread: keep the same full identity prefix — '${agentEmoji} \`${agentName}\` <message>'`,
+      ...identityGuidelines,
       "Always use this name and emoji — do not invent a new one.",
-      "Never use emoji-only prefixes (for example, '🦅 Working now') — always include the full identity prefix above on every post.",
       ...(securityPrompt
         ? [
             "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
@@ -1297,8 +1297,6 @@ export default function (pi: ExtensionAPI) {
       pollInterval: null,
     };
 
-    let wasDisconnected = false;
-
     function startPolling(): void {
       if (brokerClientRef.pollInterval) return;
       brokerClientRef.pollInterval = setInterval(async () => {
@@ -1306,47 +1304,18 @@ export default function (pi: ExtensionAPI) {
         try {
           const entries = await client.pollInbox();
           if (entries.length === 0) return;
-
           const ids: number[] = [];
-          let threadStateChanged = false;
-
           for (const entry of entries) {
             const meta = entry.message.metadata ?? {};
-            const threadTs = entry.message.threadId ?? "";
-            const channel =
-              (typeof meta.channel === "string" ? (meta.channel as string) : "") ?? "";
-
-            if (threadTs && channel) {
-              const existing = threads.get(threadTs);
-              if (!existing) {
-                threads.set(threadTs, {
-                  channelId: channel,
-                  threadTs,
-                  userId: entry.message.sender ?? "",
-                  owner: agentName,
-                });
-                threadStateChanged = true;
-              } else if (!existing.owner) {
-                existing.owner = agentName;
-                threadStateChanged = true;
-              }
-            }
-            if (channel) {
-              lastDmChannel = channel;
-              threadStateChanged = true;
-            }
-
             inbox.push({
-              channel,
-              threadTs,
+              channel: (meta.channel as string) ?? "",
+              threadTs: entry.message.threadId ?? "",
               userId: entry.message.sender ?? "",
               text: entry.message.body ?? "",
               timestamp: entry.message.createdAt ?? "",
             });
             ids.push(entry.inboxId);
           }
-          if (threadStateChanged) persistState();
-
           if (ids.length > 0) await client.ackMessages(ids);
           updateBadge();
           if (ctx.isIdle?.()) drainInbox();
@@ -1364,12 +1333,19 @@ export default function (pi: ExtensionAPI) {
     }
 
     client.onDisconnect(() => {
-      wasDisconnected = true;
       stopPolling();
       setExtStatus(ctx, "reconnecting");
-      if (ctx.ui) {
-        ctx.ui.notify("Pinet broker disconnected — reconnecting...", "warning");
-      }
+      ctx.ui.notify("Pinet broker disconnected — reconnecting...", "warning");
+      // Push system message so the LLM knows connectivity was lost
+      inbox.push({
+        channel: "",
+        threadTs: "",
+        userId: "system",
+        text: "Pinet broker connection lost. Auto-reconnecting...",
+        timestamp: String(Date.now() / 1000),
+      });
+      updateBadge();
+      if (ctx.isIdle?.()) drainInbox();
     });
 
     client.onReconnect(() => {
@@ -1378,10 +1354,7 @@ export default function (pi: ExtensionAPI) {
           await client.register(agentName, agentEmoji, getAgentMetadata());
           startPolling();
           setExtStatus(ctx, "ok");
-          if (wasDisconnected) {
-            ctx.ui.notify("Pinet broker reconnected", "info");
-            wasDisconnected = false;
-          }
+          ctx.ui.notify("Pinet broker reconnected", "info");
         } catch {
           // Re-registration failed; the next close event will trigger another reconnect
         }
