@@ -15,8 +15,13 @@ import {
   isChannelId,
   FORM_METHODS,
   resolveAgentIdentity,
+  trackBrokerInboundThread,
+  syncFollowerInboxEntries,
+  isDirectMessageChannel,
+  getFollowerReconnectUiUpdate,
   type InboxMessage,
   type AgentDisplayInfo,
+  type FollowerThreadState,
 } from "./helpers.js";
 
 // ─── loadSettings ─────────────────────────────────────────
@@ -499,5 +504,175 @@ describe("resolveAgentIdentity", () => {
     const result = resolveAgentIdentity({ agentEmoji: "🤖" });
     // Should fall through to generated name since agentName is missing
     expect(result.emoji).not.toBe("🤖");
+  });
+});
+
+// ─── trackBrokerInboundThread ─────────────────────────────
+
+describe("trackBrokerInboundThread", () => {
+  it("adds a new thread to the map for a channel mention", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    trackBrokerInboundThread(
+      threads,
+      { threadId: "1234.5678", channel: "C0APL58LB1R", userId: "U_ALICE" },
+      "TestAgent",
+    );
+    expect(threads.get("1234.5678")).toEqual({
+      channelId: "C0APL58LB1R",
+      threadTs: "1234.5678",
+      userId: "U_ALICE",
+      owner: "TestAgent",
+    });
+  });
+
+  it("does not overwrite an existing thread entry", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      [
+        "1234.5678",
+        { channelId: "C0APL58LB1R", threadTs: "1234.5678", userId: "U_ORIGINAL", owner: "First" },
+      ],
+    ]);
+    trackBrokerInboundThread(
+      threads,
+      { threadId: "1234.5678", channel: "C_OTHER", userId: "U_NEW" },
+      "Second",
+    );
+    expect(threads.get("1234.5678")?.userId).toBe("U_ORIGINAL");
+    expect(threads.get("1234.5678")?.owner).toBe("First");
+  });
+
+  it("is a no-op when threadId is empty", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    trackBrokerInboundThread(threads, { threadId: "", channel: "C123", userId: "U1" });
+    expect(threads.size).toBe(0);
+  });
+
+  it("is a no-op when channel is empty", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    trackBrokerInboundThread(threads, { threadId: "1.1", channel: "", userId: "U1" });
+    expect(threads.size).toBe(0);
+  });
+
+  it("defaults userId to empty string when undefined", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    trackBrokerInboundThread(threads, { threadId: "1.1", channel: "C1" });
+    expect(threads.get("1.1")?.userId).toBe("");
+  });
+});
+
+// ─── isDirectMessageChannel ───────────────────────────────
+
+describe("isDirectMessageChannel", () => {
+  it("recognizes DM channel IDs", () => {
+    expect(isDirectMessageChannel("D0APMDC3GNR")).toBe(true);
+  });
+
+  it("rejects public channel IDs", () => {
+    expect(isDirectMessageChannel("C0APL58LB1R")).toBe(false);
+  });
+
+  it("rejects empty string", () => {
+    expect(isDirectMessageChannel("")).toBe(false);
+  });
+});
+
+// ─── syncFollowerInboxEntries ─────────────────────────────
+
+describe("syncFollowerInboxEntries", () => {
+  it("produces thread updates and inbox messages", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    const result = syncFollowerInboxEntries(
+      [
+        {
+          message: {
+            threadId: "100.1",
+            sender: "U_SENDER",
+            body: "hello",
+            createdAt: "100.1",
+            metadata: { channel: "C_CHAN" },
+          },
+        },
+      ],
+      threads,
+      "MyAgent",
+      null,
+    );
+    expect(result.inboxMessages).toHaveLength(1);
+    expect(result.inboxMessages[0].channel).toBe("C_CHAN");
+    expect(result.threadUpdates).toHaveLength(1);
+    expect(result.threadUpdates[0].channelId).toBe("C_CHAN");
+    expect(result.changed).toBe(true);
+  });
+
+  it("updates lastDmChannel for DM messages", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    const result = syncFollowerInboxEntries(
+      [
+        {
+          message: {
+            threadId: "200.1",
+            sender: "U1",
+            body: "dm",
+            createdAt: "200.1",
+            metadata: { channel: "D0ABC123" },
+          },
+        },
+      ],
+      threads,
+      "Agent",
+      null,
+    );
+    expect(result.lastDmChannel).toBe("D0ABC123");
+  });
+
+  it("returns changed=false when thread already exists with same data", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["300.1", { channelId: "C1", threadTs: "300.1", userId: "U1", owner: "Agent" }],
+    ]);
+    const result = syncFollowerInboxEntries(
+      [
+        {
+          message: {
+            threadId: "300.1",
+            sender: "U1",
+            body: "repeat",
+            createdAt: "300.1",
+            metadata: { channel: "C1" },
+          },
+        },
+      ],
+      threads,
+      "Agent",
+      null,
+    );
+    expect(result.changed).toBe(false);
+  });
+});
+
+// ─── getFollowerReconnectUiUpdate ─────────────────────────
+
+describe("getFollowerReconnectUiUpdate", () => {
+  it("notifies on first disconnect", () => {
+    const result = getFollowerReconnectUiUpdate("disconnect", false);
+    expect(result.nextWasDisconnected).toBe(true);
+    expect(result.notify?.level).toBe("warning");
+  });
+
+  it("suppresses notification on repeated disconnect", () => {
+    const result = getFollowerReconnectUiUpdate("disconnect", true);
+    expect(result.nextWasDisconnected).toBe(true);
+    expect(result.notify).toBeUndefined();
+  });
+
+  it("notifies on reconnect after disconnect", () => {
+    const result = getFollowerReconnectUiUpdate("reconnect", true);
+    expect(result.nextWasDisconnected).toBe(false);
+    expect(result.notify?.level).toBe("info");
+  });
+
+  it("suppresses notification on reconnect when not disconnected", () => {
+    const result = getFollowerReconnectUiUpdate("reconnect", false);
+    expect(result.nextWasDisconnected).toBe(false);
+    expect(result.notify).toBeUndefined();
   });
 });

@@ -18,6 +18,9 @@ import {
   resolveAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
+  syncFollowerInboxEntries,
+  getFollowerReconnectUiUpdate,
+  trackBrokerInboundThread,
 } from "./helpers.js";
 import {
   buildSecurityPrompt,
@@ -1251,6 +1254,9 @@ export default function (pi: ExtensionAPI) {
         broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid, getAgentMetadata());
 
         adapter.onInbound((inMsg) => {
+          // Track thread so slack_send can resolve channel for all inbound messages
+          trackBrokerInboundThread(threads, inMsg, agentName);
+
           const decision = router.route(inMsg);
           if (decision.action === "deliver" && decision.agentId === selfId) {
             inbox.push(inboundToInbox(inMsg));
@@ -1296,6 +1302,7 @@ export default function (pi: ExtensionAPI) {
       client,
       pollInterval: null,
     };
+    let wasDisconnected = false;
 
     function startPolling(): void {
       if (brokerClientRef.pollInterval) return;
@@ -1304,18 +1311,24 @@ export default function (pi: ExtensionAPI) {
         try {
           const entries = await client.pollInbox();
           if (entries.length === 0) return;
-          const ids: number[] = [];
-          for (const entry of entries) {
-            const meta = entry.message.metadata ?? {};
-            inbox.push({
-              channel: (meta.channel as string) ?? "",
-              threadTs: entry.message.threadId ?? "",
-              userId: entry.message.sender ?? "",
-              text: entry.message.body ?? "",
-              timestamp: entry.message.createdAt ?? "",
-            });
-            ids.push(entry.inboxId);
+
+          const synced = syncFollowerInboxEntries(entries, threads, agentName, lastDmChannel);
+          for (const nextThread of synced.threadUpdates) {
+            const existing = threads.get(nextThread.threadTs);
+            if (!existing) {
+              threads.set(nextThread.threadTs, { ...nextThread });
+              continue;
+            }
+            existing.channelId = nextThread.channelId;
+            existing.threadTs = nextThread.threadTs;
+            existing.userId = nextThread.userId;
+            existing.owner = nextThread.owner;
           }
+          lastDmChannel = synced.lastDmChannel;
+          inbox.push(...synced.inboxMessages);
+
+          const ids = entries.map((entry) => entry.inboxId);
+          if (synced.changed) persistState();
           if (ids.length > 0) await client.ackMessages(ids);
           updateBadge();
           if (ctx.isIdle?.()) drainInbox();
@@ -1335,17 +1348,11 @@ export default function (pi: ExtensionAPI) {
     client.onDisconnect(() => {
       stopPolling();
       setExtStatus(ctx, "reconnecting");
-      ctx.ui.notify("Pinet broker disconnected — reconnecting...", "warning");
-      // Push system message so the LLM knows connectivity was lost
-      inbox.push({
-        channel: "",
-        threadTs: "",
-        userId: "system",
-        text: "Pinet broker connection lost. Auto-reconnecting...",
-        timestamp: String(Date.now() / 1000),
-      });
-      updateBadge();
-      if (ctx.isIdle?.()) drainInbox();
+      const uiUpdate = getFollowerReconnectUiUpdate("disconnect", wasDisconnected);
+      wasDisconnected = uiUpdate.nextWasDisconnected;
+      if (uiUpdate.notify) {
+        ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
+      }
     });
 
     client.onReconnect(() => {
@@ -1354,7 +1361,11 @@ export default function (pi: ExtensionAPI) {
           await client.register(agentName, agentEmoji, getAgentMetadata());
           startPolling();
           setExtStatus(ctx, "ok");
-          ctx.ui.notify("Pinet broker reconnected", "info");
+          const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
+          wasDisconnected = uiUpdate.nextWasDisconnected;
+          if (uiUpdate.notify) {
+            ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
+          }
         } catch {
           // Re-registration failed; the next close event will trigger another reconnect
         }
