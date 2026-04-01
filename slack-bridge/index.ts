@@ -885,7 +885,9 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(actualTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void (brokerClient.client as BrokerClient).claimThread(actualTs, channel);
+        void (brokerClient.client as BrokerClient).claimThread(actualTs, channel).catch(() => {
+          /* broker gone, best effort */
+        });
       }
 
       // Remove 👀 from all messages in this thread
@@ -1050,7 +1052,9 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(actualTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void (brokerClient.client as BrokerClient).claimThread(actualTs, channelId);
+        void (brokerClient.client as BrokerClient).claimThread(actualTs, channelId).catch(() => {
+          /* broker gone, best effort */
+        });
       }
 
       return {
