@@ -1,11 +1,1 @@
-{
-  "files": {
-    "nvim-bridge/.turbo/turbo-typecheck.log": {
-      "size": 144,
-      "mtime_nanos": 1775054656817631540,
-      "mode": 420,
-      "is_dir": false
-    }
-  },
-  "order": ["nvim-bridge/.turbo/turbo-typecheck.log"]
-}
+{"files":{"nvim-bridge/.turbo/turbo-typecheck.log":{"size":144,"mtime_nanos":1775060624463053122,"mode":420,"is_dir":false}},"order":["nvim-bridge/.turbo/turbo-typecheck.log"]}

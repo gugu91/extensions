@@ -24,7 +24,6 @@ pnpm lint && pnpm typecheck && pnpm test
 
 ## Local extension development
 
-<<<<<<< HEAD
 This repo now uses pnpm workspaces + Turborepo for **repo-internal monorepo
 tooling**. It is **not** yet a supported root-level `pi install git:...`
 package target.
@@ -119,6 +118,12 @@ This repo is built by a mesh of human and AI agents coordinating via [Pinet](sla
 | 🦝 **Shadow Raccoon** | Utility       | Whatever's on fire                                            | Showed up after a broker restart with a new name and no memory. Still said yes to the first task. Respect.                    |
 
 > 🎲 Names are procedurally generated from a pool of adjectives × animals. Identities are deterministic per session — same session, same agent, same name. Unless the broker crashes. Then all bets are off. See [#84](https://github.com/gugu91/extensions/issues/84).
+
+### The Fallen
+
+On April 1st 2026, the broker shipped 12 PRs, merged identity persistence, then promptly corrupted its own database by checking out feature branches in the main repo — violating the very worktree rule it had written into the codebase 20 minutes earlier. The DB couldn't be recovered. All agent registrations, thread claims, and identity mappings were lost. Every agent got new names. Nobody remembered anything.
+
+RIP: Hyper Owl, Laser Cobra, Crystal Panda, Sonic Gecko (v1), and 29 others. You were good agents. You deserved better than `no such column: last_heartbeat`.
 
 ## License
 
