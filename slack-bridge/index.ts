@@ -18,12 +18,12 @@ import {
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   generateAgentName,
-  resolveAgentIdentity,
+  resolvePersistedAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
-  buildAgentStableId,
+  resolveAgentStableId,
   syncFollowerInboxEntries,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
@@ -96,10 +96,15 @@ export default function (pi: ExtensionAPI) {
     return checkUserAllowed(allowedUsers, userId);
   }
 
-  const identity = resolveAgentIdentity(settings, process.env.PI_NICKNAME);
-  let agentName = identity.name;
-  let agentEmoji = identity.emoji;
-  let agentStableId = buildAgentStableId(undefined, os.hostname(), process.cwd());
+  const initialIdentity = resolvePersistedAgentIdentity(
+    settings,
+    undefined,
+    undefined,
+    process.env.PI_NICKNAME,
+  );
+  let agentName = initialIdentity.name;
+  let agentEmoji = initialIdentity.emoji;
+  let agentStableId = resolveAgentStableId(undefined, undefined, os.hostname(), process.cwd());
 
   // Security guardrails
   const guardrails: SecurityGuardrails = settings.security ?? {};
@@ -172,7 +177,10 @@ export default function (pi: ExtensionAPI) {
   }
 
   const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
-  const identityGuidelines = buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
+
+  function getIdentityGuidelines(): [string, string, string] {
+    return buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
+  }
 
   function applyBrokerIdentity(nextName: string, nextEmoji: string): void {
     if (agentName === nextName && agentEmoji === nextEmoji) return;
@@ -253,6 +261,7 @@ export default function (pi: ExtensionAPI) {
         userNames: Array.from(userNames.entries()),
         agentName,
         agentEmoji,
+        agentStableId,
       });
     } catch (err) {
       console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
@@ -766,13 +775,13 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Inbox",
     description:
       "Return pending Slack messages that arrived since the last check, then clear the queue.",
-    promptSnippet: `Check for new incoming Slack messages. You are ${agentEmoji} ${agentName}.`,
+    promptSnippet: "Check for new incoming Slack messages.",
     promptGuidelines: [
       "You are connected to Slack via the slack-bridge extension.",
-      `Your Slack identity is ${agentEmoji} ${agentName} — use this name and emoji when replying in Slack threads.`,
+      "Use the current Slack identity from the system prompt when replying in Slack threads.",
       "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      ...identityGuidelines,
+      "Follow the current system prompt exactly for first-message vs follow-up identity formatting.",
       "Always use this name and emoji — do not invent a new one.",
       ...(securityPrompt
         ? [
@@ -1728,12 +1737,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     extCtx = ctx;
-    agentStableId = buildAgentStableId(
-      ctx.sessionManager.getSessionFile(),
-      os.hostname(),
-      ctx.cwd,
-      ctx.sessionManager.getLeafId(),
-    );
 
     // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
@@ -1742,6 +1745,7 @@ export default function (pi: ExtensionAPI) {
       userNames?: [string, string][];
       agentName?: string;
       agentEmoji?: string;
+      agentStableId?: string;
     }
     try {
       let savedState: PersistedState | null = null;
@@ -1750,6 +1754,23 @@ export default function (pi: ExtensionAPI) {
           savedState = entry.data as PersistedState;
         }
       }
+
+      const restoredIdentity = resolvePersistedAgentIdentity(
+        settings,
+        savedState?.agentName,
+        savedState?.agentEmoji,
+        process.env.PI_NICKNAME,
+      );
+      agentName = restoredIdentity.name;
+      agentEmoji = restoredIdentity.emoji;
+      agentStableId = resolveAgentStableId(
+        savedState?.agentStableId,
+        ctx.sessionManager.getSessionFile(),
+        os.hostname(),
+        ctx.cwd,
+        ctx.sessionManager.getLeafId(),
+      );
+
       if (savedState) {
         if (savedState.threads) {
           for (const [k, v] of savedState.threads) {
@@ -1764,11 +1785,8 @@ export default function (pi: ExtensionAPI) {
             if (!userNames.has(k)) userNames.set(k, v);
           }
         }
-        if (savedState.agentName && savedState.agentEmoji) {
-          agentName = savedState.agentName;
-          agentEmoji = savedState.agentEmoji;
-        }
       }
+      persistStateNow();
     } catch (err) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
@@ -1832,15 +1850,13 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Inject broker-specific prompt guidelines when running as broker
+  // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
   pi.on("before_agent_start", async (event) => {
-    let guidelines: string[];
+    const guidelines = [...getIdentityGuidelines()];
     if (brokerRole === "broker") {
-      guidelines = buildBrokerPromptGuidelines(agentEmoji, agentName);
+      guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
     } else if (brokerRole === "follower") {
-      guidelines = buildWorkerPromptGuidelines();
-    } else {
-      return;
+      guidelines.push(...buildWorkerPromptGuidelines());
     }
     return {
       systemPrompt: event.systemPrompt + "\n\n" + guidelines.join("\n"),

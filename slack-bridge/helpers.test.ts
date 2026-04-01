@@ -13,7 +13,9 @@ import {
   rankAgentsForRouting,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
+  resolvePersistedAgentIdentity,
   buildAgentStableId,
+  resolveAgentStableId,
   buildSlackRequest,
   stripBotMention,
   isChannelId,
@@ -421,6 +423,26 @@ describe("buildAgentStableId", () => {
   });
 });
 
+describe("resolveAgentStableId", () => {
+  it("prefers the persisted stable id across reloads", () => {
+    expect(
+      resolveAgentStableId(
+        "persisted:agent:123",
+        "/tmp/pi/changed-session.json",
+        "macbook",
+        "/repo",
+        "leaf-2",
+      ),
+    ).toBe("persisted:agent:123");
+  });
+
+  it("falls back to buildAgentStableId when no persisted stable id exists", () => {
+    expect(resolveAgentStableId(undefined, "/tmp/pi/session.json", "macbook", "/repo")).toBe(
+      `macbook:session:${path.resolve("/tmp/pi/session.json")}`,
+    );
+  });
+});
+
 // ─── formatAgentList ──────────────────────────────────────
 
 describe("formatAgentList", () => {
@@ -687,7 +709,28 @@ describe("rankAgentsForRouting", () => {
   });
 });
 
-// ─── resolveAgentIdentity ───────────────────────────
+// ─── resolvePersistedAgentIdentity / resolveAgentIdentity ───────────────────────────
+
+describe("resolvePersistedAgentIdentity", () => {
+  it("prefers persisted identity from session state", () => {
+    const result = resolvePersistedAgentIdentity(
+      { agentName: "Config Bot", agentEmoji: "🤖" },
+      "Restored Gecko",
+      "🦎",
+      "env-nick",
+    );
+    expect(result).toEqual({ name: "Restored Gecko", emoji: "🦎" });
+  });
+
+  it("falls back to generated/config identity when persisted identity is incomplete", () => {
+    const result = resolvePersistedAgentIdentity(
+      { agentName: "Config Bot", agentEmoji: "🤖" },
+      "Half",
+      undefined,
+    );
+    expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
+  });
+});
 
 describe("resolveAgentIdentity", () => {
   it("returns settings name/emoji when both are configured", () => {

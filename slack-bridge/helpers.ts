@@ -523,6 +523,19 @@ export function buildIdentityReplyGuidelines(
   ];
 }
 
+export function resolvePersistedAgentIdentity(
+  settings: SlackBridgeSettings,
+  persistedName?: string,
+  persistedEmoji?: string,
+  envNickname?: string,
+): { name: string; emoji: string } {
+  if (persistedName && persistedEmoji) {
+    return { name: persistedName, emoji: persistedEmoji };
+  }
+
+  return resolveAgentIdentity(settings, envNickname);
+}
+
 export function buildAgentStableId(
   sessionFile?: string,
   host = os.hostname(),
@@ -536,6 +549,16 @@ export function buildAgentStableId(
     return `${host}:leaf:${leafId}`;
   }
   return `${host}:cwd:${path.resolve(cwd)}`;
+}
+
+export function resolveAgentStableId(
+  persistedStableId?: string,
+  sessionFile?: string,
+  host = os.hostname(),
+  cwd = process.cwd(),
+  leafId?: string,
+): string {
+  return persistedStableId || buildAgentStableId(sessionFile, host, cwd, leafId);
 }
 
 export interface FollowerThreadState {
