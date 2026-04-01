@@ -18,6 +18,7 @@ import {
   resolveAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
+  buildBrokerPromptGuidelines,
   buildAgentStableId,
   syncFollowerInboxEntries,
   getFollowerReconnectUiUpdate,
@@ -1163,7 +1164,6 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Pinet broker health recovered", "info");
       }
       lastBrokerMaintenanceSignature = signature;
-
     } catch (err) {
       ctx.ui.notify(`Pinet maintenance failed: ${msg(err)}`, "error");
     } finally {
@@ -1336,7 +1336,10 @@ export default function (pi: ExtensionAPI) {
         const selfId = selfAgent.id;
         applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
-        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(selfId, "broker_delegate");
+        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(
+          selfId,
+          "broker_delegate",
+        );
         const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
         if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
           ctx.ui.notify(
@@ -1671,6 +1674,15 @@ export default function (pi: ExtensionAPI) {
       }
     }
   }
+
+  // Inject broker-specific prompt guidelines when running as broker
+  pi.on("before_agent_start", async (event) => {
+    if (brokerRole !== "broker") return;
+    const guidelines = buildBrokerPromptGuidelines(agentEmoji, agentName);
+    return {
+      systemPrompt: event.systemPrompt + "\n\n" + guidelines.join("\n"),
+    };
+  });
 
   // When agent finishes: clear thinking status + auto-drain inbox
   pi.on("agent_end", async () => {
