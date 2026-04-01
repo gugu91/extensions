@@ -134,11 +134,11 @@ export class BrokerSocketServer {
   async stop(): Promise<void> {
     this.stopPruning();
 
-    // Clean up all connected agents. Clear agentId so the async
-    // close handler won't try to unregister after db is closed.
+    // Mark all connected agents as resumably disconnected. Clear agentId so the
+    // async close handler won't mark them a second time after db shutdown.
     for (const [socket, state] of this.connections) {
       if (state.agentId) {
-        this.db.unregisterAgent(state.agentId);
+        this.db.disconnectAgent(state.agentId, this.heartbeatTimeoutMs);
         state.agentId = null;
       }
       socket.destroy();
@@ -224,7 +224,7 @@ export class BrokerSocketServer {
 
     socket.on("close", () => {
       if (state.agentId) {
-        this.db.unregisterAgent(state.agentId);
+        this.db.disconnectAgent(state.agentId, this.heartbeatTimeoutMs);
       }
       this.connections.delete(socket);
     });

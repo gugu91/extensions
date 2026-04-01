@@ -26,6 +26,7 @@ interface AgentRow {
   metadata: string | null;
   status: string;
   disconnected_at: string | null;
+  resumable_until: string | null;
 }
 
 interface ThreadRow {
@@ -50,6 +51,8 @@ function rowToAgent(row: AgentRow): AgentInfo {
     lastHeartbeat: row.last_heartbeat,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     status: row.status === "working" ? "working" : "idle",
+    disconnectedAt: row.disconnected_at,
+    resumableUntil: row.resumable_until,
   };
 }
 
@@ -69,6 +72,8 @@ function rowToThread(row: ThreadRow): ThreadInfo {
 export function defaultDbPath(): string {
   return path.join(os.homedir(), ".pi", "pinet-broker.db");
 }
+
+export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 
 // ─── BrokerDB ────────────────────────────────────────────
 
@@ -102,7 +107,8 @@ export class BrokerDB implements BrokerDBInterface {
         last_heartbeat TEXT NOT NULL,
         metadata TEXT,
         status TEXT NOT NULL DEFAULT 'idle',
-        disconnected_at TEXT
+        disconnected_at TEXT,
+        resumable_until TEXT
       );
 
       CREATE TABLE IF NOT EXISTS threads (
@@ -172,6 +178,11 @@ export class BrokerDB implements BrokerDBInterface {
     } catch {
       /* exists */
     }
+    try {
+      this.db.exec("ALTER TABLE agents ADD COLUMN resumable_until TEXT");
+    } catch {
+      /* exists */
+    }
 
     this.db.exec(`
       UPDATE agents
@@ -190,7 +201,7 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   /**
-   * Mark agents whose PID is no longer running as disconnected.
+   * Mark agents whose PID is no longer running as resumably disconnected.
    * Thread claims are kept for a short resumption window and released later
    * by heartbeat-based stale pruning.
    */
@@ -198,7 +209,7 @@ export class BrokerDB implements BrokerDBInterface {
     const agents = this.getAgents();
     for (const agent of agents) {
       if (!isProcessRunning(agent.pid)) {
-        this.unregisterAgent(agent.id);
+        this.disconnectAgent(agent.id);
       }
     }
   }
@@ -233,9 +244,9 @@ export class BrokerDB implements BrokerDBInterface {
       `INSERT INTO agents (
          id, stable_id, name, emoji, pid,
          connected_at, last_seen, last_heartbeat,
-         metadata, status, disconnected_at
+         metadata, status, disconnected_at, resumable_until
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', NULL)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', NULL, NULL)
        ON CONFLICT(id) DO UPDATE SET
          stable_id = COALESCE(excluded.stable_id, agents.stable_id),
          name = excluded.name,
@@ -246,7 +257,8 @@ export class BrokerDB implements BrokerDBInterface {
          last_heartbeat = excluded.last_heartbeat,
          metadata = excluded.metadata,
          status = 'idle',
-         disconnected_at = NULL`,
+         disconnected_at = NULL,
+         resumable_until = NULL`,
     ).run(agentId, persistedStableId, finalName, finalEmoji, pid, now, now, now, meta);
 
     return {
@@ -263,7 +275,24 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   unregisterAgent(id: string): void {
-    this.markAgentDisconnected(id);
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    db.prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?").run(
+      now,
+      id,
+    );
+    db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?").run(id);
+  }
+
+  disconnectAgent(id: string, resumableForMs = DEFAULT_RESUMABLE_WINDOW_MS): void {
+    const db = this.getDb();
+    const now = new Date();
+    const resumableUntil = new Date(now.getTime() + resumableForMs).toISOString();
+    db.prepare("UPDATE agents SET disconnected_at = ?, resumable_until = ? WHERE id = ?").run(
+      now.toISOString(),
+      resumableUntil,
+      id,
+    );
   }
 
   getAgentById(id: string): AgentInfo | null {
@@ -286,26 +315,29 @@ export class BrokerDB implements BrokerDBInterface {
 
   heartbeatAgent(id: string): void {
     const db = this.getDb();
-    db.prepare("UPDATE agents SET last_heartbeat = ?, disconnected_at = NULL WHERE id = ?").run(
-      new Date().toISOString(),
-      id,
-    );
+    db.prepare(
+      "UPDATE agents SET last_heartbeat = ?, disconnected_at = NULL, resumable_until = NULL WHERE id = ?",
+    ).run(new Date().toISOString(), id);
   }
 
   pruneStaleAgents(staleAfterMs: number): string[] {
     const db = this.getDb();
     const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
     const now = new Date().toISOString();
-    const staleRows = db.prepare("SELECT id FROM agents WHERE last_heartbeat <= ?").all(cutoff) as
-      | Array<{ id: string }>
-      | undefined;
+    const staleRows = db
+      .prepare(
+        `SELECT id FROM agents
+         WHERE (disconnected_at IS NULL AND last_heartbeat <= ?)
+            OR (disconnected_at IS NOT NULL AND resumable_until IS NOT NULL AND resumable_until <= ?)`,
+      )
+      .all(cutoff, now) as Array<{ id: string }>;
 
-    if (!staleRows || staleRows.length === 0) {
+    if (staleRows.length === 0) {
       return [];
     }
 
     const disconnectAgent = db.prepare(
-      "UPDATE agents SET disconnected_at = COALESCE(disconnected_at, ?) WHERE id = ?",
+      "UPDATE agents SET disconnected_at = COALESCE(disconnected_at, ?), resumable_until = NULL WHERE id = ?",
     );
     const releaseClaims = db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?");
 
@@ -321,14 +353,6 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     db.prepare("UPDATE agents SET status = ?, last_seen = ? WHERE id = ?").run(
       status,
-      new Date().toISOString(),
-      id,
-    );
-  }
-
-  private markAgentDisconnected(id: string): void {
-    const db = this.getDb();
-    db.prepare("UPDATE agents SET disconnected_at = ? WHERE id = ?").run(
       new Date().toISOString(),
       id,
     );

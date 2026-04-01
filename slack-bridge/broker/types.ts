@@ -10,6 +10,8 @@ export interface AgentInfo {
   lastHeartbeat: string;
   metadata: Record<string, unknown> | null;
   status: "working" | "idle";
+  disconnectedAt?: string | null;
+  resumableUntil?: string | null;
 }
 
 export interface ThreadInfo {

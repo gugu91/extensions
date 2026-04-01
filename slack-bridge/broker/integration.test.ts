@@ -143,12 +143,12 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
-  it("reconnect with same stableId reuses agent identity and thread ownership", async () => {
+  it("reconnect with same stableId reuses agent identity and thread ownership after a resumable disconnect", async () => {
     const reg1 = await client.register("resume-agent", "🔁", undefined, "host:session:/tmp/resume");
     await client.claimThread("t-resume");
-    await client.unregister();
+    client.disconnect();
 
-    expect(db.getAgents()).toHaveLength(0);
+    await waitFor(() => db.getAgents().length === 0, 1000);
     expect(db.getThread("t-resume")?.ownerAgent).toBe(reg1.agentId);
 
     const info = server.getConnectInfo();
@@ -171,6 +171,28 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(threads.map((thread) => thread.threadId)).toContain("t-resume");
 
     client2.disconnect();
+  });
+
+  it("explicit unregister releases ownership so follow-up replies are not routed to the dead owner", async () => {
+    const reg = await client.register("owner-agent", "🧵");
+    await client.claimThread("t-unregister-followup");
+    await client.unregister();
+
+    expect(db.getAgents()).toHaveLength(0);
+    expect(db.getThread("t-unregister-followup")?.ownerAgent).toBeNull();
+
+    const router = new MessageRouter(db);
+    const decision = router.route({
+      source: "slack",
+      threadId: "t-unregister-followup",
+      channel: "C123",
+      userId: "U1",
+      text: "follow-up after unregister",
+      timestamp: "124",
+    });
+
+    expect(decision).toEqual({ action: "unrouted" });
+    expect(db.getInbox(reg.agentId)).toHaveLength(0);
   });
 
   it("stale pruning disconnects silent agents and releases claims", async () => {
