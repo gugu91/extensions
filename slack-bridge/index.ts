@@ -34,8 +34,14 @@ import {
 } from "./guardrails.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
-import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
+import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
+import {
+  DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS,
+  DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
+  runBrokerMaintenancePass,
+  type BrokerMaintenanceResult,
+} from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 
 // ─── Slack API (raw fetch, zero deps) ────────────────────
@@ -93,18 +99,7 @@ export default function (pi: ExtensionAPI) {
   const guardrails: SecurityGuardrails = settings.security ?? {};
   const securityPrompt = buildSecurityPrompt(guardrails);
 
-  function inboundToInbox(inMsg: BrokerInboundMessage): InboxMessage {
-    return {
-      channel: inMsg.channel,
-      threadTs: inMsg.threadId,
-      userId: inMsg.userId ?? "",
-      text: inMsg.text ?? "",
-      timestamp: inMsg.timestamp ?? "",
-      isChannelMention: inMsg.isChannelMention,
-    };
-  }
-
-  function getAgentMetadata(): Record<string, unknown> {
+  function getAgentMetadata(role: "broker" | "worker" = "worker"): Record<string, unknown> {
     let branch = "";
     try {
       branch = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
@@ -115,6 +110,7 @@ export default function (pi: ExtensionAPI) {
       cwd: process.cwd(),
       branch,
       host: os.hostname(),
+      role,
     };
   }
 
@@ -1124,6 +1120,10 @@ export default function (pi: ExtensionAPI) {
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let brokerMaintenanceTimer: ReturnType<typeof setInterval> | null = null;
+  let brokerMaintenanceRunning = false;
+  let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
+  let lastBrokerMaintenanceSignature = "";
 
   function startBrokerHeartbeat(): void {
     stopBrokerHeartbeat();
@@ -1135,12 +1135,55 @@ export default function (pi: ExtensionAPI) {
         /* best effort */
       }
     }, HEARTBEAT_INTERVAL_MS);
+    brokerHeartbeatTimer.unref?.();
   }
 
   function stopBrokerHeartbeat(): void {
     if (!brokerHeartbeatTimer) return;
     clearInterval(brokerHeartbeatTimer);
     brokerHeartbeatTimer = null;
+  }
+
+  function runBrokerMaintenance(ctx: ExtensionContext): void {
+    if (!activeBroker || !activeSelfId || brokerMaintenanceRunning) return;
+
+    brokerMaintenanceRunning = true;
+    try {
+      const result = runBrokerMaintenancePass(activeBroker.db as BrokerDB, {
+        brokerAgentId: activeSelfId,
+        staleAfterMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+        busyAssignmentAgeMs: DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
+      });
+      lastBrokerMaintenance = result;
+
+      const signature = result.anomalies.join("|");
+      if (signature && signature !== lastBrokerMaintenanceSignature) {
+        ctx.ui.notify(`Pinet broker: ${result.anomalies.join("; ")}`, "warning");
+      } else if (!signature && lastBrokerMaintenanceSignature) {
+        ctx.ui.notify("Pinet broker health recovered", "info");
+      }
+      lastBrokerMaintenanceSignature = signature;
+
+    } catch (err) {
+      ctx.ui.notify(`Pinet maintenance failed: ${msg(err)}`, "error");
+    } finally {
+      brokerMaintenanceRunning = false;
+    }
+  }
+
+  function startBrokerMaintenance(ctx: ExtensionContext): void {
+    stopBrokerMaintenance();
+    brokerMaintenanceTimer = setInterval(() => {
+      runBrokerMaintenance(ctx);
+    }, DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS);
+    brokerMaintenanceTimer.unref?.();
+    runBrokerMaintenance(ctx);
+  }
+
+  function stopBrokerMaintenance(): void {
+    if (!brokerMaintenanceTimer) return;
+    clearInterval(brokerMaintenanceTimer);
+    brokerMaintenanceTimer = null;
   }
 
   pi.registerTool({
@@ -1287,28 +1330,37 @@ export default function (pi: ExtensionAPI) {
           agentName,
           agentEmoji,
           process.pid,
-          getAgentMetadata(),
+          getAgentMetadata("broker"),
           agentStableId,
         );
         const selfId = selfAgent.id;
         applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
+        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(selfId, "broker_delegate");
+        const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
+        if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
+          ctx.ui.notify(
+            `Pinet broker reclaimed ${recoveredBrokerMessages} message${recoveredBrokerMessages === 1 ? "" : "s"} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
+            "info",
+          );
+        }
+
         adapter.onInbound((inMsg) => {
-          // Track thread so slack_send can resolve channel for all inbound messages
-          trackBrokerInboundThread(threads, inMsg, agentName);
+          // Track thread metadata without claiming broker ownership.
+          trackBrokerInboundThread(threads, inMsg);
 
           const decision = router.route(inMsg);
-          if (decision.action === "deliver" && decision.agentId === selfId) {
-            inbox.push(inboundToInbox(inMsg));
-            updateBadge();
-            if (ctx.isIdle?.()) drainInbox();
-          } else if (decision.action === "deliver") {
+          if (decision.action === "deliver" && decision.agentId !== selfId) {
             broker.db.queueMessage(decision.agentId, inMsg);
-          } else if (decision.action === "unrouted") {
-            inbox.push(inboundToInbox(inMsg));
-            updateBadge();
-            router.claimThread(inMsg.threadId, selfId);
-            if (ctx.isIdle?.()) drainInbox();
+            return;
+          }
+
+          if (decision.action === "deliver" || decision.action === "unrouted") {
+            broker.db.queueUnroutedMessage(
+              inMsg,
+              decision.action === "deliver" ? "broker_delegate" : "no_route",
+            );
+            runBrokerMaintenance(ctx);
           }
         });
 
@@ -1320,6 +1372,7 @@ export default function (pi: ExtensionAPI) {
         activeRouter = router;
         activeSelfId = selfId;
         startBrokerHeartbeat();
+        startBrokerMaintenance(ctx);
         brokerRole = "broker";
         pinetEnabled = true;
         setExtStatus(ctx, "ok");
@@ -1337,7 +1390,7 @@ export default function (pi: ExtensionAPI) {
     const registration = await client.register(
       agentName,
       agentEmoji,
-      getAgentMetadata(),
+      getAgentMetadata("worker"),
       agentStableId,
     );
     applyBrokerIdentity(registration.name, registration.emoji);
@@ -1408,7 +1461,7 @@ export default function (pi: ExtensionAPI) {
           const registration = await client.register(
             agentName,
             agentEmoji,
-            getAgentMetadata(),
+            getAgentMetadata("worker"),
             agentStableId,
           );
           applyBrokerIdentity(registration.name, registration.emoji);
@@ -1467,6 +1520,16 @@ export default function (pi: ExtensionAPI) {
       const defaultChInfo = settings.defaultChannel
         ? `Default channel: ${settings.defaultChannel}`
         : "Default channel: none";
+      const brokerHealthInfo =
+        mode === "broker" && lastBrokerMaintenance
+          ? [
+              `Pending backlog: ${lastBrokerMaintenance.pendingBacklogCount}`,
+              `Last maintenance: assigned ${lastBrokerMaintenance.assignedBacklogCount}, reaped ${lastBrokerMaintenance.reapedAgentIds.length}, repaired ${lastBrokerMaintenance.repairedThreadClaims}`,
+              ...(lastBrokerMaintenance.anomalies.length > 0
+                ? [`Health: ${lastBrokerMaintenance.anomalies.join("; ")}`]
+                : []),
+            ]
+          : [];
       ctx.ui.notify(
         [
           `Mode: ${mode}`,
@@ -1477,6 +1540,7 @@ export default function (pi: ExtensionAPI) {
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
+          ...brokerHealthInfo,
         ].join("\n"),
         "info",
       );
@@ -1623,6 +1687,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     flushPersist();
     stopBrokerHeartbeat();
+    stopBrokerMaintenance();
     if (activeBroker) {
       try {
         if (activeSelfId) {
@@ -1636,6 +1701,8 @@ export default function (pi: ExtensionAPI) {
     }
     activeRouter = null;
     activeSelfId = null;
+    lastBrokerMaintenance = null;
+    lastBrokerMaintenanceSignature = "";
     if (brokerClient) {
       try {
         clearInterval(brokerClient.pollInterval);

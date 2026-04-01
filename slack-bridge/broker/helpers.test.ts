@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as net from "node:net";
 import { BrokerDB } from "./schema.js";
 import { LeaderLock } from "./leader.js";
+import { runBrokerMaintenancePass } from "./maintenance.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "./types.js";
 
@@ -212,6 +213,73 @@ describe("BrokerDB", () => {
     expect(db.getAgents()).toEqual([]);
     expect(db.getThread("t1")?.ownerAgent).toBeNull();
     expect(db.getAgentById("a1")).not.toBeNull();
+  });
+
+  it("queueUnroutedMessage persists pending backlog without assigning an owner", () => {
+    const backlog = db.queueUnroutedMessage(
+      {
+        source: "slack",
+        threadId: "t-unrouted",
+        channel: "C1",
+        userId: "U1",
+        text: "hello backlog",
+        timestamp: "100.200",
+      },
+      "no_route",
+    );
+
+    expect(backlog.threadId).toBe("t-unrouted");
+    expect(backlog.status).toBe("pending");
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getThread("t-unrouted")?.ownerAgent).toBeNull();
+  });
+
+  it("requeueUndeliveredMessages moves pending slack work back into backlog", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    db.createThread("t-requeue", "slack", "C1", "worker-1");
+    db.insertMessage("t-requeue", "slack", "inbound", "U1", "hello", ["worker-1"], {
+      channel: "C1",
+    });
+
+    const moved = db.requeueUndeliveredMessages("worker-1");
+
+    expect(moved).toBe(1);
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue");
+  });
+
+  it("maintenance requeues messages orphaned in a disconnected agent inbox", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    db.createThread("t-orphan", "slack", "C1", "worker-1");
+    // Use disconnectAgent with 0ms window so resumable_until expires immediately
+    db.disconnectAgent("worker-1", 0);
+
+    db.queueMessage("worker-1", {
+      source: "slack",
+      threadId: "t-orphan",
+      channel: "C1",
+      userId: "U1",
+      text: "stuck during resume window",
+      timestamp: "100.200",
+    });
+
+    // Ensure resumable_until is in the past
+    const start = Date.now();
+    while (Date.now() - start < 10) {
+      /* spin */
+    }
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.reapedAgentIds).toContain("worker-1");
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0].threadId).toBe("t-orphan");
+    expect(db.getThread("t-orphan")?.ownerAgent).toBeNull();
   });
 
   it("createThread and getThread", () => {
