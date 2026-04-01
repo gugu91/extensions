@@ -284,10 +284,11 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const now = new Date().toISOString();
     const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
+    const existingById = this.getAgentRowById(existing?.id ?? id);
     const agentId = existing?.id ?? id;
-    const finalName = existing?.name ?? name;
+    const finalName = existing?.name ?? this.ensureUniqueAgentName(name, agentId);
     const finalEmoji = existing?.emoji ?? emoji;
-    const persistedStableId = stableId ?? existing?.stable_id ?? null;
+    const persistedStableId = stableId ?? existing?.stable_id ?? existingById?.stable_id ?? null;
     const meta = metadata ? JSON.stringify(metadata) : null;
 
     db.prepare(
@@ -423,6 +424,25 @@ export class BrokerDB implements BrokerDBInterface {
       new Date().toISOString(),
       id,
     );
+  }
+
+  private ensureUniqueAgentName(name: string, agentId: string): string {
+    const db = this.getDb();
+    const baseName = name.trim() || "Agent";
+    let candidate = baseName;
+    let suffix = 2;
+
+    while (true) {
+      const row = db.prepare("SELECT id FROM agents WHERE lower(name) = lower(?) AND id != ? LIMIT 1").get(
+        candidate,
+        agentId,
+      ) as { id: string } | undefined;
+      if (!row) {
+        return candidate;
+      }
+      candidate = `${baseName} ${suffix}`;
+      suffix += 1;
+    }
   }
 
   private getAgentRowById(id: string): AgentRow | null {

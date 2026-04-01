@@ -743,14 +743,26 @@ describe("resolveAgentIdentity", () => {
     expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
   });
 
-  it("falls back to env var PI_NICKNAME with generated emoji", () => {
-    const result = resolveAgentIdentity({}, "my-agent");
-    expect(result.name).toBe("my-agent");
-    expect(typeof result.emoji).toBe("string");
-    expect(result.emoji.length).toBeGreaterThan(0);
+  it("derives the same generated identity for the same seed", () => {
+    const first = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json");
+    const second = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json");
+    expect(first).toEqual(second);
   });
 
-  it("generates a random name when nothing else is available", () => {
+  it("derives different generated identities for different seeds", () => {
+    const first = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json");
+    const second = resolveAgentIdentity({}, undefined, "/tmp/pi/session-b.json");
+    expect(second.name).not.toBe(first.name);
+  });
+
+  it("falls back to env var PI_NICKNAME with deterministic emoji when seeded", () => {
+    const first = resolveAgentIdentity({}, "my-agent", "/tmp/pi/session-a.json");
+    const second = resolveAgentIdentity({}, "my-agent", "/tmp/pi/session-a.json");
+    expect(first.name).toBe("my-agent");
+    expect(first.emoji).toBe(second.emoji);
+  });
+
+  it("generates a name when nothing else is available", () => {
     const result = resolveAgentIdentity({});
     expect(typeof result.name).toBe("string");
     expect(result.name.length).toBeGreaterThan(0);
@@ -759,13 +771,13 @@ describe("resolveAgentIdentity", () => {
   });
 
   it("ignores settings when only agentName is set (no emoji)", () => {
-    const result = resolveAgentIdentity({ agentName: "Half Config" });
+    const result = resolveAgentIdentity({ agentName: "Half Config" }, undefined, "/tmp/pi/session-a.json");
     // Should fall through to generated name since agentEmoji is missing
     expect(result.name).not.toBe("Half Config");
   });
 
   it("ignores settings when only agentEmoji is set (no name)", () => {
-    const result = resolveAgentIdentity({ agentEmoji: "🤖" });
+    const result = resolveAgentIdentity({ agentEmoji: "🤖" }, undefined, "/tmp/pi/session-a.json");
     // Should fall through to generated name since agentName is missing
     expect(result.emoji).not.toBe("🤖");
   });

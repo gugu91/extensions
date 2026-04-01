@@ -18,7 +18,7 @@ import {
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   generateAgentName,
-  resolvePersistedAgentIdentity,
+  resolveAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
   buildBrokerPromptGuidelines,
@@ -96,12 +96,7 @@ export default function (pi: ExtensionAPI) {
     return checkUserAllowed(allowedUsers, userId);
   }
 
-  const initialIdentity = resolvePersistedAgentIdentity(
-    settings,
-    undefined,
-    undefined,
-    process.env.PI_NICKNAME,
-  );
+  const initialIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, process.cwd());
   let agentName = initialIdentity.name;
   let agentEmoji = initialIdentity.emoji;
   let agentStableId = resolveAgentStableId(undefined, undefined, os.hostname(), process.cwd());
@@ -1755,14 +1750,6 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      const restoredIdentity = resolvePersistedAgentIdentity(
-        settings,
-        savedState?.agentName,
-        savedState?.agentEmoji,
-        process.env.PI_NICKNAME,
-      );
-      agentName = restoredIdentity.name;
-      agentEmoji = restoredIdentity.emoji;
       agentStableId = resolveAgentStableId(
         savedState?.agentStableId,
         ctx.sessionManager.getSessionFile(),
@@ -1770,6 +1757,14 @@ export default function (pi: ExtensionAPI) {
         ctx.cwd,
         ctx.sessionManager.getLeafId(),
       );
+      const identitySeed = ctx.sessionManager.getSessionFile() ?? agentStableId;
+      const restoredIdentity = resolveAgentIdentity(
+        settings,
+        process.env.PI_NICKNAME,
+        identitySeed,
+      );
+      agentName = restoredIdentity.name;
+      agentEmoji = restoredIdentity.emoji;
 
       if (savedState) {
         if (savedState.threads) {

@@ -765,7 +765,7 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
     .join("\n");
 }
 
-// ─── Random agent names ──────────────────────────────────
+// ─── Random / deterministic agent names ──────────────────
 
 const ADJECTIVES = [
   "Cosmic",
@@ -783,7 +783,6 @@ const ADJECTIVES = [
   "Hyper",
   "Ultra",
   "Mega",
-  "Super",
   "Electric",
   "Galactic",
   "Sonic",
@@ -792,12 +791,36 @@ const ADJECTIVES = [
   "Shadow",
   "Blazing",
   "Frozen",
+  "Lunar",
+  "Nova",
+  "Aurora",
+  "Radiant",
+  "Velvet",
+  "Iron",
+  "Golden",
+  "Silver",
+  "Scarlet",
+  "Cobalt",
+  "Amber",
+  "Obsidian",
+  "Rapid",
+  "Silent",
+  "Binary",
+  "Vector",
+  "Prism",
+  "Nimbus",
+  "Orbit",
+  "Comet",
+  "Echo",
+  "Ember",
+  "Glacial",
+  "Ionic",
+  "Jade",
 ];
 
 const ANIMALS = [
   "Badger",
   "Penguin",
-  "Falcon",
   "Otter",
   "Raccoon",
   "Fox",
@@ -810,21 +833,45 @@ const ANIMALS = [
   "Raven",
   "Gecko",
   "Mantis",
-  "Osprey",
   "Jaguar",
-  "Heron",
+  "Goose",
   "Bison",
-  "Viper",
-  "Hawk",
   "Crane",
   "Moose",
   "Owl",
+  "Beaver",
+  "Hedgehog",
+  "Rabbit",
+  "Koala",
+  "Tiger",
+  "Lion",
+  "Zebra",
+  "Giraffe",
+  "Elephant",
+  "Rhino",
+  "Hippo",
+  "Kangaroo",
+  "Camel",
+  "Llama",
+  "Goat",
+  "Deer",
+  "Buffalo",
+  "Horse",
+  "Boar",
+  "Bear",
+  "Monkey",
+  "Sloth",
+  "Turtle",
+  "Whale",
+  "Shark",
+  "Crocodile",
+  "Dragon",
+  "Parrot",
 ];
 
 const EMOJIS = [
   "🦡",
   "🐧",
-  "🦅",
   "🦦",
   "🦝",
   "🦊",
@@ -837,23 +884,62 @@ const EMOJIS = [
   "🐦‍⬛",
   "🦎",
   "🦗",
-  "🦅",
   "🐆",
   "🪿",
   "🦬",
-  "🐍",
-  "🦅",
   "🦩",
   "🫎",
   "🦉",
+  "🦫",
+  "🦔",
+  "🐇",
+  "🐨",
+  "🐯",
+  "🦁",
+  "🦓",
+  "🦒",
+  "🐘",
+  "🦏",
+  "🦛",
+  "🦘",
+  "🐫",
+  "🦙",
+  "🐐",
+  "🦌",
+  "🐃",
+  "🐎",
+  "🐗",
+  "🐻",
+  "🐒",
+  "🦥",
+  "🐢",
+  "🐋",
+  "🦈",
+  "🐊",
+  "🐉",
+  "🦜",
 ];
 
-export function generateAgentName(): { name: string; emoji: string } {
-  const ai = Math.floor(Math.random() * ADJECTIVES.length);
-  const ni = Math.floor(Math.random() * ANIMALS.length);
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function generateAgentName(seed?: string): { name: string; emoji: string } {
+  const adjectiveIndex = seed
+    ? hashString(`${seed}:adjective`) % ADJECTIVES.length
+    : Math.floor(Math.random() * ADJECTIVES.length);
+  const animalIndex = seed
+    ? hashString(`${seed}:animal`) % ANIMALS.length
+    : Math.floor(Math.random() * ANIMALS.length);
+
   return {
-    name: `${ADJECTIVES[ai]} ${ANIMALS[ni]}`,
-    emoji: EMOJIS[ni],
+    name: `${ADJECTIVES[adjectiveIndex]} ${ANIMALS[animalIndex]}`,
+    emoji: EMOJIS[animalIndex],
   };
 }
 
@@ -862,18 +948,19 @@ export function generateAgentName(): { name: string; emoji: string } {
 export function resolveAgentIdentity(
   settings: SlackBridgeSettings,
   envNickname?: string,
+  seed?: string,
 ): { name: string; emoji: string } {
   // 1. Explicit config (both must be present)
   if (settings.agentName && settings.agentEmoji) {
     return { name: settings.agentName, emoji: settings.agentEmoji };
   }
 
-  // 2. PI_NICKNAME env var (emoji generated)
+  // 2. PI_NICKNAME env var (name fixed, emoji deterministic when seeded)
   if (envNickname) {
-    const generated = generateAgentName();
+    const generated = generateAgentName(seed);
     return { name: envNickname, emoji: generated.emoji };
   }
 
   // 3. Fully generated
-  return generateAgentName();
+  return generateAgentName(seed);
 }
