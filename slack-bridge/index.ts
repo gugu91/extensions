@@ -871,7 +871,8 @@ export default function (pi: ExtensionAPI) {
     name: "slack_send",
     label: "Slack Send",
     description: "Send a message in a Slack assistant thread.",
-    promptSnippet: "Reply in a Slack assistant thread.",
+    promptSnippet:
+      "Reply in a Slack assistant thread. Use to ACK tasks assigned in Slack, report progress or completion, and ask for help when blocked. Always reply in the same thread the task came from.",
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(
@@ -1039,7 +1040,8 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Post Channel",
     description:
       "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
-    promptSnippet: "Post a message to a Slack channel.",
+    promptSnippet:
+      "Post a message to a Slack channel or thread. Use to ACK tasks, report progress or completion, and ask for help when blocked. Use when you need to target a specific channel or thread by ID.",
     parameters: Type.Object({
       channel: Type.Optional(
         Type.String({
@@ -1443,7 +1445,8 @@ export default function (pi: ExtensionAPI) {
     name: "pinet_message",
     label: "Pinet Message",
     description: "Send a message to another connected Pinet agent.",
-    promptSnippet: "Send a message to another connected Pinet agent.",
+    promptSnippet:
+      "Send a message to another connected Pinet agent. Use to ACK assigned tasks, report progress or completion, ask for help when blocked, or delegate work. If a task arrived via pinet_message, always reply via pinet_message — not slack_send.",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent name or ID" }),
       message: Type.String({ description: "Message body" }),
@@ -1514,7 +1517,8 @@ export default function (pi: ExtensionAPI) {
     name: "pinet_agents",
     label: "Pinet Agents",
     description: "List Pinet agents, including liveness and capability visibility.",
-    promptSnippet: "List and optionally rank Pinet agents.",
+    promptSnippet:
+      "List connected Pinet agents with liveness and capability info. Use before delegating work to find available agents, or to check health and status of agents you have assigned work to.",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
       branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
