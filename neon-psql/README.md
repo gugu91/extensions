@@ -21,23 +21,53 @@ ln -s "$(pwd)/neon-psql" ~/.pi/agent/extensions/neon-psql
 
 ### 2) Add config
 
+You can now configure `neon-psql` directly from pi's top-level settings.
+
+#### Recommended: top-level settings.json
+
+Global (`~/.pi/agent/settings.json`):
+
+```json
+{
+  "neon-psql": {
+    "enabled": true,
+    "injectIntoBash": true,
+    "injectPythonShim": true,
+    "logPath": ".pi/neon-psql-tunnel.log",
+    "sourceEnv": {
+      "host": "DB_HOST",
+      "port": "DB_PORT",
+      "user": "DB_USER",
+      "password": "DB_PASSWORD",
+      "database": "DB_NAME"
+    }
+  }
+}
+```
+
+Project-local (`.pi/settings.json`) works too and takes priority over the global settings.
+
+#### Legacy config files still supported
+
 Config lookup order:
 
 1. `PI_NEON_PSQL_CONFIG`
-2. `.pi/neon-psql.json`
-3. `config.json` next to the extension
-4. `~/.pi/agent/extensions/neon-psql/config.json`
+2. `.pi/settings.json` → `"neon-psql"`
+3. `~/.pi/agent/settings.json` → `"neon-psql"`
+4. `.pi/neon-psql.json`
+5. `config.json` next to the extension
+6. `~/.pi/agent/extensions/neon-psql/config.json`
 
-If no config file is found, the extension does nothing.
+If no config is found, the extension does nothing.
 
-For a shared project config, copy `config.example.json` into the consuming repo as:
+For a shared project config file, copy `config.example.json` into the consuming repo as:
 
 ```bash
 mkdir -p .pi
 cp ~/.pi/agent/extensions/neon-psql/config.example.json .pi/neon-psql.json
 ```
 
-For a personal machine-local config, copy it next to the extension as:
+For a personal machine-local legacy config file, copy it next to the extension as:
 
 ```bash
 cp ~/.pi/agent/extensions/neon-psql/config.example.json ~/.pi/agent/extensions/neon-psql/config.json

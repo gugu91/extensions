@@ -18,14 +18,13 @@ import {
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
+import { loadConfig, type ResolvedConfig } from "./settings.js";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TUNNEL_SCRIPT = join(__dirname, "neon_socks_tunnel.py");
 const PYTHON_SHIM_DIR = join(__dirname, "python");
 const PSQL_BIN = "/opt/homebrew/opt/libpq/bin/psql";
 
-const PROJECT_CONFIG_PATH = join(process.cwd(), ".pi", "neon-psql.json");
-const LOCAL_EXTENSION_CONFIG_PATH = join(__dirname, "config.json");
-const GLOBAL_EXTENSION_CONFIG_PATH = join(getAgentDir(), "extensions", "neon-psql", "config.json");
 const SANDBOX_RUNTIME_ENTRY = join(
   getAgentDir(),
   "extensions",
@@ -36,70 +35,6 @@ const SANDBOX_RUNTIME_ENTRY = join(
   "dist",
   "index.js",
 );
-
-const DEFAULT_LOG_RELATIVE_PATH = join(".pi", "neon-psql-tunnel.log");
-const DEFAULT_SOURCE_ENV = {
-  host: "DB_HOST",
-  port: "DB_PORT",
-  user: "DB_USER",
-  password: "DB_PASSWORD",
-  database: "DB_NAME",
-} as const;
-
-const DEFAULT_INJECT_ENV: Record<string, string> = {
-  NEON_TUNNEL_DATABASE_URL: "postgres_url",
-  NEON_TUNNEL_SQLALCHEMY_URL: "sqlalchemy_url",
-  NEON_TUNNEL_SQLALCHEMY_ASYNC_URL: "sqlalchemy_async_url",
-  NEON_TUNNEL_ASYNCPG_DSN: "asyncpg_dsn",
-  TEST_DB_URL: "sqlalchemy_url",
-  DB_URL: "sqlalchemy_url",
-  DATABASE_URL: "postgres_url",
-  DB_HOST: "tunnel_host",
-  DB_PORT: "tunnel_port",
-  DB_USER: "source_user",
-  DB_PASSWORD: "source_password",
-  DB_NAME: "source_database",
-  DB_HOST_POOLED: "",
-  DB_READ_HOST: "",
-  PGHOST: "tunnel_host",
-  PGPORT: "tunnel_port",
-  PGUSER: "source_user",
-  PGPASSWORD: "source_password",
-  PGDATABASE: "source_database",
-  PGOPTIONS: "pgoptions",
-  PGSSLMODE: "sslmode",
-  NEON_ENDPOINT: "endpoint",
-  NEON_TUNNEL_HOST: "tunnel_host",
-  NEON_TUNNEL_PORT: "tunnel_port",
-  NEON_TUNNEL_SSL_MODE: "sslmode",
-  NEON_TUNNEL_ACTIVE: "1",
-};
-
-interface SourceEnvConfig {
-  host: string;
-  port: string;
-  user: string;
-  password: string;
-  database: string;
-}
-
-interface FileConfig {
-  enabled?: boolean;
-  injectIntoBash?: boolean;
-  injectPythonShim?: boolean;
-  logPath?: string;
-  sourceEnv?: Partial<SourceEnvConfig>;
-  injectEnv?: Record<string, string>;
-}
-
-interface ResolvedConfig {
-  path: string;
-  injectIntoBash: boolean;
-  injectPythonShim: boolean;
-  logPath: string;
-  sourceEnv: SourceEnvConfig;
-  injectEnv: Record<string, string>;
-}
 
 interface SourceValues {
   host: string;
@@ -167,60 +102,6 @@ function deriveEndpoint(host: string): string {
 function mergePathValue(prependValue: string, existingValue: string | undefined): string {
   if (!existingValue) return prependValue;
   return `${prependValue}${delimiter}${existingValue}`;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function resolveConfigPath(): string | null {
-  const explicit = process.env.PI_NEON_PSQL_CONFIG;
-  const candidates = [
-    explicit,
-    PROJECT_CONFIG_PATH,
-    LOCAL_EXTENSION_CONFIG_PATH,
-    GLOBAL_EXTENSION_CONFIG_PATH,
-  ].filter(isNonEmptyString);
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-function loadConfig(): ResolvedConfig | null {
-  const configPath = resolveConfigPath();
-  if (!configPath) return null;
-
-  let raw: FileConfig;
-  try {
-    raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as FileConfig;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[neon-psql] Failed to parse config ${configPath}: ${message}`);
-    return null;
-  }
-
-  if (raw.enabled === false) return null;
-
-  return {
-    path: configPath,
-    injectIntoBash: raw.injectIntoBash ?? true,
-    injectPythonShim: raw.injectPythonShim ?? true,
-    logPath: raw.logPath
-      ? join(process.cwd(), raw.logPath)
-      : join(process.cwd(), DEFAULT_LOG_RELATIVE_PATH),
-    sourceEnv: {
-      host: raw.sourceEnv?.host ?? DEFAULT_SOURCE_ENV.host,
-      port: raw.sourceEnv?.port ?? DEFAULT_SOURCE_ENV.port,
-      user: raw.sourceEnv?.user ?? DEFAULT_SOURCE_ENV.user,
-      password: raw.sourceEnv?.password ?? DEFAULT_SOURCE_ENV.password,
-      database: raw.sourceEnv?.database ?? DEFAULT_SOURCE_ENV.database,
-    },
-    injectEnv: {
-      ...DEFAULT_INJECT_ENV,
-      ...(raw.injectEnv ?? {}),
-    },
-  };
 }
 
 function readRuntimeEnv(envName: string): string | undefined {
@@ -708,7 +589,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  const config = loadConfig();
+  const config = loadConfig({ extensionDir: __dirname });
   if (!config) return;
 
   if (config.injectIntoBash) {
