@@ -165,6 +165,47 @@ describe("BrokerDB", () => {
     expect(db.getAgents().map((agent) => agent.name)).toEqual(["Hyper Owl", "Hyper Owl 2"]);
   });
 
+  it("startup reconciliation marks prior agents disconnected until they reconnect by stableId", () => {
+    const dbPath = path.join(dir, "restart.db");
+    const firstDb = new BrokerDB(dbPath);
+    firstDb.initialize();
+
+    const original = firstDb.registerAgent(
+      "a1",
+      "Hyper Owl",
+      "🦉",
+      100,
+      undefined,
+      "host:session:/tmp/a",
+    );
+    firstDb.createThread("t-restart", "slack", "C1", original.id);
+    firstDb.close();
+
+    const restartedDb = new BrokerDB(dbPath);
+    restartedDb.initialize();
+
+    expect(restartedDb.getAgents()).toEqual([]);
+    expect(restartedDb.getAgentById(original.id)?.disconnectedAt).toBeTruthy();
+    expect(restartedDb.getAgentById(original.id)?.resumableUntil).toBeTruthy();
+    expect(restartedDb.getThread("t-restart")?.ownerAgent).toBe(original.id);
+
+    const resumed = restartedDb.registerAgent(
+      "a2",
+      "Different Owl",
+      "🦎",
+      200,
+      undefined,
+      "host:session:/tmp/a",
+    );
+
+    expect(resumed.id).toBe(original.id);
+    expect(resumed.name).toBe("Hyper Owl");
+    expect(resumed.emoji).toBe("🦉");
+    expect(restartedDb.getThread("t-restart")?.ownerAgent).toBe(original.id);
+
+    restartedDb.close();
+  });
+
   it("unregisterAgent hides agent from connected list, keeps the record, and releases claims", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
     db.createThread("t-unregister", "slack", "#general", "a1");
