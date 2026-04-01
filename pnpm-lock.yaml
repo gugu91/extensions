@@ -41,23 +41,11 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2(@types/node@22.19.11)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.11)(yaml@2.8.2))
 
-  neon-psql:
-    dependencies:
-      "@gugu91/pi-ext-types":
-        specifier: workspace:*
-        version: link:../types
+  neon-psql: {}
 
-  nvim-bridge:
-    dependencies:
-      "@gugu91/pi-ext-types":
-        specifier: workspace:*
-        version: link:../types
+  nvim-bridge: {}
 
-  slack-bridge:
-    dependencies:
-      "@gugu91/pi-ext-types":
-        specifier: workspace:*
-        version: link:../types
+  slack-bridge: {}
 
   types: {}
 

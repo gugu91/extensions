@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.1",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./slack-bridge/index.ts",
+      "./nvim-bridge/index.ts",
+      "./neon-psql/index.ts"
+    ]
+  },
   "scripts": {
     "format": "pnpm format:ts && pnpm format:lua",
     "format:ts": "prettier --write .",

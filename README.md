@@ -22,16 +22,16 @@ pnpm install
 pnpm lint && pnpm typecheck && pnpm test
 ```
 
-## Install an extension
+## Install extensions
 
-Each extension is a standalone [pi package](https://github.com/nicholasgasior/pi-coding-agent/blob/main/docs/packages.md)
-and can be installed directly:
+The repo is a [pi package](https://github.com/nicholasgasior/pi-coding-agent/blob/main/docs/packages.md)
+— all three extensions are declared in the root `pi` manifest.
 
 ```bash
-# From git (recommended)
+# Install all extensions from git
 pi install git:github.com/gugu91/extensions -l
 
-# Or symlink for local development
+# Or symlink individual extensions for local development
 ln -s "$(pwd)/slack-bridge" ~/.pi/agent/extensions/slack-bridge
 ln -s "$(pwd)/nvim-bridge"  ~/.pi/agent/extensions/nvim-bridge
 ln -s "$(pwd)/neon-psql"    ~/.pi/agent/extensions/neon-psql

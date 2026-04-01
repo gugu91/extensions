@@ -12,9 +12,6 @@
       "./index.ts"
     ]
   },
-  "dependencies": {
-    "@gugu91/pi-ext-types": "workspace:*"
-  },
   "scripts": {
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
