@@ -246,7 +246,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
 
     expect(result.reapedAgentIds).toContain(reg.agentId);
     expect(db.getThread("t-stale")?.ownerAgent).toBeNull();
-    expect(db.getAgentById(reg.agentId)).not.toBeNull();
+    expect(db.getAgentById(reg.agentId)).toBeNull();
     expect(db.getAgents()).toEqual([]);
   });
 

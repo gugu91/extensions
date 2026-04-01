@@ -17,12 +17,20 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
   repairedThreadClaims = 0;
   repairedAgentIds: string[] = [];
   requeuedAgents: string[] = [];
+  methodCalls: string[] = [];
 
   pruneStaleAgents(_staleAfterMs: number): string[] {
+    this.methodCalls.push("prune");
     return [...this.staleAgents];
   }
 
+  purgeDisconnectedAgents(): string[] {
+    this.methodCalls.push("purge");
+    return [];
+  }
+
   repairThreadOwnership(): { releasedClaimCount: number; releasedAgentIds: string[] } {
+    this.methodCalls.push("repair");
     return {
       releasedClaimCount: this.repairedThreadClaims,
       releasedAgentIds: [...this.repairedAgentIds],
@@ -199,6 +207,15 @@ describe("runBrokerMaintenancePass", () => {
     });
 
     expect(db.requeuedAgents).toEqual(["ghost-1", "ghost-2"]);
+  });
+
+  it("purges disconnected ghosts immediately after stale reaping", () => {
+    runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(db.methodCalls.slice(0, 3)).toEqual(["prune", "purge", "repair"]);
   });
 
   it("surfaces stale-agent and orphaned-thread repair activity", () => {

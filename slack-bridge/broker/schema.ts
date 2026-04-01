@@ -503,6 +503,30 @@ export class BrokerDB implements BrokerDBInterface {
     });
   }
 
+  purgeDisconnectedAgents(): string[] {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const rows = db
+      .prepare(
+        `SELECT id FROM agents
+         WHERE disconnected_at IS NOT NULL
+           AND (resumable_until IS NULL OR resumable_until <= ?)`
+      )
+      .all(now) as Array<{ id: string }>;
+
+    if (rows.length === 0) {
+      return [];
+    }
+
+    db.prepare(
+      `DELETE FROM agents
+       WHERE disconnected_at IS NOT NULL
+         AND (resumable_until IS NULL OR resumable_until <= ?)`
+    ).run(now);
+
+    return rows.map((row) => row.id);
+  }
+
   updateAgentStatus(id: string, status: "working" | "idle"): void {
     const db = this.getDb();
     db.prepare("UPDATE agents SET status = ?, last_seen = ? WHERE id = ?").run(

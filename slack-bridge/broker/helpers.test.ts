@@ -350,6 +350,25 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")).not.toBeNull();
   });
 
+  it("purgeDisconnectedAgents deletes only expired disconnected agents", () => {
+    db.registerAgent("active", "Active", "🟢", 1);
+    db.registerAgent("resumable", "Resumable", "🟡", 2);
+    db.registerAgent("ghost", "Ghost", "⚫️", 3);
+    db.registerAgent("gone", "Gone", "⚪️", 4);
+
+    db.disconnectAgent("resumable", 60_000);
+    db.disconnectAgent("ghost", 0);
+    db.unregisterAgent("gone");
+
+    const purged = db.purgeDisconnectedAgents();
+
+    expect(purged.sort()).toEqual(["ghost", "gone"]);
+    expect(db.getAgentById("active")).not.toBeNull();
+    expect(db.getAgentById("resumable")).not.toBeNull();
+    expect(db.getAgentById("ghost")).toBeNull();
+    expect(db.getAgentById("gone")).toBeNull();
+  });
+
   it("queueUnroutedMessage persists pending backlog without assigning an owner", () => {
     const backlog = db.queueUnroutedMessage(
       {
@@ -411,6 +430,7 @@ describe("BrokerDB", () => {
     });
 
     expect(result.reapedAgentIds).toContain("worker-1");
+    expect(db.getAgentById("worker-1")).toBeNull();
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-orphan");
