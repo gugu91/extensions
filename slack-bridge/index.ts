@@ -1448,7 +1448,7 @@ export default function (pi: ExtensionAPI) {
     label: "Pinet Message",
     description: "Send a message to another connected Pinet agent.",
     promptSnippet:
-      "Send a message to another connected Pinet agent. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
+      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from.",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent name or ID" }),
       message: Type.String({ description: "Message body" }),
