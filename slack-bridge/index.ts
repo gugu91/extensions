@@ -1370,6 +1370,8 @@ export default function (pi: ExtensionAPI) {
 
       const signature = buildRalphLoopAnomalySignature(evaluation);
       const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      // Keep cooldown state across transient clean cycles so flapping anomalies
+      // do not immediately re-notify when they return.
       const shouldDeliverFollowUp =
         followUpPrompt != null &&
         shouldDeliverRalphLoopFollowUp({
@@ -1398,10 +1400,6 @@ export default function (pi: ExtensionAPI) {
           }
         }
       }
-      if (!signature) {
-        lastBrokerRalphLoopFollowUpAt = 0;
-      }
-
       if (signature && signature !== lastBrokerRalphLoopSignature) {
         ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
       } else if (!signature && lastBrokerRalphLoopSignature) {

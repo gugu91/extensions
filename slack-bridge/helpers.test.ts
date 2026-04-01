@@ -851,6 +851,26 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps cooldown active across a transient clean cycle", () => {
+    const deliveredAt = 10_000;
+
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "",
+        lastDeliveredAt: deliveredAt,
+        now: deliveredAt + 15_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-1",
+        lastDeliveredAt: deliveredAt,
+        now: deliveredAt + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS - 1,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("buildRalphLoopFollowUpMessage", () => {
