@@ -137,6 +137,45 @@ export function isChannelId(nameOrId: string): boolean {
   return /^[CGD][A-Z0-9]+$/.test(nameOrId);
 }
 
+// ─── Agent list formatting ───────────────────────────────
+
+export interface AgentDisplayInfo {
+  emoji: string;
+  name: string;
+  id: string;
+  status: "working" | "idle";
+  metadata?: { cwd?: string; branch?: string; host?: string } | null;
+}
+
+export function shortenPath(p: string, homedir: string): string {
+  if (p === homedir) return "~";
+  const prefix = homedir.endsWith("/") ? homedir : homedir + "/";
+  if (p.startsWith(prefix)) {
+    return "~/" + p.slice(prefix.length);
+  }
+  return p;
+}
+
+export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): string {
+  if (agents.length === 0) return "(no agents connected)";
+
+  return agents
+    .map((a) => {
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}`;
+
+      const meta = a.metadata;
+      if (meta && (meta.cwd || meta.branch || meta.host)) {
+        const cwd = meta.cwd ? shortenPath(meta.cwd, homedir) : "";
+        const branch = meta.branch ? ` (${meta.branch})` : "";
+        const host = meta.host ? ` @ ${meta.host}` : "";
+        line += `\n   ${cwd}${branch}${host}`;
+      }
+
+      return line;
+    })
+    .join("\n");
+}
+
 // ─── Random agent names ──────────────────────────────────
 
 const ADJECTIVES = [

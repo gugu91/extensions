@@ -262,6 +262,8 @@ export class BrokerSocketServer {
           return this.handleThreadClaim(req, state);
         case "agent.message":
           return this.handleAgentMessage(req, state);
+        case "status.update":
+          return this.handleStatusUpdate(req, state);
         case "slack.proxy":
           return await this.handleSlackProxy(req, state);
         default:
@@ -280,9 +282,13 @@ export class BrokerSocketServer {
     const name = typeof params.name === "string" ? params.name : "anonymous";
     const emoji = typeof params.emoji === "string" ? params.emoji : "";
     const pid = typeof params.pid === "number" ? params.pid : 0;
+    const metadata =
+      params.metadata && typeof params.metadata === "object"
+        ? (params.metadata as Record<string, unknown>)
+        : undefined;
 
     const agentId = state.agentId ?? crypto.randomUUID();
-    const agent = this.db.registerAgent(agentId, name, emoji, pid);
+    const agent = this.db.registerAgent(agentId, name, emoji, pid, metadata);
     state.agentId = agentId;
 
     return rpcOk(req.id, { agentId: agent.id, name: agent.name, emoji: agent.emoji });
@@ -467,6 +473,19 @@ export class BrokerSocketServer {
     );
 
     return rpcOk(req.id, { ok: true, messageId: msg.id });
+  }
+
+  // ─── Status update handler ─────────────────────────────
+
+  private handleStatusUpdate(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const status = params.status === "working" ? "working" : "idle";
+    this.db.updateAgentStatus(state.agentId, status);
+    return rpcOk(req.id, { ok: true });
   }
 
   // ─── Slack proxy handler ──────────────────────────────
