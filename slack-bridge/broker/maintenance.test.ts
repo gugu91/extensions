@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { AgentInfo, BacklogEntry, ThreadInfo } from "./types.js";
 import {
   DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
+  OVERLOADED_INBOX_THRESHOLD,
   runBrokerMaintenancePass,
   selectBacklogAssignee,
   type BrokerMaintenanceDB,
@@ -14,13 +15,23 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
   pendingInboxCounts = new Map<string, number>();
   staleAgents: string[] = [];
   repairedThreadClaims = 0;
+  repairedAgentIds: string[] = [];
+  requeuedAgents: string[] = [];
 
   pruneStaleAgents(_staleAfterMs: number): string[] {
     return [...this.staleAgents];
   }
 
-  repairThreadOwnership(): number {
-    return this.repairedThreadClaims;
+  repairThreadOwnership(): { releasedClaimCount: number; releasedAgentIds: string[] } {
+    return {
+      releasedClaimCount: this.repairedThreadClaims,
+      releasedAgentIds: [...this.repairedAgentIds],
+    };
+  }
+
+  requeueUndeliveredMessages(agentId: string): number {
+    this.requeuedAgents.push(agentId);
+    return 0;
   }
 
   getPendingBacklog(limit = 50): BacklogEntry[] {
@@ -178,6 +189,18 @@ describe("runBrokerMaintenancePass", () => {
     expect(result.anomalies).toContain("pending unrouted backlog has no live workers");
   });
 
+  it("requeues disconnected-agent inbox work after ownership repair", () => {
+    db.repairedThreadClaims = 2;
+    db.repairedAgentIds = ["ghost-1", "ghost-2"];
+
+    runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(db.requeuedAgents).toEqual(["ghost-1", "ghost-2"]);
+  });
+
   it("surfaces stale-agent and orphaned-thread repair activity", () => {
     db.agents = [makeAgent({ id: "worker-1", name: "Worker" })];
     db.staleAgents = ["ghost-1"];
@@ -190,5 +213,17 @@ describe("runBrokerMaintenancePass", () => {
 
     expect(result.anomalies).toContain("reaped 1 stale agent");
     expect(result.anomalies).toContain("released 2 orphaned thread claims");
+  });
+
+  it("reports overloaded workers", () => {
+    db.agents = [makeAgent({ id: "worker-1", name: "Worker" })];
+    db.pendingInboxCounts.set("worker-1", OVERLOADED_INBOX_THRESHOLD);
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.anomalies).toContain("overloaded workers: Worker");
   });
 });

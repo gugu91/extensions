@@ -26,18 +26,12 @@ export function defaultSocketPath(): string {
 // Re-export as static for easier access
 export const DEFAULT_SOCKET_PATH = defaultSocketPath();
 export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 15_000;
-export const DEFAULT_PRUNE_INTERVAL_MS = 5_000;
 
 // ─── Listen target: Unix socket path or TCP host:port ────
 
 export type ListenTarget =
   | { type: "unix"; path: string }
   | { type: "tcp"; host: string; port: number };
-
-export interface BrokerSocketServerOptions {
-  heartbeatTimeoutMs?: number;
-  pruneIntervalMs?: number;
-}
 
 // ─── Connection state ────────────────────────────────────
 
@@ -72,22 +66,16 @@ export class BrokerSocketServer {
   private readonly router: MessageRouter;
   private readonly slackProxyFn: SlackProxyFn | null;
   private readonly connections = new Map<net.Socket, ConnectionState>();
-  private readonly heartbeatTimeoutMs: number;
-  private readonly pruneIntervalMs: number;
-  private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private assignedPort: number | null = null;
 
   constructor(
     db: BrokerDB,
     target?: ListenTarget | string,
     slackProxyFn?: SlackProxyFn,
-    options: BrokerSocketServerOptions = {},
   ) {
     this.db = db;
     this.router = new MessageRouter(db);
     this.slackProxyFn = slackProxyFn ?? null;
-    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
-    this.pruneIntervalMs = options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
     if (typeof target === "string") {
       this.target = { type: "unix", path: target };
     } else if (target) {
@@ -115,7 +103,6 @@ export class BrokerSocketServer {
 
       if (this.target.type === "unix") {
         this.server.listen(this.target.path, () => {
-          this.startPruning();
           resolve();
         });
       } else {
@@ -124,7 +111,6 @@ export class BrokerSocketServer {
           if (addr && typeof addr === "object") {
             this.assignedPort = addr.port;
           }
-          this.startPruning();
           resolve();
         });
       }
@@ -132,8 +118,6 @@ export class BrokerSocketServer {
   }
 
   async stop(): Promise<void> {
-    this.stopPruning();
-
     // Clean up all connected agents. Clear agentId so the async
     // close handler won't try to unregister after db is closed.
     for (const [socket, state] of this.connections) {
@@ -181,24 +165,6 @@ export class BrokerSocketServer {
       host: this.target.host,
       port: this.assignedPort ?? this.target.port,
     };
-  }
-
-  private startPruning(): void {
-    this.stopPruning();
-    this.pruneTimer = setInterval(() => {
-      try {
-        this.db.pruneStaleAgents(this.heartbeatTimeoutMs);
-      } catch {
-        /* best effort */
-      }
-    }, this.pruneIntervalMs);
-    this.pruneTimer.unref?.();
-  }
-
-  private stopPruning(): void {
-    if (!this.pruneTimer) return;
-    clearInterval(this.pruneTimer);
-    this.pruneTimer = null;
   }
 
   private disconnectDuplicateConnections(agentId: string, currentSocket: net.Socket): void {

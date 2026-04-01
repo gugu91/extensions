@@ -4,9 +4,15 @@ export const DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS = 5_000;
 export const DEFAULT_BUSY_ASSIGNMENT_AGE_MS = 30_000;
 export const OVERLOADED_INBOX_THRESHOLD = 10;
 
+export interface ThreadRepairResult {
+  releasedClaimCount: number;
+  releasedAgentIds: string[];
+}
+
 export interface BrokerMaintenanceDB {
   pruneStaleAgents(staleAfterMs: number): string[];
-  repairThreadOwnership(): number;
+  repairThreadOwnership(): ThreadRepairResult;
+  requeueUndeliveredMessages(agentId: string, reason?: string): number;
   getPendingBacklog(limit?: number): BacklogEntry[];
   getBacklogCount(status?: BacklogEntry["status"]): number;
   getAgents(): AgentInfo[];
@@ -70,7 +76,11 @@ export function runBrokerMaintenancePass(
   const now = options.now ?? Date.now();
   const busyAssignmentAgeMs = options.busyAssignmentAgeMs ?? DEFAULT_BUSY_ASSIGNMENT_AGE_MS;
   const reapedAgentIds = db.pruneStaleAgents(options.staleAfterMs);
-  const repairedThreadClaims = db.repairThreadOwnership();
+  const repaired = db.repairThreadOwnership();
+  for (const agentId of repaired.releasedAgentIds) {
+    db.requeueUndeliveredMessages(agentId, "agent_disconnected");
+  }
+  const repairedThreadClaims = repaired.releasedClaimCount;
   const brokerAgentId = options.brokerAgentId;
 
   const agents = db

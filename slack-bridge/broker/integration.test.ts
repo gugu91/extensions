@@ -18,16 +18,6 @@ function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-async function waitFor(fn: () => boolean, timeoutMs = 2000, intervalMs = 10): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!fn()) {
-    if (Date.now() > deadline) {
-      throw new Error("waitFor timed out");
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-}
-
 // ─── Integration: client ↔ server ↔ DB ──────────────────
 
 describe("broker integration — client ↔ server ↔ DB", () => {
@@ -213,27 +203,19 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
-  it("stale pruning disconnects silent agents and releases claims", async () => {
-    client.disconnect();
-    await server.stop();
-
-    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, undefined, {
-      heartbeatTimeoutMs: 50,
-      pruneIntervalMs: 10,
-    });
-    await server.start();
-
-    const info = server.getConnectInfo();
-    if (info.type !== "tcp") throw new Error("Expected TCP");
-    client = new BrokerClient({ host: info.host, port: info.port });
-    await client.connect();
-
+  it("maintenance pruning disconnects stale agents and releases claims", async () => {
     const reg = await client.register("stale-agent", "💤");
     await client.claimThread("t-stale");
 
-    await waitFor(() => db.getAgents().length === 0, 1000);
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 0,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.reapedAgentIds).toContain(reg.agentId);
     expect(db.getThread("t-stale")?.ownerAgent).toBeNull();
     expect(db.getAgentById(reg.agentId)).not.toBeNull();
+    expect(db.getAgents()).toEqual([]);
   });
 
   it("agent.message delivers to target by name", async () => {

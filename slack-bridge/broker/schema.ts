@@ -346,26 +346,29 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
     const now = new Date().toISOString();
-    const staleRows = db
-      .prepare("SELECT id FROM agents WHERE disconnected_at IS NULL AND last_heartbeat <= ?")
-      .all(cutoff) as Array<{ id: string }>;
 
-    if (staleRows.length === 0) {
-      return [];
-    }
+    return this.withTransaction(() => {
+      const staleRows = db
+        .prepare("SELECT id FROM agents WHERE disconnected_at IS NULL AND last_heartbeat <= ?")
+        .all(cutoff) as Array<{ id: string }>;
 
-    const disconnectAgent = db.prepare(
-      "UPDATE agents SET disconnected_at = COALESCE(disconnected_at, ?) WHERE id = ?",
-    );
-    const releaseClaims = db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?");
+      if (staleRows.length === 0) {
+        return [];
+      }
 
-    for (const row of staleRows) {
-      this.requeueUndeliveredMessages(row.id, "agent_disconnected");
-      disconnectAgent.run(now, row.id);
-      releaseClaims.run(row.id);
-    }
+      const disconnectAgent = db.prepare(
+        "UPDATE agents SET disconnected_at = COALESCE(disconnected_at, ?) WHERE id = ?",
+      );
+      const releaseClaims = db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?");
 
-    return staleRows.map((row) => row.id);
+      for (const row of staleRows) {
+        this.requeueUndeliveredMessagesInternal(row.id, "agent_disconnected");
+        disconnectAgent.run(now, row.id);
+        releaseClaims.run(row.id);
+      }
+
+      return staleRows.map((row) => row.id);
+    });
   }
 
   updateAgentStatus(id: string, status: "working" | "idle"): void {
@@ -576,68 +579,37 @@ export class BrokerDB implements BrokerDBInterface {
 
   assignBacklogEntry(id: number, agentId: string): BacklogEntry | null {
     const db = this.getDb();
-    const row = db.prepare("SELECT * FROM unrouted_backlog WHERE id = ?").get(id) as
-      | BacklogRow
-      | undefined;
-    if (!row) return null;
 
-    const now = new Date().toISOString();
-    db.prepare(
-      `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
-       VALUES (?, ?, 0, ?)`,
-    ).run(agentId, row.message_id, now);
+    return this.withTransaction(() => {
+      const row = db.prepare("SELECT * FROM unrouted_backlog WHERE id = ? AND status = 'pending'").get(id) as
+        | BacklogRow
+        | undefined;
+      if (!row) return null;
 
-    db.prepare(
-      `UPDATE unrouted_backlog
-       SET status = 'assigned',
-           assigned_agent_id = ?,
-           attempt_count = attempt_count + 1,
-           last_attempt_at = ?,
-           updated_at = ?
-       WHERE id = ?`,
-    ).run(agentId, now, now, id);
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
+         VALUES (?, ?, 0, ?)`,
+      ).run(agentId, row.message_id, now);
 
-    this.updateThread(row.thread_id, { ownerAgent: agentId, channel: row.channel });
+      db.prepare(
+        `UPDATE unrouted_backlog
+         SET status = 'assigned',
+             assigned_agent_id = ?,
+             attempt_count = attempt_count + 1,
+             last_attempt_at = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(agentId, now, now, id);
 
-    return this.getBacklogById(id);
+      this.updateThread(row.thread_id, { ownerAgent: agentId, channel: row.channel });
+
+      return this.getBacklogById(id);
+    });
   }
 
   requeueUndeliveredMessages(agentId: string, reason = "agent_disconnected"): number {
-    const db = this.getDb();
-    const rows = db
-      .prepare(
-        `SELECT
-           i.id AS inbox_id,
-           m.id AS message_id,
-           m.thread_id AS thread_id,
-           m.metadata AS metadata
-         FROM inbox i
-         JOIN messages m ON m.id = i.message_id
-         WHERE i.agent_id = ?
-           AND i.delivered = 0
-           AND m.direction = 'inbound'
-           AND m.source = 'slack'`,
-      )
-      .all(agentId) as Array<{
-      inbox_id: number;
-      message_id: number;
-      thread_id: string;
-      metadata: string | null;
-    }>;
-
-    if (rows.length === 0) {
-      return 0;
-    }
-
-    const markDelivered = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
-    for (const row of rows) {
-      const metadata = row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {};
-      const channel = typeof metadata.channel === "string" ? metadata.channel : "";
-      this.upsertBacklogEntry(row.message_id, row.thread_id, channel, reason, "pending", null);
-      markDelivered.run(row.inbox_id);
-    }
-
-    return rows.length;
+    return this.withTransaction(() => this.requeueUndeliveredMessagesInternal(agentId, reason));
   }
 
   getPendingInboxCount(agentId: string): number {
@@ -654,17 +626,40 @@ export class BrokerDB implements BrokerDBInterface {
     return Number(result.changes ?? 0);
   }
 
-  repairThreadOwnership(): number {
+  repairThreadOwnership(): { releasedClaimCount: number; releasedAgentIds: string[] } {
     const db = this.getDb();
-    const result = db.prepare(
-      `UPDATE threads
-       SET owner_agent = NULL
-       WHERE owner_agent IS NOT NULL
-         AND owner_agent NOT IN (
-           SELECT id FROM agents WHERE disconnected_at IS NULL
-         )`,
-    ).run();
-    return Number(result.changes ?? 0);
+
+    return this.withTransaction(() => {
+      const rows = db
+        .prepare(
+          `SELECT owner_agent, COUNT(*) AS claim_count
+           FROM threads
+           WHERE owner_agent IS NOT NULL
+             AND owner_agent NOT IN (
+               SELECT id FROM agents WHERE disconnected_at IS NULL
+             )
+           GROUP BY owner_agent`,
+        )
+        .all() as Array<{ owner_agent: string; claim_count: number }>;
+
+      if (rows.length === 0) {
+        return { releasedClaimCount: 0, releasedAgentIds: [] };
+      }
+
+      db.prepare(
+        `UPDATE threads
+         SET owner_agent = NULL
+         WHERE owner_agent IS NOT NULL
+           AND owner_agent NOT IN (
+             SELECT id FROM agents WHERE disconnected_at IS NULL
+           )`,
+      ).run();
+
+      return {
+        releasedClaimCount: rows.reduce((count, row) => count + Number(row.claim_count), 0),
+        releasedAgentIds: rows.map((row) => row.owner_agent),
+      };
+    });
   }
 
   // ─── Messages + Inbox ────────────────────────────────
@@ -811,6 +806,47 @@ export class BrokerDB implements BrokerDBInterface {
 
   // ─── Internal ────────────────────────────────────────
 
+  private requeueUndeliveredMessagesInternal(
+    agentId: string,
+    reason = "agent_disconnected",
+  ): number {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT
+           i.id AS inbox_id,
+           m.id AS message_id,
+           m.thread_id AS thread_id,
+           m.metadata AS metadata
+         FROM inbox i
+         JOIN messages m ON m.id = i.message_id
+         WHERE i.agent_id = ?
+           AND i.delivered = 0
+           AND m.direction = 'inbound'
+           AND m.source = 'slack'`,
+      )
+      .all(agentId) as Array<{
+      inbox_id: number;
+      message_id: number;
+      thread_id: string;
+      metadata: string | null;
+    }>;
+
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const markDelivered = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
+    for (const row of rows) {
+      const metadata = row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {};
+      const channel = typeof metadata.channel === "string" ? metadata.channel : "";
+      this.upsertBacklogEntry(row.message_id, row.thread_id, channel, reason, "pending", null);
+      markDelivered.run(row.inbox_id);
+    }
+
+    return rows.length;
+  }
+
   private getBacklogById(id: number): BacklogEntry | null {
     const db = this.getDb();
     const row = db.prepare("SELECT * FROM unrouted_backlog WHERE id = ?").get(id) as
@@ -859,6 +895,23 @@ export class BrokerDB implements BrokerDBInterface {
       throw new Error(`Failed to upsert backlog entry for message ${messageId}`);
     }
     return rowToBacklog(row);
+  }
+
+  private withTransaction<T>(operation: () => T): T {
+    const db = this.getDb();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* best effort */
+      }
+      throw err;
+    }
   }
 
   private getDb(): DatabaseSync {

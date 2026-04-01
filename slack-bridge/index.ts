@@ -1135,6 +1135,7 @@ export default function (pi: ExtensionAPI) {
         /* best effort */
       }
     }, HEARTBEAT_INTERVAL_MS);
+    brokerHeartbeatTimer.unref?.();
   }
 
   function stopBrokerHeartbeat(): void {
