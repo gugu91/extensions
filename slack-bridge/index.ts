@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
@@ -14,6 +15,8 @@ import {
   stripBotMention,
   isChannelId,
   buildSlackRequest,
+  buildAgentDisplayInfo,
+  rankAgentsForRouting,
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
@@ -99,18 +102,69 @@ export default function (pi: ExtensionAPI) {
   const guardrails: SecurityGuardrails = settings.security ?? {};
   const securityPrompt = buildSecurityPrompt(guardrails);
 
+  function detectProjectTools(repoRoot: string, cwd: string): string[] {
+    const tools = new Set<string>();
+
+    for (const candidate of [path.join(cwd, "package.json"), path.join(repoRoot, "package.json")]) {
+      try {
+        if (!fs.existsSync(candidate)) continue;
+        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
+          scripts?: Record<string, string>;
+        };
+        const scripts = parsed.scripts ?? {};
+        if (scripts.test) tools.add("test");
+        if (scripts.lint) tools.add("lint");
+        if (scripts.typecheck) tools.add("typecheck");
+        if (scripts.build) tools.add("build");
+      } catch {
+        // Ignore unreadable package.json files.
+      }
+    }
+
+    tools.add("git");
+    return [...tools].sort();
+  }
+
   function getAgentMetadata(role: "broker" | "worker" = "worker"): Record<string, unknown> {
     let branch = "";
+    let repoRoot = "";
+    try {
+      repoRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+    } catch {
+      /* not in a git repo */
+    }
     try {
       branch = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
     } catch {
       /* not in a git repo */
     }
+
+    const cwd = process.cwd();
+    const resolvedRepoRoot = repoRoot || cwd;
+    const repo = path.basename(resolvedRepoRoot);
+    const tools = detectProjectTools(resolvedRepoRoot, cwd);
+    const tags = [
+      `role:${role}`,
+      `repo:${repo}`,
+      ...(branch ? [`branch:${branch}`] : []),
+      ...tools.map((tool) => `tool:${tool}`),
+    ];
+
     return {
-      cwd: process.cwd(),
+      cwd,
       branch,
       host: os.hostname(),
       role,
+      repo,
+      repoRoot: repoRoot || undefined,
+      capabilities: {
+        repo,
+        repoRoot: repoRoot || undefined,
+        branch: branch || undefined,
+        role,
+        tools,
+        tags,
+      },
     };
   }
 
@@ -1163,7 +1217,6 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Pinet broker health recovered", "info");
       }
       lastBrokerMaintenanceSignature = signature;
-
     } catch (err) {
       ctx.ui.notify(`Pinet maintenance failed: ${msg(err)}`, "error");
     } finally {
@@ -1260,42 +1313,128 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "pinet_agents",
     label: "Pinet Agents",
-    description: "List all connected Pinet agents.",
-    promptSnippet: "List all connected Pinet agents.",
-    parameters: Type.Object({}),
-    async execute() {
+    description: "List Pinet agents, including liveness and capability visibility.",
+    promptSnippet: "List and optionally rank Pinet agents.",
+    parameters: Type.Object({
+      repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
+      branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
+      role: Type.Optional(
+        Type.String({ description: "Preferred agent role, e.g. broker or worker" }),
+      ),
+      required_tools: Type.Optional(
+        Type.String({ description: "Comma-separated required capability/tool tags" }),
+      ),
+      task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
+    }),
+    async execute(_toolCallId, params) {
       requireToolPolicy("pinet_agents", undefined);
 
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
 
-      let agents: AgentDisplayInfo[];
+      const includeGhosts = true;
+      const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
+      const nowMs = Date.now();
+
+      const isRecentDisconnected = (agent: { disconnectedAt?: string | null }): boolean => {
+        if (!agent.disconnectedAt) return true;
+        const disconnectedMs = Date.parse(agent.disconnectedAt);
+        return !Number.isNaN(disconnectedMs) && nowMs - disconnectedMs <= recentGhostWindowMs;
+      };
+
+      const toDisplay = (agent: {
+        emoji: string;
+        name: string;
+        id: string;
+        status: "working" | "idle";
+        metadata: Record<string, unknown> | null;
+        lastHeartbeat: string;
+        disconnectedAt?: string | null;
+        resumableUntil?: string | null;
+      }): AgentDisplayInfo =>
+        buildAgentDisplayInfo(agent, {
+          now: nowMs,
+          heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+          heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        });
+
+      let rawAgents: Array<{
+        emoji: string;
+        name: string;
+        id: string;
+        status: "working" | "idle";
+        metadata: Record<string, unknown> | null;
+        lastHeartbeat: string;
+        disconnectedAt?: string | null;
+        resumableUntil?: string | null;
+      }>;
       if (brokerRole === "broker" && activeBroker) {
-        agents = (activeBroker.db as BrokerDB).getAgents().map((a) => ({
-          emoji: a.emoji,
-          name: a.name,
-          id: a.id,
-          status: a.status,
-          metadata: a.metadata as AgentDisplayInfo["metadata"],
-        }));
+        rawAgents = (activeBroker.db as BrokerDB)
+          .getAllAgents()
+          .filter((agent) => includeGhosts || !agent.disconnectedAt)
+          .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
+          .map((agent) => ({
+            emoji: agent.emoji,
+            name: agent.name,
+            id: agent.id,
+            status: agent.status,
+            metadata: agent.metadata,
+            lastHeartbeat: agent.lastHeartbeat,
+            disconnectedAt: agent.disconnectedAt,
+            resumableUntil: agent.resumableUntil,
+          }));
       } else if (brokerRole === "follower" && brokerClient) {
-        const raw = await (brokerClient.client as BrokerClient).listAgents();
-        agents = raw.map((a) => ({
-          emoji: a.emoji,
-          name: a.name,
-          id: a.id,
-          status: a.status ?? "idle",
-          metadata: a.metadata as AgentDisplayInfo["metadata"],
-        }));
+        rawAgents = (await (brokerClient.client as BrokerClient).listAgents(includeGhosts))
+          .filter((agent) => includeGhosts || !agent.disconnectedAt)
+          .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
+          .map((agent) => ({
+            emoji: agent.emoji,
+            name: agent.name,
+            id: agent.id,
+            status: agent.status ?? "idle",
+            metadata: agent.metadata,
+            lastHeartbeat: agent.lastHeartbeat,
+            disconnectedAt: agent.disconnectedAt,
+            resumableUntil: agent.resumableUntil,
+          }));
       } else {
         throw new Error("Pinet is in an unexpected state.");
       }
 
-      const text = formatAgentList(agents, os.homedir());
+      const visibleAgents = rawAgents.map(toDisplay);
+      const hint = {
+        repo: params.repo,
+        branch: params.branch,
+        role: params.role,
+        requiredTools: params.required_tools
+          ?.split(",")
+          .map((tool: string) => tool.trim())
+          .filter(Boolean),
+        task: params.task,
+      };
+      const hasHint = Boolean(
+        hint.repo || hint.branch || hint.role || (hint.requiredTools?.length ?? 0) > 0 || hint.task,
+      );
+      const agents = rankAgentsForRouting(visibleAgents, hint);
+
+      const header = hasHint
+        ? `Agent routing hints: ${[
+            hint.repo ? `repo=${hint.repo}` : null,
+            hint.branch ? `branch=${hint.branch}` : null,
+            hint.role ? `role=${hint.role}` : null,
+            hint.requiredTools && hint.requiredTools.length > 0
+              ? `tools=${hint.requiredTools.join(",")}`
+              : null,
+            hint.task ? `task=${hint.task}` : null,
+          ]
+            .filter((item): item is string => Boolean(item))
+            .join(" · ")}\n\n`
+        : "";
+      const text = `${header}${formatAgentList(agents, os.homedir())}`;
       return {
         content: [{ type: "text", text }],
-        details: { agents },
+        details: { agents, hint },
       };
     },
   });
@@ -1336,7 +1475,10 @@ export default function (pi: ExtensionAPI) {
         const selfId = selfAgent.id;
         applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
-        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(selfId, "broker_delegate");
+        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(
+          selfId,
+          "broker_delegate",
+        );
         const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
         if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
           ctx.ui.notify(

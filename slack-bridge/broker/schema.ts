@@ -358,6 +358,17 @@ export class BrokerDB implements BrokerDBInterface {
     return rows.map(rowToAgent);
   }
 
+  getAllAgents(): AgentInfo[] {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT * FROM agents
+         ORDER BY CASE WHEN disconnected_at IS NULL THEN 0 ELSE 1 END, connected_at ASC`,
+      )
+      .all() as unknown as AgentRow[];
+    return rows.map(rowToAgent);
+  }
+
   touchAgent(id: string): void {
     const db = this.getDb();
     db.prepare("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), id);

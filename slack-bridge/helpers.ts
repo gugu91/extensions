@@ -139,12 +139,141 @@ export function isChannelId(nameOrId: string): boolean {
 
 // ─── Agent list formatting ───────────────────────────────
 
+export interface AgentCapabilities {
+  repo?: string;
+  repoRoot?: string;
+  branch?: string;
+  role?: string;
+  tools?: string[];
+  tags?: string[];
+}
+
+export type AgentHealth = "healthy" | "stale" | "ghost" | "resumable";
+
 export interface AgentDisplayInfo {
   emoji: string;
   name: string;
   id: string;
   status: "working" | "idle";
-  metadata?: { cwd?: string; branch?: string; host?: string } | null;
+  metadata?: {
+    cwd?: string;
+    branch?: string;
+    host?: string;
+    repo?: string;
+    role?: string;
+    capabilities?: AgentCapabilities | null;
+  } | null;
+  lastHeartbeat?: string;
+  leaseExpiresAt?: string | null;
+  heartbeatAgeMs?: number | null;
+  heartbeatSummary?: string | null;
+  leaseSummary?: string | null;
+  health?: AgentHealth;
+  ghost?: boolean;
+  capabilityTags?: string[];
+  routingScore?: number;
+  routingReasons?: string[];
+}
+
+export interface AgentVisibilityInput {
+  emoji: string;
+  name: string;
+  id: string;
+  status: "working" | "idle";
+  metadata?: Record<string, unknown> | null;
+  lastHeartbeat?: string;
+  disconnectedAt?: string | null;
+  resumableUntil?: string | null;
+}
+
+export interface AgentVisibilityOptions {
+  now?: number;
+  heartbeatTimeoutMs?: number;
+  heartbeatIntervalMs?: number;
+}
+
+export interface AgentRoutingHint {
+  repo?: string;
+  branch?: string;
+  role?: string;
+  requiredTools?: string[];
+  task?: string;
+}
+
+const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 15_000;
+const DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS = 5_000;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.map(asString).filter((item): item is string => Boolean(item));
+  return strings.length > 0 ? strings : undefined;
+}
+
+function parseIsoMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatAge(ms: number | null | undefined): string | null {
+  if (ms == null || !Number.isFinite(ms)) return null;
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatLease(expiresAt: string | null | undefined, nowMs: number): string | null {
+  const expiresMs = parseIsoMs(expiresAt);
+  if (expiresMs == null) return null;
+  const deltaMs = expiresMs - nowMs;
+  if (deltaMs >= 0) {
+    const seconds = Math.max(0, Math.round(deltaMs / 1000));
+    if (seconds < 60) return `lease in ${seconds}s`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `lease in ${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    return `lease in ${hours}h`;
+  }
+
+  const elapsedSeconds = Math.round(Math.abs(deltaMs) / 1000);
+  if (elapsedSeconds < 60) return `lease expired ${elapsedSeconds}s ago`;
+  const minutes = Math.round(elapsedSeconds / 60);
+  if (minutes < 60) return `lease expired ${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `lease expired ${hours}h ago`;
+}
+
+function normalizeTaskTokens(task: string | undefined): string[] {
+  if (!task) return [];
+  return task
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function compareRouting(left: AgentDisplayInfo, right: AgentDisplayInfo): number {
+  if ((left.routingScore ?? 0) !== (right.routingScore ?? 0)) {
+    return (right.routingScore ?? 0) - (left.routingScore ?? 0);
+  }
+  const leftGhost = left.ghost ? 1 : 0;
+  const rightGhost = right.ghost ? 1 : 0;
+  if (leftGhost !== rightGhost) return leftGhost - rightGhost;
+  if (left.status !== right.status) return left.status === "idle" ? -1 : 1;
+  return left.name.localeCompare(right.name);
 }
 
 export function shortenPath(p: string, homedir: string): string {
@@ -154,6 +283,202 @@ export function shortenPath(p: string, homedir: string): string {
     return "~/" + p.slice(prefix.length);
   }
   return p;
+}
+
+export function extractAgentCapabilities(
+  metadata: Record<string, unknown> | null | undefined,
+): AgentCapabilities {
+  const record = asRecord(metadata);
+  const capabilitiesRecord = asRecord(record?.capabilities);
+
+  return {
+    repo: asString(capabilitiesRecord?.repo) ?? asString(record?.repo),
+    repoRoot: asString(capabilitiesRecord?.repoRoot) ?? asString(record?.repoRoot),
+    branch: asString(capabilitiesRecord?.branch) ?? asString(record?.branch),
+    role: asString(capabilitiesRecord?.role) ?? asString(record?.role),
+    tools: asStringArray(capabilitiesRecord?.tools),
+    tags: asStringArray(capabilitiesRecord?.tags),
+  };
+}
+
+export function buildAgentCapabilityTags(capabilities: AgentCapabilities): string[] {
+  const tags = new Set<string>();
+
+  if (capabilities.role) tags.add(`role:${capabilities.role}`);
+  if (capabilities.repo) tags.add(`repo:${capabilities.repo}`);
+  if (capabilities.branch) tags.add(`branch:${capabilities.branch}`);
+  for (const tool of capabilities.tools ?? []) {
+    tags.add(`tool:${tool}`);
+  }
+  for (const tag of capabilities.tags ?? []) {
+    tags.add(tag);
+  }
+
+  return [...tags];
+}
+
+export function buildAgentDisplayInfo(
+  agent: AgentVisibilityInput,
+  options: AgentVisibilityOptions = {},
+): AgentDisplayInfo {
+  const nowMs = options.now ?? Date.now();
+  const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS;
+  const heartbeatMs = parseIsoMs(agent.lastHeartbeat);
+  const heartbeatAgeMs = heartbeatMs == null ? null : Math.max(0, nowMs - heartbeatMs);
+  const computedLeaseExpiresAt =
+    agent.resumableUntil ??
+    (heartbeatMs == null ? null : new Date(heartbeatMs + heartbeatTimeoutMs).toISOString());
+  const disconnectedAtMs = parseIsoMs(agent.disconnectedAt);
+  const resumableUntilMs = parseIsoMs(agent.resumableUntil);
+  const staleThresholdMs = Math.max(
+    heartbeatIntervalMs * 2,
+    heartbeatTimeoutMs - heartbeatIntervalMs,
+  );
+
+  let health: AgentHealth = "healthy";
+  if (disconnectedAtMs != null && resumableUntilMs != null && resumableUntilMs > nowMs) {
+    health = "resumable";
+  } else if (
+    disconnectedAtMs != null ||
+    (heartbeatAgeMs != null && heartbeatAgeMs > heartbeatTimeoutMs)
+  ) {
+    health = "ghost";
+  } else if (heartbeatAgeMs != null && heartbeatAgeMs > staleThresholdMs) {
+    health = "stale";
+  }
+
+  const metadata = asRecord(agent.metadata);
+  const capabilities = extractAgentCapabilities(metadata);
+  const capabilityTags = buildAgentCapabilityTags(capabilities);
+
+  return {
+    emoji: agent.emoji,
+    name: agent.name,
+    id: agent.id,
+    status: agent.status,
+    metadata: metadata
+      ? {
+          cwd: asString(metadata.cwd),
+          branch: asString(metadata.branch),
+          host: asString(metadata.host),
+          repo: asString(metadata.repo) ?? capabilities.repo,
+          role: asString(metadata.role) ?? capabilities.role,
+          capabilities,
+        }
+      : null,
+    lastHeartbeat: agent.lastHeartbeat,
+    leaseExpiresAt: computedLeaseExpiresAt,
+    heartbeatAgeMs,
+    heartbeatSummary: formatAge(heartbeatAgeMs),
+    leaseSummary: formatLease(computedLeaseExpiresAt, nowMs),
+    health,
+    ghost: health === "ghost",
+    capabilityTags,
+  };
+}
+
+export function rankAgentsForRouting(
+  agents: AgentDisplayInfo[],
+  hint: AgentRoutingHint,
+): AgentDisplayInfo[] {
+  const requiredTools = new Set((hint.requiredTools ?? []).map((tool) => tool.toLowerCase()));
+  const taskTokens = normalizeTaskTokens(hint.task);
+
+  const ranked = agents.map((agent) => {
+    let score = 0;
+    const reasons: string[] = [];
+    const capabilities = agent.metadata?.capabilities ?? {};
+    const capabilityTags = agent.capabilityTags ?? [];
+    const searchable = [
+      agent.name,
+      agent.metadata?.repo,
+      capabilities.repo,
+      agent.metadata?.branch,
+      capabilities.branch,
+      agent.metadata?.role,
+      capabilities.role,
+      ...capabilityTags,
+      ...(capabilities.tools ?? []),
+    ]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.toLowerCase());
+
+    if (agent.health === "ghost") {
+      score -= 1000;
+      reasons.push("ghost");
+    } else if (agent.health === "resumable") {
+      score -= 200;
+      reasons.push("resumable");
+    } else if (agent.health === "stale") {
+      score -= 20;
+      reasons.push("stale heartbeat");
+    } else {
+      score += 20;
+      reasons.push("healthy heartbeat");
+    }
+
+    if (agent.status === "idle") {
+      score += 10;
+      reasons.push("idle");
+    } else {
+      score += 2;
+      reasons.push("working");
+    }
+
+    const repo = (capabilities.repo ?? agent.metadata?.repo)?.toLowerCase();
+    const branch = (capabilities.branch ?? agent.metadata?.branch)?.toLowerCase();
+    const role = (capabilities.role ?? agent.metadata?.role)?.toLowerCase();
+    const tools = new Set((capabilities.tools ?? []).map((tool) => tool.toLowerCase()));
+    const lowerCapabilityTags = capabilityTags.map((tag) => tag.toLowerCase());
+
+    if (hint.repo && repo === hint.repo.toLowerCase()) {
+      score += 40;
+      reasons.push(`repo:${hint.repo}`);
+    }
+    if (hint.branch && branch === hint.branch.toLowerCase()) {
+      score += 30;
+      reasons.push(`branch:${hint.branch}`);
+    }
+    if (hint.role && role === hint.role.toLowerCase()) {
+      score += 20;
+      reasons.push(`role:${hint.role}`);
+    }
+
+    if (requiredTools.size > 0) {
+      let matchedTools = 0;
+      for (const tool of requiredTools) {
+        if (tools.has(tool) || lowerCapabilityTags.includes(`tool:${tool}`)) {
+          matchedTools += 1;
+        }
+      }
+      if (matchedTools > 0) {
+        score += matchedTools * 12;
+        reasons.push(`tools:${matchedTools}/${requiredTools.size}`);
+      }
+      if (matchedTools !== requiredTools.size) {
+        score -= (requiredTools.size - matchedTools) * 15;
+      }
+    }
+
+    if (taskTokens.length > 0) {
+      const overlaps = taskTokens.filter((token) =>
+        searchable.some((value) => value.includes(token)),
+      );
+      if (overlaps.length > 0) {
+        score += overlaps.length * 3;
+        reasons.push(`task:${overlaps.slice(0, 3).join(",")}`);
+      }
+    }
+
+    return {
+      ...agent,
+      routingScore: score,
+      routingReasons: reasons,
+    };
+  });
+
+  return ranked.sort(compareRouting);
 }
 
 export function buildIdentityReplyGuidelines(
@@ -333,7 +658,8 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
 
   return agents
     .map((a) => {
-      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}`;
+      const health = a.health ? ` [${a.health}]` : "";
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}`;
 
       const meta = a.metadata;
       if (meta && (meta.cwd || meta.branch || meta.host)) {
@@ -341,6 +667,29 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
         const branch = meta.branch ? ` (${meta.branch})` : "";
         const host = meta.host ? ` @ ${meta.host}` : "";
         line += `\n   ${cwd}${branch}${host}`;
+      }
+
+      const heartbeat = a.heartbeatSummary ?? formatAge(a.heartbeatAgeMs);
+      const lease = a.leaseSummary ?? null;
+      if (heartbeat || lease) {
+        const summary = [heartbeat ? `heartbeat ${heartbeat}` : null, lease].filter(
+          (item): item is string => Boolean(item),
+        );
+        line += `\n   ${summary.join(" · ")}`;
+      }
+
+      const tags = (a.capabilityTags ?? []).slice(0, 6);
+      if (tags.length > 0) {
+        const suffix = (a.capabilityTags?.length ?? 0) > tags.length ? " …" : "";
+        line += `\n   caps: ${tags.join(", ")}${suffix}`;
+      }
+
+      if (a.routingScore != null) {
+        const reasons = (a.routingReasons ?? []).slice(0, 4);
+        line += `\n   routing: ${a.routingScore}`;
+        if (reasons.length > 0) {
+          line += ` (${reasons.join(", ")})`;
+        }
       }
 
       return line;

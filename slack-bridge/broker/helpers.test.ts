@@ -161,6 +161,16 @@ describe("BrokerDB", () => {
     expect(db.getThread("t-unregister")?.ownerAgent).toBeNull();
   });
 
+  it("getAllAgents includes recently disconnected agents for visibility", () => {
+    db.registerAgent("a1", "Agent", "🤖", 1);
+    db.unregisterAgent("a1");
+
+    const allAgents = db.getAllAgents();
+    expect(allAgents).toHaveLength(1);
+    expect(allAgents[0]?.id).toBe("a1");
+    expect(allAgents[0]?.disconnectedAt).toBeTruthy();
+  });
+
   it("touchAgent updates last_seen", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
     const before = db.getAgents()[0].lastSeen;
@@ -612,6 +622,25 @@ describe("BrokerSocketServer", () => {
     const agents = res.result as Array<{ name: string }>;
     expect(agents).toHaveLength(2);
     expect(agents.map((a) => a.name).sort()).toEqual(["Alpha", "Beta"]);
+
+    client1.destroy();
+    client2.destroy();
+  });
+
+  it("agents.list can include disconnected agents for visibility", async () => {
+    const client1 = await connectClient(getInfo());
+    const client2 = await connectClient(getInfo());
+
+    await client1.call("register", { name: "Alpha", emoji: "🅰️" });
+    const beta = await client2.call("register", { name: "Beta", emoji: "🅱️" });
+    const betaId = (beta.result as { agentId: string }).agentId;
+    await client2.call("unregister");
+
+    const res = await client1.call("agents.list", { includeDisconnected: true });
+    expect(res.error).toBeUndefined();
+    const agents = res.result as Array<{ id: string; disconnectedAt?: string | null }>;
+    expect(agents.map((a) => a.id)).toContain(betaId);
+    expect(agents.find((a) => a.id === betaId)?.disconnectedAt).toBeTruthy();
 
     client1.destroy();
     client2.destroy();

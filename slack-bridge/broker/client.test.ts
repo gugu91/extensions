@@ -562,6 +562,27 @@ describe("BrokerClient — listThreads / listAgents", () => {
 
     client.disconnect();
   });
+
+  it("includes includeDisconnected when requested", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const agentsPromise = client.listAgents(true);
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params?: { includeDisconnected?: boolean };
+    };
+    expect(req.method).toBe("agents.list");
+    expect(req.params?.includeDisconnected).toBe(true);
+
+    mock.respondTo(mock.connections[0], req.id, []);
+    await expect(agentsPromise).resolves.toEqual([]);
+
+    client.disconnect();
+  });
 });
 
 describe("BrokerClient — sendAgentMessage", () => {

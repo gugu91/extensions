@@ -9,6 +9,8 @@ import {
   formatInboxMessages,
   formatAgentList,
   shortenPath,
+  buildAgentDisplayInfo,
+  rankAgentsForRouting,
   buildIdentityReplyGuidelines,
   buildAgentStableId,
   buildSlackRequest,
@@ -484,6 +486,172 @@ describe("formatAgentList", () => {
     ];
     const result = formatAgentList(agents, homedir);
     expect(result).toContain("~/work (dev) @ srv");
+  });
+
+  it("formats health, lease, and capability tags", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🤖",
+        name: "Visible Bot",
+        id: "agent-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:08.000Z",
+        metadata: {
+          cwd: "/Users/alice/src/extensions",
+          branch: "main",
+          host: "macbook",
+          capabilities: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            tools: ["test", "lint"],
+          },
+        },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    const result = formatAgentList([agent], homedir);
+    expect(result).toContain("Visible Bot (agent-1) — idle [stale]");
+    expect(result).toContain("heartbeat 12s ago · lease in 3s");
+    expect(result).toContain(
+      "caps: role:worker, repo:extensions, branch:main, tool:test, tool:lint",
+    );
+  });
+});
+
+describe("buildAgentDisplayInfo", () => {
+  it("marks a disconnected agent with resumable lease as resumable", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🤖",
+        name: "Resume Bot",
+        id: "agent-2",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        disconnectedAt: "2026-01-01T00:00:10.000Z",
+        resumableUntil: "2026-01-01T00:00:25.000Z",
+        metadata: { role: "worker" },
+      },
+      { now: Date.parse("2026-01-01T00:00:20.000Z") },
+    );
+
+    expect(agent.health).toBe("resumable");
+    expect(agent.ghost).toBe(false);
+    expect(agent.leaseSummary).toBe("lease in 5s");
+  });
+
+  it("marks expired agents as ghosts", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "👻",
+        name: "Ghost Bot",
+        id: "ghost-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        metadata: { role: "worker" },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(agent.health).toBe("ghost");
+    expect(agent.ghost).toBe(true);
+    expect(agent.leaseSummary).toBe("lease expired 5s ago");
+  });
+});
+
+describe("rankAgentsForRouting", () => {
+  it("prefers healthy idle agents that match repo, branch, role, and tools", () => {
+    const agents = [
+      buildAgentDisplayInfo(
+        {
+          emoji: "🤖",
+          name: "Best Bot",
+          id: "best",
+          status: "idle",
+          lastHeartbeat: "2026-01-01T00:00:18.000Z",
+          metadata: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            capabilities: {
+              repo: "extensions",
+              branch: "main",
+              role: "worker",
+              tools: ["test", "lint"],
+            },
+          },
+        },
+        { now: Date.parse("2026-01-01T00:00:20.000Z") },
+      ),
+      buildAgentDisplayInfo(
+        {
+          emoji: "🛠️",
+          name: "Busy Bot",
+          id: "busy",
+          status: "working",
+          lastHeartbeat: "2026-01-01T00:00:19.000Z",
+          metadata: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            capabilities: {
+              repo: "extensions",
+              branch: "main",
+              role: "worker",
+              tools: ["lint"],
+            },
+          },
+        },
+        { now: Date.parse("2026-01-01T00:00:20.000Z") },
+      ),
+      buildAgentDisplayInfo(
+        {
+          emoji: "👻",
+          name: "Ghost Bot",
+          id: "ghost",
+          status: "idle",
+          lastHeartbeat: "2026-01-01T00:00:00.000Z",
+          metadata: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            capabilities: {
+              repo: "extensions",
+              branch: "main",
+              role: "worker",
+              tools: ["test", "lint"],
+            },
+          },
+        },
+        {
+          now: Date.parse("2026-01-01T00:00:20.000Z"),
+          heartbeatTimeoutMs: 15_000,
+          heartbeatIntervalMs: 5_000,
+        },
+      ),
+    ];
+
+    const ranked = rankAgentsForRouting(agents, {
+      repo: "extensions",
+      branch: "main",
+      role: "worker",
+      requiredTools: ["test"],
+      task: "run tests on extensions main",
+    });
+
+    expect(ranked[0]?.id).toBe("best");
+    expect(ranked[ranked.length - 1]?.id).toBe("ghost");
+    expect(ranked[0]?.routingReasons).toContain("repo:extensions");
+    expect(ranked[0]?.routingReasons).toContain("tools:1/1");
   });
 });
 
