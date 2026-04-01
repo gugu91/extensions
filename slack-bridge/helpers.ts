@@ -168,6 +168,21 @@ export function buildIdentityReplyGuidelines(
   ];
 }
 
+export function buildAgentStableId(
+  sessionFile?: string,
+  host = os.hostname(),
+  cwd = process.cwd(),
+  leafId?: string,
+): string {
+  if (sessionFile) {
+    return `${host}:session:${path.resolve(sessionFile)}`;
+  }
+  if (leafId) {
+    return `${host}:leaf:${leafId}`;
+  }
+  return `${host}:cwd:${path.resolve(cwd)}`;
+}
+
 export interface FollowerThreadState {
   channelId: string;
   threadTs: string;

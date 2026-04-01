@@ -18,6 +18,7 @@ import {
   resolveAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
+  buildAgentStableId,
   syncFollowerInboxEntries,
   getFollowerReconnectUiUpdate,
   trackBrokerInboundThread,
@@ -35,7 +36,7 @@ import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { InboundMessage as BrokerInboundMessage } from "./broker/adapters/types.js";
 import { MessageRouter } from "./broker/router.js";
-import { BrokerClient, DEFAULT_SOCKET_PATH } from "./broker/client.js";
+import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 
 // ─── Slack API (raw fetch, zero deps) ────────────────────
 
@@ -86,6 +87,7 @@ export default function (pi: ExtensionAPI) {
   const identity = resolveAgentIdentity(settings, process.env.PI_NICKNAME);
   let agentName = identity.name;
   let agentEmoji = identity.emoji;
+  let agentStableId = buildAgentStableId(undefined, os.hostname(), process.cwd());
 
   // Security guardrails
   const guardrails: SecurityGuardrails = settings.security ?? {};
@@ -118,6 +120,14 @@ export default function (pi: ExtensionAPI) {
 
   const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
   const identityGuidelines = buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
+
+  function applyBrokerIdentity(nextName: string, nextEmoji: string): void {
+    if (agentName === nextName && agentEmoji === nextEmoji) return;
+    agentName = nextName;
+    agentEmoji = nextEmoji;
+    persistState();
+    updateBadge();
+  }
 
   interface ThreadInfo {
     channelId: string;
@@ -1113,6 +1123,25 @@ export default function (pi: ExtensionAPI) {
   let brokerClient: any = null;
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
+  let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  function startBrokerHeartbeat(): void {
+    stopBrokerHeartbeat();
+    if (!activeBroker || !activeSelfId) return;
+    brokerHeartbeatTimer = setInterval(() => {
+      try {
+        (activeBroker.db as BrokerDB).heartbeatAgent(activeSelfId!);
+      } catch {
+        /* best effort */
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function stopBrokerHeartbeat(): void {
+    if (!brokerHeartbeatTimer) return;
+    clearInterval(brokerHeartbeatTimer);
+    brokerHeartbeatTimer = null;
+  }
 
   pi.registerTool({
     name: "pinet_message",
@@ -1142,7 +1171,10 @@ export default function (pi: ExtensionAPI) {
           throw new Error(`Agent not found: ${params.to}`);
         }
 
-        const selfId = `broker-${process.pid}`;
+        const selfId = activeSelfId;
+        if (!selfId) {
+          throw new Error("Broker agent identity is unavailable.");
+        }
         const threadId = `a2a:${selfId}:${target.id}`;
 
         if (!db.getThread(threadId)) {
@@ -1250,8 +1282,16 @@ export default function (pi: ExtensionAPI) {
         });
 
         const router = new MessageRouter(broker.db);
-        const selfId = `broker-${process.pid}`;
-        broker.db.registerAgent(selfId, agentName, agentEmoji, process.pid, getAgentMetadata());
+        const selfAgent = broker.db.registerAgent(
+          ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
+          agentName,
+          agentEmoji,
+          process.pid,
+          getAgentMetadata(),
+          agentStableId,
+        );
+        const selfId = selfAgent.id;
+        applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
         adapter.onInbound((inMsg) => {
           // Track thread so slack_send can resolve channel for all inbound messages
@@ -1279,6 +1319,7 @@ export default function (pi: ExtensionAPI) {
         activeBroker = broker;
         activeRouter = router;
         activeSelfId = selfId;
+        startBrokerHeartbeat();
         brokerRole = "broker";
         pinetEnabled = true;
         setExtStatus(ctx, "ok");
@@ -1293,7 +1334,13 @@ export default function (pi: ExtensionAPI) {
   async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
     const client = new BrokerClient();
     await client.connect();
-    await client.register(agentName, agentEmoji, getAgentMetadata());
+    const registration = await client.register(
+      agentName,
+      agentEmoji,
+      getAgentMetadata(),
+      agentStableId,
+    );
+    applyBrokerIdentity(registration.name, registration.emoji);
 
     const brokerClientRef: {
       client: BrokerClient;
@@ -1358,7 +1405,13 @@ export default function (pi: ExtensionAPI) {
     client.onReconnect(() => {
       void (async () => {
         try {
-          await client.register(agentName, agentEmoji, getAgentMetadata());
+          const registration = await client.register(
+            agentName,
+            agentEmoji,
+            getAgentMetadata(),
+            agentStableId,
+          );
+          applyBrokerIdentity(registration.name, registration.emoji);
           startPolling();
           setExtStatus(ctx, "ok");
           const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
@@ -1451,6 +1504,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     extCtx = ctx;
+    agentStableId = buildAgentStableId(
+      ctx.sessionManager.getSessionFile(),
+      os.hostname(),
+      ctx.cwd,
+      ctx.sessionManager.getLeafId(),
+    );
 
     // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
@@ -1563,8 +1622,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     flushPersist();
+    stopBrokerHeartbeat();
     if (activeBroker) {
       try {
+        if (activeSelfId) {
+          (activeBroker.db as BrokerDB).unregisterAgent(activeSelfId);
+        }
         await activeBroker.stop();
       } catch {
         /* best effort */
@@ -1576,6 +1639,9 @@ export default function (pi: ExtensionAPI) {
     if (brokerClient) {
       try {
         clearInterval(brokerClient.pollInterval);
+        await (brokerClient.client as BrokerClient).unregister().catch(() => {
+          /* best effort */
+        });
         brokerClient.client.disconnect();
       } catch {
         /* best effort */

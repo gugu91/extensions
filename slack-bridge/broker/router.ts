@@ -51,21 +51,26 @@ export class MessageRouter {
 
     const agents = this.db.getAgents();
 
-    // 1. Thread ownership — if thread already has an owner, route there
+    // 1. Thread ownership — if thread already has an owner, route there.
+    //    Disconnected agents may still own a thread briefly so they can
+    //    reconnect and resume it before the stale-prune window expires.
     const thread = this.db.getThread(msg.threadId);
     if (thread?.ownerAgent) {
-      const owner = agents.find((a) => a.id === thread.ownerAgent);
+      const owner = this.db.getAgentById(thread.ownerAgent);
       if (owner) {
         return { action: "deliver", agentId: owner.id };
       }
-      // Owner agent is gone — clear ownership and fall through to re-route
+      // Owner record is gone entirely — clear ownership and fall through to re-route.
       this.db.updateThread(msg.threadId, { ownerAgent: null });
     }
 
-    // 2. Channel assignment — if channel is mapped to a specific agent
+    // 2. Channel assignment — if channel is mapped to a connected agent
     const assignment = this.db.getChannelAssignment(msg.channel);
     if (assignment) {
-      return { action: "deliver", agentId: assignment.agentId };
+      const assigned = agents.find((agent) => agent.id === assignment.agentId);
+      if (assigned) {
+        return { action: "deliver", agentId: assigned.id };
+      }
     }
 
     // 3. Direct address — message mentions an agent by name

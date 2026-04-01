@@ -21,6 +21,10 @@ class StubBrokerDBInterface implements BrokerDBInterface {
     return this.threads.get(threadId) ?? null;
   }
 
+  getAgentById(agentId: string): AgentInfo | null {
+    return this.agents.find((agent) => agent.id === agentId) ?? null;
+  }
+
   getAgents(): AgentInfo[] {
     return this.agents;
   }
@@ -68,6 +72,7 @@ function makeAgent(overrides: Partial<AgentInfo> & { id: string; name: string })
     pid: 1000,
     connectedAt: "2026-01-01T00:00:00Z",
     lastSeen: "2026-01-01T00:00:00Z",
+    lastHeartbeat: "2026-01-01T00:00:00Z",
     metadata: null,
     status: "idle",
     ...overrides,

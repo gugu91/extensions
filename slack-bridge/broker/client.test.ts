@@ -9,6 +9,7 @@ import {
   RECONNECT_DELAY_MS,
   INITIAL_RECONNECT_DELAY_MS,
   MAX_RECONNECT_DELAY_MS,
+  HEARTBEAT_INTERVAL_MS,
   computeReconnectDelay,
 } from "./client.js";
 import type { BrokerConnectOpts } from "./client.js";
@@ -173,7 +174,7 @@ describe("BrokerClient — register", () => {
     await mock.close();
   });
 
-  it("sends register RPC and returns agentId", async () => {
+  it("sends register RPC and returns agent identity", async () => {
     const client = new BrokerClient(mock.connectOpts);
     await client.connect();
 
@@ -193,10 +194,114 @@ describe("BrokerClient — register", () => {
     expect(req.params.pid).toBe(process.pid);
 
     // Respond
-    mock.respondTo(mock.connections[0], req.id, { agentId: "agent-001" });
+    mock.respondTo(mock.connections[0], req.id, {
+      agentId: "agent-001",
+      name: "TestAgent",
+      emoji: "🤖",
+    });
 
     const result = await registerPromise;
-    expect(result).toEqual({ agentId: "agent-001" });
+    expect(result).toEqual({ agentId: "agent-001", name: "TestAgent", emoji: "🤖" });
+
+    client.disconnect();
+  });
+
+  it("includes stableId when provided", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const registerPromise = client.register("StableBot", "🧷", undefined, "host:session:/tmp/a");
+
+    await waitFor(() => mock.received.length > 0);
+
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      params: { stableId?: string };
+    };
+    expect(req.params.stableId).toBe("host:session:/tmp/a");
+
+    mock.respondTo(mock.connections[0], req.id, {
+      agentId: "agent-stable",
+      name: "StableBot",
+      emoji: "🧷",
+    });
+
+    await expect(registerPromise).resolves.toEqual({
+      agentId: "agent-stable",
+      name: "StableBot",
+      emoji: "🧷",
+    });
+
+    client.disconnect();
+  });
+});
+
+describe("BrokerClient — heartbeat / unregister", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await mock.close();
+  });
+
+  it("starts sending heartbeats after register", async () => {
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const registerPromise = client.register("HeartbeatBot", "💓");
+    await waitFor(() => mock.received.length > 0);
+
+    const registerReq = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "hb-1",
+      name: "HeartbeatBot",
+      emoji: "💓",
+    });
+    await registerPromise;
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), HEARTBEAT_INTERVAL_MS);
+    const heartbeatTick = setIntervalSpy.mock.calls.at(-1)?.[0] as (() => void) | undefined;
+    expect(heartbeatTick).toBeDefined();
+    heartbeatTick?.();
+
+    await waitFor(() => mock.received.length > 1);
+
+    const heartbeatReq = JSON.parse(mock.received[1]) as { id: number; method: string };
+    expect(heartbeatReq.method).toBe("heartbeat");
+    mock.respondTo(mock.connections[0], heartbeatReq.id, { ok: true });
+
+    setIntervalSpy.mockRestore();
+    client.disconnect();
+  });
+
+  it("sends unregister RPC", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const registerPromise = client.register("GracefulBot", "👋");
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "grace-1",
+      name: "GracefulBot",
+      emoji: "👋",
+    });
+    await registerPromise;
+
+    const unregisterPromise = client.unregister();
+    await waitFor(() => mock.received.length > 1);
+
+    const unregisterReq = JSON.parse(mock.received[1]) as { id: number; method: string };
+    expect(unregisterReq.method).toBe("unregister");
+
+    mock.respondTo(mock.connections[0], unregisterReq.id, { ok: true });
+    await unregisterPromise;
 
     client.disconnect();
   });
@@ -447,6 +552,7 @@ describe("BrokerClient — listThreads / listAgents", () => {
         pid: 1000,
         connectedAt: "2026-01-01T00:00:00Z",
         lastSeen: "2026-01-01T00:00:00Z",
+        lastHeartbeat: "2026-01-01T00:00:00Z",
       },
     ];
     mock.respondTo(mock.connections[0], req.id, agents);
@@ -688,6 +794,7 @@ describe("BrokerClient — multiple concurrent requests", () => {
         pid: 1000,
         connectedAt: "2026-01-01T00:00:00Z",
         lastSeen: "2026-01-01T00:00:00Z",
+        lastHeartbeat: "2026-01-01T00:00:00Z",
       },
     ]);
     mock.respondTo(mock.connections[0], req1.id, [

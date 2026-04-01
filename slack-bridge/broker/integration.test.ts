@@ -17,6 +17,16 @@ function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+async function waitFor(fn: () => boolean, timeoutMs = 2000, intervalMs = 10): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!fn()) {
+    if (Date.now() > deadline) {
+      throw new Error("waitFor timed out");
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 // ─── Integration: client ↔ server ↔ DB ──────────────────
 
 describe("broker integration — client ↔ server ↔ DB", () => {
@@ -131,6 +141,59 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(names).toEqual(["agent-alpha", "agent-beta"]);
 
     client2.disconnect();
+  });
+
+  it("reconnect with same stableId reuses agent identity and thread ownership", async () => {
+    const reg1 = await client.register("resume-agent", "🔁", undefined, "host:session:/tmp/resume");
+    await client.claimThread("t-resume");
+    await client.unregister();
+
+    expect(db.getAgents()).toHaveLength(0);
+    expect(db.getThread("t-resume")?.ownerAgent).toBe(reg1.agentId);
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+
+    const reg2 = await client2.register(
+      "different-name",
+      "❌",
+      undefined,
+      "host:session:/tmp/resume",
+    );
+
+    expect(reg2.agentId).toBe(reg1.agentId);
+    expect(reg2.name).toBe("resume-agent");
+    expect(reg2.emoji).toBe("🔁");
+
+    const threads = await client2.listThreads();
+    expect(threads.map((thread) => thread.threadId)).toContain("t-resume");
+
+    client2.disconnect();
+  });
+
+  it("stale pruning disconnects silent agents and releases claims", async () => {
+    client.disconnect();
+    await server.stop();
+
+    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, undefined, {
+      heartbeatTimeoutMs: 50,
+      pruneIntervalMs: 10,
+    });
+    await server.start();
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    client = new BrokerClient({ host: info.host, port: info.port });
+    await client.connect();
+
+    const reg = await client.register("stale-agent", "💤");
+    await client.claimThread("t-stale");
+
+    await waitFor(() => db.getAgents().length === 0, 1000);
+    expect(db.getThread("t-stale")?.ownerAgent).toBeNull();
+    expect(db.getAgentById(reg.agentId)).not.toBeNull();
   });
 
   it("agent.message delivers to target by name", async () => {
