@@ -23,6 +23,11 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isRoutableOwner(agent: AgentInfo, now = new Date().toISOString()): boolean {
+  if (!agent.disconnectedAt) return true;
+  return agent.resumableUntil != null && agent.resumableUntil > now;
+}
+
 // ─── MessageRouter ───────────────────────────────────────
 
 export class MessageRouter {
@@ -51,21 +56,26 @@ export class MessageRouter {
 
     const agents = this.db.getAgents();
 
-    // 1. Thread ownership — if thread already has an owner, route there
+    // 1. Thread ownership — if thread already has an owner, route there.
+    //    Disconnected owners are only routable during an explicit resumable
+    //    window; graceful unregister should release ownership immediately.
     const thread = this.db.getThread(msg.threadId);
     if (thread?.ownerAgent) {
-      const owner = agents.find((a) => a.id === thread.ownerAgent);
-      if (owner) {
+      const owner = this.db.getAgentById(thread.ownerAgent);
+      if (owner && isRoutableOwner(owner)) {
         return { action: "deliver", agentId: owner.id };
       }
-      // Owner agent is gone — clear ownership and fall through to re-route
+      // Owner is gone or no longer routable — clear ownership and fall through.
       this.db.updateThread(msg.threadId, { ownerAgent: null });
     }
 
-    // 2. Channel assignment — if channel is mapped to a specific agent
+    // 2. Channel assignment — if channel is mapped to a connected agent
     const assignment = this.db.getChannelAssignment(msg.channel);
     if (assignment) {
-      return { action: "deliver", agentId: assignment.agentId };
+      const assigned = agents.find((agent) => agent.id === assignment.agentId);
+      if (assigned) {
+        return { action: "deliver", agentId: assigned.id };
+      }
     }
 
     // 3. Direct address — message mentions an agent by name

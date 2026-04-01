@@ -34,6 +34,7 @@ export interface AgentInfo {
   pid: number;
   connectedAt: string;
   lastSeen: string;
+  lastHeartbeat: string;
   metadata: Record<string, unknown> | null;
   status: "working" | "idle";
 }
@@ -61,6 +62,7 @@ export const REQUEST_TIMEOUT_MS = 5000;
 export const RECONNECT_DELAY_MS = 3000;
 export const INITIAL_RECONNECT_DELAY_MS = 1000;
 export const MAX_RECONNECT_DELAY_MS = 30000;
+export const HEARTBEAT_INTERVAL_MS = 5000;
 
 /** Compute reconnect delay with exponential backoff and jitter. */
 export function computeReconnectDelay(attempt: number, random = Math.random()): number {
@@ -91,6 +93,7 @@ export class BrokerClient {
   private connected = false;
   private shuttingDown = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private disconnectHandler: (() => void) | null = null;
   private reconnectHandler: (() => void) | null = null;
   private reconnectAttempt = 0;
@@ -131,6 +134,7 @@ export class BrokerClient {
         const wasConnected = this.connected;
         this.connected = false;
         this.socket = null;
+        this.stopHeartbeat();
         this.rejectAllPending(new Error("Socket closed"));
         if (wasConnected && !this.shuttingDown) {
           this.disconnectHandler?.();
@@ -153,6 +157,7 @@ export class BrokerClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHeartbeat();
     this.rejectAllPending(new Error("Client disconnected"));
     try {
       this.socket?.destroy();
@@ -173,16 +178,34 @@ export class BrokerClient {
     name: string,
     emoji: string,
     metadata?: Record<string, unknown>,
-  ): Promise<{ agentId: string }> {
+    stableId?: string,
+  ): Promise<{ agentId: string; name: string; emoji: string }> {
     const result = (await this.request("register", {
       name,
       emoji,
       pid: process.pid,
       ...(metadata ? { metadata } : {}),
+      ...(stableId ? { stableId } : {}),
     })) as {
       agentId: string;
+      name: string;
+      emoji: string;
     };
+    this.startHeartbeat();
     return result;
+  }
+
+  async unregister(): Promise<void> {
+    if (!this.connected) return;
+    try {
+      await this.request("unregister");
+    } finally {
+      this.stopHeartbeat();
+    }
+  }
+
+  async heartbeat(): Promise<void> {
+    await this.request("heartbeat");
   }
 
   // ─── Messaging ───────────────────────────────────────
@@ -346,6 +369,23 @@ export class BrokerClient {
           /* reconnect failed — will retry on next close */
         });
     }, delay);
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.connected) return;
+      void this.heartbeat().catch(() => {
+        /* best effort */
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (!this.heartbeatTimer) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   private rejectAllPending(err: Error): void {

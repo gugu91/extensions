@@ -10,6 +10,7 @@ import {
   formatAgentList,
   shortenPath,
   buildIdentityReplyGuidelines,
+  buildAgentStableId,
   buildSlackRequest,
   stripBotMention,
   isChannelId,
@@ -363,6 +364,26 @@ describe("buildIdentityReplyGuidelines", () => {
       "Follow-up messages in the same thread: keep the same full identity prefix — '🦅 `Sonic Eagle` <message>'",
     );
     expect(bareRule).toContain("emoji-only");
+  });
+});
+
+// ─── buildAgentStableId ───────────────────────────────────
+
+describe("buildAgentStableId", () => {
+  it("prefers session file when available", () => {
+    expect(buildAgentStableId("/tmp/pi/session.json", "macbook", "/repo", "leaf-1")).toBe(
+      `macbook:session:${path.resolve("/tmp/pi/session.json")}`,
+    );
+  });
+
+  it("falls back to leaf id when session file is missing", () => {
+    expect(buildAgentStableId(undefined, "macbook", "/repo", "leaf-1")).toBe("macbook:leaf:leaf-1");
+  });
+
+  it("falls back to cwd when neither session file nor leaf id is available", () => {
+    expect(buildAgentStableId(undefined, "macbook", "/repo")).toBe(
+      `macbook:cwd:${path.resolve("/repo")}`,
+    );
   });
 });
 

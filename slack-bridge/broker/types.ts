@@ -7,8 +7,11 @@ export interface AgentInfo {
   pid: number;
   connectedAt: string;
   lastSeen: string;
+  lastHeartbeat: string;
   metadata: Record<string, unknown> | null;
   status: "working" | "idle";
+  disconnectedAt?: string | null;
+  resumableUntil?: string | null;
 }
 
 export interface ThreadInfo {
@@ -97,6 +100,7 @@ export type MessageAdapter = _MessageAdapter;
 
 export interface BrokerDBInterface {
   getThread(threadId: string): ThreadInfo | null;
+  getAgentById(agentId: string): AgentInfo | null;
   getAgents(): AgentInfo[];
   getChannelAssignment(channel: string): ChannelAssignment | null;
   getAllowedUsers(): Set<string> | null;

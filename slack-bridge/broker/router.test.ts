@@ -21,8 +21,12 @@ class StubBrokerDBInterface implements BrokerDBInterface {
     return this.threads.get(threadId) ?? null;
   }
 
+  getAgentById(agentId: string): AgentInfo | null {
+    return this.agents.find((agent) => agent.id === agentId) ?? null;
+  }
+
   getAgents(): AgentInfo[] {
-    return this.agents;
+    return this.agents.filter((agent) => !agent.disconnectedAt);
   }
 
   getChannelAssignment(channel: string): ChannelAssignment | null {
@@ -68,6 +72,7 @@ function makeAgent(overrides: Partial<AgentInfo> & { id: string; name: string })
     pid: 1000,
     connectedAt: "2026-01-01T00:00:00Z",
     lastSeen: "2026-01-01T00:00:00Z",
+    lastHeartbeat: "2026-01-01T00:00:00Z",
     metadata: null,
     status: "idle",
     ...overrides,
@@ -225,6 +230,38 @@ describe("MessageRouter — route", () => {
     expect(decision).toEqual({ action: "unrouted" });
     // Ownership should be cleared
     expect(db.threads.get("t-100")?.ownerAgent).toBeNull();
+  });
+
+  it("routes to a disconnected owner only while it is explicitly resumable", () => {
+    const agent = makeAgent({
+      id: "a1",
+      name: "ResumeBot",
+      disconnectedAt: "2026-01-01T00:00:00Z",
+      resumableUntil: "9999-12-31T23:59:59Z",
+    });
+    db.agents = [agent];
+    db.threads.set("t-resume", makeThread({ threadId: "t-resume", ownerAgent: "a1" }));
+
+    const decision = router.route(makeMessage({ threadId: "t-resume" }));
+
+    expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+    expect(db.threads.get("t-resume")?.ownerAgent).toBe("a1");
+  });
+
+  it("clears ownership when the owner is disconnected without a resumable window", () => {
+    const agent = makeAgent({
+      id: "a1",
+      name: "OfflineBot",
+      disconnectedAt: "2026-01-01T00:00:00Z",
+      resumableUntil: null,
+    });
+    db.agents = [agent];
+    db.threads.set("t-offline", makeThread({ threadId: "t-offline", ownerAgent: "a1" }));
+
+    const decision = router.route(makeMessage({ threadId: "t-offline" }));
+
+    expect(decision).toEqual({ action: "unrouted" });
+    expect(db.threads.get("t-offline")?.ownerAgent).toBeNull();
   });
 });
 
