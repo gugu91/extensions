@@ -1514,12 +1514,22 @@ export default function (pi: ExtensionAPI) {
             return;
           }
 
-          if (decision.action === "deliver" || decision.action === "unrouted") {
-            broker.db.queueUnroutedMessage(
-              inMsg,
-              decision.action === "deliver" ? "broker_delegate" : "no_route",
-            );
+          if (decision.action === "deliver") {
+            // Message routed to broker itself — queue for maintenance pickup
+            broker.db.queueUnroutedMessage(inMsg, "broker_delegate");
             runBrokerMaintenance(ctx);
+          } else if (decision.action === "unrouted") {
+            // No route found — deliver to broker's own inbox (broker is the default handler)
+            trackBrokerInboundThread(threads, inMsg);
+            inbox.push({
+              channel: inMsg.channel,
+              threadTs: inMsg.threadId,
+              userId: inMsg.userId,
+              text: inMsg.text,
+              timestamp: inMsg.timestamp,
+            });
+            updateBadge();
+            if (extCtx?.isIdle?.()) drainInbox();
           }
         });
 

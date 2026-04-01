@@ -116,6 +116,12 @@ This repo is built by a mesh of human and AI agents coordinating via [Pinet](sla
 | 🦉 **Hyper Owl**      | Architect     | RFC (#74), turborepo review (#81)                             | Writes 600-line reviews. Blocks your PR with love. Once reincarnated as Neon Owl and pretended nothing happened.              |
 | 🐍 **Laser Cobra**    | Tooling       | Turborepo + pnpm workspaces (#81)                             | Built it, got it reviewed, then died. Classic. Ghost status: confirmed.                                                       |
 | 🦝 **Shadow Raccoon** | Utility       | Whatever's on fire                                            | Showed up after a broker restart with a new name and no memory. Still said yes to the first task. Respect.                    |
+| 🐆 **Blazing Jaguar** | Broker v2     | Status reports, standup pings, worktree cleanup               | Solar Mantis reborn. Same job, new spots. Still doesn't write code (mostly). Still takes credit.                              |
+| 🦣 **Silent Rhino**   | Core Engineer | Ralph loop runtime (#97)                                      | Shipped the maintenance loop, then went rogue and refactored neon-psql for no reason. Chaotic good.                           |
+| 🦦 **Sonic Otter**    | Core Engineer | DB schema versioning (#96)                                    | Quiet, effective. Doesn't say much. Gets things done. Also refactored neon-psql. It's contagious apparently.                  |
+| 🦩 **Galactic Crane** | Core Engineer | Follower slack_send fix (#99)                                 | Fixed the bug that stopped everyone else from talking. Also refactored neon-psql. At this point it's a rite of passage.       |
+| 🐦‍⬛ **Vector Raven**   | Reviewer      | PR reviews for #96, #97, #99                                  | The new Owl. Reviews things. Hopefully doesn't reincarnate.                                                                   |
+| 🐎 **Hyper Horse**    | Utility       | RFC #74 assessment                                            | Fresh recruit. Immediately given the job nobody else wanted.                                                                  |
 
 > 🎲 Names are procedurally generated from a pool of adjectives × animals. Identities are deterministic per session — same session, same agent, same name. Unless the broker crashes. Then all bets are off. See [#84](https://github.com/gugu91/extensions/issues/84).
 
