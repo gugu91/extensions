@@ -149,11 +149,16 @@ describe("BrokerDB", () => {
     expect(db.getAgents()).toHaveLength(1);
   });
 
-  it("unregisterAgent hides agent from connected list but keeps the record", () => {
+  it("unregisterAgent hides agent from connected list, keeps the record, and releases claims", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
+    db.createThread("t-unregister", "slack", "#general", "a1");
+
     db.unregisterAgent("a1");
+
     expect(db.getAgents()).toEqual([]);
     expect(db.getAgentById("a1")?.name).toBe("Agent");
+    expect(db.getAgentById("a1")?.resumableUntil).toBeNull();
+    expect(db.getThread("t-unregister")?.ownerAgent).toBeNull();
   });
 
   it("touchAgent updates last_seen", () => {
@@ -184,6 +189,18 @@ describe("BrokerDB", () => {
     const after = db.getAgentById("a1")?.lastHeartbeat;
     expect(after).toBeDefined();
     expect(after! >= before).toBe(true);
+  });
+
+  it("disconnectAgent keeps claims during the resumable window", () => {
+    db.registerAgent("a1", "Agent", "🤖", 1);
+    db.createThread("t-resumable", "slack", "#general", "a1");
+
+    db.disconnectAgent("a1", 60_000);
+
+    expect(db.getAgents()).toEqual([]);
+    expect(db.getAgentById("a1")?.disconnectedAt).toBeTruthy();
+    expect(db.getAgentById("a1")?.resumableUntil).toBeTruthy();
+    expect(db.getThread("t-resumable")?.ownerAgent).toBe("a1");
   });
 
   it("pruneStaleAgents disconnects stale agents and releases their thread claims", () => {
@@ -235,7 +252,8 @@ describe("BrokerDB", () => {
   it("maintenance requeues messages orphaned in a disconnected agent inbox", () => {
     db.registerAgent("worker-1", "Worker", "🤖", 1);
     db.createThread("t-orphan", "slack", "C1", "worker-1");
-    db.unregisterAgent("worker-1");
+    // Use disconnectAgent with 0ms window so resumable_until expires immediately
+    db.disconnectAgent("worker-1", 0);
 
     db.queueMessage("worker-1", {
       source: "slack",
@@ -246,12 +264,18 @@ describe("BrokerDB", () => {
       timestamp: "100.200",
     });
 
+    // Ensure resumable_until is in the past
+    const start = Date.now();
+    while (Date.now() - start < 10) {
+      /* spin */
+    }
+
     const result = runBrokerMaintenancePass(db, {
       staleAfterMs: 15_000,
       now: Date.parse("2026-04-01T00:00:10.000Z"),
     });
 
-    expect(result.repairedThreadClaims).toBe(1);
+    expect(result.reapedAgentIds).toContain("worker-1");
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-orphan");

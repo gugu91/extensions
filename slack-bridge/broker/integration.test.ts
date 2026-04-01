@@ -18,6 +18,16 @@ function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+async function waitFor(fn: () => boolean, timeoutMs = 2000, intervalMs = 10): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!fn()) {
+    if (Date.now() > deadline) {
+      throw new Error("waitFor timed out");
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 // ─── Integration: client ↔ server ↔ DB ──────────────────
 
 describe("broker integration — client ↔ server ↔ DB", () => {
@@ -173,12 +183,12 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
-  it("reconnect with same stableId reuses agent identity and thread ownership", async () => {
+  it("reconnect with same stableId reuses agent identity and thread ownership after a resumable disconnect", async () => {
     const reg1 = await client.register("resume-agent", "🔁", undefined, "host:session:/tmp/resume");
     await client.claimThread("t-resume");
-    await client.unregister();
+    client.disconnect();
 
-    expect(db.getAgents()).toHaveLength(0);
+    await waitFor(() => db.getAgents().length === 0, 1000);
     expect(db.getThread("t-resume")?.ownerAgent).toBe(reg1.agentId);
 
     const info = server.getConnectInfo();
@@ -203,6 +213,28 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("explicit unregister releases ownership so follow-up replies are not routed to the dead owner", async () => {
+    const reg = await client.register("owner-agent", "🧵");
+    await client.claimThread("t-unregister-followup");
+    await client.unregister();
+
+    expect(db.getAgents()).toHaveLength(0);
+    expect(db.getThread("t-unregister-followup")?.ownerAgent).toBeNull();
+
+    const router = new MessageRouter(db);
+    const decision = router.route({
+      source: "slack",
+      threadId: "t-unregister-followup",
+      channel: "C123",
+      userId: "U1",
+      text: "follow-up after unregister",
+      timestamp: "124",
+    });
+
+    expect(decision).toEqual({ action: "unrouted" });
+    expect(db.getInbox(reg.agentId)).toHaveLength(0);
+  });
+
   it("maintenance pruning disconnects stale agents and releases claims", async () => {
     const reg = await client.register("stale-agent", "💤");
     await client.claimThread("t-stale");
@@ -216,6 +248,29 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(db.getThread("t-stale")?.ownerAgent).toBeNull();
     expect(db.getAgentById(reg.agentId)).not.toBeNull();
     expect(db.getAgents()).toEqual([]);
+  });
+
+  it("stale pruning disconnects silent agents and releases claims", async () => {
+    client.disconnect();
+    await server.stop();
+
+    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, undefined, {
+      heartbeatTimeoutMs: 50,
+      pruneIntervalMs: 10,
+    });
+    await server.start();
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    client = new BrokerClient({ host: info.host, port: info.port });
+    await client.connect();
+
+    const reg = await client.register("stale-agent", "💤");
+    await client.claimThread("t-stale");
+
+    await waitFor(() => db.getAgents().length === 0, 1000);
+    expect(db.getThread("t-stale")?.ownerAgent).toBeNull();
+    expect(db.getAgentById(reg.agentId)).not.toBeNull();
   });
 
   it("agent.message delivers to target by name", async () => {
