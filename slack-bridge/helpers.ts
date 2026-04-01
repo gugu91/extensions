@@ -671,13 +671,15 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
 
 export function buildWorkerPromptGuidelines(): string[] {
   return [
-    "WORKTREE RULE: NEVER work directly on the `main` branch or checkout feature branches in the main repo directory.",
-    "ALWAYS create a git worktree for your work: `git worktree add .worktrees/<name> -b <branch>` and `cd` into it before making changes.",
-    "If you are already in a worktree, stay there. Do not `cd` back to the main checkout to run git commands.",
-    "When your PR is merged, clean up: `git worktree remove .worktrees/<name>` from the main checkout.",
-    "NEVER run `git checkout <branch>` or `git switch <branch>` in the main repo checkout. The main checkout must always be on `main`.",
-    "Always run validation before pushing: `pnpm lint && pnpm typecheck && pnpm test`.",
-    "Report progress in your assigned Slack thread. If you hit a blocker, say so immediately — don't go silent.",
+    "WORKFLOW: ACK assigned work, do the work, ask for help quickly if blocked, then report completion.",
+    "WHY: the sender needs to know the task was picked up, but the task only moves forward if you start working right away.",
+    "ACK briefly in the same place the task came from, then immediately start. Do NOT spend your turn only on acknowledgment.",
+    "If the task arrived via `pinet_message`, ACK and reply via `pinet_message`. Do NOT try to `slack_send` unless you were given a real Slack thread.",
+    "If the task arrived in Slack, ACK briefly in that Slack thread and report back in the same thread.",
+    "If you get blocked, say so quickly in the same place and ask for what you need. WHY: blocked work should be visible so it can be unblocked or reassigned.",
+    "When the work is done, report the outcome in the same place with the relevant result. WHY: the sender needs closure and next steps.",
+    "Do NOT go idle with assigned work undone.",
+    "Follow the local instructions for this repo or task for worktrees, validation, branch/PR flow, and any other implementation details.",
   ];
 }
 
