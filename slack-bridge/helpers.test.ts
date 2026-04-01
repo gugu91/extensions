@@ -11,6 +11,8 @@ import {
   shortenPath,
   buildAgentDisplayInfo,
   rankAgentsForRouting,
+  evaluateRalphLoopCycle,
+  buildRalphLoopNudgeMessage,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
   resolvePersistedAgentIdentity,
@@ -707,6 +709,77 @@ describe("rankAgentsForRouting", () => {
     expect(ranked[ranked.length - 1]?.id).toBe("ghost");
     expect(ranked[0]?.routingReasons).toContain("repo:extensions");
     expect(ranked[0]?.routingReasons).toContain("tools:1/1");
+  });
+});
+
+// ─── Ralph loop helpers ────────────────────────────────
+
+describe("evaluateRalphLoopCycle", () => {
+  it("flags ghost agents, nudges idle agents with work, and reports self-repair anomalies", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🦎",
+          name: "Idle Gecko",
+          id: "idle-worker",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:00:00.000Z",
+          lastHeartbeat: "2026-04-01T00:01:55.000Z",
+          pendingInboxCount: 2,
+          ownedThreadCount: 1,
+        },
+        {
+          emoji: "🦉",
+          name: "Ready Owl",
+          id: "ready-worker",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:01:20.000Z",
+          lastHeartbeat: "2026-04-01T00:01:55.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 0,
+        },
+        {
+          emoji: "👻",
+          name: "Ghost Fox",
+          id: "ghost-worker",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:00:00.000Z",
+          lastHeartbeat: "2026-04-01T00:00:00.000Z",
+          disconnectedAt: "2026-04-01T00:00:10.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 1,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:02:00.000Z"),
+        idleWithWorkThresholdMs: 60_000,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+        pendingBacklogCount: 3,
+        currentBranch: "feat/not-main",
+        brokerHeartbeatActive: false,
+        brokerMaintenanceActive: false,
+      },
+    );
+
+    expect(result.ghostAgentIds).toEqual(["ghost-worker"]);
+    expect(result.nudgeAgentIds).toEqual(["idle-worker"]);
+    expect(result.idleDrainAgentIds).toEqual(["ready-worker"]);
+    expect(result.anomalies).toContain("Idle Gecko idle with assigned work (2 inbox, 1 threads)");
+    expect(result.anomalies).toContain("ghost agents detected: ghost-worker");
+    expect(result.anomalies).toContain("pending backlog (3) with 1 idle worker");
+    expect(result.anomalies).toContain("broker heartbeat timer is not running");
+    expect(result.anomalies).toContain("broker maintenance timer is not running");
+    expect(result.anomalies.some((item) => item.includes("expected `main`"))).toBe(true);
+  });
+});
+
+describe("buildRalphLoopNudgeMessage", () => {
+  it("formats pending inbox and claimed thread counts", () => {
+    expect(buildRalphLoopNudgeMessage(2, 1)).toContain("2 inbox items and 1 claimed thread");
   });
 });
 
