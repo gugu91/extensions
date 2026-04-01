@@ -320,6 +320,18 @@ export function getFollowerReconnectUiUpdate(
   };
 }
 
+export function getFollowerOwnedThreadClaims(
+  threads: ReadonlyMap<string, Pick<FollowerThreadState, "threadTs" | "channelId" | "owner">>,
+  agentName: string,
+): Array<{ threadTs: string; channelId: string }> {
+  return [...threads.values()]
+    .filter((thread) => thread.owner === agentName && Boolean(thread.threadTs) && Boolean(thread.channelId))
+    .map((thread) => ({
+      threadTs: thread.threadTs,
+      channelId: thread.channelId,
+    }));
+}
+
 /**
  * Track a thread from a broker inbound message in the threads map.
  * Used by the broker onInbound callback so that slack_send can resolve

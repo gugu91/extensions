@@ -21,6 +21,7 @@ import {
   syncFollowerInboxEntries,
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
+  getFollowerOwnedThreadClaims,
   type InboxMessage,
   type AgentDisplayInfo,
   type FollowerThreadState,
@@ -726,5 +727,29 @@ describe("getFollowerReconnectUiUpdate", () => {
     const result = getFollowerReconnectUiUpdate("reconnect", false);
     expect(result.nextWasDisconnected).toBe(false);
     expect(result.notify).toBeUndefined();
+  });
+});
+
+// ─── getFollowerOwnedThreadClaims ────────────────────────
+
+describe("getFollowerOwnedThreadClaims", () => {
+  it("returns only threads owned by the agent", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "C1", userId: "U1", owner: "Sonic Gecko" }],
+      ["t-2", { threadTs: "t-2", channelId: "C2", userId: "U2", owner: "Other Agent" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([
+      { threadTs: "t-1", channelId: "C1" },
+    ]);
+  });
+
+  it("ignores incomplete thread records", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "", userId: "U1", owner: "Sonic Gecko" }],
+      ["t-2", { threadTs: "", channelId: "C2", userId: "U2", owner: "Sonic Gecko" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
   });
 });
