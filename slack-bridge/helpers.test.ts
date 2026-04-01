@@ -15,6 +15,8 @@ import {
   buildRalphLoopNudgeMessage,
   buildRalphLoopAnomalySignature,
   buildRalphLoopFollowUpMessage,
+  shouldDeliverRalphLoopFollowUp,
+  DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
   resolvePersistedAgentIdentity,
@@ -803,6 +805,54 @@ describe("buildRalphLoopAnomalySignature", () => {
   });
 });
 
+describe("shouldDeliverRalphLoopFollowUp", () => {
+  it("delivers new actionable findings", () => {
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not repeat the same signature", () => {
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-1",
+        previousSignature: "ghost agents detected: ghost-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not send while a Ralph prompt is already pending", () => {
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-1",
+        pending: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not send while the broker is busy", () => {
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-1",
+        idle: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("throttles repeated Ralph follow-ups", () => {
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-2",
+        previousSignature: "ghost agents detected: ghost-1",
+        lastDeliveredAt: 10_000,
+        now: 10_000 + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS - 1,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("buildRalphLoopFollowUpMessage", () => {
   it("formats actionable anomalies into a broker follow-up prompt", () => {
     expect(
@@ -836,25 +886,6 @@ describe("buildRalphLoopFollowUpMessage", () => {
         idleDrainAgentIds: [],
         anomalies: [],
       }),
-    ).toBeNull();
-  });
-
-  it("returns null when the anomaly signature has not changed", () => {
-    const evaluation = {
-      ghostAgentIds: ["ghost-1"],
-      nudgeAgentIds: ["idle-1"],
-      idleDrainAgentIds: [],
-      anomalies: [
-        "ghost agents detected: ghost-1",
-        "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
-      ],
-    };
-
-    expect(
-      buildRalphLoopFollowUpMessage(
-        evaluation,
-        "ghost agents detected: ghost-1|Idle Gecko idle with assigned work (2 inbox, 1 threads)",
-      ),
     ).toBeNull();
   });
 });

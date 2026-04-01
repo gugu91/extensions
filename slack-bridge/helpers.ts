@@ -484,6 +484,7 @@ export function rankAgentsForRouting(
 export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 30_000;
 export const DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS = 60_000;
 export const DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS = 5 * 60_000;
+export const DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS = 60_000;
 
 export interface RalphLoopAgentWorkload extends AgentVisibilityInput {
   lastSeen?: string;
@@ -605,12 +606,40 @@ export function buildRalphLoopAnomalySignature(evaluation: RalphLoopEvaluationRe
   return evaluation.anomalies.join("|");
 }
 
+export interface RalphLoopFollowUpDeliveryOptions {
+  signature: string;
+  previousSignature?: string;
+  lastDeliveredAt?: number;
+  now?: number;
+  cooldownMs?: number;
+  pending?: boolean;
+  idle?: boolean;
+}
+
+export function shouldDeliverRalphLoopFollowUp(options: RalphLoopFollowUpDeliveryOptions): boolean {
+  const now = options.now ?? Date.now();
+  const previousSignature = options.previousSignature ?? "";
+  const lastDeliveredAt = options.lastDeliveredAt ?? 0;
+  const cooldownMs = options.cooldownMs ?? DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS;
+  const pending = options.pending ?? false;
+  const idle = options.idle ?? true;
+
+  if (!options.signature || options.signature === previousSignature) {
+    return false;
+  }
+  if (pending || !idle) {
+    return false;
+  }
+  if (lastDeliveredAt > 0 && now - lastDeliveredAt < cooldownMs) {
+    return false;
+  }
+  return true;
+}
+
 export function buildRalphLoopFollowUpMessage(
   evaluation: RalphLoopEvaluationResult,
-  previousSignature = "",
 ): string | null {
-  const signature = buildRalphLoopAnomalySignature(evaluation);
-  if (!signature || signature === previousSignature) {
+  if (evaluation.anomalies.length === 0) {
     return null;
   }
 
