@@ -37,6 +37,8 @@ export interface AgentInfo {
   lastHeartbeat: string;
   metadata: Record<string, unknown> | null;
   status: "working" | "idle";
+  disconnectedAt?: string | null;
+  resumableUntil?: string | null;
 }
 
 // ─── JSON-RPC types ──────────────────────────────────────
@@ -81,6 +83,19 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface RegistrationSnapshot {
+  name: string;
+  emoji: string;
+  metadata?: Record<string, unknown>;
+  stableId?: string;
+}
+
+interface RegistrationResult {
+  agentId: string;
+  name: string;
+  emoji: string;
+}
+
 // ─── Connection options ──────────────────────────────────
 
 export type BrokerConnectOpts = { path: string } | { host: string; port: number };
@@ -97,6 +112,8 @@ export class BrokerClient {
   private disconnectHandler: (() => void) | null = null;
   private reconnectHandler: (() => void) | null = null;
   private reconnectAttempt = 0;
+  private registrationSnapshot: RegistrationSnapshot | null = null;
+  private registeredIdentity: RegistrationResult | null = null;
 
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
@@ -116,39 +133,7 @@ export class BrokerClient {
 
   connect(): Promise<void> {
     this.shuttingDown = false;
-    return new Promise<void>((resolve, reject) => {
-      const sock = net.createConnection(this.connectOpts);
-
-      sock.on("connect", () => {
-        this.socket = sock;
-        this.connected = true;
-        this.buffer = "";
-        resolve();
-      });
-
-      sock.on("data", (chunk: Buffer) => {
-        this.onData(chunk.toString("utf-8"));
-      });
-
-      sock.on("close", () => {
-        const wasConnected = this.connected;
-        this.connected = false;
-        this.socket = null;
-        this.stopHeartbeat();
-        this.rejectAllPending(new Error("Socket closed"));
-        if (wasConnected && !this.shuttingDown) {
-          this.disconnectHandler?.();
-          this.scheduleReconnect();
-        }
-      });
-
-      sock.on("error", (err: Error) => {
-        if (!this.connected) {
-          reject(err);
-        }
-        // If already connected, the close event handles cleanup
-      });
-    });
+    return this.connectSocket();
   }
 
   disconnect(): void {
@@ -180,19 +165,13 @@ export class BrokerClient {
     metadata?: Record<string, unknown>,
     stableId?: string,
   ): Promise<{ agentId: string; name: string; emoji: string }> {
-    const result = (await this.request("register", {
+    this.registrationSnapshot = {
       name,
       emoji,
-      pid: process.pid,
       ...(metadata ? { metadata } : {}),
       ...(stableId ? { stableId } : {}),
-    })) as {
-      agentId: string;
-      name: string;
-      emoji: string;
     };
-    this.startHeartbeat();
-    return result;
+    return this.performRegister(this.registrationSnapshot);
   }
 
   async unregister(): Promise<void> {
@@ -201,6 +180,8 @@ export class BrokerClient {
       await this.request("unregister");
     } finally {
       this.stopHeartbeat();
+      this.registrationSnapshot = null;
+      this.registeredIdentity = null;
     }
   }
 
@@ -255,8 +236,11 @@ export class BrokerClient {
     return result;
   }
 
-  async listAgents(): Promise<AgentInfo[]> {
-    const result = (await this.request("agents.list")) as AgentInfo[];
+  async listAgents(includeDisconnected = false): Promise<AgentInfo[]> {
+    const result = (await this.request(
+      "agents.list",
+      includeDisconnected ? { includeDisconnected: true } : undefined,
+    )) as AgentInfo[];
     return result;
   }
 
@@ -285,6 +269,10 @@ export class BrokerClient {
 
   getReconnectAttempt(): number {
     return this.reconnectAttempt;
+  }
+
+  getRegisteredIdentity(): { agentId: string; name: string; emoji: string } | null {
+    return this.registeredIdentity ? { ...this.registeredIdentity } : null;
   }
 
   // ─── JSON-RPC transport ──────────────────────────────
@@ -360,15 +348,88 @@ export class BrokerClient {
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.connect()
-        .then(() => {
-          this.reconnectAttempt = 0;
-          this.reconnectHandler?.();
-        })
-        .catch(() => {
-          /* reconnect failed — will retry on next close */
-        });
+      void this.reconnectOnce();
     }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  private connectSocket(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const sock = net.createConnection(this.connectOpts);
+
+      sock.on("connect", () => {
+        this.socket = sock;
+        this.connected = true;
+        this.buffer = "";
+        resolve();
+      });
+
+      sock.on("data", (chunk: Buffer) => {
+        this.onData(chunk.toString("utf-8"));
+      });
+
+      sock.on("close", () => {
+        const wasConnected = this.connected;
+        this.connected = false;
+        this.socket = null;
+        this.stopHeartbeat();
+        this.rejectAllPending(new Error("Socket closed"));
+        if (wasConnected && !this.shuttingDown) {
+          this.disconnectHandler?.();
+          this.scheduleReconnect();
+        }
+      });
+
+      sock.on("error", (err: Error) => {
+        if (!this.connected) {
+          reject(err);
+        }
+        // If already connected, the close event handles cleanup
+      });
+    });
+  }
+
+  private async performRegister(
+    snapshot: RegistrationSnapshot,
+  ): Promise<{ agentId: string; name: string; emoji: string }> {
+    const result = (await this.request("register", {
+      name: snapshot.name,
+      emoji: snapshot.emoji,
+      pid: process.pid,
+      ...(snapshot.metadata ? { metadata: snapshot.metadata } : {}),
+      ...(snapshot.stableId ? { stableId: snapshot.stableId } : {}),
+    })) as RegistrationResult;
+    this.registrationSnapshot = {
+      ...snapshot,
+      name: result.name,
+      emoji: result.emoji,
+    };
+    this.registeredIdentity = result;
+    this.startHeartbeat();
+    return result;
+  }
+
+  private async reconnectOnce(): Promise<void> {
+    try {
+      await this.connectSocket();
+    } catch {
+      this.scheduleReconnect();
+      return;
+    }
+
+    try {
+      if (this.registrationSnapshot) {
+        await this.performRegister(this.registrationSnapshot);
+      }
+      this.reconnectAttempt = 0;
+      this.reconnectHandler?.();
+    } catch {
+      try {
+        this.socket?.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   private startHeartbeat(): void {

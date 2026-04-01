@@ -149,6 +149,56 @@ describe("BrokerDB", () => {
     expect(db.getAgents()).toHaveLength(1);
   });
 
+  it("registerAgent enforces unique names for different identities", () => {
+    const first = db.registerAgent("a1", "Hyper Owl", "🦉", 100, undefined, "host:session:/tmp/a");
+    const second = db.registerAgent("a2", "Hyper Owl", "🦎", 200, undefined, "host:session:/tmp/b");
+
+    expect(first.name).toBe("Hyper Owl");
+    expect(second.name).toBe("Hyper Owl 2");
+    expect(db.getAgents().map((agent) => agent.name)).toEqual(["Hyper Owl", "Hyper Owl 2"]);
+  });
+
+  it("startup reconciliation marks prior agents disconnected until they reconnect by stableId", () => {
+    const dbPath = path.join(dir, "restart.db");
+    const firstDb = new BrokerDB(dbPath);
+    firstDb.initialize();
+
+    const original = firstDb.registerAgent(
+      "a1",
+      "Hyper Owl",
+      "🦉",
+      100,
+      undefined,
+      "host:session:/tmp/a",
+    );
+    firstDb.createThread("t-restart", "slack", "C1", original.id);
+    firstDb.close();
+
+    const restartedDb = new BrokerDB(dbPath);
+    restartedDb.initialize();
+
+    expect(restartedDb.getAgents()).toEqual([]);
+    expect(restartedDb.getAgentById(original.id)?.disconnectedAt).toBeTruthy();
+    expect(restartedDb.getAgentById(original.id)?.resumableUntil).toBeTruthy();
+    expect(restartedDb.getThread("t-restart")?.ownerAgent).toBe(original.id);
+
+    const resumed = restartedDb.registerAgent(
+      "a2",
+      "Different Owl",
+      "🦎",
+      200,
+      undefined,
+      "host:session:/tmp/a",
+    );
+
+    expect(resumed.id).toBe(original.id);
+    expect(resumed.name).toBe("Hyper Owl");
+    expect(resumed.emoji).toBe("🦉");
+    expect(restartedDb.getThread("t-restart")?.ownerAgent).toBe(original.id);
+
+    restartedDb.close();
+  });
+
   it("unregisterAgent hides agent from connected list, keeps the record, and releases claims", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
     db.createThread("t-unregister", "slack", "#general", "a1");
@@ -159,6 +209,16 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")?.name).toBe("Agent");
     expect(db.getAgentById("a1")?.resumableUntil).toBeNull();
     expect(db.getThread("t-unregister")?.ownerAgent).toBeNull();
+  });
+
+  it("getAllAgents includes recently disconnected agents for visibility", () => {
+    db.registerAgent("a1", "Agent", "🤖", 1);
+    db.unregisterAgent("a1");
+
+    const allAgents = db.getAllAgents();
+    expect(allAgents).toHaveLength(1);
+    expect(allAgents[0]?.id).toBe("a1");
+    expect(allAgents[0]?.disconnectedAt).toBeTruthy();
   });
 
   it("touchAgent updates last_seen", () => {
@@ -612,6 +672,25 @@ describe("BrokerSocketServer", () => {
     const agents = res.result as Array<{ name: string }>;
     expect(agents).toHaveLength(2);
     expect(agents.map((a) => a.name).sort()).toEqual(["Alpha", "Beta"]);
+
+    client1.destroy();
+    client2.destroy();
+  });
+
+  it("agents.list can include disconnected agents for visibility", async () => {
+    const client1 = await connectClient(getInfo());
+    const client2 = await connectClient(getInfo());
+
+    await client1.call("register", { name: "Alpha", emoji: "🅰️" });
+    const beta = await client2.call("register", { name: "Beta", emoji: "🅱️" });
+    const betaId = (beta.result as { agentId: string }).agentId;
+    await client2.call("unregister");
+
+    const res = await client1.call("agents.list", { includeDisconnected: true });
+    expect(res.error).toBeUndefined();
+    const agents = res.result as Array<{ id: string; disconnectedAt?: string | null }>;
+    expect(agents.map((a) => a.id)).toContain(betaId);
+    expect(agents.find((a) => a.id === betaId)?.disconnectedAt).toBeTruthy();
 
     client1.destroy();
     client2.destroy();

@@ -9,8 +9,13 @@ import {
   formatInboxMessages,
   formatAgentList,
   shortenPath,
+  buildAgentDisplayInfo,
+  rankAgentsForRouting,
+  buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
+  resolvePersistedAgentIdentity,
   buildAgentStableId,
+  resolveAgentStableId,
   buildSlackRequest,
   stripBotMention,
   isChannelId,
@@ -20,6 +25,7 @@ import {
   syncFollowerInboxEntries,
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
+  getFollowerOwnedThreadClaims,
   type InboxMessage,
   type AgentDisplayInfo,
   type FollowerThreadState,
@@ -347,6 +353,36 @@ describe("shortenPath", () => {
   });
 });
 
+// ─── buildBrokerPromptGuidelines ──────────────────────────────
+
+describe("buildBrokerPromptGuidelines", () => {
+  it("returns broker-specific coordination guidelines", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    expect(guidelines.length).toBeGreaterThan(0);
+    expect(guidelines[0]).toContain("BROKER");
+    expect(guidelines[0]).toContain("Solar Mantis");
+  });
+
+  it("instructs not to pick up coding tasks", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("DO NOT pick up coding tasks");
+  });
+
+  it("instructs to use pinet_message instead of Agent tool", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_message");
+    expect(joined).toContain("DO NOT use the Agent tool");
+  });
+
+  it("instructs to check pinet_agents for idle workers", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_agents");
+  });
+});
+
 // ─── buildIdentityReplyGuidelines ─────────────────────────────
 
 describe("buildIdentityReplyGuidelines", () => {
@@ -383,6 +419,26 @@ describe("buildAgentStableId", () => {
   it("falls back to cwd when neither session file nor leaf id is available", () => {
     expect(buildAgentStableId(undefined, "macbook", "/repo")).toBe(
       `macbook:cwd:${path.resolve("/repo")}`,
+    );
+  });
+});
+
+describe("resolveAgentStableId", () => {
+  it("prefers the persisted stable id across reloads", () => {
+    expect(
+      resolveAgentStableId(
+        "persisted:agent:123",
+        "/tmp/pi/changed-session.json",
+        "macbook",
+        "/repo",
+        "leaf-2",
+      ),
+    ).toBe("persisted:agent:123");
+  });
+
+  it("falls back to buildAgentStableId when no persisted stable id exists", () => {
+    expect(resolveAgentStableId(undefined, "/tmp/pi/session.json", "macbook", "/repo")).toBe(
+      `macbook:session:${path.resolve("/tmp/pi/session.json")}`,
     );
   });
 });
@@ -485,9 +541,196 @@ describe("formatAgentList", () => {
     const result = formatAgentList(agents, homedir);
     expect(result).toContain("~/work (dev) @ srv");
   });
+
+  it("formats health, lease, and capability tags", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🤖",
+        name: "Visible Bot",
+        id: "agent-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:08.000Z",
+        metadata: {
+          cwd: "/Users/alice/src/extensions",
+          branch: "main",
+          host: "macbook",
+          capabilities: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            tools: ["test", "lint"],
+          },
+        },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    const result = formatAgentList([agent], homedir);
+    expect(result).toContain("Visible Bot (agent-1) — idle [stale]");
+    expect(result).toContain("heartbeat 12s ago · lease in 3s");
+    expect(result).toContain(
+      "caps: role:worker, repo:extensions, branch:main, tool:test, tool:lint",
+    );
+  });
 });
 
-// ─── resolveAgentIdentity ───────────────────────────
+describe("buildAgentDisplayInfo", () => {
+  it("marks a disconnected agent with resumable lease as resumable", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🤖",
+        name: "Resume Bot",
+        id: "agent-2",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        disconnectedAt: "2026-01-01T00:00:10.000Z",
+        resumableUntil: "2026-01-01T00:00:25.000Z",
+        metadata: { role: "worker" },
+      },
+      { now: Date.parse("2026-01-01T00:00:20.000Z") },
+    );
+
+    expect(agent.health).toBe("resumable");
+    expect(agent.ghost).toBe(false);
+    expect(agent.leaseSummary).toBe("lease in 5s");
+  });
+
+  it("marks expired agents as ghosts", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "👻",
+        name: "Ghost Bot",
+        id: "ghost-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        metadata: { role: "worker" },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(agent.health).toBe("ghost");
+    expect(agent.ghost).toBe(true);
+    expect(agent.leaseSummary).toBe("lease expired 5s ago");
+  });
+});
+
+describe("rankAgentsForRouting", () => {
+  it("prefers healthy idle agents that match repo, branch, role, and tools", () => {
+    const agents = [
+      buildAgentDisplayInfo(
+        {
+          emoji: "🤖",
+          name: "Best Bot",
+          id: "best",
+          status: "idle",
+          lastHeartbeat: "2026-01-01T00:00:18.000Z",
+          metadata: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            capabilities: {
+              repo: "extensions",
+              branch: "main",
+              role: "worker",
+              tools: ["test", "lint"],
+            },
+          },
+        },
+        { now: Date.parse("2026-01-01T00:00:20.000Z") },
+      ),
+      buildAgentDisplayInfo(
+        {
+          emoji: "🛠️",
+          name: "Busy Bot",
+          id: "busy",
+          status: "working",
+          lastHeartbeat: "2026-01-01T00:00:19.000Z",
+          metadata: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            capabilities: {
+              repo: "extensions",
+              branch: "main",
+              role: "worker",
+              tools: ["lint"],
+            },
+          },
+        },
+        { now: Date.parse("2026-01-01T00:00:20.000Z") },
+      ),
+      buildAgentDisplayInfo(
+        {
+          emoji: "👻",
+          name: "Ghost Bot",
+          id: "ghost",
+          status: "idle",
+          lastHeartbeat: "2026-01-01T00:00:00.000Z",
+          metadata: {
+            repo: "extensions",
+            branch: "main",
+            role: "worker",
+            capabilities: {
+              repo: "extensions",
+              branch: "main",
+              role: "worker",
+              tools: ["test", "lint"],
+            },
+          },
+        },
+        {
+          now: Date.parse("2026-01-01T00:00:20.000Z"),
+          heartbeatTimeoutMs: 15_000,
+          heartbeatIntervalMs: 5_000,
+        },
+      ),
+    ];
+
+    const ranked = rankAgentsForRouting(agents, {
+      repo: "extensions",
+      branch: "main",
+      role: "worker",
+      requiredTools: ["test"],
+      task: "run tests on extensions main",
+    });
+
+    expect(ranked[0]?.id).toBe("best");
+    expect(ranked[ranked.length - 1]?.id).toBe("ghost");
+    expect(ranked[0]?.routingReasons).toContain("repo:extensions");
+    expect(ranked[0]?.routingReasons).toContain("tools:1/1");
+  });
+});
+
+// ─── resolvePersistedAgentIdentity / resolveAgentIdentity ───────────────────────────
+
+describe("resolvePersistedAgentIdentity", () => {
+  it("prefers persisted identity from session state", () => {
+    const result = resolvePersistedAgentIdentity(
+      { agentName: "Config Bot", agentEmoji: "🤖" },
+      "Restored Gecko",
+      "🦎",
+      "env-nick",
+    );
+    expect(result).toEqual({ name: "Restored Gecko", emoji: "🦎" });
+  });
+
+  it("falls back to generated/config identity when persisted identity is incomplete", () => {
+    const result = resolvePersistedAgentIdentity(
+      { agentName: "Config Bot", agentEmoji: "🤖" },
+      "Half",
+      undefined,
+    );
+    expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
+  });
+});
 
 describe("resolveAgentIdentity", () => {
   it("returns settings name/emoji when both are configured", () => {
@@ -500,14 +743,26 @@ describe("resolveAgentIdentity", () => {
     expect(result).toEqual({ name: "Config Bot", emoji: "🤖" });
   });
 
-  it("falls back to env var PI_NICKNAME with generated emoji", () => {
-    const result = resolveAgentIdentity({}, "my-agent");
-    expect(result.name).toBe("my-agent");
-    expect(typeof result.emoji).toBe("string");
-    expect(result.emoji.length).toBeGreaterThan(0);
+  it("derives the same generated identity for the same seed", () => {
+    const first = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json");
+    const second = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json");
+    expect(first).toEqual(second);
   });
 
-  it("generates a random name when nothing else is available", () => {
+  it("derives different generated identities for different seeds", () => {
+    const first = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json");
+    const second = resolveAgentIdentity({}, undefined, "/tmp/pi/session-b.json");
+    expect(second.name).not.toBe(first.name);
+  });
+
+  it("falls back to env var PI_NICKNAME with deterministic emoji when seeded", () => {
+    const first = resolveAgentIdentity({}, "my-agent", "/tmp/pi/session-a.json");
+    const second = resolveAgentIdentity({}, "my-agent", "/tmp/pi/session-a.json");
+    expect(first.name).toBe("my-agent");
+    expect(first.emoji).toBe(second.emoji);
+  });
+
+  it("generates a name when nothing else is available", () => {
     const result = resolveAgentIdentity({});
     expect(typeof result.name).toBe("string");
     expect(result.name.length).toBeGreaterThan(0);
@@ -516,13 +771,17 @@ describe("resolveAgentIdentity", () => {
   });
 
   it("ignores settings when only agentName is set (no emoji)", () => {
-    const result = resolveAgentIdentity({ agentName: "Half Config" });
+    const result = resolveAgentIdentity(
+      { agentName: "Half Config" },
+      undefined,
+      "/tmp/pi/session-a.json",
+    );
     // Should fall through to generated name since agentEmoji is missing
     expect(result.name).not.toBe("Half Config");
   });
 
   it("ignores settings when only agentEmoji is set (no name)", () => {
-    const result = resolveAgentIdentity({ agentEmoji: "🤖" });
+    const result = resolveAgentIdentity({ agentEmoji: "🤖" }, undefined, "/tmp/pi/session-a.json");
     // Should fall through to generated name since agentName is missing
     expect(result.emoji).not.toBe("🤖");
   });
@@ -695,5 +954,29 @@ describe("getFollowerReconnectUiUpdate", () => {
     const result = getFollowerReconnectUiUpdate("reconnect", false);
     expect(result.nextWasDisconnected).toBe(false);
     expect(result.notify).toBeUndefined();
+  });
+});
+
+// ─── getFollowerOwnedThreadClaims ────────────────────────
+
+describe("getFollowerOwnedThreadClaims", () => {
+  it("returns only threads owned by the agent", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "C1", userId: "U1", owner: "Sonic Gecko" }],
+      ["t-2", { threadTs: "t-2", channelId: "C2", userId: "U2", owner: "Other Agent" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([
+      { threadTs: "t-1", channelId: "C1" },
+    ]);
+  });
+
+  it("ignores incomplete thread records", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "", userId: "U1", owner: "Sonic Gecko" }],
+      ["t-2", { threadTs: "", channelId: "C2", userId: "U2", owner: "Sonic Gecko" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
   });
 });

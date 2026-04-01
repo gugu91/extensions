@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
@@ -14,13 +15,18 @@ import {
   stripBotMention,
   isChannelId,
   buildSlackRequest,
+  buildAgentDisplayInfo,
+  rankAgentsForRouting,
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
-  buildAgentStableId,
+  buildBrokerPromptGuidelines,
+  buildWorkerPromptGuidelines,
+  resolveAgentStableId,
   syncFollowerInboxEntries,
   getFollowerReconnectUiUpdate,
+  getFollowerOwnedThreadClaims,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import {
@@ -90,37 +96,97 @@ export default function (pi: ExtensionAPI) {
     return checkUserAllowed(allowedUsers, userId);
   }
 
-  const identity = resolveAgentIdentity(settings, process.env.PI_NICKNAME);
-  let agentName = identity.name;
-  let agentEmoji = identity.emoji;
-  let agentStableId = buildAgentStableId(undefined, os.hostname(), process.cwd());
+  const initialIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, process.cwd());
+  let agentName = initialIdentity.name;
+  let agentEmoji = initialIdentity.emoji;
+  let agentStableId = resolveAgentStableId(undefined, undefined, os.hostname(), process.cwd());
 
   // Security guardrails
   const guardrails: SecurityGuardrails = settings.security ?? {};
   const securityPrompt = buildSecurityPrompt(guardrails);
 
+  function detectProjectTools(repoRoot: string, cwd: string): string[] {
+    const tools = new Set<string>();
+
+    for (const candidate of [path.join(cwd, "package.json"), path.join(repoRoot, "package.json")]) {
+      try {
+        if (!fs.existsSync(candidate)) continue;
+        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
+          scripts?: Record<string, string>;
+        };
+        const scripts = parsed.scripts ?? {};
+        if (scripts.test) tools.add("test");
+        if (scripts.lint) tools.add("lint");
+        if (scripts.typecheck) tools.add("typecheck");
+        if (scripts.build) tools.add("build");
+      } catch {
+        // Ignore unreadable package.json files.
+      }
+    }
+
+    tools.add("git");
+    return [...tools].sort();
+  }
+
   function getAgentMetadata(role: "broker" | "worker" = "worker"): Record<string, unknown> {
     let branch = "";
+    let repoRoot = "";
+    try {
+      repoRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+    } catch {
+      /* not in a git repo */
+    }
     try {
       branch = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
     } catch {
       /* not in a git repo */
     }
+
+    const cwd = process.cwd();
+    const resolvedRepoRoot = repoRoot || cwd;
+    const repo = path.basename(resolvedRepoRoot);
+    const tools = detectProjectTools(resolvedRepoRoot, cwd);
+    const tags = [
+      `role:${role}`,
+      `repo:${repo}`,
+      ...(branch ? [`branch:${branch}`] : []),
+      ...tools.map((tool) => `tool:${tool}`),
+    ];
+
     return {
-      cwd: process.cwd(),
+      cwd,
       branch,
       host: os.hostname(),
       role,
+      repo,
+      repoRoot: repoRoot || undefined,
+      capabilities: {
+        repo,
+        repoRoot: repoRoot || undefined,
+        branch: branch || undefined,
+        role,
+        tools,
+        tags,
+      },
     };
   }
 
   const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
-  const identityGuidelines = buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
+
+  function getIdentityGuidelines(): [string, string, string] {
+    return buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
+  }
 
   function applyBrokerIdentity(nextName: string, nextEmoji: string): void {
     if (agentName === nextName && agentEmoji === nextEmoji) return;
+    const previousName = agentName;
     agentName = nextName;
     agentEmoji = nextEmoji;
+    for (const thread of threads.values()) {
+      if (thread.owner === previousName) {
+        thread.owner = nextName;
+      }
+    }
     persistState();
     updateBadge();
   }
@@ -190,6 +256,7 @@ export default function (pi: ExtensionAPI) {
         userNames: Array.from(userNames.entries()),
         agentName,
         agentEmoji,
+        agentStableId,
       });
     } catch (err) {
       console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
@@ -703,13 +770,13 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Inbox",
     description:
       "Return pending Slack messages that arrived since the last check, then clear the queue.",
-    promptSnippet: `Check for new incoming Slack messages. You are ${agentEmoji} ${agentName}.`,
+    promptSnippet: "Check for new incoming Slack messages.",
     promptGuidelines: [
       "You are connected to Slack via the slack-bridge extension.",
-      `Your Slack identity is ${agentEmoji} ${agentName} — use this name and emoji when replying in Slack threads.`,
+      "Use the current Slack identity from the system prompt when replying in Slack threads.",
       "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      ...identityGuidelines,
+      "Follow the current system prompt exactly for first-message vs follow-up identity formatting.",
       "Always use this name and emoji — do not invent a new one.",
       ...(securityPrompt
         ? [
@@ -823,7 +890,9 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(actualTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void (brokerClient.client as BrokerClient).claimThread(actualTs, channel);
+        void (brokerClient.client as BrokerClient).claimThread(actualTs, channel).catch(() => {
+          /* broker gone, best effort */
+        });
       }
 
       // Remove 👀 from all messages in this thread
@@ -988,7 +1057,9 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(actualTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void (brokerClient.client as BrokerClient).claimThread(actualTs, channelId);
+        void (brokerClient.client as BrokerClient).claimThread(actualTs, channelId).catch(() => {
+          /* broker gone, best effort */
+        });
       }
 
       return {
@@ -1163,7 +1234,6 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Pinet broker health recovered", "info");
       }
       lastBrokerMaintenanceSignature = signature;
-
     } catch (err) {
       ctx.ui.notify(`Pinet maintenance failed: ${msg(err)}`, "error");
     } finally {
@@ -1260,42 +1330,128 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "pinet_agents",
     label: "Pinet Agents",
-    description: "List all connected Pinet agents.",
-    promptSnippet: "List all connected Pinet agents.",
-    parameters: Type.Object({}),
-    async execute() {
+    description: "List Pinet agents, including liveness and capability visibility.",
+    promptSnippet: "List and optionally rank Pinet agents.",
+    parameters: Type.Object({
+      repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
+      branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
+      role: Type.Optional(
+        Type.String({ description: "Preferred agent role, e.g. broker or worker" }),
+      ),
+      required_tools: Type.Optional(
+        Type.String({ description: "Comma-separated required capability/tool tags" }),
+      ),
+      task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
+    }),
+    async execute(_toolCallId, params) {
       requireToolPolicy("pinet_agents", undefined);
 
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
       }
 
-      let agents: AgentDisplayInfo[];
+      const includeGhosts = true;
+      const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
+      const nowMs = Date.now();
+
+      const isRecentDisconnected = (agent: { disconnectedAt?: string | null }): boolean => {
+        if (!agent.disconnectedAt) return true;
+        const disconnectedMs = Date.parse(agent.disconnectedAt);
+        return !Number.isNaN(disconnectedMs) && nowMs - disconnectedMs <= recentGhostWindowMs;
+      };
+
+      const toDisplay = (agent: {
+        emoji: string;
+        name: string;
+        id: string;
+        status: "working" | "idle";
+        metadata: Record<string, unknown> | null;
+        lastHeartbeat: string;
+        disconnectedAt?: string | null;
+        resumableUntil?: string | null;
+      }): AgentDisplayInfo =>
+        buildAgentDisplayInfo(agent, {
+          now: nowMs,
+          heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+          heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        });
+
+      let rawAgents: Array<{
+        emoji: string;
+        name: string;
+        id: string;
+        status: "working" | "idle";
+        metadata: Record<string, unknown> | null;
+        lastHeartbeat: string;
+        disconnectedAt?: string | null;
+        resumableUntil?: string | null;
+      }>;
       if (brokerRole === "broker" && activeBroker) {
-        agents = (activeBroker.db as BrokerDB).getAgents().map((a) => ({
-          emoji: a.emoji,
-          name: a.name,
-          id: a.id,
-          status: a.status,
-          metadata: a.metadata as AgentDisplayInfo["metadata"],
-        }));
+        rawAgents = (activeBroker.db as BrokerDB)
+          .getAllAgents()
+          .filter((agent) => includeGhosts || !agent.disconnectedAt)
+          .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
+          .map((agent) => ({
+            emoji: agent.emoji,
+            name: agent.name,
+            id: agent.id,
+            status: agent.status,
+            metadata: agent.metadata,
+            lastHeartbeat: agent.lastHeartbeat,
+            disconnectedAt: agent.disconnectedAt,
+            resumableUntil: agent.resumableUntil,
+          }));
       } else if (brokerRole === "follower" && brokerClient) {
-        const raw = await (brokerClient.client as BrokerClient).listAgents();
-        agents = raw.map((a) => ({
-          emoji: a.emoji,
-          name: a.name,
-          id: a.id,
-          status: a.status ?? "idle",
-          metadata: a.metadata as AgentDisplayInfo["metadata"],
-        }));
+        rawAgents = (await (brokerClient.client as BrokerClient).listAgents(includeGhosts))
+          .filter((agent) => includeGhosts || !agent.disconnectedAt)
+          .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
+          .map((agent) => ({
+            emoji: agent.emoji,
+            name: agent.name,
+            id: agent.id,
+            status: agent.status ?? "idle",
+            metadata: agent.metadata,
+            lastHeartbeat: agent.lastHeartbeat,
+            disconnectedAt: agent.disconnectedAt,
+            resumableUntil: agent.resumableUntil,
+          }));
       } else {
         throw new Error("Pinet is in an unexpected state.");
       }
 
-      const text = formatAgentList(agents, os.homedir());
+      const visibleAgents = rawAgents.map(toDisplay);
+      const hint = {
+        repo: params.repo,
+        branch: params.branch,
+        role: params.role,
+        requiredTools: params.required_tools
+          ?.split(",")
+          .map((tool: string) => tool.trim())
+          .filter(Boolean),
+        task: params.task,
+      };
+      const hasHint = Boolean(
+        hint.repo || hint.branch || hint.role || (hint.requiredTools?.length ?? 0) > 0 || hint.task,
+      );
+      const agents = rankAgentsForRouting(visibleAgents, hint);
+
+      const header = hasHint
+        ? `Agent routing hints: ${[
+            hint.repo ? `repo=${hint.repo}` : null,
+            hint.branch ? `branch=${hint.branch}` : null,
+            hint.role ? `role=${hint.role}` : null,
+            hint.requiredTools && hint.requiredTools.length > 0
+              ? `tools=${hint.requiredTools.join(",")}`
+              : null,
+            hint.task ? `task=${hint.task}` : null,
+          ]
+            .filter((item): item is string => Boolean(item))
+            .join(" · ")}\n\n`
+        : "";
+      const text = `${header}${formatAgentList(agents, os.homedir())}`;
       return {
         content: [{ type: "text", text }],
-        details: { agents },
+        details: { agents, hint },
       };
     },
   });
@@ -1336,7 +1492,10 @@ export default function (pi: ExtensionAPI) {
         const selfId = selfAgent.id;
         applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
-        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(selfId, "broker_delegate");
+        const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(
+          selfId,
+          "broker_delegate",
+        );
         const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
         if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
           ctx.ui.notify(
@@ -1404,6 +1563,16 @@ export default function (pi: ExtensionAPI) {
     };
     let wasDisconnected = false;
 
+    async function resumeThreadClaims(): Promise<void> {
+      for (const thread of getFollowerOwnedThreadClaims(threads, agentName)) {
+        try {
+          await client.claimThread(thread.threadTs, thread.channelId);
+        } catch {
+          break;
+        }
+      }
+    }
+
     function startPolling(): void {
       if (brokerClientRef.pollInterval) return;
       brokerClientRef.pollInterval = setInterval(async () => {
@@ -1457,27 +1626,22 @@ export default function (pi: ExtensionAPI) {
 
     client.onReconnect(() => {
       void (async () => {
-        try {
-          const registration = await client.register(
-            agentName,
-            agentEmoji,
-            getAgentMetadata("worker"),
-            agentStableId,
-          );
+        const registration = client.getRegisteredIdentity();
+        if (registration) {
           applyBrokerIdentity(registration.name, registration.emoji);
-          startPolling();
-          setExtStatus(ctx, "ok");
-          const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
-          wasDisconnected = uiUpdate.nextWasDisconnected;
-          if (uiUpdate.notify) {
-            ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
-          }
-        } catch {
-          // Re-registration failed; the next close event will trigger another reconnect
+        }
+        await resumeThreadClaims();
+        startPolling();
+        setExtStatus(ctx, "ok");
+        const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
+        wasDisconnected = uiUpdate.nextWasDisconnected;
+        if (uiUpdate.notify) {
+          ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
         }
       })();
     });
 
+    await resumeThreadClaims();
     startPolling();
     brokerClient = brokerClientRef;
     brokerRole = "follower";
@@ -1568,12 +1732,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     extCtx = ctx;
-    agentStableId = buildAgentStableId(
-      ctx.sessionManager.getSessionFile(),
-      os.hostname(),
-      ctx.cwd,
-      ctx.sessionManager.getLeafId(),
-    );
 
     // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
@@ -1582,6 +1740,7 @@ export default function (pi: ExtensionAPI) {
       userNames?: [string, string][];
       agentName?: string;
       agentEmoji?: string;
+      agentStableId?: string;
     }
     try {
       let savedState: PersistedState | null = null;
@@ -1590,6 +1749,23 @@ export default function (pi: ExtensionAPI) {
           savedState = entry.data as PersistedState;
         }
       }
+
+      agentStableId = resolveAgentStableId(
+        savedState?.agentStableId,
+        ctx.sessionManager.getSessionFile(),
+        os.hostname(),
+        ctx.cwd,
+        ctx.sessionManager.getLeafId(),
+      );
+      const identitySeed = ctx.sessionManager.getSessionFile() ?? agentStableId;
+      const restoredIdentity = resolveAgentIdentity(
+        settings,
+        process.env.PI_NICKNAME,
+        identitySeed,
+      );
+      agentName = restoredIdentity.name;
+      agentEmoji = restoredIdentity.emoji;
+
       if (savedState) {
         if (savedState.threads) {
           for (const [k, v] of savedState.threads) {
@@ -1604,11 +1780,8 @@ export default function (pi: ExtensionAPI) {
             if (!userNames.has(k)) userNames.set(k, v);
           }
         }
-        if (savedState.agentName && savedState.agentEmoji) {
-          agentName = savedState.agentName;
-          agentEmoji = savedState.agentEmoji;
-        }
       }
+      persistStateNow();
     } catch (err) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
@@ -1671,6 +1844,19 @@ export default function (pi: ExtensionAPI) {
       }
     }
   }
+
+  // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
+  pi.on("before_agent_start", async (event) => {
+    const guidelines = [...getIdentityGuidelines()];
+    if (brokerRole === "broker") {
+      guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
+    } else if (brokerRole === "follower") {
+      guidelines.push(...buildWorkerPromptGuidelines());
+    }
+    return {
+      systemPrompt: event.systemPrompt + "\n\n" + guidelines.join("\n"),
+    };
+  });
 
   // When agent finishes: clear thinking status + auto-drain inbox
   pi.on("agent_end", async () => {

@@ -1,0 +1,11 @@
+{
+  "files": {
+    "nvim-bridge/.turbo/turbo-lint.log": {
+      "size": 145,
+      "mtime_nanos": 1775054693409464308,
+      "mode": 420,
+      "is_dir": false
+    }
+  },
+  "order": ["nvim-bridge/.turbo/turbo-lint.log"]
+}
