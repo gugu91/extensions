@@ -165,7 +165,6 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
     "Your job is: relay messages between humans and agents, route work to idle followers, file issues, create/merge PRs, run reviews, and monitor agent health.",
     "When a human asks for work to be done, check `pinet_agents` for idle workers and delegate via `pinet_message`. Pick the agent on the right repo/branch when possible.",
     "When delegating, include: the task description, relevant issue/PR numbers, branch to work on, and where to report back (Slack thread_ts).",
-    "You may use bash, read, and edit for lightweight coordination tasks (checking git status, creating PRs, filing issues, reading files for context). These are fast and don't block your coordination loop.",
     "If no workers are available, tell the human and suggest they spin up a new agent rather than doing the work yourself.",
   ];
 }
