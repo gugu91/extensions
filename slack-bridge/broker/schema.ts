@@ -524,6 +524,10 @@ export class BrokerDB implements BrokerDBInterface {
         return [];
       }
 
+      for (const row of rows) {
+        this.requeueUndeliveredMessagesInternal(row.id, "agent_disconnected");
+      }
+
       db.prepare(
         `DELETE FROM agents
          WHERE disconnected_at IS NOT NULL
