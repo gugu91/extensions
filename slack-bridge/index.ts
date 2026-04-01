@@ -872,7 +872,7 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Send",
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
-      "Reply in a Slack assistant thread. Use to ACK tasks assigned in Slack, report progress or completion, and ask for help when blocked. Always reply in the same thread the task came from.",
+      "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(
@@ -887,7 +887,9 @@ export default function (pi: ExtensionAPI) {
       const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? lastDmChannel;
 
       if (!channel) {
-        throw new Error("No active Slack thread. Wait for an incoming message first.");
+        throw new Error(
+          "No active Slack thread. If you know the channel and thread_ts, use slack_post_channel instead.",
+        );
       }
 
       const body: Record<string, unknown> = {
@@ -1041,7 +1043,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
     promptSnippet:
-      "Post a message to a Slack channel or thread. Use to ACK tasks, report progress or completion, and ask for help when blocked. Use when you need to target a specific channel or thread by ID.",
+      "Post a message to a Slack channel or thread. Use when you need to target a specific channel or thread by ID.",
     parameters: Type.Object({
       channel: Type.Optional(
         Type.String({
@@ -1446,7 +1448,7 @@ export default function (pi: ExtensionAPI) {
     label: "Pinet Message",
     description: "Send a message to another connected Pinet agent.",
     promptSnippet:
-      "Send a message to another connected Pinet agent. Use to ACK assigned tasks, report progress or completion, ask for help when blocked, or delegate work. If a task arrived via pinet_message, always reply via pinet_message — not slack_send.",
+      "Send a message to another connected Pinet agent. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent name or ID" }),
       message: Type.String({ description: "Message body" }),

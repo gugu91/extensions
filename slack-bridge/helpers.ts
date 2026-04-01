@@ -671,15 +671,12 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
 
 export function buildWorkerPromptGuidelines(): string[] {
   return [
-    "WORKFLOW: ACK assigned work, do the work, ask for help quickly if blocked, then report completion.",
-    "WHY: the sender needs to know the task was picked up, but the task only moves forward if you start working right away.",
-    "ACK briefly in the same place the task came from, then immediately start. Do NOT spend your turn only on acknowledgment.",
-    "If the task arrived via `pinet_message`, ACK and reply via `pinet_message`. Do NOT try to `slack_send` unless you were given a real Slack thread.",
-    "If the task arrived in Slack, ACK briefly in that Slack thread and report back in the same thread.",
-    "If you get blocked, say so quickly in the same place and ask for what you need. WHY: blocked work should be visible so it can be unblocked or reassigned.",
-    "When the work is done, report the outcome in the same place with the relevant result. WHY: the sender needs closure and next steps.",
-    "Do NOT go idle with assigned work undone.",
-    "Follow the local instructions for this repo or task for worktrees, validation, branch/PR flow, and any other implementation details.",
+    "TASK WORKFLOW: When you receive work, follow these steps:",
+    "1. ACK briefly so the sender knows you picked it up — then start working immediately. Do not stop after the ACK.",
+    "2. Do the work.",
+    "3. If you hit a blocker, report it immediately and ask for what you need — blocked work must be visible so it can be unblocked or reassigned.",
+    "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
+    "Always reply where the task came from.",
   ];
 }
 
