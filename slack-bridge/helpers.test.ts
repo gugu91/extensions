@@ -9,6 +9,7 @@ import {
   formatInboxMessages,
   formatAgentList,
   shortenPath,
+  buildIdentityReplyGuidelines,
   buildSlackRequest,
   stripBotMention,
   isChannelId,
@@ -337,6 +338,26 @@ describe("shortenPath", () => {
 
   it("does not match partial directory names", () => {
     expect(shortenPath("/Users/alicewonder/src", "/Users/alice")).toBe("/Users/alicewonder/src");
+  });
+});
+
+// ─── buildIdentityReplyGuidelines ─────────────────────────────
+
+describe("buildIdentityReplyGuidelines", () => {
+  it("builds strict first-post and follow-up identity guidance", () => {
+    const [first, followUp, bareRule] = buildIdentityReplyGuidelines(
+      "🦅",
+      "Sonic Eagle",
+      "~/repo@my-host",
+    );
+
+    expect(first).toBe(
+      "First message in a new thread: use exact format — '🦅 `Sonic Eagle` reporting from `~/repo@my-host`\\n\\n<message body>'",
+    );
+    expect(followUp).toBe(
+      "Follow-up messages in the same thread: keep the same full identity prefix — '🦅 `Sonic Eagle` <message>'",
+    );
+    expect(bareRule).toContain("emoji-only");
   });
 });
 

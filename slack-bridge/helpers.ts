@@ -156,6 +156,18 @@ export function shortenPath(p: string, homedir: string): string {
   return p;
 }
 
+export function buildIdentityReplyGuidelines(
+  agentEmoji: string,
+  agentName: string,
+  location: string,
+): [string, string, string] {
+  return [
+    `First message in a new thread: use exact format — '${agentEmoji} \`${agentName}\` reporting from \`${location}\`\\n\\n<message body>'`,
+    `Follow-up messages in the same thread: keep the same full identity prefix — '${agentEmoji} \`${agentName}\` <message>'`,
+    "Never use emoji-only prefixes (for example, '🦅 Working now') — always include the full identity prefix above on every post.",
+  ];
+}
+
 export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): string {
   if (agents.length === 0) return "(no agents connected)";
 

@@ -16,6 +16,8 @@ import {
   buildSlackRequest,
   generateAgentName,
   resolveAgentIdentity,
+  shortenPath,
+  buildIdentityReplyGuidelines,
 } from "./helpers.js";
 import {
   buildSecurityPrompt,
@@ -110,6 +112,9 @@ export default function (pi: ExtensionAPI) {
       host: os.hostname(),
     };
   }
+
+  const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
+  const identityGuidelines = buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
 
   interface ThreadInfo {
     channelId: string;
@@ -695,8 +700,7 @@ export default function (pi: ExtensionAPI) {
       `Your Slack identity is ${agentEmoji} ${agentName} — use this name and emoji when replying in Slack threads.`,
       "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
       "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      `First message in a new thread: use full format — '${agentEmoji} (${agentName}) Just finished splitting the auth module.'`,
-      `Follow-up messages in the same thread: just prefix with the emoji — '${agentEmoji} Found two more files to split.'`,
+      ...identityGuidelines,
       "Always use this name and emoji — do not invent a new one.",
       ...(securityPrompt
         ? [
@@ -1409,7 +1413,8 @@ export default function (pi: ExtensionAPI) {
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
-        ].join("\n"),        "info",
+        ].join("\n"),
+        "info",
       );
     },
   });
