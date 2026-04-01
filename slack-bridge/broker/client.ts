@@ -213,6 +213,13 @@ export class BrokerClient {
     return result;
   }
 
+  async resolveThread(threadTs: string): Promise<string | null> {
+    const result = (await this.request("resolveThread", { threadTs })) as {
+      channelId?: string | null;
+    };
+    return typeof result.channelId === "string" ? result.channelId : null;
+  }
+
   // ─── Status ────────────────────────────────────────────
 
   async updateStatus(status: "working" | "idle"): Promise<void> {

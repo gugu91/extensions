@@ -25,6 +25,7 @@ import {
   buildWorkerPromptGuidelines,
   resolveAgentStableId,
   syncFollowerInboxEntries,
+  resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
   trackBrokerInboundThread,
@@ -347,6 +348,30 @@ export default function (pi: ExtensionAPI) {
     } while (cursor);
 
     throw new Error(`Channel "${name}" not found.`);
+  }
+
+  async function resolveFollowerReplyChannel(threadTs: string | undefined): Promise<string | null> {
+    if (!threadTs) return null;
+
+    const existingThread = threads.get(threadTs);
+    const resolved = await resolveFollowerThreadChannel(
+      threadTs,
+      existingThread,
+      brokerRole,
+      brokerRole === "follower" && brokerClient?.client
+        ? (nextThreadTs) => (brokerClient.client as BrokerClient).resolveThread(nextThreadTs)
+        : undefined,
+    );
+
+    if (resolved.threadUpdate && resolved.changed) {
+      threads.set(threadTs, {
+        ...(existingThread ?? {}),
+        ...resolved.threadUpdate,
+      });
+      persistState();
+    }
+
+    return resolved.channelId;
   }
 
   async function clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
@@ -850,8 +875,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params) {
       requireToolPolicy("slack_send", params.thread_ts);
 
-      const thread = params.thread_ts ? threads.get(params.thread_ts) : undefined;
-      const channel = thread?.channelId ?? lastDmChannel;
+      const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? lastDmChannel;
 
       if (!channel) {
         throw new Error("No active Slack thread. Wait for an incoming message first.");
@@ -1020,11 +1044,17 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params) {
       requireToolPolicy("slack_post_channel", params.thread_ts);
 
+      const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);
       const channelInput = params.channel ?? settings.defaultChannel;
-      if (!channelInput) {
+      let channelId = params.channel ? await resolveChannel(params.channel) : resolvedThreadChannel;
+
+      if (!channelId && channelInput) {
+        channelId = await resolveChannel(channelInput);
+      }
+      if (!channelId) {
         throw new Error("No channel specified and no defaultChannel configured in settings.json.");
       }
-      const channelId = await resolveChannel(channelInput);
+
       const body: Record<string, unknown> = {
         channel: channelId,
         text: params.text,
@@ -1062,13 +1092,14 @@ export default function (pi: ExtensionAPI) {
         });
       }
 
+      const channelLabel = params.channel ?? resolvedThreadChannel ?? channelInput ?? channelId;
       return {
         content: [
           {
             type: "text",
             text: params.thread_ts
-              ? `Replied in thread ${params.thread_ts} in channel ${channelInput}.`
-              : `Posted to #${channelInput} (ts: ${ts}).`,
+              ? `Replied in thread ${params.thread_ts} in channel ${channelLabel}.`
+              : `Posted to #${channelLabel} (ts: ${ts}).`,
           },
         ],
         details: { ts, channel: channelId },

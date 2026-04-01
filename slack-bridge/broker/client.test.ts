@@ -585,6 +585,56 @@ describe("BrokerClient — listThreads / listAgents", () => {
   });
 });
 
+describe("BrokerClient — resolveThread", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends resolveThread RPC and returns the channelId", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const resolvePromise = client.resolveThread("1234.5678");
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { threadTs: string };
+    };
+    expect(req.method).toBe("resolveThread");
+    expect(req.params.threadTs).toBe("1234.5678");
+
+    mock.respondTo(mock.connections[0], req.id, { channelId: "C123" });
+
+    await expect(resolvePromise).resolves.toBe("C123");
+
+    client.disconnect();
+  });
+
+  it("returns null when the broker has no channel for the thread", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const resolvePromise = client.resolveThread("missing-thread");
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as { id: number };
+
+    mock.respondTo(mock.connections[0], req.id, { channelId: null });
+
+    await expect(resolvePromise).resolves.toBeNull();
+
+    client.disconnect();
+  });
+});
+
 describe("BrokerClient — sendAgentMessage", () => {
   let mock: MockServer;
 

@@ -23,6 +23,7 @@ import {
   resolveAgentIdentity,
   trackBrokerInboundThread,
   syncFollowerInboxEntries,
+  resolveFollowerThreadChannel,
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
@@ -926,6 +927,72 @@ describe("syncFollowerInboxEntries", () => {
       null,
     );
     expect(result.changed).toBe(false);
+  });
+});
+
+// ─── resolveFollowerThreadChannel ─────────────────────────
+
+describe("resolveFollowerThreadChannel", () => {
+  it("returns the local channel without calling the broker", async () => {
+    const resolveThread = async () => {
+      throw new Error("should not be called");
+    };
+
+    await expect(
+      resolveFollowerThreadChannel(
+        "1234.5678",
+        { channelId: "C123", threadTs: "1234.5678", userId: "U1", owner: "Bot" },
+        "follower",
+        resolveThread,
+      ),
+    ).resolves.toEqual({ channelId: "C123", changed: false });
+  });
+
+  it("asks the broker for the channel when the follower has no local thread", async () => {
+    const result = await resolveFollowerThreadChannel(
+      "1234.5678",
+      undefined,
+      "follower",
+      async (threadTs) => {
+        expect(threadTs).toBe("1234.5678");
+        return "C999";
+      },
+    );
+
+    expect(result).toEqual({
+      channelId: "C999",
+      changed: true,
+      threadUpdate: {
+        channelId: "C999",
+        threadTs: "1234.5678",
+        userId: "",
+        owner: undefined,
+      },
+    });
+  });
+
+  it("returns null when the broker cannot resolve the thread", async () => {
+    await expect(
+      resolveFollowerThreadChannel("1234.5678", undefined, "follower", async () => null),
+    ).resolves.toEqual({ channelId: null, changed: false });
+  });
+
+  it("returns null when the broker lookup throws", async () => {
+    await expect(
+      resolveFollowerThreadChannel("1234.5678", undefined, "follower", async () => {
+        throw new Error("broker offline");
+      }),
+    ).resolves.toEqual({ channelId: null, changed: false });
+  });
+
+  it("does not query the broker for non-followers", async () => {
+    const resolveThread = async () => {
+      throw new Error("should not be called");
+    };
+
+    await expect(
+      resolveFollowerThreadChannel("1234.5678", undefined, "broker", resolveThread),
+    ).resolves.toEqual({ channelId: null, changed: false });
   });
 });
 
