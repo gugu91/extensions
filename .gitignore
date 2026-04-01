@@ -1,7 +1,9 @@
 node_modules/
 dist/
 .pnpm-store/
+# Turbo cache artifacts
 .turbo/
+.turbo/cache/
 .DS_Store
 *.log
 .nvimlog
