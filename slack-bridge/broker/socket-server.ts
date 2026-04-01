@@ -464,7 +464,9 @@ export class BrokerSocketServer {
   }
 
   private handleAgentsList(req: JsonRpcRequest): JsonRpcResponse {
-    const agents = this.db.getAgents();
+    const params = req.params ?? {};
+    const includeDisconnected = params.includeDisconnected === true;
+    const agents = includeDisconnected ? this.db.getAllAgents() : this.db.getAgents();
     return rpcOk(req.id, agents);
   }
 

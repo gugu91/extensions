@@ -37,6 +37,8 @@ export interface AgentInfo {
   lastHeartbeat: string;
   metadata: Record<string, unknown> | null;
   status: "working" | "idle";
+  disconnectedAt?: string | null;
+  resumableUntil?: string | null;
 }
 
 // ─── JSON-RPC types ──────────────────────────────────────
@@ -229,8 +231,11 @@ export class BrokerClient {
     return result;
   }
 
-  async listAgents(): Promise<AgentInfo[]> {
-    const result = (await this.request("agents.list")) as AgentInfo[];
+  async listAgents(includeDisconnected = false): Promise<AgentInfo[]> {
+    const result = (await this.request(
+      "agents.list",
+      includeDisconnected ? { includeDisconnected: true } : undefined,
+    )) as AgentInfo[];
     return result;
   }
 
