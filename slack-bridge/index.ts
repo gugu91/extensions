@@ -746,7 +746,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}`,
+            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\\n\\n${lines.join("\\n")}`,
           },
         ],
         details: { count: pending.length },
@@ -1285,11 +1285,17 @@ export default function (pi: ExtensionAPI) {
     await client.connect();
     await client.register(agentName, agentEmoji, getAgentMetadata());
 
-    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    const brokerClientRef: {
+      client: BrokerClient;
+      pollInterval: ReturnType<typeof setInterval> | null;
+    } = {
+      client,
+      pollInterval: null,
+    };
 
     function startPolling(): void {
-      if (pollInterval) return;
-      pollInterval = setInterval(async () => {
+      if (brokerClientRef.pollInterval) return;
+      brokerClientRef.pollInterval = setInterval(async () => {
         if (!pinetEnabled) return;
         try {
           const entries = await client.pollInbox();
@@ -1316,9 +1322,9 @@ export default function (pi: ExtensionAPI) {
     }
 
     function stopPolling(): void {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
+      if (brokerClientRef.pollInterval) {
+        clearInterval(brokerClientRef.pollInterval);
+        brokerClientRef.pollInterval = null;
       }
     }
 
@@ -1352,7 +1358,7 @@ export default function (pi: ExtensionAPI) {
     });
 
     startPolling();
-    brokerClient = { client, pollInterval };
+    brokerClient = brokerClientRef;
     brokerRole = "follower";
     pinetEnabled = true;
     setExtStatus(ctx, "ok");
@@ -1403,8 +1409,7 @@ export default function (pi: ExtensionAPI) {
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
-        ].join("\\n"),
-        "info",
+        ].join("\n"),        "info",
       );
     },
   });
