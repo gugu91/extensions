@@ -19,8 +19,12 @@ import {
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   buildRalphLoopNudgeMessage,
+  buildRalphLoopAnomalySignature,
+  buildRalphLoopFollowUpMessage,
+  shouldDeliverRalphLoopFollowUp,
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
+  DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
@@ -1233,6 +1237,9 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
   let lastBrokerRalphLoopSignature = "";
+  let lastBrokerRalphLoopFollowUpSignature = "";
+  let lastBrokerRalphLoopFollowUpAt = 0;
+  let brokerRalphLoopFollowUpPending = false;
   const lastBrokerNudges = new Map<string, number>();
 
   function startBrokerHeartbeat(): void {
@@ -1362,7 +1369,42 @@ export default function (pi: ExtensionAPI) {
         lastBrokerNudges.set(workload.id, now);
       }
 
-      const signature = evaluation.anomalies.join("|");
+      const signature = buildRalphLoopAnomalySignature(evaluation);
+      const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      const shouldDeliverFollowUp =
+        followUpPrompt != null &&
+        shouldDeliverRalphLoopFollowUp({
+          signature,
+          previousSignature: lastBrokerRalphLoopFollowUpSignature,
+          lastDeliveredAt: lastBrokerRalphLoopFollowUpAt,
+          now,
+          cooldownMs: DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
+          pending: brokerRalphLoopFollowUpPending,
+          idle: ctx.isIdle?.() ?? true,
+        });
+      if (shouldDeliverFollowUp && followUpPrompt) {
+        const markFollowUpDelivered = () => {
+          brokerRalphLoopFollowUpPending = true;
+          lastBrokerRalphLoopFollowUpAt = now;
+          lastBrokerRalphLoopFollowUpSignature = signature;
+        };
+
+        try {
+          pi.sendUserMessage(followUpPrompt, { deliverAs: "followUp" });
+          markFollowUpDelivered();
+        } catch {
+          try {
+            pi.sendUserMessage(followUpPrompt);
+            markFollowUpDelivered();
+          } catch {
+            /* best effort */
+          }
+        }
+      }
+      if (!signature) {
+        lastBrokerRalphLoopFollowUpSignature = "";
+      }
+
       if (signature && signature !== lastBrokerRalphLoopSignature) {
         ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
       } else if (!signature && lastBrokerRalphLoopSignature) {
@@ -1392,6 +1434,9 @@ export default function (pi: ExtensionAPI) {
     }
     lastBrokerNudges.clear();
     lastBrokerRalphLoopSignature = "";
+    lastBrokerRalphLoopFollowUpSignature = "";
+    lastBrokerRalphLoopFollowUpAt = 0;
+    brokerRalphLoopFollowUpPending = false;
   }
 
   pi.registerTool({
@@ -2014,6 +2059,7 @@ export default function (pi: ExtensionAPI) {
       if (thread) await clearThreadStatus(thread.channelId, ts);
     }
     thinking.clear();
+    brokerRalphLoopFollowUpPending = false;
 
     reportStatus("idle");
     drainInbox();
