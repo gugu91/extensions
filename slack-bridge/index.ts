@@ -1237,7 +1237,6 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
   let lastBrokerRalphLoopSignature = "";
-  let lastBrokerRalphLoopFollowUpSignature = "";
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
   const lastBrokerNudges = new Map<string, number>();
@@ -1375,7 +1374,6 @@ export default function (pi: ExtensionAPI) {
         followUpPrompt != null &&
         shouldDeliverRalphLoopFollowUp({
           signature,
-          previousSignature: lastBrokerRalphLoopFollowUpSignature,
           lastDeliveredAt: lastBrokerRalphLoopFollowUpAt,
           now,
           cooldownMs: DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
@@ -1386,7 +1384,6 @@ export default function (pi: ExtensionAPI) {
         const markFollowUpDelivered = () => {
           brokerRalphLoopFollowUpPending = true;
           lastBrokerRalphLoopFollowUpAt = now;
-          lastBrokerRalphLoopFollowUpSignature = signature;
         };
 
         try {
@@ -1402,7 +1399,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
       if (!signature) {
-        lastBrokerRalphLoopFollowUpSignature = "";
+        lastBrokerRalphLoopFollowUpAt = 0;
       }
 
       if (signature && signature !== lastBrokerRalphLoopSignature) {
@@ -1434,7 +1431,6 @@ export default function (pi: ExtensionAPI) {
     }
     lastBrokerNudges.clear();
     lastBrokerRalphLoopSignature = "";
-    lastBrokerRalphLoopFollowUpSignature = "";
     lastBrokerRalphLoopFollowUpAt = 0;
     brokerRalphLoopFollowUpPending = false;
   }

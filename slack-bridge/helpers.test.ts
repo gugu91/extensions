@@ -814,13 +814,14 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
     ).toBe(true);
   });
 
-  it("does not repeat the same signature", () => {
+  it("allows the same signature again after cooldown", () => {
     expect(
       shouldDeliverRalphLoopFollowUp({
         signature: "ghost agents detected: ghost-1",
-        previousSignature: "ghost agents detected: ghost-1",
+        lastDeliveredAt: 10_000,
+        now: 10_000 + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not send while a Ralph prompt is already pending", () => {
@@ -841,11 +842,10 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
     ).toBe(false);
   });
 
-  it("throttles repeated Ralph follow-ups", () => {
+  it("throttles repeated Ralph follow-ups during cooldown", () => {
     expect(
       shouldDeliverRalphLoopFollowUp({
-        signature: "ghost agents detected: ghost-2",
-        previousSignature: "ghost agents detected: ghost-1",
+        signature: "ghost agents detected: ghost-1",
         lastDeliveredAt: 10_000,
         now: 10_000 + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS - 1,
       }),
