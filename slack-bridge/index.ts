@@ -806,11 +806,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Check for new incoming Slack messages.",
     promptGuidelines: [
       "You are connected to Slack via the slack-bridge extension.",
-      "Use the current Slack identity from the system prompt when replying in Slack threads.",
-      "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
-      "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      "Follow the current system prompt exactly for first-message vs follow-up identity formatting.",
-      "Always use this name and emoji — do not invent a new one.",
+      "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
       ...(securityPrompt
         ? [
             "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
@@ -871,7 +867,8 @@ export default function (pi: ExtensionAPI) {
     name: "slack_send",
     label: "Slack Send",
     description: "Send a message in a Slack assistant thread.",
-    promptSnippet: "Reply in a Slack assistant thread.",
+    promptSnippet:
+      "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(
@@ -886,7 +883,9 @@ export default function (pi: ExtensionAPI) {
       const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? lastDmChannel;
 
       if (!channel) {
-        throw new Error("No active Slack thread. Wait for an incoming message first.");
+        throw new Error(
+          "No active Slack thread. If you know the channel and thread_ts, use slack_post_channel instead.",
+        );
       }
 
       const body: Record<string, unknown> = {
@@ -1039,7 +1038,8 @@ export default function (pi: ExtensionAPI) {
     label: "Slack Post Channel",
     description:
       "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
-    promptSnippet: "Post a message to a Slack channel.",
+    promptSnippet:
+      "Post a message to a Slack channel or thread. Use when you need to target a specific channel or thread by ID.",
     parameters: Type.Object({
       channel: Type.Optional(
         Type.String({
@@ -1443,7 +1443,8 @@ export default function (pi: ExtensionAPI) {
     name: "pinet_message",
     label: "Pinet Message",
     description: "Send a message to another connected Pinet agent.",
-    promptSnippet: "Send a message to another connected Pinet agent.",
+    promptSnippet:
+      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from.",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent name or ID" }),
       message: Type.String({ description: "Message body" }),
@@ -1514,7 +1515,8 @@ export default function (pi: ExtensionAPI) {
     name: "pinet_agents",
     label: "Pinet Agents",
     description: "List Pinet agents, including liveness and capability visibility.",
-    promptSnippet: "List and optionally rank Pinet agents.",
+    promptSnippet:
+      "List connected Pinet agents with liveness and capability info. Use before delegating work to find available agents, or to check health and status of agents you have assigned work to.",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
       branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),

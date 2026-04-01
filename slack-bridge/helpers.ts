@@ -76,7 +76,7 @@ export function formatInboxMessages(
     return `[thread ${m.threadTs}] ${n}: ${m.text}`;
   });
 
-  return `New Slack messages:\n${lines.join("\n")}\n\nRespond to each via slack_send with the correct thread_ts.`;
+  return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
 }
 
 // ─── Slack API encoding ──────────────────────────────────
@@ -671,13 +671,12 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
 
 export function buildWorkerPromptGuidelines(): string[] {
   return [
-    "WORKTREE RULE: NEVER work directly on the `main` branch or checkout feature branches in the main repo directory.",
-    "ALWAYS create a git worktree for your work: `git worktree add .worktrees/<name> -b <branch>` and `cd` into it before making changes.",
-    "If you are already in a worktree, stay there. Do not `cd` back to the main checkout to run git commands.",
-    "When your PR is merged, clean up: `git worktree remove .worktrees/<name>` from the main checkout.",
-    "NEVER run `git checkout <branch>` or `git switch <branch>` in the main repo checkout. The main checkout must always be on `main`.",
-    "Always run validation before pushing: `pnpm lint && pnpm typecheck && pnpm test`.",
-    "Report progress in your assigned Slack thread. If you hit a blocker, say so immediately — don't go silent.",
+    "TASK WORKFLOW: When you receive work, follow these steps:",
+    "1. ACK briefly so the sender knows you picked it up — then start working immediately. Do not stop after the ACK.",
+    "2. Do the work.",
+    "3. If you hit a blocker, report it immediately and ask for what you need — blocked work must be visible so it can be unblocked or reassigned.",
+    "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
+    "Always reply where the task came from.",
   ];
 }
 

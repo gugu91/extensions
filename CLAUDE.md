@@ -29,6 +29,14 @@ pnpm format        # Prettier + Stylua
 Turbo caches lint/typecheck/test results per-package. Unchanged packages
 are skipped on re-runs.
 
+## Worktree rules
+
+- NEVER work directly on `main` or checkout feature branches in the main repo directory.
+- ALWAYS create a git worktree: `git worktree add .worktrees/<name> -b <branch>` and `cd` into it before making changes.
+- If you are already in a worktree, stay there. Do not `cd` back to the main checkout.
+- When your PR is merged, clean up: `git worktree remove .worktrees/<name>` from the main checkout.
+- NEVER run `git checkout <branch>` or `git switch <branch>` in the main repo checkout. It must always be on `main`.
+
 ## Development workflow
 
 1. **Branch** from `main` — use `feat/`, `fix/`, `chore/` prefixes
