@@ -746,7 +746,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}`,
+            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\\n\\n${lines.join("\\n")}`,
           },
         ],
         details: { count: pending.length },
@@ -1409,8 +1409,7 @@ export default function (pi: ExtensionAPI) {
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
-        ].join("\\n"),
-        "info",
+        ].join("\n"),        "info",
       );
     },
   });
