@@ -350,6 +350,33 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")).not.toBeNull();
   });
 
+  it("purgeDisconnectedAgents waits for the grace window before deleting ghosts", () => {
+    db.registerAgent("active", "Active", "🟢", 1);
+    db.registerAgent("resumable", "Resumable", "🟡", 2);
+    db.registerAgent("ghost", "Ghost", "⚫️", 3);
+    db.registerAgent("gone", "Gone", "⚪️", 4);
+    db.createThread("t-gone", "slack", "C1", "gone");
+    db.insertMessage("t-gone", "slack", "inbound", "U1", "recover me", ["gone"], {
+      channel: "C1",
+    });
+
+    db.disconnectAgent("resumable", 60_000);
+    db.disconnectAgent("ghost", 0);
+    db.unregisterAgent("gone");
+
+    expect(db.purgeDisconnectedAgents()).toEqual([]);
+
+    const purged = db.purgeDisconnectedAgents(0);
+
+    expect(purged.sort()).toEqual(["ghost", "gone"]);
+    expect(db.getAgentById("active")).not.toBeNull();
+    expect(db.getAgentById("resumable")).not.toBeNull();
+    expect(db.getAgentById("ghost")).toBeNull();
+    expect(db.getAgentById("gone")).toBeNull();
+    expect(db.getInbox("gone")).toHaveLength(0);
+    expect(db.getPendingBacklog().map((entry) => entry.threadId)).toContain("t-gone");
+  });
+
   it("queueUnroutedMessage persists pending backlog without assigning an owner", () => {
     const backlog = db.queueUnroutedMessage(
       {
@@ -411,10 +438,37 @@ describe("BrokerDB", () => {
     });
 
     expect(result.reapedAgentIds).toContain("worker-1");
+    expect(db.getAgentById("worker-1")).not.toBeNull();
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-orphan");
     expect(db.getThread("t-orphan")?.ownerAgent).toBeNull();
+  });
+
+  it("maintenance purge requeues inbox work before deleting expired disconnected agents", () => {
+    db.registerAgent("gone", "Gone", "⚪️", 4);
+    db.createThread("t-gone-maint", "slack", "C1", "gone");
+    db.insertMessage("t-gone-maint", "slack", "inbound", "U1", "recover me too", ["gone"], {
+      channel: "C1",
+    });
+    db.unregisterAgent("gone");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare(
+        "UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?",
+      )
+      .run(new Date(Date.now() - 2 * 60 * 60_000).toISOString(), "gone");
+
+    runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(db.getAgentById("gone")).toBeNull();
+    expect(db.getInbox("gone")).toHaveLength(0);
+    expect(db.getPendingBacklog().map((entry) => entry.threadId)).toContain("t-gone-maint");
+    expect(db.getThread("t-gone-maint")?.ownerAgent).toBeNull();
   });
 
   it("createThread and getThread", () => {

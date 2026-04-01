@@ -11,6 +11,7 @@ export interface ThreadRepairResult {
 
 export interface BrokerMaintenanceDB {
   pruneStaleAgents(staleAfterMs: number): string[];
+  purgeDisconnectedAgents(graceMs?: number): string[];
   repairThreadOwnership(): ThreadRepairResult;
   requeueUndeliveredMessages(agentId: string, reason?: string): number;
   getPendingBacklog(limit?: number): BacklogEntry[];
@@ -76,6 +77,7 @@ export function runBrokerMaintenancePass(
   const now = options.now ?? Date.now();
   const busyAssignmentAgeMs = options.busyAssignmentAgeMs ?? DEFAULT_BUSY_ASSIGNMENT_AGE_MS;
   const reapedAgentIds = db.pruneStaleAgents(options.staleAfterMs);
+  db.purgeDisconnectedAgents();
   const repaired = db.repairThreadOwnership();
   for (const agentId of repaired.releasedAgentIds) {
     db.requeueUndeliveredMessages(agentId, "agent_disconnected");
