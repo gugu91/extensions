@@ -601,10 +601,16 @@ export function buildRalphLoopNudgeMessage(
   return `RALPH LOOP nudge: you appear idle but still have ${workload}. Please pick it up, post a status update, or release ownership so the broker can reassign it.`;
 }
 
+export function buildRalphLoopAnomalySignature(evaluation: RalphLoopEvaluationResult): string {
+  return evaluation.anomalies.join("|");
+}
+
 export function buildRalphLoopFollowUpMessage(
   evaluation: RalphLoopEvaluationResult,
+  previousSignature = "",
 ): string | null {
-  if (evaluation.anomalies.length === 0) {
+  const signature = buildRalphLoopAnomalySignature(evaluation);
+  if (!signature || signature === previousSignature) {
     return null;
   }
 

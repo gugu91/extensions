@@ -13,6 +13,7 @@ import {
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   buildRalphLoopNudgeMessage,
+  buildRalphLoopAnomalySignature,
   buildRalphLoopFollowUpMessage,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
@@ -784,6 +785,24 @@ describe("buildRalphLoopNudgeMessage", () => {
   });
 });
 
+describe("buildRalphLoopAnomalySignature", () => {
+  it("joins anomalies into a stable dedupe signature", () => {
+    expect(
+      buildRalphLoopAnomalySignature({
+        ghostAgentIds: ["ghost-1"],
+        nudgeAgentIds: ["idle-1"],
+        idleDrainAgentIds: ["ready-1"],
+        anomalies: [
+          "ghost agents detected: ghost-1",
+          "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+        ],
+      }),
+    ).toBe(
+      "ghost agents detected: ghost-1|Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+    );
+  });
+});
+
 describe("buildRalphLoopFollowUpMessage", () => {
   it("formats actionable anomalies into a broker follow-up prompt", () => {
     expect(
@@ -817,6 +836,25 @@ describe("buildRalphLoopFollowUpMessage", () => {
         idleDrainAgentIds: [],
         anomalies: [],
       }),
+    ).toBeNull();
+  });
+
+  it("returns null when the anomaly signature has not changed", () => {
+    const evaluation = {
+      ghostAgentIds: ["ghost-1"],
+      nudgeAgentIds: ["idle-1"],
+      idleDrainAgentIds: [],
+      anomalies: [
+        "ghost agents detected: ghost-1",
+        "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+      ],
+    };
+
+    expect(
+      buildRalphLoopFollowUpMessage(
+        evaluation,
+        "ghost agents detected: ghost-1|Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+      ),
     ).toBeNull();
   });
 });

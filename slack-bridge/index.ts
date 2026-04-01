@@ -19,6 +19,7 @@ import {
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   buildRalphLoopNudgeMessage,
+  buildRalphLoopAnomalySignature,
   buildRalphLoopFollowUpMessage,
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
@@ -1363,7 +1364,11 @@ export default function (pi: ExtensionAPI) {
         lastBrokerNudges.set(workload.id, now);
       }
 
-      const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      const signature = buildRalphLoopAnomalySignature(evaluation);
+      const followUpPrompt = buildRalphLoopFollowUpMessage(
+        evaluation,
+        lastBrokerRalphLoopSignature,
+      );
       if (followUpPrompt) {
         try {
           pi.sendUserMessage(followUpPrompt, { deliverAs: "followUp" });
@@ -1376,7 +1381,6 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      const signature = evaluation.anomalies.join("|");
       if (signature && signature !== lastBrokerRalphLoopSignature) {
         ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
       } else if (!signature && lastBrokerRalphLoopSignature) {
