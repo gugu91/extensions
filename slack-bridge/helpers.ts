@@ -505,6 +505,7 @@ export interface RalphLoopEvaluationResult {
   ghostAgentIds: string[];
   nudgeAgentIds: string[];
   idleDrainAgentIds: string[];
+  pendingBacklogCount: number;
   anomalies: string[];
 }
 
@@ -583,6 +584,7 @@ export function evaluateRalphLoopCycle(
     ghostAgentIds,
     nudgeAgentIds,
     idleDrainAgentIds,
+    pendingBacklogCount,
     anomalies,
   };
 }
@@ -639,13 +641,24 @@ export function shouldDeliverRalphLoopFollowUp(options: RalphLoopFollowUpDeliver
 export function buildRalphLoopFollowUpMessage(
   evaluation: RalphLoopEvaluationResult,
 ): string | null {
-  if (evaluation.anomalies.length === 0) {
+  const actionableLines = [...evaluation.anomalies];
+
+  if (
+    evaluation.pendingBacklogCount > 0 &&
+    !actionableLines.some((line) => line.includes("pending backlog"))
+  ) {
+    actionableLines.push(
+      `pending backlog (${evaluation.pendingBacklogCount}) still needs attention`,
+    );
+  }
+
+  if (actionableLines.length === 0) {
     return null;
   }
 
   return [
     "RALPH LOOP CYCLE:",
-    ...evaluation.anomalies.map((anomaly) => `- ${anomaly}`),
+    ...actionableLines.map((anomaly) => `- ${anomaly}`),
     "",
     "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
   ].join("\n");
@@ -739,6 +752,7 @@ export interface FollowerThreadState {
 }
 
 export interface FollowerInboxEntry {
+  inboxId?: number;
   message: {
     threadId?: string;
     sender?: string;
@@ -746,6 +760,11 @@ export interface FollowerInboxEntry {
     createdAt?: string;
     metadata: Record<string, unknown> | null;
   };
+}
+
+export interface FollowerFollowUpMessage {
+  inboxId?: number;
+  text: string;
 }
 
 export interface FollowerInboxSyncResult {
@@ -757,6 +776,26 @@ export interface FollowerInboxSyncResult {
 
 export function isDirectMessageChannel(channel: string): boolean {
   return /^D[A-Z0-9]+$/.test(channel);
+}
+
+export function extractFollowerFollowUpMessages(entries: FollowerInboxEntry[]): {
+  remainingEntries: FollowerInboxEntry[];
+  followUpMessages: FollowerFollowUpMessage[];
+} {
+  const remainingEntries: FollowerInboxEntry[] = [];
+  const followUpMessages: FollowerFollowUpMessage[] = [];
+
+  for (const entry of entries) {
+    const meta = entry.message.metadata ?? {};
+    if (meta.kind === "ralph_loop_nudge" && entry.message.body) {
+      followUpMessages.push({ inboxId: entry.inboxId, text: entry.message.body });
+      continue;
+    }
+
+    remainingEntries.push(entry);
+  }
+
+  return { remainingEntries, followUpMessages };
 }
 
 export function syncFollowerInboxEntries(

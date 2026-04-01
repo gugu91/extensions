@@ -28,6 +28,7 @@ import {
   FORM_METHODS,
   resolveAgentIdentity,
   trackBrokerInboundThread,
+  extractFollowerFollowUpMessages,
   syncFollowerInboxEntries,
   resolveFollowerThreadChannel,
   isDirectMessageChannel,
@@ -772,6 +773,7 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.ghostAgentIds).toEqual(["ghost-worker"]);
     expect(result.nudgeAgentIds).toEqual(["idle-worker"]);
     expect(result.idleDrainAgentIds).toEqual(["ready-worker"]);
+    expect(result.pendingBacklogCount).toBe(3);
     expect(result.anomalies).toContain("Idle Gecko idle with assigned work (2 inbox, 1 threads)");
     expect(result.anomalies).toContain("ghost agents detected: ghost-worker");
     expect(result.anomalies).toContain("pending backlog (3) with 1 idle worker");
@@ -794,6 +796,7 @@ describe("buildRalphLoopAnomalySignature", () => {
         ghostAgentIds: ["ghost-1"],
         nudgeAgentIds: ["idle-1"],
         idleDrainAgentIds: ["ready-1"],
+        pendingBacklogCount: 0,
         anomalies: [
           "ghost agents detected: ghost-1",
           "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
@@ -860,6 +863,7 @@ describe("buildRalphLoopFollowUpMessage", () => {
         ghostAgentIds: ["ghost-1"],
         nudgeAgentIds: ["idle-1"],
         idleDrainAgentIds: ["ready-1"],
+        pendingBacklogCount: 1,
         anomalies: [
           "ghost agents detected: ghost-1",
           "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
@@ -872,6 +876,26 @@ describe("buildRalphLoopFollowUpMessage", () => {
         "- ghost agents detected: ghost-1",
         "- Idle Gecko idle with assigned work (2 inbox, 1 threads)",
         "- main checkout is on `feat/not-main`, expected `main`",
+        "- pending backlog (1) still needs attention",
+        "",
+        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+      ].join("\n"),
+    );
+  });
+
+  it("returns a backlog-only follow-up when pending backlog remains", () => {
+    expect(
+      buildRalphLoopFollowUpMessage({
+        ghostAgentIds: [],
+        nudgeAgentIds: [],
+        idleDrainAgentIds: [],
+        pendingBacklogCount: 2,
+        anomalies: [],
+      }),
+    ).toBe(
+      [
+        "RALPH LOOP CYCLE:",
+        "- pending backlog (2) still needs attention",
         "",
         "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
       ].join("\n"),
@@ -884,6 +908,7 @@ describe("buildRalphLoopFollowUpMessage", () => {
         ghostAgentIds: [],
         nudgeAgentIds: [],
         idleDrainAgentIds: [],
+        pendingBacklogCount: 0,
         anomalies: [],
       }),
     ).toBeNull();
@@ -1034,6 +1059,57 @@ describe("isDirectMessageChannel", () => {
 
   it("rejects empty string", () => {
     expect(isDirectMessageChannel("")).toBe(false);
+  });
+});
+
+// ─── extractFollowerFollowUpMessages ──────────────────────
+
+describe("extractFollowerFollowUpMessages", () => {
+  it("pulls Ralph loop nudges out for direct follow-up delivery", () => {
+    const result = extractFollowerFollowUpMessages([
+      {
+        inboxId: 1,
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker",
+          body: "RALPH LOOP nudge: please wake up",
+          metadata: { kind: "ralph_loop_nudge" },
+        },
+      },
+      {
+        inboxId: 2,
+        message: {
+          threadId: "123.4",
+          sender: "U1",
+          body: "hello",
+          metadata: { channel: "C1" },
+        },
+      },
+    ]);
+
+    expect(result.followUpMessages).toEqual([
+      { inboxId: 1, text: "RALPH LOOP nudge: please wake up" },
+    ]);
+    expect(result.remainingEntries).toHaveLength(1);
+    expect(result.remainingEntries[0].inboxId).toBe(2);
+  });
+
+  it("leaves normal inbox entries alone", () => {
+    const result = extractFollowerFollowUpMessages([
+      {
+        inboxId: 2,
+        message: {
+          threadId: "123.4",
+          sender: "U1",
+          body: "hello",
+          metadata: { channel: "C1" },
+        },
+      },
+    ]);
+
+    expect(result.followUpMessages).toEqual([]);
+    expect(result.remainingEntries).toHaveLength(1);
+    expect(result.remainingEntries[0].inboxId).toBe(2);
   });
 });
 

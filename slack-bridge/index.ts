@@ -32,6 +32,7 @@ import {
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
   resolveAgentStableId,
+  extractFollowerFollowUpMessages,
   syncFollowerInboxEntries,
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
@@ -1319,6 +1320,22 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
+  function sendFollowUpMessage(prompt: string, onDelivered?: () => void): boolean {
+    try {
+      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+      onDelivered?.();
+      return true;
+    } catch {
+      try {
+        pi.sendUserMessage(prompt);
+        onDelivered?.();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
   function runBrokerRalphLoop(ctx: ExtensionContext): void {
     if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
 
@@ -1369,12 +1386,13 @@ export default function (pi: ExtensionAPI) {
         lastBrokerNudges.set(workload.id, now);
       }
 
-      const signature = buildRalphLoopAnomalySignature(evaluation);
+      const anomalySignature = buildRalphLoopAnomalySignature(evaluation);
       const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      const followUpSignature = followUpPrompt ?? "";
       const shouldDeliverFollowUp =
         followUpPrompt != null &&
         shouldDeliverRalphLoopFollowUp({
-          signature,
+          signature: followUpSignature,
           previousSignature: lastBrokerRalphLoopFollowUpSignature,
           lastDeliveredAt: lastBrokerRalphLoopFollowUpAt,
           now,
@@ -1383,34 +1401,22 @@ export default function (pi: ExtensionAPI) {
           idle: ctx.isIdle?.() ?? true,
         });
       if (shouldDeliverFollowUp && followUpPrompt) {
-        const markFollowUpDelivered = () => {
+        sendFollowUpMessage(followUpPrompt, () => {
           brokerRalphLoopFollowUpPending = true;
           lastBrokerRalphLoopFollowUpAt = now;
-          lastBrokerRalphLoopFollowUpSignature = signature;
-        };
-
-        try {
-          pi.sendUserMessage(followUpPrompt, { deliverAs: "followUp" });
-          markFollowUpDelivered();
-        } catch {
-          try {
-            pi.sendUserMessage(followUpPrompt);
-            markFollowUpDelivered();
-          } catch {
-            /* best effort */
-          }
-        }
+          lastBrokerRalphLoopFollowUpSignature = followUpSignature;
+        });
       }
-      if (!signature) {
+      if (!followUpPrompt) {
         lastBrokerRalphLoopFollowUpSignature = "";
       }
 
-      if (signature && signature !== lastBrokerRalphLoopSignature) {
+      if (anomalySignature && anomalySignature !== lastBrokerRalphLoopSignature) {
         ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
-      } else if (!signature && lastBrokerRalphLoopSignature) {
+      } else if (!anomalySignature && lastBrokerRalphLoopSignature) {
         ctx.ui.notify("RALPH loop health recovered", "info");
       }
-      lastBrokerRalphLoopSignature = signature;
+      lastBrokerRalphLoopSignature = anomalySignature;
     } catch (err) {
       ctx.ui.notify(`RALPH loop failed: ${msg(err)}`, "error");
     } finally {
@@ -1775,7 +1781,13 @@ export default function (pi: ExtensionAPI) {
           const entries = await client.pollInbox();
           if (entries.length === 0) return;
 
-          const synced = syncFollowerInboxEntries(entries, threads, agentName, lastDmChannel);
+          const { remainingEntries, followUpMessages } = extractFollowerFollowUpMessages(entries);
+          const synced = syncFollowerInboxEntries(
+            remainingEntries,
+            threads,
+            agentName,
+            lastDmChannel,
+          );
           for (const nextThread of synced.threadUpdates) {
             const existing = threads.get(nextThread.threadTs);
             if (!existing) {
@@ -1790,7 +1802,14 @@ export default function (pi: ExtensionAPI) {
           lastDmChannel = synced.lastDmChannel;
           inbox.push(...synced.inboxMessages);
 
-          const ids = entries.map((entry) => entry.inboxId);
+          const ids = remainingEntries
+            .map((entry) => entry.inboxId)
+            .filter((inboxId): inboxId is number => typeof inboxId === "number");
+          for (const followUp of followUpMessages) {
+            if (sendFollowUpMessage(followUp.text) && typeof followUp.inboxId === "number") {
+              ids.push(followUp.inboxId);
+            }
+          }
           if (synced.changed) persistState();
           if (ids.length > 0) await client.ackMessages(ids);
           updateBadge();
@@ -2027,15 +2046,9 @@ export default function (pi: ExtensionAPI) {
       prompt = securityPrompt + "\n\n" + prompt;
     }
 
-    try {
-      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-    } catch {
-      try {
-        pi.sendUserMessage(prompt);
-      } catch {
-        inbox.push(...pending);
-        updateBadge();
-      }
+    if (!sendFollowUpMessage(prompt)) {
+      inbox.push(...pending);
+      updateBadge();
     }
   }
 
