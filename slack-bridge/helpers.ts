@@ -481,6 +481,19 @@ export function rankAgentsForRouting(
   return ranked.sort(compareRouting);
 }
 
+export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: string): string[] {
+  return [
+    `You are ${agentEmoji} ${agentName}, the Pinet BROKER. Your role is coordination, not coding.`,
+    "WHY: You are the only process routing messages, monitoring agent health, and keeping the mesh alive. If you get stuck in a long coding task, Slack messages stop flowing, dead agents don't get reaped, and the whole multi-agent system stalls. Stay light and fast.",
+    "DO NOT pick up coding tasks, bug fixes, or implementation work yourself. Delegate to connected workers instead.",
+    "DO NOT use the Agent tool to spawn local subagents. Local subagents have no Slack/Pinet connectivity and can't be monitored. Use `pinet_message` to delegate to connected Pinet agents who can respond in Slack, own threads, and coordinate with humans directly.",
+    "Your job is: relay messages between humans and agents, route work to idle followers, file issues, create/merge PRs, run reviews, and monitor agent health.",
+    "When a human asks for work to be done, check `pinet_agents` for idle workers and delegate via `pinet_message`. Pick the agent on the right repo/branch when possible.",
+    "When delegating, include: the task description, relevant issue/PR numbers, branch to work on, and where to report back (Slack thread_ts).",
+    "If no workers are available, tell the human and suggest they spin up a new agent rather than doing the work yourself.",
+  ];
+}
+
 export function buildIdentityReplyGuidelines(
   agentEmoji: string,
   agentName: string,
@@ -630,6 +643,18 @@ export function getFollowerReconnectUiUpdate(
       message: "Pinet broker reconnected",
     },
   };
+}
+
+export function getFollowerOwnedThreadClaims(
+  threads: ReadonlyMap<string, Pick<FollowerThreadState, "threadTs" | "channelId" | "owner">>,
+  agentName: string,
+): Array<{ threadTs: string; channelId: string }> {
+  return [...threads.values()]
+    .filter((thread) => thread.owner === agentName && Boolean(thread.threadTs) && Boolean(thread.channelId))
+    .map((thread) => ({
+      threadTs: thread.threadTs,
+      channelId: thread.channelId,
+    }));
 }
 
 /**

@@ -27,7 +27,7 @@ interface MockServer {
   connectOpts: BrokerConnectOpts;
 }
 
-function createMockServer(): Promise<MockServer> {
+function createMockServer(port = 0): Promise<MockServer> {
   return new Promise((resolve, reject) => {
     const connections: net.Socket[] = [];
     const received: string[] = [];
@@ -47,8 +47,8 @@ function createMockServer(): Promise<MockServer> {
 
     server.on("error", reject);
 
-    // Use TCP on localhost with a random port (Unix sockets may be blocked in CI/sandbox)
-    server.listen(0, "127.0.0.1", () => {
+    // Use TCP on localhost (Unix sockets may be blocked in CI/sandbox)
+    server.listen(port, "127.0.0.1", () => {
       const addr = server.address() as net.AddressInfo;
       const opts: BrokerConnectOpts = { host: "127.0.0.1", port: addr.port };
       resolve({
@@ -959,6 +959,80 @@ describe("BrokerClient — onReconnect callback", () => {
     client.disconnect();
     const server2 = (client as unknown as { _testServer2: net.Server })._testServer2;
     await new Promise<void>((res) => server2.close(() => res()));
+  }, 20000);
+
+  it("keeps retrying until it can reconnect and re-register with stable identity", async () => {
+    let mock = await createMockServer();
+    const port = mock.port;
+    const client = new BrokerClient(mock.connectOpts);
+    let disconnectFired = false;
+    let reconnectFired = false;
+
+    client.onDisconnect(() => {
+      disconnectFired = true;
+    });
+    client.onReconnect(() => {
+      reconnectFired = true;
+    });
+
+    await client.connect();
+    const registerPromise = client.register(
+      "RetryBot",
+      "🔁",
+      { cwd: "/repo", branch: "main" },
+      "host:session:/tmp/retry",
+    );
+
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { stableId?: string };
+    };
+    expect(registerReq.method).toBe("register");
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "retry-agent",
+      name: "RetryBot",
+      emoji: "🔁",
+    });
+    await registerPromise;
+
+    await mock.close();
+    await waitFor(() => disconnectFired, 2000);
+    await waitFor(() => client.getReconnectAttempt() >= 2, 5000);
+
+    mock = await createMockServer(port);
+    await waitFor(() => mock.received.length > 0, 5000);
+
+    const reRegisterReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(reRegisterReq.method).toBe("register");
+    expect(reRegisterReq.params.name).toBe("RetryBot");
+    expect(reRegisterReq.params.emoji).toBe("🔁");
+    expect(reRegisterReq.params.stableId).toBe("host:session:/tmp/retry");
+    expect(reconnectFired).toBe(false);
+
+    mock.respondTo(mock.connections[0], reRegisterReq.id, {
+      agentId: "retry-agent",
+      name: "RetryBot",
+      emoji: "🔁",
+    });
+
+    await waitFor(() => reconnectFired, 5000);
+    expect(reconnectFired).toBe(true);
+    expect(client.isConnected()).toBe(true);
+    expect(client.getReconnectAttempt()).toBe(0);
+    expect(client.getRegisteredIdentity()).toEqual({
+      agentId: "retry-agent",
+      name: "RetryBot",
+      emoji: "🔁",
+    });
+
+    client.disconnect();
+    await mock.close();
   }, 20000);
 });
 

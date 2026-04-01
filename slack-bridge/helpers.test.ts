@@ -11,6 +11,7 @@ import {
   shortenPath,
   buildAgentDisplayInfo,
   rankAgentsForRouting,
+  buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
   buildAgentStableId,
   buildSlackRequest,
@@ -22,6 +23,7 @@ import {
   syncFollowerInboxEntries,
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
+  getFollowerOwnedThreadClaims,
   type InboxMessage,
   type AgentDisplayInfo,
   type FollowerThreadState,
@@ -346,6 +348,36 @@ describe("shortenPath", () => {
 
   it("does not match partial directory names", () => {
     expect(shortenPath("/Users/alicewonder/src", "/Users/alice")).toBe("/Users/alicewonder/src");
+  });
+});
+
+// ─── buildBrokerPromptGuidelines ──────────────────────────────
+
+describe("buildBrokerPromptGuidelines", () => {
+  it("returns broker-specific coordination guidelines", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    expect(guidelines.length).toBeGreaterThan(0);
+    expect(guidelines[0]).toContain("BROKER");
+    expect(guidelines[0]).toContain("Solar Mantis");
+  });
+
+  it("instructs not to pick up coding tasks", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("DO NOT pick up coding tasks");
+  });
+
+  it("instructs to use pinet_message instead of Agent tool", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_message");
+    expect(joined).toContain("DO NOT use the Agent tool");
+  });
+
+  it("instructs to check pinet_agents for idle workers", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_agents");
   });
 });
 
@@ -863,5 +895,29 @@ describe("getFollowerReconnectUiUpdate", () => {
     const result = getFollowerReconnectUiUpdate("reconnect", false);
     expect(result.nextWasDisconnected).toBe(false);
     expect(result.notify).toBeUndefined();
+  });
+});
+
+// ─── getFollowerOwnedThreadClaims ────────────────────────
+
+describe("getFollowerOwnedThreadClaims", () => {
+  it("returns only threads owned by the agent", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "C1", userId: "U1", owner: "Sonic Gecko" }],
+      ["t-2", { threadTs: "t-2", channelId: "C2", userId: "U2", owner: "Other Agent" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([
+      { threadTs: "t-1", channelId: "C1" },
+    ]);
+  });
+
+  it("ignores incomplete thread records", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "", userId: "U1", owner: "Sonic Gecko" }],
+      ["t-2", { threadTs: "", channelId: "C2", userId: "U2", owner: "Sonic Gecko" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
   });
 });
