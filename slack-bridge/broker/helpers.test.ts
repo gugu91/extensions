@@ -445,6 +445,16 @@ describe("BrokerDB", () => {
     expect(allThreads).toHaveLength(3);
   });
 
+  it("getOwnedThreadCount returns the number of claimed threads", () => {
+    db.createThread("t1", "slack", "#a", "agent-1");
+    db.createThread("t2", "slack", "#b", "agent-2");
+    db.createThread("t3", "slack", "#c", "agent-1");
+
+    expect(db.getOwnedThreadCount("agent-1")).toBe(2);
+    expect(db.getOwnedThreadCount("agent-2")).toBe(1);
+    expect(db.getOwnedThreadCount("missing")).toBe(0);
+  });
+
   it("insertMessage and getInbox", () => {
     db.registerAgent("a1", "Agent1", "🔵", 1);
     db.registerAgent("a2", "Agent2", "🔴", 2);

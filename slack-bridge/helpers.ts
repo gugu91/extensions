@@ -481,6 +481,126 @@ export function rankAgentsForRouting(
   return ranked.sort(compareRouting);
 }
 
+export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 30_000;
+export const DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS = 60_000;
+export const DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS = 5 * 60_000;
+
+export interface RalphLoopAgentWorkload extends AgentVisibilityInput {
+  lastSeen?: string;
+  pendingInboxCount: number;
+  ownedThreadCount: number;
+}
+
+export interface RalphLoopEvaluationOptions extends AgentVisibilityOptions {
+  idleWithWorkThresholdMs?: number;
+  pendingBacklogCount?: number;
+  currentBranch?: string | null;
+  expectedMainBranch?: string;
+  brokerHeartbeatActive?: boolean;
+  brokerMaintenanceActive?: boolean;
+}
+
+export interface RalphLoopEvaluationResult {
+  ghostAgentIds: string[];
+  nudgeAgentIds: string[];
+  idleDrainAgentIds: string[];
+  anomalies: string[];
+}
+
+export function evaluateRalphLoopCycle(
+  workloads: RalphLoopAgentWorkload[],
+  options: RalphLoopEvaluationOptions = {},
+): RalphLoopEvaluationResult {
+  const nowMs = options.now ?? Date.now();
+  const idleWithWorkThresholdMs =
+    options.idleWithWorkThresholdMs ?? DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS;
+  const pendingBacklogCount = options.pendingBacklogCount ?? 0;
+  const expectedMainBranch = options.expectedMainBranch ?? "main";
+  const anomalies: string[] = [];
+  const ghostAgentIds: string[] = [];
+  const nudgeAgentIds: string[] = [];
+  const idleDrainAgentIds: string[] = [];
+
+  for (const workload of workloads) {
+    const metadata = asRecord(workload.metadata);
+    const capabilities = extractAgentCapabilities(metadata);
+    const role = (capabilities.role ?? asString(metadata?.role) ?? "worker").toLowerCase();
+    if (role === "broker") {
+      continue;
+    }
+
+    const display = buildAgentDisplayInfo(workload, options);
+    if (display.health === "ghost") {
+      ghostAgentIds.push(workload.id);
+      continue;
+    }
+
+    const hasAssignedWork = workload.pendingInboxCount > 0 || workload.ownedThreadCount > 0;
+    const lastSeenMs = parseIsoMs(workload.lastSeen) ?? parseIsoMs(workload.lastHeartbeat);
+    const idleAgeMs = lastSeenMs == null ? null : Math.max(0, nowMs - lastSeenMs);
+
+    if (
+      hasAssignedWork &&
+      workload.status === "idle" &&
+      display.health !== "resumable" &&
+      idleAgeMs != null &&
+      idleAgeMs >= idleWithWorkThresholdMs
+    ) {
+      nudgeAgentIds.push(workload.id);
+      anomalies.push(
+        `${workload.name} idle with assigned work (${workload.pendingInboxCount} inbox, ${workload.ownedThreadCount} threads)`,
+      );
+      continue;
+    }
+
+    if (!hasAssignedWork && workload.status === "idle" && display.health === "healthy") {
+      idleDrainAgentIds.push(workload.id);
+    }
+  }
+
+  if (ghostAgentIds.length > 0) {
+    anomalies.push(`ghost agents detected: ${ghostAgentIds.join(", ")}`);
+  }
+  if (pendingBacklogCount > 0 && idleDrainAgentIds.length > 0) {
+    anomalies.push(
+      `pending backlog (${pendingBacklogCount}) with ${idleDrainAgentIds.length} idle worker${idleDrainAgentIds.length === 1 ? "" : "s"}`,
+    );
+  }
+  if (options.currentBranch && options.currentBranch !== expectedMainBranch) {
+    anomalies.push(
+      `main checkout is on \`${options.currentBranch}\`, expected \`${expectedMainBranch}\``,
+    );
+  }
+  if (options.brokerHeartbeatActive === false) {
+    anomalies.push("broker heartbeat timer is not running");
+  }
+  if (options.brokerMaintenanceActive === false) {
+    anomalies.push("broker maintenance timer is not running");
+  }
+
+  return {
+    ghostAgentIds,
+    nudgeAgentIds,
+    idleDrainAgentIds,
+    anomalies,
+  };
+}
+
+export function buildRalphLoopNudgeMessage(
+  pendingInboxCount: number,
+  ownedThreadCount: number,
+): string {
+  const parts = [];
+  if (pendingInboxCount > 0) {
+    parts.push(`${pendingInboxCount} inbox item${pendingInboxCount === 1 ? "" : "s"}`);
+  }
+  if (ownedThreadCount > 0) {
+    parts.push(`${ownedThreadCount} claimed thread${ownedThreadCount === 1 ? "" : "s"}`);
+  }
+  const workload = parts.length > 0 ? parts.join(" and ") : "assigned work";
+  return `RALPH LOOP nudge: you appear idle but still have ${workload}. Please pick it up, post a status update, or release ownership so the broker can reassign it.`;
+}
+
 export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: string): string[] {
   return [
     `You are ${agentEmoji} ${agentName}, the Pinet BROKER. Your role is coordination, not coding.`,

@@ -17,6 +17,10 @@ import {
   buildSlackRequest,
   buildAgentDisplayInfo,
   rankAgentsForRouting,
+  evaluateRalphLoopCycle,
+  buildRalphLoopNudgeMessage,
+  DEFAULT_RALPH_LOOP_INTERVAL_MS,
+  DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
@@ -1223,9 +1227,13 @@ export default function (pi: ExtensionAPI) {
   let activeSelfId: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceTimer: ReturnType<typeof setInterval> | null = null;
+  let brokerRalphLoopTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceRunning = false;
+  let brokerRalphLoopRunning = false;
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
+  let lastBrokerRalphLoopSignature = "";
+  const lastBrokerNudges = new Map<string, number>();
 
   function startBrokerHeartbeat(): void {
     stopBrokerHeartbeat();
@@ -1285,6 +1293,105 @@ export default function (pi: ExtensionAPI) {
     if (!brokerMaintenanceTimer) return;
     clearInterval(brokerMaintenanceTimer);
     brokerMaintenanceTimer = null;
+  }
+
+  function sendBrokerMaintenanceMessage(targetAgentId: string, body: string): void {
+    if (!activeBroker || !activeSelfId) return;
+    const db = activeBroker.db as BrokerDB;
+    const target = db.getAgentById(targetAgentId);
+    if (!target) return;
+
+    const threadId = `a2a:${activeSelfId}:${target.id}`;
+    if (!db.getThread(threadId)) {
+      db.createThread(threadId, "agent", "", activeSelfId);
+    }
+
+    db.insertMessage(threadId, "agent", "outbound", activeSelfId, body, [target.id], {
+      kind: "ralph_loop_nudge",
+      targetAgentId,
+    });
+  }
+
+  function runBrokerRalphLoop(ctx: ExtensionContext): void {
+    if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
+
+    brokerRalphLoopRunning = true;
+    try {
+      runBrokerMaintenance(ctx);
+
+      const db = activeBroker.db as BrokerDB;
+      let currentBranch: string | null = null;
+      try {
+        currentBranch = execSync("git branch --show-current", { encoding: "utf-8" }).trim() || null;
+      } catch {
+        /* best effort */
+      }
+
+      const workloads = db.getAllAgents().map((agent) => ({
+        ...agent,
+        pendingInboxCount: db.getPendingInboxCount(agent.id),
+        ownedThreadCount: db.getOwnedThreadCount(agent.id),
+      }));
+      const evaluation = evaluateRalphLoopCycle(workloads, {
+        now: Date.now(),
+        heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+        heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        pendingBacklogCount: db.getBacklogCount("pending"),
+        currentBranch,
+        brokerHeartbeatActive: brokerHeartbeatTimer != null,
+        brokerMaintenanceActive: brokerMaintenanceTimer != null,
+      });
+
+      const now = Date.now();
+      const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
+      for (const workload of workloads) {
+        if (!nudgeAgentIds.has(workload.id)) {
+          lastBrokerNudges.delete(workload.id);
+          continue;
+        }
+
+        const lastNudgeAt = lastBrokerNudges.get(workload.id) ?? 0;
+        if (now - lastNudgeAt < DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS) {
+          continue;
+        }
+
+        sendBrokerMaintenanceMessage(
+          workload.id,
+          buildRalphLoopNudgeMessage(workload.pendingInboxCount, workload.ownedThreadCount),
+        );
+        lastBrokerNudges.set(workload.id, now);
+      }
+
+      const signature = evaluation.anomalies.join("|");
+      if (signature && signature !== lastBrokerRalphLoopSignature) {
+        ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
+      } else if (!signature && lastBrokerRalphLoopSignature) {
+        ctx.ui.notify("RALPH loop health recovered", "info");
+      }
+      lastBrokerRalphLoopSignature = signature;
+    } catch (err) {
+      ctx.ui.notify(`RALPH loop failed: ${msg(err)}`, "error");
+    } finally {
+      brokerRalphLoopRunning = false;
+    }
+  }
+
+  function startBrokerRalphLoop(ctx: ExtensionContext): void {
+    stopBrokerRalphLoop();
+    brokerRalphLoopTimer = setInterval(() => {
+      runBrokerRalphLoop(ctx);
+    }, DEFAULT_RALPH_LOOP_INTERVAL_MS);
+    brokerRalphLoopTimer.unref?.();
+    runBrokerRalphLoop(ctx);
+  }
+
+  function stopBrokerRalphLoop(): void {
+    if (brokerRalphLoopTimer) {
+      clearInterval(brokerRalphLoopTimer);
+      brokerRalphLoopTimer = null;
+    }
+    lastBrokerNudges.clear();
+    lastBrokerRalphLoopSignature = "";
   }
 
   pi.registerTool({
@@ -1573,6 +1680,7 @@ export default function (pi: ExtensionAPI) {
         activeSelfId = selfId;
         startBrokerHeartbeat();
         startBrokerMaintenance(ctx);
+        startBrokerRalphLoop(ctx);
         brokerRole = "broker";
         pinetEnabled = true;
         setExtStatus(ctx, "ok");
@@ -1915,6 +2023,7 @@ export default function (pi: ExtensionAPI) {
     flushPersist();
     stopBrokerHeartbeat();
     stopBrokerMaintenance();
+    stopBrokerRalphLoop();
     if (activeBroker) {
       try {
         if (activeSelfId) {
@@ -1930,6 +2039,7 @@ export default function (pi: ExtensionAPI) {
     activeSelfId = null;
     lastBrokerMaintenance = null;
     lastBrokerMaintenanceSignature = "";
+    lastBrokerRalphLoopSignature = "";
     if (brokerClient) {
       try {
         clearInterval(brokerClient.pollInterval);

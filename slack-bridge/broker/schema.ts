@@ -762,6 +762,14 @@ export class BrokerDB implements BrokerDBInterface {
     return row.count;
   }
 
+  getOwnedThreadCount(agentId: string): number {
+    const db = this.getDb();
+    const row = db
+      .prepare("SELECT COUNT(*) AS count FROM threads WHERE owner_agent = ?")
+      .get(agentId) as { count: number };
+    return row.count;
+  }
+
   releaseThreadClaims(agentId: string): number {
     const db = this.getDb();
     const result = db
