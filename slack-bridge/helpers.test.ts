@@ -9,6 +9,7 @@ import {
   formatInboxMessages,
   formatAgentList,
   shortenPath,
+  buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
   buildAgentStableId,
   buildSlackRequest,
@@ -344,6 +345,36 @@ describe("shortenPath", () => {
 
   it("does not match partial directory names", () => {
     expect(shortenPath("/Users/alicewonder/src", "/Users/alice")).toBe("/Users/alicewonder/src");
+  });
+});
+
+// ─── buildBrokerPromptGuidelines ──────────────────────────────
+
+describe("buildBrokerPromptGuidelines", () => {
+  it("returns broker-specific coordination guidelines", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    expect(guidelines.length).toBeGreaterThan(0);
+    expect(guidelines[0]).toContain("BROKER");
+    expect(guidelines[0]).toContain("Solar Mantis");
+  });
+
+  it("instructs not to pick up coding tasks", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("DO NOT pick up coding tasks");
+  });
+
+  it("instructs to use pinet_message instead of Agent tool", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_message");
+    expect(joined).toContain("DO NOT use the Agent tool");
+  });
+
+  it("instructs to check pinet_agents for idle workers", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_agents");
   });
 });
 
