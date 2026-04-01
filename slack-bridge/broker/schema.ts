@@ -108,6 +108,22 @@ export function defaultDbPath(): string {
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const CURRENT_BROKER_SCHEMA_VERSION = 3;
 
+class BrokerSchemaTooNewError extends Error {
+  constructor(
+    readonly dbVersion: number,
+    readonly supportedVersion: number,
+  ) {
+    super(
+      `Broker DB schema version ${dbVersion} is newer than supported version ${supportedVersion}`,
+    );
+    this.name = "BrokerSchemaTooNewError";
+  }
+}
+
+function isBrokerSchemaTooNewError(error: unknown): error is BrokerSchemaTooNewError {
+  return error instanceof BrokerSchemaTooNewError;
+}
+
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
   "metadata",
@@ -246,8 +262,11 @@ function addAgentLifecycleColumns(db: DatabaseSync): void {
 
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
-  if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
+  if (currentVersion === CURRENT_BROKER_SCHEMA_VERSION) {
     return;
+  }
+  if (currentVersion > CURRENT_BROKER_SCHEMA_VERSION) {
+    throw new BrokerSchemaTooNewError(currentVersion, CURRENT_BROKER_SCHEMA_VERSION);
   }
 
   for (
@@ -302,6 +321,12 @@ export class BrokerDB implements BrokerDBInterface {
     try {
       this.openAndMigrate();
     } catch (error) {
+      if (isBrokerSchemaTooNewError(error)) {
+        console.error(`[BrokerDB] Refusing to open ${this.dbPath}: ${error.message}`);
+        this.close();
+        throw error;
+      }
+
       console.error(
         `[BrokerDB] Failed to open or migrate ${this.dbPath}; recreating from scratch`,
         error,

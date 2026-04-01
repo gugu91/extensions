@@ -183,6 +183,73 @@ describe("BrokerDB", () => {
     errorSpy.mockRestore();
   });
 
+  it("refuses to open a database with a newer schema version", () => {
+    const dbPath = path.join(dir, "future.db");
+    const futureDbFile = new DatabaseSync(dbPath);
+    futureDbFile.exec("PRAGMA user_version = 999");
+    futureDbFile.close();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const futureDb = new BrokerDB(dbPath);
+    expect(() => futureDb.initialize()).toThrow(
+      /schema version 999 is newer than supported version 3/i,
+    );
+    futureDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    inspectDb.close();
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`Refusing to open ${dbPath}`));
+    expect(versionRow.user_version).toBe(999);
+    errorSpy.mockRestore();
+  });
+
+  it("skips startup reconciliation when required lifecycle columns are missing", () => {
+    const dbPath = path.join(dir, "missing-columns.db");
+    const rawDb = new DatabaseSync(dbPath);
+    rawDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      );
+    `);
+    rawDb
+      .prepare(
+        `INSERT INTO agents (id, name, emoji, pid, connected_at, last_seen)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-guard",
+        "Legacy Guard",
+        "🛡️",
+        7,
+        "2026-04-01T10:00:00.000Z",
+        "2026-04-01T10:00:00.000Z",
+      );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const guardDb = new BrokerDB(dbPath);
+    (guardDb as unknown as { db: DatabaseSync | null }).db = rawDb;
+
+    expect(() => guardDb.reconcileStartupAgents()).not.toThrow();
+    const row = rawDb.prepare("SELECT * FROM agents WHERE id = ?").get("legacy-guard") as {
+      id: string;
+    };
+
+    expect(row.id).toBe("legacy-guard");
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping startup reconciliation; agents table is missing columns"),
+    );
+
+    guardDb.close();
+    errorSpy.mockRestore();
+  });
+
   it("registerAgent and getAgents", () => {
     const agent = db.registerAgent("a1", "TestAgent", "🤖", 1234);
     expect(agent.id).toBe("a1");
