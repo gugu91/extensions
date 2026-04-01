@@ -168,6 +168,151 @@ export function buildIdentityReplyGuidelines(
   ];
 }
 
+export interface FollowerThreadState {
+  channelId: string;
+  threadTs: string;
+  userId: string;
+  owner?: string;
+}
+
+export interface FollowerInboxEntry {
+  message: {
+    threadId?: string;
+    sender?: string;
+    body?: string;
+    createdAt?: string;
+    metadata: Record<string, unknown> | null;
+  };
+}
+
+export interface FollowerInboxSyncResult {
+  inboxMessages: InboxMessage[];
+  threadUpdates: FollowerThreadState[];
+  lastDmChannel: string | null;
+  changed: boolean;
+}
+
+export function isDirectMessageChannel(channel: string): boolean {
+  return /^D[A-Z0-9]+$/.test(channel);
+}
+
+export function syncFollowerInboxEntries(
+  entries: FollowerInboxEntry[],
+  existingThreads: ReadonlyMap<string, FollowerThreadState>,
+  agentName: string,
+  lastDmChannel: string | null,
+): FollowerInboxSyncResult {
+  let nextLastDmChannel = lastDmChannel;
+  let changed = false;
+  const threadUpdates: FollowerThreadState[] = [];
+
+  const inboxMessages = entries.map((entry) => {
+    const meta = entry.message.metadata ?? {};
+    const threadTs = entry.message.threadId ?? "";
+    const channel = typeof meta.channel === "string" ? meta.channel : "";
+    const sender = entry.message.sender ?? "";
+
+    if (threadTs && channel) {
+      const existing = existingThreads.get(threadTs);
+      const nextThread: FollowerThreadState = {
+        channelId: channel,
+        threadTs,
+        userId: existing?.userId || sender,
+        owner: existing?.owner ?? agentName,
+      };
+
+      if (
+        !existing ||
+        existing.channelId !== nextThread.channelId ||
+        existing.userId !== nextThread.userId ||
+        existing.owner !== nextThread.owner
+      ) {
+        changed = true;
+      }
+
+      threadUpdates.push(nextThread);
+    }
+
+    if (isDirectMessageChannel(channel) && nextLastDmChannel !== channel) {
+      nextLastDmChannel = channel;
+      changed = true;
+    }
+
+    return {
+      channel,
+      threadTs,
+      userId: sender,
+      text: entry.message.body ?? "",
+      timestamp: entry.message.createdAt ?? "",
+    };
+  });
+
+  return {
+    inboxMessages,
+    threadUpdates,
+    lastDmChannel: nextLastDmChannel,
+    changed,
+  };
+}
+
+export interface FollowerReconnectUiUpdate {
+  nextWasDisconnected: boolean;
+  notify?: {
+    level: "warning" | "info";
+    message: string;
+  };
+}
+
+export function getFollowerReconnectUiUpdate(
+  event: "disconnect" | "reconnect",
+  wasDisconnected: boolean,
+): FollowerReconnectUiUpdate {
+  if (event === "disconnect") {
+    return wasDisconnected
+      ? { nextWasDisconnected: true }
+      : {
+          nextWasDisconnected: true,
+          notify: {
+            level: "warning",
+            message: "Pinet broker disconnected — reconnecting...",
+          },
+        };
+  }
+
+  if (!wasDisconnected) {
+    return { nextWasDisconnected: false };
+  }
+
+  return {
+    nextWasDisconnected: false,
+    notify: {
+      level: "info",
+      message: "Pinet broker reconnected",
+    },
+  };
+}
+
+/**
+ * Track a thread from a broker inbound message in the threads map.
+ * Used by the broker onInbound callback so that slack_send can resolve
+ * the channel for channel-mention messages.
+ */
+export function trackBrokerInboundThread(
+  threads: Map<string, FollowerThreadState>,
+  inMsg: { threadId: string; channel: string; userId?: string },
+  owner?: string,
+): void {
+  if (!inMsg.threadId || !inMsg.channel) return;
+  if (!threads.has(inMsg.threadId)) {
+    threads.set(inMsg.threadId, {
+      channelId: inMsg.channel,
+      threadTs: inMsg.threadId,
+      userId: inMsg.userId ?? "",
+      owner,
+    });
+  }
+}
+
 export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): string {
   if (agents.length === 0) return "(no agents connected)";
 
