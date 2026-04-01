@@ -22,6 +22,7 @@ import {
   buildAgentStableId,
   syncFollowerInboxEntries,
   getFollowerReconnectUiUpdate,
+  getFollowerOwnedThreadClaims,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import {
@@ -120,8 +121,14 @@ export default function (pi: ExtensionAPI) {
 
   function applyBrokerIdentity(nextName: string, nextEmoji: string): void {
     if (agentName === nextName && agentEmoji === nextEmoji) return;
+    const previousName = agentName;
     agentName = nextName;
     agentEmoji = nextEmoji;
+    for (const thread of threads.values()) {
+      if (thread.owner === previousName) {
+        thread.owner = nextName;
+      }
+    }
     persistState();
     updateBadge();
   }
@@ -1407,6 +1414,16 @@ export default function (pi: ExtensionAPI) {
     };
     let wasDisconnected = false;
 
+    async function resumeThreadClaims(): Promise<void> {
+      for (const thread of getFollowerOwnedThreadClaims(threads, agentName)) {
+        try {
+          await client.claimThread(thread.threadTs, thread.channelId);
+        } catch {
+          break;
+        }
+      }
+    }
+
     function startPolling(): void {
       if (brokerClientRef.pollInterval) return;
       brokerClientRef.pollInterval = setInterval(async () => {
@@ -1460,27 +1477,22 @@ export default function (pi: ExtensionAPI) {
 
     client.onReconnect(() => {
       void (async () => {
-        try {
-          const registration = await client.register(
-            agentName,
-            agentEmoji,
-            getAgentMetadata("worker"),
-            agentStableId,
-          );
+        const registration = client.getRegisteredIdentity();
+        if (registration) {
           applyBrokerIdentity(registration.name, registration.emoji);
-          startPolling();
-          setExtStatus(ctx, "ok");
-          const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
-          wasDisconnected = uiUpdate.nextWasDisconnected;
-          if (uiUpdate.notify) {
-            ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
-          }
-        } catch {
-          // Re-registration failed; the next close event will trigger another reconnect
+        }
+        await resumeThreadClaims();
+        startPolling();
+        setExtStatus(ctx, "ok");
+        const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
+        wasDisconnected = uiUpdate.nextWasDisconnected;
+        if (uiUpdate.notify) {
+          ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
         }
       })();
     });
 
+    await resumeThreadClaims();
     startPolling();
     brokerClient = brokerClientRef;
     brokerRole = "follower";
