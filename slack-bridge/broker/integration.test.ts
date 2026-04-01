@@ -408,6 +408,19 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(thread!.channel).toBe("C-TEST-123");
   });
 
+  it("resolveThread returns the broker channel for an existing thread", async () => {
+    await client.register("resolver-agent", "🧭");
+    db.createThread("t-resolve", "slack", "C-THREAD-1", null);
+
+    await expect(client.resolveThread("t-resolve")).resolves.toBe("C-THREAD-1");
+  });
+
+  it("resolveThread returns null for unknown threads", async () => {
+    await client.register("resolver-agent", "🧭");
+
+    await expect(client.resolveThread("missing-thread")).resolves.toBeNull();
+  });
+
   it("slack.proxy chat.postMessage auto-claims thread for calling agent", async () => {
     client.disconnect();
     await server.stop();

@@ -648,6 +648,51 @@ export function syncFollowerInboxEntries(
   };
 }
 
+export interface FollowerThreadChannelResolution {
+  channelId: string | null;
+  threadUpdate?: FollowerThreadState;
+  changed: boolean;
+}
+
+export async function resolveFollowerThreadChannel(
+  threadTs: string | undefined,
+  existingThread: FollowerThreadState | undefined,
+  brokerRole: "broker" | "follower" | null,
+  resolveThread?: (threadTs: string) => Promise<string | null>,
+): Promise<FollowerThreadChannelResolution> {
+  if (!threadTs) {
+    return { channelId: null, changed: false };
+  }
+
+  if (existingThread?.channelId) {
+    return { channelId: existingThread.channelId, changed: false };
+  }
+
+  if (brokerRole !== "follower" || !resolveThread) {
+    return { channelId: null, changed: false };
+  }
+
+  try {
+    const channelId = await resolveThread(threadTs);
+    if (!channelId) {
+      return { channelId: null, changed: false };
+    }
+
+    return {
+      channelId,
+      changed: true,
+      threadUpdate: {
+        channelId,
+        threadTs,
+        userId: existingThread?.userId ?? "",
+        owner: existingThread?.owner,
+      },
+    };
+  } catch {
+    return { channelId: null, changed: false };
+  }
+}
+
 export interface FollowerReconnectUiUpdate {
   nextWasDisconnected: boolean;
   notify?: {

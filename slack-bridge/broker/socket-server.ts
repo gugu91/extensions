@@ -312,6 +312,8 @@ export class BrokerSocketServer {
           return this.handleAgentsList(req);
         case "thread.claim":
           return this.handleThreadClaim(req, state);
+        case "resolveThread":
+          return this.handleResolveThread(req, state);
         case "agent.message":
           return this.handleAgentMessage(req, state);
         case "status.update":
@@ -486,6 +488,21 @@ export class BrokerSocketServer {
     const channel = typeof params.channel === "string" ? params.channel : undefined;
     const claimed = this.router.claimThread(threadId, state.agentId, channel);
     return rpcOk(req.id, { claimed });
+  }
+
+  private handleResolveThread(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const threadTs = typeof params.threadTs === "string" ? params.threadTs : null;
+    if (!threadTs) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "threadTs is required");
+    }
+
+    const channelId = this.db.getThread(threadTs)?.channel || null;
+    return rpcOk(req.id, { channelId });
   }
 
   // ─── Agent-to-agent messaging ─────────────────────────
