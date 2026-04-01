@@ -201,7 +201,9 @@ describe("formatInboxMessages", () => {
     ];
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("[thread 123.456] will: hello");
-    expect(result).toContain("Respond to each via slack_send");
+    expect(result).toContain(
+      "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
+    );
   });
 
   it("formats a channel mention", () => {

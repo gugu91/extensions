@@ -76,7 +76,7 @@ export function formatInboxMessages(
     return `[thread ${m.threadTs}] ${n}: ${m.text}`;
   });
 
-  return `New Slack messages:\n${lines.join("\n")}\n\nRespond to each via slack_send with the correct thread_ts.`;
+  return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
 }
 
 // ─── Slack API encoding ──────────────────────────────────

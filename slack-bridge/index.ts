@@ -806,11 +806,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Check for new incoming Slack messages.",
     promptGuidelines: [
       "You are connected to Slack via the slack-bridge extension.",
-      "Use the current Slack identity from the system prompt when replying in Slack threads.",
-      "New Slack messages are queued — call `slack_inbox` periodically (e.g. between tasks or when you see the badge count increase) to check for pending messages.",
-      "Reply to each message with `slack_send`, passing the correct `thread_ts`.",
-      "Follow the current system prompt exactly for first-message vs follow-up identity formatting.",
-      "Always use this name and emoji — do not invent a new one.",
+      "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
       ...(securityPrompt
         ? [
             "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
