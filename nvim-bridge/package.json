@@ -1,6 +1,6 @@
 {
   "name": "@gugu91/pi-nvim-bridge",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "Neovim bridge for pi — editor context sync and PiComms persistent comments",

@@ -1,6 +1,6 @@
 {
   "name": "@gugu91/pi-slack-bridge",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "Slack assistant integration for pi (Pinet) — multi-agent broker, thread routing, and inbox tools",

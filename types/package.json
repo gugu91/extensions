@@ -1,6 +1,6 @@
 {
   "name": "@gugu91/pi-ext-types",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "Shared ambient type declarations and workspace helpers for pi extensions",
