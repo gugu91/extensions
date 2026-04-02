@@ -14,6 +14,7 @@ import {
   buildPinetSkinAssignment,
   buildPinetSkinPromptGuideline,
   buildPinetSkinMetadata,
+  buildPinetOwnerToken,
   extractPinetControlCommand,
   extractPinetSkinUpdate,
   queuePinetRemoteControl,
@@ -2315,10 +2316,12 @@ describe("getFollowerReconnectUiUpdate", () => {
 // ─── getFollowerOwnedThreadClaims ────────────────────────
 
 describe("agentOwnsThread", () => {
-  it("matches the current name or any remembered alias", () => {
-    expect(agentOwnsThread("Solar Falcon", "Solar Falcon", ["Old Falcon"])).toBe(true);
-    expect(agentOwnsThread("Old Falcon", "Solar Falcon", ["Old Falcon"])).toBe(true);
-    expect(agentOwnsThread("Other Falcon", "Solar Falcon", ["Old Falcon"])).toBe(false);
+  it("matches the current name, stable owner token, or any remembered alias", () => {
+    const ownerToken = buildPinetOwnerToken("host:session:/tmp/agent");
+    expect(agentOwnsThread("Solar Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
+    expect(agentOwnsThread("Old Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
+    expect(agentOwnsThread(ownerToken, "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
+    expect(agentOwnsThread("Other Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(false);
   });
 });
 
@@ -2344,14 +2347,19 @@ describe("getFollowerOwnedThreadClaims", () => {
   });
 
   it("treats remembered aliases as owned threads after a skin change", () => {
+    const ownerToken = buildPinetOwnerToken("host:session:/tmp/gecko");
     const threads = new Map<string, FollowerThreadState>([
       ["t-1", { threadTs: "t-1", channelId: "C1", userId: "U1", owner: "Old Gecko" }],
-      ["t-2", { threadTs: "t-2", channelId: "C2", userId: "U2", owner: "Other Agent" }],
+      ["t-2", { threadTs: "t-2", channelId: "C2", userId: "U2", owner: ownerToken }],
+      ["t-3", { threadTs: "t-3", channelId: "C3", userId: "U3", owner: "Other Agent" }],
     ]);
 
-    expect(getFollowerOwnedThreadClaims(threads, "Solar Gecko", ["Old Gecko"])).toEqual([
-      { threadTs: "t-1", channelId: "C1" },
-    ]);
+    expect(getFollowerOwnedThreadClaims(threads, "Solar Gecko", ["Old Gecko"], ownerToken)).toEqual(
+      [
+        { threadTs: "t-1", channelId: "C1" },
+        { threadTs: "t-2", channelId: "C2" },
+      ],
+    );
   });
 });
 

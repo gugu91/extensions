@@ -650,8 +650,12 @@ export class BrokerDB implements BrokerDBInterface {
     const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
     const existingById = this.getAgentRowById(existing?.id ?? id);
     const agentId = existing?.id ?? id;
-    const finalName = existing?.name ?? this.ensureUniqueAgentName(name, agentId);
-    const finalEmoji = existing?.emoji ?? emoji;
+    const hasSkinIdentity =
+      typeof metadata?.skinTheme === "string" && metadata.skinTheme.trim().length > 0;
+    const finalName = hasSkinIdentity
+      ? this.ensureUniqueAgentName(name, agentId)
+      : (existing?.name ?? this.ensureUniqueAgentName(name, agentId));
+    const finalEmoji = hasSkinIdentity ? emoji : (existing?.emoji ?? emoji);
     const persistedStableId = stableId ?? existing?.stable_id ?? existingById?.stable_id ?? null;
     const meta = metadata ? JSON.stringify(metadata) : null;
 

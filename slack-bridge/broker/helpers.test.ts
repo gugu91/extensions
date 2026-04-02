@@ -630,6 +630,32 @@ describe("BrokerDB", () => {
     expect(db.getAgents().map((agent) => agent.name)).toEqual(["Hyper Owl", "Hyper Owl 2"]);
   });
 
+  it("registerAgent refreshes themed identities for reconnecting stable agents", () => {
+    db.registerAgent(
+      "a1",
+      "Hyper Owl",
+      "🦉",
+      100,
+      { role: "worker", skinTheme: "default", personality: "whimsical" },
+      "host:session:/tmp/a",
+    );
+    db.unregisterAgent("a1");
+
+    const refreshed = db.registerAgent(
+      "a2",
+      "Night Ranger",
+      "🌙",
+      200,
+      { role: "worker", skinTheme: "night's watch", personality: "grim but steady" },
+      "host:session:/tmp/a",
+    );
+
+    expect(refreshed.id).toBe("a1");
+    expect(refreshed.name).toBe("Night Ranger");
+    expect(refreshed.emoji).toBe("🌙");
+    expect(refreshed.metadata).toMatchObject({ skinTheme: "night's watch" });
+  });
+
   it("stores broker settings as JSON values", () => {
     db.setSetting("pinet.skinTheme", { theme: "cyberpunk hackers" });
 

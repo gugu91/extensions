@@ -51,6 +51,7 @@ import {
   DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
   partitionFollowerInboxEntries,
   agentOwnsThread,
+  buildPinetOwnerToken,
   generateAgentName,
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
@@ -199,6 +200,7 @@ export default function (pi: ExtensionAPI) {
   let agentName = initialIdentity.name;
   let agentEmoji = initialIdentity.emoji;
   let agentStableId = resolveAgentStableId(undefined, undefined, os.hostname(), process.cwd());
+  let agentOwnerToken = buildPinetOwnerToken(agentStableId);
   let activeSkinTheme: string | null = null;
   let agentPersonality: string | null = null;
   const agentAliases = new Set<string>();
@@ -371,6 +373,7 @@ export default function (pi: ExtensionAPI) {
     agentEmoji = snapshot.agentEmoji;
     activeSkinTheme = snapshot.activeSkinTheme;
     agentPersonality = snapshot.agentPersonality;
+    agentOwnerToken = buildPinetOwnerToken(agentStableId);
     agentAliases.clear();
     for (const alias of snapshot.agentAliases) {
       if (alias && alias !== agentName) {
@@ -941,9 +944,16 @@ export default function (pi: ExtensionAPI) {
       for (const m of msgs) {
         if (!m.bot_id) continue;
         const meta = m.metadata as
-          | { event_type?: string; event_payload?: { agent?: string } }
+          | {
+              event_type?: string;
+              event_payload?: { agent?: string; agent_owner?: string };
+            }
           | undefined;
-        if (meta?.event_type === "pi_agent_msg" && meta.event_payload?.agent) {
+        if (meta?.event_type !== "pi_agent_msg") continue;
+        if (typeof meta.event_payload?.agent_owner === "string" && meta.event_payload.agent_owner) {
+          return meta.event_payload.agent_owner;
+        }
+        if (meta.event_payload?.agent) {
           return meta.event_payload.agent;
         }
       }
@@ -1267,19 +1277,21 @@ export default function (pi: ExtensionAPI) {
 
     // ── Thread ownership check (before allowlist so only the owning agent rejects) ──
     const localOwner = threads.get(effectiveTs)?.owner;
-    if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases)) return;
+    if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
+      return;
+    }
 
     if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
       const remoteOwner = await resolveThreadOwner(channel, effectiveTs);
       if (shuttingDown) return;
-      if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases)) {
+      if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
         const t = threads.get(effectiveTs);
         if (t) t.owner = remoteOwner; // cache so we skip instantly next time
         return;
       }
-      if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases)) {
+      if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
         const t = threads.get(effectiveTs);
-        if (t) t.owner = agentName;
+        if (t) t.owner = agentOwnerToken;
       }
       if (!remoteOwner) {
         unclaimedThreads.add(effectiveTs); // negative cache: no owner found yet
@@ -1494,6 +1506,7 @@ export default function (pi: ExtensionAPI) {
     slack,
     getAgentName: () => agentName,
     getAgentEmoji: () => agentEmoji,
+    getAgentOwnerToken: () => agentOwnerToken,
     getLastDmChannel: () => lastDmChannel,
     updateBadge,
     resolveUser,
@@ -1509,11 +1522,11 @@ export default function (pi: ExtensionAPI) {
           channelId,
           threadTs,
           userId: "",
-          owner: agentName,
+          owner: agentOwnerToken,
         });
       } else {
         const thread = threads.get(threadTs)!;
-        if (!thread.owner) thread.owner = agentName;
+        if (!thread.owner) thread.owner = agentOwnerToken;
       }
       unclaimedThreads.delete(threadTs);
       persistState();
@@ -3117,7 +3130,12 @@ export default function (pi: ExtensionAPI) {
       let followerPollRunning = false;
 
       async function resumeThreadClaims(): Promise<void> {
-        for (const thread of getFollowerOwnedThreadClaims(threads, agentName, agentAliases)) {
+        for (const thread of getFollowerOwnedThreadClaims(
+          threads,
+          agentName,
+          agentAliases,
+          agentOwnerToken,
+        )) {
           try {
             await client.claimThread(thread.threadTs, thread.channelId);
           } catch {
@@ -3233,7 +3251,12 @@ export default function (pi: ExtensionAPI) {
             }
 
             if (regular.length > 0) {
-              const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
+              const synced = syncFollowerInboxEntries(
+                regular,
+                threads,
+                agentOwnerToken,
+                lastDmChannel,
+              );
               for (const nextThread of synced.threadUpdates) {
                 const existing = threads.get(nextThread.threadTs);
                 if (!existing) {
@@ -3500,7 +3523,7 @@ export default function (pi: ExtensionAPI) {
       const mode = brokerRole === "broker" ? "broker" : "follower";
       const socket = mode;
       const ownedCount = [...threads.values()].filter((t) =>
-        agentOwnsThread(t.owner, agentName, agentAliases),
+        agentOwnsThread(t.owner, agentName, agentAliases, agentOwnerToken),
       ).length;
       const allowlistInfo = allowedUsers
         ? `Allowed users: ${[...allowedUsers].join(", ")}`
@@ -3640,6 +3663,7 @@ export default function (pi: ExtensionAPI) {
         ctx.cwd,
         ctx.sessionManager.getLeafId(),
       );
+      agentOwnerToken = buildPinetOwnerToken(agentStableId);
       const identitySeed = ctx.sessionManager.getSessionFile() ?? agentStableId;
       activeSkinTheme = savedState?.activeSkinTheme ?? null;
       agentPersonality = savedState?.agentPersonality ?? null;

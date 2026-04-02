@@ -56,6 +56,7 @@ export interface RegisterSlackToolsDeps {
   slack: (method: string, token: string, body?: Record<string, unknown>) => Promise<SlackResult>;
   getAgentName: () => string;
   getAgentEmoji: () => string;
+  getAgentOwnerToken: () => string;
   getLastDmChannel: () => string | null;
   updateBadge: () => void;
   resolveUser: (userId: string) => Promise<string>;
@@ -161,6 +162,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     slack,
     getAgentName,
     getAgentEmoji,
+    getAgentOwnerToken,
     getLastDmChannel,
     updateBadge,
     resolveUser,
@@ -1039,7 +1041,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         text: params.text,
         metadata: {
           event_type: "pi_agent_msg",
-          event_payload: { agent: getAgentName() },
+          event_payload: { agent: getAgentName(), agent_owner: getAgentOwnerToken() },
         },
       };
       if (params.blocks) {
@@ -1531,7 +1533,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         text: params.text,
         metadata: {
           event_type: "pi_agent_msg",
-          event_payload: { agent: getAgentName() },
+          event_payload: { agent: getAgentName(), agent_owner: getAgentOwnerToken() },
         },
       };
       if (params.blocks) {
@@ -2155,7 +2157,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         text: confirmMessage,
         metadata: {
           event_type: "pi_agent_msg",
-          event_payload: { agent: getAgentName() },
+          event_payload: { agent: getAgentName(), agent_owner: getAgentOwnerToken() },
         },
       });
 

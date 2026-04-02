@@ -1477,7 +1477,7 @@ export function isDirectMessageChannel(channel: string): boolean {
 export function syncFollowerInboxEntries(
   entries: FollowerInboxEntry[],
   existingThreads: ReadonlyMap<string, FollowerThreadState>,
-  agentName: string,
+  agentOwner: string,
   lastDmChannel: string | null,
 ): FollowerInboxSyncResult {
   let nextLastDmChannel = lastDmChannel;
@@ -1496,7 +1496,7 @@ export function syncFollowerInboxEntries(
         channelId: channel,
         threadTs,
         userId: existing?.userId || sender,
-        owner: existing?.owner ?? agentName,
+        owner: existing?.owner ?? agentOwner,
       };
 
       if (
@@ -1622,8 +1622,10 @@ export function agentOwnsThread(
   owner: string | undefined,
   agentName: string,
   agentAliases: Iterable<string> = [],
+  ownerToken?: string,
 ): boolean {
   if (!owner) return false;
+  if (ownerToken && owner === ownerToken) return true;
   if (owner === agentName) return true;
   for (const alias of agentAliases) {
     if (owner === alias) return true;
@@ -1635,11 +1637,12 @@ export function getFollowerOwnedThreadClaims(
   threads: ReadonlyMap<string, Pick<FollowerThreadState, "threadTs" | "channelId" | "owner">>,
   agentName: string,
   agentAliases: Iterable<string> = [],
+  ownerToken?: string,
 ): Array<{ threadTs: string; channelId: string }> {
   return [...threads.values()]
     .filter(
       (thread) =>
-        agentOwnsThread(thread.owner, agentName, agentAliases) &&
+        agentOwnsThread(thread.owner, agentName, agentAliases, ownerToken) &&
         Boolean(thread.threadTs) &&
         Boolean(thread.channelId),
     )
@@ -1932,6 +1935,12 @@ function hashString(value: string): number {
 
 export type AgentIdentityRole = "broker" | "worker";
 
+export function buildPinetOwnerToken(stableId: string): string {
+  const primary = hashString(stableId).toString(16).padStart(8, "0");
+  const secondary = hashString(`${stableId}:owner`).toString(16).padStart(8, "0");
+  return `owner:${primary}${secondary}`;
+}
+
 export function generateAgentName(
   seed?: string,
   role: AgentIdentityRole = "worker",
@@ -1947,7 +1956,6 @@ export function generateAgentName(
       emoji,
     };
   }
-
   const adjectiveIndex = seed
     ? hashString(`${seed}:adjective`) % ADJECTIVES.length
     : Math.floor(Math.random() * ADJECTIVES.length);

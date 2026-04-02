@@ -164,6 +164,7 @@ describe("registerSlackTools", () => {
       slack,
       getAgentName: () => "Radiant Koala",
       getAgentEmoji: () => "🐨",
+      getAgentOwnerToken: () => "owner:test-token",
       getLastDmChannel: () => null,
       updateBadge: () => {},
       resolveUser: async (userId) => resolveUser(userId),
