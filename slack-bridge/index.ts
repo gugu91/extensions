@@ -45,6 +45,8 @@ import {
   partitionFollowerInboxEntries,
   generateAgentName,
   resolveAgentIdentity,
+  resolvePersistedAgentIdentity,
+  resolveRuntimeAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
   buildBrokerPromptGuidelines,
@@ -181,7 +183,13 @@ export default function (pi: ExtensionAPI) {
     guardrails = settings.security ?? {};
     securityPrompt = buildSecurityPrompt(guardrails);
     const identitySeed = extCtx?.sessionManager.getSessionFile() ?? agentStableId;
-    const refreshedIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, identitySeed);
+    const refreshedIdentity = resolveRuntimeAgentIdentity(
+      { name: agentName, emoji: agentEmoji },
+      settings,
+      process.env.PI_NICKNAME,
+      identitySeed,
+      brokerRole === "broker" ? "broker" : "worker",
+    );
     agentName = refreshedIdentity.name;
     agentEmoji = refreshedIdentity.emoji;
   }
@@ -1898,17 +1906,24 @@ export default function (pi: ExtensionAPI) {
     let selfId: string | null = null;
 
     try {
+      const brokerIdentity = resolveRuntimeAgentIdentity(
+        { name: agentName, emoji: agentEmoji },
+        settings,
+        process.env.PI_NICKNAME,
+        ctx.sessionManager.getSessionFile() ?? agentStableId,
+        "broker",
+      );
+
       const router = new MessageRouter(broker.db);
       const selfAgent = broker.db.registerAgent(
         ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
-        agentName,
-        agentEmoji,
+        brokerIdentity.name,
+        brokerIdentity.emoji,
         process.pid,
         await getAgentMetadata("broker"),
         agentStableId,
       );
       selfId = selfAgent.id;
-      applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
       resetBrokerDeliveryState(brokerDeliveryState);
       const recoveredBrokerMessages = broker.db.getPendingInboxCount(selfId);
@@ -1993,6 +2008,7 @@ export default function (pi: ExtensionAPI) {
       startBrokerScheduledWakeups(ctx);
       brokerRole = "broker";
       pinetEnabled = true;
+      applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
       setExtStatus(ctx, "ok");
       ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
     } catch (err) {
@@ -2048,13 +2064,21 @@ export default function (pi: ExtensionAPI) {
 
     try {
       await client.connect();
+      const workerIdentity = resolveRuntimeAgentIdentity(
+        { name: agentName, emoji: agentEmoji },
+        settings,
+        process.env.PI_NICKNAME,
+        ctx.sessionManager.getSessionFile() ?? agentStableId,
+        "worker",
+      );
+
       const registration = await client.register(
-        agentName,
-        agentEmoji,
+        workerIdentity.name,
+        workerIdentity.emoji,
         await getAgentMetadata("worker"),
         agentStableId,
       );
-      applyBrokerIdentity(registration.name, registration.emoji);
+      const followerIdentity = { name: registration.name, emoji: registration.emoji };
 
       const brokerClientRef: BrokerClientRef = {
         client,
@@ -2065,8 +2089,8 @@ export default function (pi: ExtensionAPI) {
       let wasDisconnected = false;
       let followerPollRunning = false;
 
-      async function resumeThreadClaims(): Promise<void> {
-        for (const thread of getFollowerOwnedThreadClaims(threads, agentName)) {
+      async function resumeThreadClaims(ownerName = agentName): Promise<void> {
+        for (const thread of getFollowerOwnedThreadClaims(threads, ownerName)) {
           try {
             await client.claimThread(thread.threadTs, thread.channelId);
           } catch {
@@ -2225,11 +2249,12 @@ export default function (pi: ExtensionAPI) {
         })();
       });
 
-      await resumeThreadClaims();
-      startPolling();
+      await resumeThreadClaims(followerIdentity.name);
       brokerClient = brokerClientRef;
       brokerRole = "follower";
       pinetEnabled = true;
+      applyBrokerIdentity(followerIdentity.name, followerIdentity.emoji);
+      startPolling();
       setExtStatus(ctx, "ok");
     } catch (err) {
       await client.unregister().catch(() => {
@@ -2410,7 +2435,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const newName = args.trim();
       if (!newName) {
-        const fresh = generateAgentName();
+        const fresh = generateAgentName(undefined, brokerRole === "broker" ? "broker" : "worker");
         agentName = fresh.name;
         agentEmoji = fresh.emoji;
       } else {
@@ -2461,8 +2486,10 @@ export default function (pi: ExtensionAPI) {
         ctx.sessionManager.getLeafId(),
       );
       const identitySeed = ctx.sessionManager.getSessionFile() ?? agentStableId;
-      const restoredIdentity = resolveAgentIdentity(
+      const restoredIdentity = resolvePersistedAgentIdentity(
         settings,
+        savedState?.agentName,
+        savedState?.agentEmoji,
         process.env.PI_NICKNAME,
         identitySeed,
       );

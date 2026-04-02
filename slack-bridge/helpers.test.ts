@@ -39,6 +39,7 @@ import {
   buildWorkerPromptGuidelines,
   buildIdentityReplyGuidelines,
   resolvePersistedAgentIdentity,
+  resolveRuntimeAgentIdentity,
   buildAgentStableId,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
@@ -48,7 +49,9 @@ import {
   stripBotMention,
   isChannelId,
   FORM_METHODS,
+  generateAgentName,
   resolveAgentIdentity,
+  alignAgentIdentityToRole,
   trackBrokerInboundThread,
   syncFollowerInboxEntries,
   resolveFollowerThreadChannel,
@@ -1721,12 +1724,25 @@ describe("resolveAgentIdentity", () => {
     expect(first.emoji).toBe(second.emoji);
   });
 
-  it("generates a name when nothing else is available", () => {
+  it("generates a worker name when nothing else is available", () => {
     const result = resolveAgentIdentity({});
     expect(typeof result.name).toBe("string");
     expect(result.name.length).toBeGreaterThan(0);
     expect(result.name).toMatch(/^\w+ \w+ \w+$/); // "Adjective Color Animal"
     expect(typeof result.emoji).toBe("string");
+  });
+
+  it("generates a broker name when requested", () => {
+    const result = resolveAgentIdentity({}, undefined, "/tmp/pi/session-a.json", "broker");
+    expect(result.name).toMatch(/^The Broker \w+$/);
+    expect(typeof result.emoji).toBe("string");
+  });
+
+  it("keeps the same animal and emoji across worker and broker generated names", () => {
+    const worker = generateAgentName("/tmp/pi/session-a.json");
+    const broker = generateAgentName("/tmp/pi/session-a.json", "broker");
+    expect(broker.name).toBe(`The Broker ${worker.name.split(" ").at(-1)}`);
+    expect(broker.emoji).toBe(worker.emoji);
   });
 
   it("ignores settings when only agentName is set (no emoji)", () => {
@@ -1743,6 +1759,53 @@ describe("resolveAgentIdentity", () => {
     const result = resolveAgentIdentity({ agentEmoji: "🤖" }, undefined, "/tmp/pi/session-a.json");
     // Should fall through to generated name since agentName is missing
     expect(result.emoji).not.toBe("🤖");
+  });
+});
+
+describe("alignAgentIdentityToRole", () => {
+  it("switches generated identities to the broker format", () => {
+    const seed = "/tmp/pi/session-a.json";
+    const workerIdentity = resolveAgentIdentity({}, undefined, seed, "worker");
+
+    expect(alignAgentIdentityToRole(workerIdentity, {}, undefined, seed, "broker")).toEqual(
+      resolveAgentIdentity({}, undefined, seed, "broker"),
+    );
+  });
+
+  it("preserves custom renamed identities when the role changes", () => {
+    const currentIdentity = { name: "Custom Bot", emoji: "🤖" };
+
+    expect(
+      alignAgentIdentityToRole(currentIdentity, {}, undefined, "/tmp/pi/session-a.json", "broker"),
+    ).toEqual(currentIdentity);
+  });
+});
+
+describe("resolveRuntimeAgentIdentity", () => {
+  it("preserves custom runtime names when no explicit config overrides exist", () => {
+    const currentIdentity = { name: "Custom Bot", emoji: "🤖" };
+
+    expect(
+      resolveRuntimeAgentIdentity(
+        currentIdentity,
+        {},
+        undefined,
+        "/tmp/pi/session-a.json",
+        "broker",
+      ),
+    ).toEqual(currentIdentity);
+  });
+
+  it("still honors explicit configured identities", () => {
+    expect(
+      resolveRuntimeAgentIdentity(
+        { name: "Custom Bot", emoji: "🤖" },
+        { agentName: "Config Bot", agentEmoji: "🛠️" },
+        undefined,
+        "/tmp/pi/session-a.json",
+        "broker",
+      ),
+    ).toEqual({ name: "Config Bot", emoji: "🛠️" });
   });
 });
 

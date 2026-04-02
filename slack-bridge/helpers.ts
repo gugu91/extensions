@@ -1141,12 +1141,14 @@ export function resolvePersistedAgentIdentity(
   persistedName?: string,
   persistedEmoji?: string,
   envNickname?: string,
+  seed?: string,
+  role: AgentIdentityRole = "worker",
 ): { name: string; emoji: string } {
   if (persistedName && persistedEmoji) {
     return { name: persistedName, emoji: persistedEmoji };
   }
 
-  return resolveAgentIdentity(settings, envNickname);
+  return resolveAgentIdentity(settings, envNickname, seed, role);
 }
 
 export function buildAgentStableId(
@@ -1655,20 +1657,34 @@ function hashString(value: string): number {
   return hash >>> 0;
 }
 
-export function generateAgentName(seed?: string): { name: string; emoji: string } {
+export type AgentIdentityRole = "broker" | "worker";
+
+export function generateAgentName(
+  seed?: string,
+  role: AgentIdentityRole = "worker",
+): { name: string; emoji: string } {
+  const animalIndex = seed
+    ? hashString(`${seed}:animal`) % ANIMALS.length
+    : Math.floor(Math.random() * ANIMALS.length);
+  const emoji = EMOJIS[animalIndex];
+
+  if (role === "broker") {
+    return {
+      name: `The Broker ${ANIMALS[animalIndex]}`,
+      emoji,
+    };
+  }
+
   const adjectiveIndex = seed
     ? hashString(`${seed}:adjective`) % ADJECTIVES.length
     : Math.floor(Math.random() * ADJECTIVES.length);
   const colorIndex = seed
     ? hashString(`${seed}:color`) % COLORS.length
     : Math.floor(Math.random() * COLORS.length);
-  const animalIndex = seed
-    ? hashString(`${seed}:animal`) % ANIMALS.length
-    : Math.floor(Math.random() * ANIMALS.length);
 
   return {
     name: `${ADJECTIVES[adjectiveIndex]} ${COLORS[colorIndex]} ${ANIMALS[animalIndex]}`,
-    emoji: EMOJIS[animalIndex],
+    emoji,
   };
 }
 
@@ -1678,6 +1694,7 @@ export function resolveAgentIdentity(
   settings: SlackBridgeSettings,
   envNickname?: string,
   seed?: string,
+  role: AgentIdentityRole = "worker",
 ): { name: string; emoji: string } {
   // 1. Explicit config (both must be present)
   if (settings.agentName && settings.agentEmoji) {
@@ -1686,12 +1703,53 @@ export function resolveAgentIdentity(
 
   // 2. PI_NICKNAME env var (name fixed, emoji deterministic when seeded)
   if (envNickname) {
-    const generated = generateAgentName(seed);
+    const generated = generateAgentName(seed, role);
     return { name: envNickname, emoji: generated.emoji };
   }
 
   // 3. Fully generated
-  return generateAgentName(seed);
+  return generateAgentName(seed, role);
+}
+
+export function alignAgentIdentityToRole(
+  currentIdentity: { name: string; emoji: string },
+  settings: SlackBridgeSettings,
+  envNickname?: string,
+  seed?: string,
+  role: AgentIdentityRole = "worker",
+): { name: string; emoji: string } {
+  const workerIdentity = resolveAgentIdentity(settings, envNickname, seed, "worker");
+  const brokerIdentity = resolveAgentIdentity(settings, envNickname, seed, "broker");
+  const targetIdentity = role === "broker" ? brokerIdentity : workerIdentity;
+
+  if (
+    (currentIdentity.name === workerIdentity.name &&
+      currentIdentity.emoji === workerIdentity.emoji) ||
+    (currentIdentity.name === brokerIdentity.name && currentIdentity.emoji === brokerIdentity.emoji)
+  ) {
+    return targetIdentity;
+  }
+
+  return currentIdentity;
+}
+
+export function resolveRuntimeAgentIdentity(
+  currentIdentity: { name: string; emoji: string },
+  settings: SlackBridgeSettings,
+  envNickname?: string,
+  seed?: string,
+  role: AgentIdentityRole = "worker",
+): { name: string; emoji: string } {
+  if (settings.agentName && settings.agentEmoji) {
+    return { name: settings.agentName, emoji: settings.agentEmoji };
+  }
+
+  if (envNickname) {
+    const generated = generateAgentName(seed, role);
+    return { name: envNickname, emoji: generated.emoji };
+  }
+
+  return alignAgentIdentityToRole(currentIdentity, settings, undefined, seed, role);
 }
 
 // ─── Confirmation state cleanup ─────────────────────────
