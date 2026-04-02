@@ -524,8 +524,18 @@ export class BrokerDB implements BrokerDBInterface {
         return [];
       }
 
+      const releaseThreads = db.prepare(
+        "UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?",
+      );
+      const deleteInbox = db.prepare("DELETE FROM inbox WHERE agent_id = ?");
+
       for (const row of rows) {
+        // Requeue undelivered messages to the backlog
         this.requeueUndeliveredMessagesInternal(row.id, "agent_disconnected");
+        // Release thread ownership for the purged agent
+        releaseThreads.run(row.id);
+        // Clean up all inbox entries (both delivered and undelivered) for the agent
+        deleteInbox.run(row.id);
       }
 
       db.prepare(

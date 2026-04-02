@@ -374,6 +374,9 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("ghost")).toBeNull();
     expect(db.getAgentById("gone")).toBeNull();
     expect(db.getInbox("gone")).toHaveLength(0);
+    // Thread ownership should be released after purge
+    expect(db.getThread("t-gone")?.ownerAgent).toBeNull();
+    // Messages should be moved to backlog for reassignment
     expect(db.getPendingBacklog().map((entry) => entry.threadId)).toContain("t-gone");
   });
 
@@ -455,9 +458,7 @@ describe("BrokerDB", () => {
 
     const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
     sqlite
-      .prepare(
-        "UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?",
-      )
+      .prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?")
       .run(new Date(Date.now() - 2 * 60 * 60_000).toISOString(), "gone");
 
     runBrokerMaintenancePass(db, {
