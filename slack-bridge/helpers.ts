@@ -154,6 +154,7 @@ export interface AgentDisplayInfo {
   emoji: string;
   name: string;
   id: string;
+  pid?: number;
   status: "working" | "idle";
   metadata?: {
     cwd?: string;
@@ -184,6 +185,7 @@ export interface AgentVisibilityInput {
   emoji: string;
   name: string;
   id: string;
+  pid?: number;
   status: "working" | "idle";
   metadata?: Record<string, unknown> | null;
   lastHeartbeat?: string;
@@ -368,6 +370,7 @@ export function buildAgentDisplayInfo(
     emoji: agent.emoji,
     name: agent.name,
     id: agent.id,
+    ...(agent.pid != null ? { pid: agent.pid } : {}),
     status: agent.status,
     metadata: metadata
       ? {
@@ -988,7 +991,8 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
     .map((a) => {
       const health = a.health ? ` [${a.health}]` : "";
       const stuckTag = a.stuck ? " [stuck]" : "";
-      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}${stuckTag}`;
+      const pid = a.pid != null ? ` pid:${a.pid}` : "";
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}${stuckTag}${pid}`;
 
       const meta = a.metadata;
       if (meta && (meta.cwd || meta.branch || meta.host)) {
