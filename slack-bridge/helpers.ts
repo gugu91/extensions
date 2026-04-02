@@ -19,6 +19,10 @@ export interface SlackBridgeSettings {
   autoFollow?: boolean;
   agentName?: string;
   agentEmoji?: string;
+  controlPlaneCanvasEnabled?: boolean;
+  controlPlaneCanvasId?: string;
+  controlPlaneCanvasChannel?: string;
+  controlPlaneCanvasTitle?: string;
   security?: {
     readOnly?: boolean;
     requireConfirmation?: string[];

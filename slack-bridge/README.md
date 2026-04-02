@@ -71,6 +71,7 @@ a short cache to avoid hammering Slack.
 - **Multi-user** — handles concurrent conversations from different users
 - **@mentions** — tag Pinet in any channel and it responds in-thread
 - **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
+- **Broker control plane canvas** — the broker can maintain a live Slack canvas with agent roster, task/PR state, and RALPH health on every cycle
 - **Block Kit messages** — send rich Slack layouts via the optional `blocks` parameter
 - **Interactive buttons** — `block_actions` button clicks are routed back into the inbox as structured events
 - **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
@@ -115,6 +116,9 @@ Add to `~/.pi/agent/settings.json`:
     "appConfigToken": "xoxe.xoxp-...",
     "allowedUsers": ["U09GWL270LA"],
     "defaultChannel": "C0APL58LB1R",
+    "controlPlaneCanvasEnabled": true,
+    "controlPlaneCanvasChannel": "C0APL58LB1R",
+    "controlPlaneCanvasTitle": "Pinet Broker Control Plane",
     "reactionCommands": {
       "📝": "summarize",
       "🐛": "file-issue",
@@ -130,16 +134,20 @@ Add to `~/.pi/agent/settings.json`:
 }
 ```
 
-| Key                | Required | Description                                      |
-| ------------------ | -------- | ------------------------------------------------ |
-| `botToken`         | yes      | Bot User OAuth Token (`xoxb-...`)                |
-| `appToken`         | yes      | App-Level Token for Socket Mode (`xapp-...`)     |
-| `appId`            | deploy   | Slack app ID (`A...`) for manifest deploy/update |
-| `appConfigToken`   | deploy   | App configuration token (`xoxe.xoxp-...`)        |
-| `allowedUsers`     | no       | Slack user IDs allowed to interact               |
-| `defaultChannel`   | no       | Default channel for `slack_post_channel`         |
-| `reactionCommands` | no       | Emoji/name → action mapping for `reaction_added` |
-| `suggestedPrompts` | no       | Prompts shown on new assistant thread            |
+| Key                         | Required | Description                                                                |
+| --------------------------- | -------- | -------------------------------------------------------------------------- |
+| `botToken`                  | yes      | Bot User OAuth Token (`xoxb-...`)                                          |
+| `appToken`                  | yes      | App-Level Token for Socket Mode (`xapp-...`)                               |
+| `appId`                     | deploy   | Slack app ID (`A...`) for manifest deploy/update                           |
+| `appConfigToken`            | deploy   | App configuration token (`xoxe.xoxp-...`)                                  |
+| `allowedUsers`              | no       | Slack user IDs allowed to interact                                         |
+| `defaultChannel`            | no       | Default channel for `slack_post_channel` and control-plane canvas fallback |
+| `controlPlaneCanvasEnabled` | no       | Enable the broker-maintained control plane canvas (defaults to true)       |
+| `controlPlaneCanvasId`      | no       | Existing canvas ID to update instead of creating/finding a channel canvas  |
+| `controlPlaneCanvasChannel` | no       | Channel ID/name used to create or recover the broker control plane canvas  |
+| `controlPlaneCanvasTitle`   | no       | Title used when the broker creates the control plane canvas                |
+| `reactionCommands`          | no       | Emoji/name → action mapping for `reaction_added`                           |
+| `suggestedPrompts`          | no       | Prompts shown on new assistant thread                                      |
 
 > Runtime tokens can also be set via `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`
 > env vars (settings.json takes priority).
@@ -147,6 +155,9 @@ Add to `~/.pi/agent/settings.json`:
 > Manifest deploy also reads `SLACK_APP_ID` and `SLACK_APP_CONFIG_TOKEN`
 > (or `SLACK_CONFIG_TOKEN`). The Socket Mode `xapp-...` token cannot be used
 > with `apps.manifest.update`.
+>
+> If `controlPlaneCanvasId` is not set, the broker will try to create or recover a
+> channel canvas from `controlPlaneCanvasChannel`, falling back to `defaultChannel`.
 
 `reactionCommands` accepts either Slack reaction names (`eyes`, `repeat`) or the
 emoji characters themselves (`👀`, `🔄`). The default mappings include `📝`

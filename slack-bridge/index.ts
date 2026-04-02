@@ -9,6 +9,9 @@ import {
   type AgentDisplayInfo,
   type ConfirmationRequest,
   type ThreadConfirmationState,
+  type RalphLoopAgentWorkload,
+  type RalphLoopEvaluationResult,
+  type RalphLoopEvaluationOptions,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   isUserAllowed as checkUserAllowed,
@@ -123,6 +126,7 @@ import {
   getPendingTaskAssignmentReport,
   hasTaskAssignmentStatusChange,
   resolveTaskAssignments,
+  type ResolvedTaskAssignment,
 } from "./task-assignments.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import {
@@ -133,6 +137,11 @@ import {
   queueBrokerInboxIds,
   resetBrokerDeliveryState,
 } from "./broker-delivery.js";
+import {
+  buildBrokerControlPlaneDashboardSnapshot,
+  refreshBrokerControlPlaneCanvas,
+  renderBrokerControlPlaneCanvasMarkdown,
+} from "./broker/control-plane-canvas.js";
 import { getMainCheckoutToolBlockReason } from "./worktree-policy.js";
 
 // Settings and helpers imported from ./helpers.js
@@ -180,6 +189,41 @@ export default function (pi: ExtensionAPI) {
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
   let securityPrompt = buildSecurityPrompt(guardrails);
+
+  function normalizeOptionalSetting(value?: string | null): string | null {
+    const trimmed = value?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : null;
+  }
+
+  let brokerControlPlaneCanvasRuntimeId: string | null = null;
+  let brokerControlPlaneCanvasRuntimeChannelId: string | null = null;
+  let lastBrokerControlPlaneCanvasRefreshAt: string | null = null;
+  let lastBrokerControlPlaneCanvasError: string | null = null;
+
+  function isBrokerControlPlaneCanvasEnabled(): boolean {
+    return settings.controlPlaneCanvasEnabled ?? true;
+  }
+
+  function getExplicitBrokerControlPlaneCanvasId(): string | null {
+    return normalizeOptionalSetting(settings.controlPlaneCanvasId);
+  }
+
+  function getConfiguredBrokerControlPlaneCanvasId(): string | null {
+    return getExplicitBrokerControlPlaneCanvasId() ?? brokerControlPlaneCanvasRuntimeId;
+  }
+
+  function getConfiguredBrokerControlPlaneCanvasChannel(): string | null {
+    return (
+      normalizeOptionalSetting(settings.controlPlaneCanvasChannel) ??
+      normalizeOptionalSetting(settings.defaultChannel)
+    );
+  }
+
+  function getConfiguredBrokerControlPlaneCanvasTitle(): string {
+    return (
+      normalizeOptionalSetting(settings.controlPlaneCanvasTitle) ?? "Pinet Broker Control Plane"
+    );
+  }
 
   interface ReloadableRuntimeSnapshot {
     settings: typeof settings;
@@ -405,6 +449,8 @@ export default function (pi: ExtensionAPI) {
         agentName,
         agentEmoji,
         agentStableId,
+        brokerControlPlaneCanvasId: brokerControlPlaneCanvasRuntimeId,
+        brokerControlPlaneCanvasChannelId: brokerControlPlaneCanvasRuntimeChannelId,
       });
     } catch (err) {
       console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
@@ -1467,6 +1513,104 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function refreshBrokerControlPlaneCanvasDashboard(
+    ctx: ExtensionContext,
+    input: {
+      workloads: RalphLoopAgentWorkload[];
+      evaluation: RalphLoopEvaluationResult;
+      evaluationOptions: RalphLoopEvaluationOptions;
+      maintenance: BrokerMaintenanceResult | null;
+      assignments: ResolvedTaskAssignment[];
+      recentCycles: Array<{
+        startedAt: string;
+        completedAt: string | null;
+        durationMs: number | null;
+        ghostAgentIds: string[];
+        stuckAgentIds: string[];
+        anomalies: string[];
+        followUpDelivered: boolean;
+        agentCount: number;
+        backlogCount: number;
+      }>;
+      cycleStartedAt: string;
+      cycleDurationMs: number;
+      currentBranch: string | null;
+    },
+  ): Promise<void> {
+    if (!botToken || !isBrokerControlPlaneCanvasEnabled()) {
+      lastBrokerControlPlaneCanvasError = null;
+      return;
+    }
+
+    const explicitCanvasId = getExplicitBrokerControlPlaneCanvasId();
+    const effectiveCanvasId = getConfiguredBrokerControlPlaneCanvasId();
+    const channelInput = getConfiguredBrokerControlPlaneCanvasChannel();
+    if (!effectiveCanvasId && !channelInput) {
+      const warning =
+        "Pinet broker control plane canvas skipped: set slack-bridge.controlPlaneCanvasChannel, defaultChannel, or controlPlaneCanvasId.";
+      if (lastBrokerControlPlaneCanvasError !== warning) {
+        ctx.ui.notify(warning, "warning");
+      }
+      lastBrokerControlPlaneCanvasError = warning;
+      return;
+    }
+
+    const snapshot = buildBrokerControlPlaneDashboardSnapshot({
+      workloads: input.workloads,
+      evaluation: input.evaluation,
+      evaluationOptions: input.evaluationOptions,
+      maintenance: input.maintenance,
+      assignments: input.assignments,
+      recentCycles: input.recentCycles,
+      cycleStartedAt: input.cycleStartedAt,
+      cycleDurationMs: input.cycleDurationMs,
+      currentBranch: input.currentBranch,
+      homedir: os.homedir(),
+    });
+    const markdown = renderBrokerControlPlaneCanvasMarkdown(snapshot);
+    const channelId = explicitCanvasId || !channelInput ? null : await resolveChannel(channelInput);
+    const reusableRuntimeCanvasId =
+      !explicitCanvasId &&
+      brokerControlPlaneCanvasRuntimeId &&
+      (!channelId || brokerControlPlaneCanvasRuntimeChannelId === channelId)
+        ? brokerControlPlaneCanvasRuntimeId
+        : null;
+    const previousRuntimeId = brokerControlPlaneCanvasRuntimeId;
+    const previousRuntimeChannelId = brokerControlPlaneCanvasRuntimeChannelId;
+    const result = await refreshBrokerControlPlaneCanvas({
+      slack,
+      token: botToken,
+      markdown,
+      canvasId: explicitCanvasId ?? reusableRuntimeCanvasId,
+      channelId,
+      title: getConfiguredBrokerControlPlaneCanvasTitle(),
+    });
+
+    if (!explicitCanvasId) {
+      brokerControlPlaneCanvasRuntimeId = result.canvasId;
+      brokerControlPlaneCanvasRuntimeChannelId = channelId;
+    }
+    lastBrokerControlPlaneCanvasRefreshAt = input.cycleStartedAt;
+    lastBrokerControlPlaneCanvasError = null;
+
+    if (
+      !explicitCanvasId &&
+      (result.canvasId !== previousRuntimeId || channelId !== previousRuntimeChannelId)
+    ) {
+      persistState();
+      const destination = channelInput ? ` via ${channelInput}` : "";
+      const action = result.created
+        ? "created"
+        : result.reusedExistingChannelCanvas
+          ? "attached"
+          : "updated";
+      ctx.ui.notify(
+        `Pinet broker control plane canvas ${action}: ${result.canvasId}${destination}`,
+        "info",
+      );
+    }
+  }
+
   async function runBrokerRalphLoop(ctx: ExtensionContext): Promise<void> {
     if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
 
@@ -1485,7 +1629,7 @@ export default function (pi: ExtensionAPI) {
         ownedThreadCount: db.getOwnedThreadCount(agent.id),
       }));
       const pendingBacklogCount = db.getBacklogCount("pending");
-      const evaluation = evaluateRalphLoopCycle(workloads, {
+      const evaluationOptions: RalphLoopEvaluationOptions = {
         now: Date.now(),
         heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
         heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
@@ -1494,7 +1638,8 @@ export default function (pi: ExtensionAPI) {
         currentBranch,
         brokerHeartbeatActive: brokerHeartbeatTimer != null,
         brokerMaintenanceActive: brokerMaintenanceTimer != null,
-      });
+      };
+      const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
 
       const now = Date.now();
       const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
@@ -1544,13 +1689,14 @@ export default function (pi: ExtensionAPI) {
       const agentsById = new Map(
         workloads.map((workload) => [workload.id, { emoji: workload.emoji, name: workload.name }]),
       );
+      let projectedAssignments: ResolvedTaskAssignment[] = [];
       const trackedAssignments = db.listTaskAssignments();
       if (trackedAssignments.length === 0) {
         pendingBrokerTaskAssignmentReport = null;
         lastBrokerTaskAssignmentReportSignature = "";
       } else {
         const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
-        const projectedAssignments = resolvedAssignments.map((assignment) => {
+        projectedAssignments = resolvedAssignments.map((assignment) => {
           if (hasTaskAssignmentStatusChange(assignment)) {
             db.updateTaskAssignmentProgress(
               assignment.id,
@@ -1615,6 +1761,18 @@ export default function (pi: ExtensionAPI) {
       lastBrokerRalphLoopNonGhostSignature = nonGhostSignature;
       lastBrokerRalphLoopHadOutstandingAnomalies = hasOutstandingAnomalies;
 
+      let recentRalphCycles: Array<{
+        startedAt: string;
+        completedAt: string | null;
+        durationMs: number | null;
+        ghostAgentIds: string[];
+        stuckAgentIds: string[];
+        anomalies: string[];
+        followUpDelivered: boolean;
+        agentCount: number;
+        backlogCount: number;
+      }> = [];
+
       // #103: Record ralph cycle for observability
       try {
         const cycleCompletedAt = new Date().toISOString();
@@ -1632,8 +1790,39 @@ export default function (pi: ExtensionAPI) {
           agentCount: workloads.filter((w) => !w.disconnectedAt).length,
           backlogCount: pendingBacklogCount,
         });
+        recentRalphCycles = db.getRecentRalphCycles(5).map((cycle) => ({
+          startedAt: cycle.startedAt,
+          completedAt: cycle.completedAt,
+          durationMs: cycle.durationMs,
+          ghostAgentIds: cycle.ghostAgentIds,
+          stuckAgentIds: cycle.stuckAgentIds,
+          anomalies: cycle.anomalies,
+          followUpDelivered: cycle.followUpDelivered,
+          agentCount: cycle.agentCount,
+          backlogCount: cycle.backlogCount,
+        }));
       } catch {
         /* best effort — don't let cycle recording break the loop */
+      }
+
+      try {
+        await refreshBrokerControlPlaneCanvasDashboard(ctx, {
+          workloads,
+          evaluation: visibleEvaluation,
+          evaluationOptions,
+          maintenance: lastBrokerMaintenance,
+          assignments: projectedAssignments,
+          recentCycles: recentRalphCycles,
+          cycleStartedAt,
+          cycleDurationMs: Date.now() - cycleStartMs,
+          currentBranch,
+        });
+      } catch (canvasErr) {
+        const canvasMessage = `Pinet broker control plane canvas refresh failed: ${msg(canvasErr)}`;
+        if (canvasMessage !== lastBrokerControlPlaneCanvasError) {
+          ctx.ui.notify(canvasMessage, "warning");
+        }
+        lastBrokerControlPlaneCanvasError = canvasMessage;
       }
     } catch (err) {
       ctx.ui.notify(buildRalphLoopStatusMessage(`failed: ${msg(err)}`, cycleStartedAt), "error");
@@ -1762,6 +1951,8 @@ export default function (pi: ExtensionAPI) {
     lastBrokerMaintenanceSignature = "";
     lastBrokerRalphLoopNonGhostSignature = "";
     lastBrokerRalphLoopHadOutstandingAnomalies = false;
+    lastBrokerControlPlaneCanvasRefreshAt = null;
+    lastBrokerControlPlaneCanvasError = null;
     lastReportedGhostIds.clear();
     resetBrokerDeliveryState(brokerDeliveryState);
 
@@ -2737,6 +2928,23 @@ export default function (pi: ExtensionAPI) {
                 : []),
             ]
           : [];
+      const brokerCanvasInfo =
+        mode === "broker"
+          ? [
+              `Control plane canvas: ${
+                isBrokerControlPlaneCanvasEnabled()
+                  ? (getConfiguredBrokerControlPlaneCanvasId() ??
+                    `pending (${getConfiguredBrokerControlPlaneCanvasChannel() ?? "no target"})`)
+                  : "disabled"
+              }`,
+              ...(lastBrokerControlPlaneCanvasRefreshAt
+                ? [`Canvas refreshed: ${lastBrokerControlPlaneCanvasRefreshAt}`]
+                : []),
+              ...(lastBrokerControlPlaneCanvasError
+                ? [`Canvas status: ${lastBrokerControlPlaneCanvasError}`]
+                : []),
+            ]
+          : [];
       ctx.ui.notify(
         [
           `Mode: ${mode}`,
@@ -2748,6 +2956,7 @@ export default function (pi: ExtensionAPI) {
           allowlistInfo,
           defaultChInfo,
           ...brokerHealthInfo,
+          ...brokerCanvasInfo,
         ].join("\n"),
         "info",
       );
@@ -2793,6 +3002,8 @@ export default function (pi: ExtensionAPI) {
       agentName?: string;
       agentEmoji?: string;
       agentStableId?: string;
+      brokerControlPlaneCanvasId?: string | null;
+      brokerControlPlaneCanvasChannelId?: string | null;
     }
     try {
       let savedState: PersistedState | null = null;
@@ -2834,6 +3045,12 @@ export default function (pi: ExtensionAPI) {
             if (!userNames.has(k)) userNames.set(k, v);
           }
         }
+        brokerControlPlaneCanvasRuntimeId =
+          normalizeOptionalSetting(savedState.brokerControlPlaneCanvasId) ??
+          brokerControlPlaneCanvasRuntimeId;
+        brokerControlPlaneCanvasRuntimeChannelId =
+          normalizeOptionalSetting(savedState.brokerControlPlaneCanvasChannelId) ??
+          brokerControlPlaneCanvasRuntimeChannelId;
       }
       persistStateNow();
     } catch (err) {

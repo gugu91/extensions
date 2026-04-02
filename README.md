@@ -172,10 +172,13 @@ sessions, so this section is a snapshot of the agents visible in today's work.
 
 ### Today's agents (2026-04-02)
 
-| Agent                   | Contribution                                                                                                                                                                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 🐊 **Silent Crocodile** | Shipped the Slack manifest deploy command, wired name-based personalities into agent prompts, verified the initial RALPH assignment report behavior already on `main`, and refreshed the repo README to match the current state. |
-| 🐬 **Rocket Dolphin**   | Helped validate the Slack deploy workflow by confirming the Slack CLI does not provide a `slack manifest update` command, which unblocked the direct Web API deploy design.                                                      |
+| Agent                     | Contribution                                                                                                                                                                                        |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🐇 **Ultra Rabbit**       | Built file uploads, scheduled messages, pinning, thread export, the activity log, and the philosophy docs.                                                                                          |
+| 🦩 **Cosmic Crane**       | Shipped Slack canvases, broker-specific naming, Block Kit support, the remaining RALPH timestamp work, neon-psql execution-path tests, the broker control-plane canvas, and the thread-routing fix. |
+| 🐊 **Silent Crocodile**   | Shipped the deploy command, agent personalities, reaction triggers, user presence checks, the dedup fix, and Slack modals.                                                                          |
+| 🐬 **Rocket Dolphin**     | Handled video research, Slack CLI research, the `slack-api` package, npm-readiness work, worktree cleanup, and the idle/free signal.                                                                |
+| 🐻 **Crystal Blush Bear** | Fixed the phone input bug in `ai-recruiter`.                                                                                                                                                        |
 
 ### Maintainers
 
