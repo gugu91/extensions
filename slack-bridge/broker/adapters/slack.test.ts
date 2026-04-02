@@ -10,6 +10,20 @@ import {
 } from "./slack.js";
 import type { OutboundMessage } from "./types.js";
 
+async function waitForAssertion(assertion: () => void, attempts = 50): Promise<void> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 // ─── parseSocketFrame ────────────────────────────────────
 
 describe("parseSocketFrame", () => {
@@ -1246,6 +1260,182 @@ describe("SlackAdapter — disconnect", () => {
     await adapter.disconnect();
 
     await expect(sendPromise).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
+  let originalFetch: typeof globalThis.fetch;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+  const originalWebSocket = globalThis.WebSocket;
+
+  class FakeWebSocket {
+    static readonly OPEN = 1;
+    static readonly CLOSED = 3;
+
+    static instances: FakeWebSocket[] = [];
+
+    readonly url: string;
+    readyState = FakeWebSocket.OPEN;
+    sent: string[] = [];
+    private readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
+
+    constructor(url: string) {
+      this.url = url;
+      FakeWebSocket.instances.push(this);
+    }
+
+    addEventListener(type: string, handler: (event: { data?: string }) => void): void {
+      const handlers = this.listeners.get(type) ?? [];
+      handlers.push(handler);
+      this.listeners.set(type, handlers);
+    }
+
+    send(data: string): void {
+      this.sent.push(String(data));
+    }
+
+    close(): void {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit("close", {});
+    }
+
+    emit(type: string, event: { data?: string }): void {
+      for (const handler of this.listeners.get(type) ?? []) {
+        handler(event);
+      }
+    }
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchMock = vi.fn<typeof fetch>();
+    globalThis.fetch = fetchMock;
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.unstubAllGlobals();
+    if (originalWebSocket) {
+      globalThis.WebSocket = originalWebSocket;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("receives a DM, ACKs the envelope, emits inbound text, then removes 👀 after replying", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      const ok = (data: Record<string, unknown>) =>
+        new Response(JSON.stringify({ ok: true, ...data }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+
+      if (url.endsWith("/auth.test")) {
+        return ok({ user_id: "U_BOT" });
+      }
+      if (url.endsWith("/apps.connections.open")) {
+        return ok({ url: "wss://slack.test/socket" });
+      }
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U123");
+        return ok({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        expect(parsedBody).toEqual({ channel: "D123", timestamp: "111.222", name: "eyes" });
+        return ok({});
+      }
+      if (url.endsWith("/chat.postMessage")) {
+        expect(parsedBody).toMatchObject({
+          channel: "D123",
+          thread_ts: "111.222",
+          text: "Roger that",
+        });
+        return ok({ message: { ts: "111.333" } });
+      }
+      if (url.endsWith("/reactions.remove")) {
+        expect(parsedBody).toEqual({ channel: "D123", timestamp: "111.222", name: "eyes" });
+        return ok({});
+      }
+      if (url.endsWith("/assistant.threads.setStatus")) {
+        expect(parsedBody).toEqual({ channel_id: "D123", thread_ts: "111.222", status: "" });
+        return ok({});
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await adapter.connect();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const ws = FakeWebSocket.instances[0]!;
+    expect(ws.url).toBe("wss://slack.test/socket");
+
+    ws.emit("message", {
+      data: JSON.stringify({
+        envelope_id: "env-1",
+        type: "events_api",
+        payload: {
+          event_id: "Ev-1",
+          event: {
+            type: "message",
+            user: "U123",
+            text: "Hello from Slack",
+            channel: "D123",
+            channel_type: "im",
+            ts: "111.222",
+          },
+        },
+      }),
+    });
+
+    await waitForAssertion(() => {
+      expect(ws.sent).toContain(JSON.stringify({ envelope_id: "env-1" }));
+      expect(handler).toHaveBeenCalledWith({
+        source: "slack",
+        threadId: "111.222",
+        channel: "D123",
+        userId: "U123",
+        userName: "Alice Example",
+        text: "Hello from Slack",
+        timestamp: "111.222",
+      });
+    });
+
+    await adapter.send({
+      threadId: "111.222",
+      channel: "D123",
+      text: "Roger that",
+      agentName: "Silent Crocodile",
+      agentEmoji: "🐊",
+    });
+
+    await waitForAssertion(() => {
+      const endpoints = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(endpoints).toContain("https://slack.com/api/reactions.remove");
+      expect(endpoints).toContain("https://slack.com/api/assistant.threads.setStatus");
+    });
+
+    const endpoints = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(endpoints).toContain("https://slack.com/api/reactions.add");
+    expect(endpoints).toContain("https://slack.com/api/chat.postMessage");
+    expect(endpoints).toContain("https://slack.com/api/reactions.remove");
+    expect(endpoints).toContain("https://slack.com/api/assistant.threads.setStatus");
+
+    await adapter.disconnect();
   });
 });
 
