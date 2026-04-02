@@ -1,9 +1,34 @@
 {
   "name": "@gugu91/pi-slack-api",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Typed Slack Web API client and CLI generated from Slack's OpenAPI spec",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu91/extensions.git",
+    "directory": "slack-api"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./generated/index.ts",
+  "exports": {
+    ".": "./generated/index.ts",
+    "./cli": "./cli.ts",
+    "./generated": "./generated/index.ts",
+    "./generated/*": "./generated/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "bin/",
+    "cli.ts",
+    "cli-helpers.ts",
+    "generated/",
+    "scripts/generate.ts"
+  ],
   "keywords": [
     "pi-package"
   ],

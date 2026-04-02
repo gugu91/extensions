@@ -1,9 +1,55 @@
 {
   "name": "@gugu91/pi-slack-bridge",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Slack assistant integration for pi (Pinet) — multi-agent broker, thread routing, and inbox tools",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu91/extensions.git",
+    "directory": "slack-bridge"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "manifest.yaml",
+    "index.ts",
+    "helpers.ts",
+    "guardrails.ts",
+    "git-metadata.ts",
+    "ttl-cache.ts",
+    "scheduled-wakeups.ts",
+    "task-assignments.ts",
+    "slack-api.ts",
+    "slack-export.ts",
+    "slack-tools.ts",
+    "slack-upload.ts",
+    "canvases.ts",
+    "deploy-manifest.ts",
+    "broker-delivery.ts",
+    "follower-delivery.ts",
+    "worktree-policy.ts",
+    "broker/adapters/slack.ts",
+    "broker/adapters/types.ts",
+    "broker/agent-messaging.ts",
+    "broker/client.ts",
+    "broker/index.ts",
+    "broker/leader.ts",
+    "broker/maintenance.ts",
+    "broker/paths.ts",
+    "broker/router.ts",
+    "broker/schema.ts",
+    "broker/socket-server.ts",
+    "broker/types.ts"
+  ],
   "keywords": [
     "pi-package"
   ],

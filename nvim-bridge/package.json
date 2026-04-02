@@ -1,9 +1,30 @@
 {
   "name": "@gugu91/pi-nvim-bridge",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Neovim bridge for pi — editor context sync and PiComms persistent comments",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu91/extensions.git",
+    "directory": "nvim-bridge"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "index.ts",
+    "comments.ts",
+    "comments-sqlite.ts",
+    "nvim/"
+  ],
   "keywords": [
     "pi-package"
   ],
