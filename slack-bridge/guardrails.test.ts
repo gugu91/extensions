@@ -6,6 +6,9 @@ import {
   buildSecurityPrompt,
   isConfirmationApproval,
   isConfirmationRejection,
+  isBrokerForbiddenTool,
+  buildBrokerToolGuardrailsPrompt,
+  BROKER_FORBIDDEN_TOOLS,
   READ_ONLY_TOOLS,
   WRITE_TOOLS,
   type SecurityGuardrails,
@@ -252,6 +255,51 @@ describe("isConfirmationApproval", () => {
     expect(isConfirmationApproval("maybe")).toBe(false);
     expect(isConfirmationApproval("let me think")).toBe(false);
     expect(isConfirmationApproval("")).toBe(false);
+  });
+});
+
+// ─── Broker role guardrails ───────────────────────────────
+
+describe("BROKER_FORBIDDEN_TOOLS", () => {
+  it("blocks the Agent tool", () => {
+    expect(BROKER_FORBIDDEN_TOOLS.has("Agent")).toBe(true);
+  });
+});
+
+describe("isBrokerForbiddenTool", () => {
+  it("returns true for Agent tool", () => {
+    expect(isBrokerForbiddenTool("Agent")).toBe(true);
+  });
+
+  it("returns false for allowed tools", () => {
+    expect(isBrokerForbiddenTool("pinet_message")).toBe(false);
+    expect(isBrokerForbiddenTool("pinet_agents")).toBe(false);
+    expect(isBrokerForbiddenTool("slack_send")).toBe(false);
+    expect(isBrokerForbiddenTool("read")).toBe(false);
+    expect(isBrokerForbiddenTool("bash")).toBe(false);
+  });
+
+  it("is case-sensitive", () => {
+    expect(isBrokerForbiddenTool("agent")).toBe(false);
+    expect(isBrokerForbiddenTool("AGENT")).toBe(false);
+  });
+});
+
+describe("buildBrokerToolGuardrailsPrompt", () => {
+  it("mentions the Agent tool as blocked", () => {
+    const prompt = buildBrokerToolGuardrailsPrompt();
+    expect(prompt).toContain("Agent");
+    expect(prompt).toContain("BLOCKED");
+  });
+
+  it("recommends pinet_message as the alternative", () => {
+    const prompt = buildBrokerToolGuardrailsPrompt();
+    expect(prompt).toContain("pinet_message");
+  });
+
+  it("explains why the Agent tool is forbidden", () => {
+    const prompt = buildBrokerToolGuardrailsPrompt();
+    expect(prompt).toContain("no Slack/Pinet connectivity");
   });
 });
 

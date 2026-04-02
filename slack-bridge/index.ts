@@ -47,6 +47,8 @@ import {
   isToolBlocked,
   matchesToolPattern,
   toolNeedsConfirmation,
+  isBrokerForbiddenTool,
+  buildBrokerToolGuardrailsPrompt,
   type SecurityGuardrails,
 } from "./guardrails.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
@@ -2122,11 +2124,22 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Hard-block forbidden tools when broker role is active.
+  pi.on("tool_call", async (event) => {
+    if (brokerRole === "broker" && isBrokerForbiddenTool(event.toolName)) {
+      return {
+        block: true,
+        reason: `Tool "${event.toolName}" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet_message to delegate to a connected worker instead.`,
+      };
+    }
+  });
+
   // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
   pi.on("before_agent_start", async (event) => {
     const guidelines = [...getIdentityGuidelines()];
     if (brokerRole === "broker") {
       guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
+      guidelines.push(buildBrokerToolGuardrailsPrompt());
     } else if (brokerRole === "follower") {
       guidelines.push(...buildWorkerPromptGuidelines());
     }
