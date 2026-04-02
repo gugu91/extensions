@@ -372,23 +372,57 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(guidelines[0]).toContain("Solar Mantis");
   });
 
-  it("instructs not to pick up coding tasks", () => {
+  it("contains a hard rule against writing code", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
-    expect(joined).toContain("DO NOT pick up coding tasks");
+    expect(joined).toContain("HARD RULE");
+    expect(joined).toContain("NEVER WRITE CODE");
+  });
+
+  it("lists forbidden actions explicitly", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("FORBIDDEN");
+    expect(joined).toContain("Agent tool");
+    expect(joined).toContain("edit");
+    expect(joined).toContain("write");
+    expect(joined).toContain("bash");
+  });
+
+  it("lists allowed actions explicitly", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("ALLOWED");
+    expect(joined).toContain("Route messages");
+    expect(joined).toContain("pinet_agents");
+    expect(joined).toContain("pinet_message");
+  });
+
+  it("includes a refusal template for coding requests", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("IF ASKED TO CODE");
+    expect(joined).toContain("Refuse");
+    expect(joined).toContain("delegate");
+  });
+
+  it("explains why the constraint exists (mesh stalls)", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("mesh");
+    expect(joined).toContain("stall");
   });
 
   it("instructs to use pinet_message instead of Agent tool", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
     expect(joined).toContain("pinet_message");
-    expect(joined).toContain("DO NOT use the Agent tool");
   });
 
-  it("instructs to check pinet_agents for idle workers", () => {
+  it("tells broker to never do the work as a fallback", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
-    expect(joined).toContain("pinet_agents");
+    expect(joined).toContain("NEVER do the work yourself");
   });
 });
 

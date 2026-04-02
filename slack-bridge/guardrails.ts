@@ -132,6 +132,38 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
   return sections.join("\n\n");
 }
 
+// ─── Broker Role Guardrails ──────────────────────────────
+
+/**
+ * Tools that the broker agent must NEVER use.
+ * The broker is infrastructure — it coordinates, not codes.
+ * Spawning local subagents (Agent) is forbidden because they
+ * have no Slack/Pinet connectivity and can't be monitored.
+ */
+export const BROKER_FORBIDDEN_TOOLS = new Set(["Agent"]);
+
+/**
+ * Check if a tool is forbidden for the broker role.
+ * Returns true if the broker must not use this tool.
+ */
+export function isBrokerForbiddenTool(toolName: string): boolean {
+  return BROKER_FORBIDDEN_TOOLS.has(toolName);
+}
+
+/**
+ * Build a prompt snippet describing broker tool restrictions.
+ * Injected into the system prompt when the broker role is active.
+ */
+export function buildBrokerToolGuardrailsPrompt(): string {
+  const forbidden = [...BROKER_FORBIDDEN_TOOLS].join(", ");
+  return [
+    "🚫 BROKER TOOL RESTRICTION:",
+    `The following tools are BLOCKED for the broker role: ${forbidden}.`,
+    "The Agent tool spawns local subagents with no Slack/Pinet connectivity — they can't be monitored, can't own threads, and can't coordinate with humans.",
+    "Use pinet_message to delegate to connected Pinet agents instead.",
+  ].join("\n");
+}
+
 /**
  * Parse whether a user message is approving a confirmation request.
  * Case-insensitive, trimmed.
