@@ -1239,6 +1239,7 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerRalphLoopSignature = "";
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
+  const lastReportedGhostIds = new Set<string>();
   const lastBrokerNudges = new Map<string, number>();
 
   function startBrokerHeartbeat(): void {
@@ -1348,6 +1349,41 @@ export default function (pi: ExtensionAPI) {
         brokerMaintenanceActive: brokerMaintenanceTimer != null,
       });
 
+      // Track ghost ID changes to only report NEW ghosts, not the same ones every cycle.
+      // This prevents duplicate "ghost agents detected" alerts for the same dead agents.
+      const currentGhostIds = new Set(evaluation.ghostAgentIds);
+      const newGhosts = evaluation.ghostAgentIds.filter((id) => !lastReportedGhostIds.has(id));
+      const clearedGhosts = Array.from(lastReportedGhostIds).filter(
+        (id) => !currentGhostIds.has(id),
+      );
+
+      // Build a modified anomalies list that reports only NEW ghost IDs, not repeated ones.
+      // Keep all other anomalies as-is (idle with work, pending backlog, broker health, etc).
+      let anomalyList = evaluation.anomalies;
+      if (newGhosts.length > 0 || clearedGhosts.length > 0) {
+        anomalyList = evaluation.anomalies.filter((a) => !a.startsWith("ghost agents detected:"));
+        if (newGhosts.length > 0) {
+          anomalyList.push(`NEW ghost agents detected: ${newGhosts.join(", ")}`);
+        }
+        if (clearedGhosts.length > 0) {
+          anomalyList.push(
+            `Ghost agents cleared from registry: ${clearedGhosts.join(", ")} (good news!)`,
+          );
+        }
+      }
+
+      // Update tracking for next cycle
+      lastReportedGhostIds.clear();
+      for (const id of currentGhostIds) {
+        lastReportedGhostIds.add(id);
+      }
+
+      // Build signature and prompt with only NEW/CLEARED ghost messages to avoid duplicate alerts.
+      const modifiedEvaluation = {
+        ...evaluation,
+        anomalies: anomalyList,
+      };
+
       const now = Date.now();
       const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
       for (const workload of workloads) {
@@ -1368,8 +1404,8 @@ export default function (pi: ExtensionAPI) {
         lastBrokerNudges.set(workload.id, now);
       }
 
-      const signature = buildRalphLoopAnomalySignature(evaluation);
-      const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      const signature = buildRalphLoopAnomalySignature(modifiedEvaluation);
+      const followUpPrompt = buildRalphLoopFollowUpMessage(modifiedEvaluation);
       // Keep cooldown state across transient clean cycles so flapping anomalies
       // do not immediately re-notify when they return.
       const shouldDeliverFollowUp =
@@ -1401,7 +1437,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
       if (signature && signature !== lastBrokerRalphLoopSignature) {
-        ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
+        ctx.ui.notify(`RALPH loop: ${modifiedEvaluation.anomalies.join("; ")}`, "warning");
       } else if (!signature && lastBrokerRalphLoopSignature) {
         ctx.ui.notify("RALPH loop health recovered", "info");
       }
@@ -1427,6 +1463,7 @@ export default function (pi: ExtensionAPI) {
       clearInterval(brokerRalphLoopTimer);
       brokerRalphLoopTimer = null;
     }
+    lastReportedGhostIds.clear();
     lastBrokerNudges.clear();
     lastBrokerRalphLoopSignature = "";
     lastBrokerRalphLoopFollowUpAt = 0;
