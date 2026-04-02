@@ -488,4 +488,116 @@ describe("registerSlackTools", () => {
     expect(response.content?.[0]?.text).not.toContain("too late");
     expect(response.details?.count).toBe(1);
   });
+
+  it("includes blocks when slack_send posts a rich message", async () => {
+    const { slack, tools, setResolveFollowerReplyChannel } = setup();
+    setResolveFollowerReplyChannel(async () => "D123");
+
+    await tools.get("slack_send")!.execute("tool-14", {
+      thread_ts: "123.456",
+      text: "Deploy complete",
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: "*Deploy complete*" } },
+        { type: "actions", elements: [] },
+      ],
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel: "D123",
+        thread_ts: "123.456",
+        text: "Deploy complete",
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "*Deploy complete*" } },
+          { type: "actions", elements: [] },
+        ],
+      }),
+    );
+  });
+
+  it("includes blocks when slack_post_channel posts a rich message", async () => {
+    const { slack, tools } = setup();
+
+    await tools.get("slack_post_channel")!.execute("tool-15", {
+      channel: "deployments",
+      text: "Status update",
+      blocks: [{ type: "header", text: { type: "plain_text", text: "Deploy status" } }],
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel: "resolved:deployments",
+        text: "Status update",
+        blocks: [{ type: "header", text: { type: "plain_text", text: "Deploy status" } }],
+      }),
+    );
+  });
+
+  it("returns structured inbox messages including block action metadata", async () => {
+    const { inbox, tools } = setup();
+    inbox.push({
+      channel: "C123",
+      threadTs: "123.456",
+      userId: "U123",
+      text: 'Clicked Slack "Approve" (action_id: review.approve).',
+      timestamp: "123.789",
+      metadata: {
+        kind: "slack_block_action",
+        actionId: "review.approve",
+        parsedValue: { decision: "approve" },
+      },
+    });
+
+    const response = await tools.get("slack_inbox")!.execute("tool-16", {});
+
+    expect(response.content?.[0]?.text).toContain(
+      'metadata={"kind":"slack_block_action","actionId":"review.approve"',
+    );
+    expect(response.details).toEqual({
+      count: 1,
+      messages: [
+        {
+          channel: "C123",
+          threadTs: "123.456",
+          userId: "U123",
+          text: 'Clicked Slack "Approve" (action_id: review.approve).',
+          timestamp: "123.789",
+          metadata: {
+            kind: "slack_block_action",
+            actionId: "review.approve",
+            parsedValue: { decision: "approve" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("builds block kit templates via slack_blocks_build", async () => {
+    const { tools } = setup();
+
+    const response = await tools.get("slack_blocks_build")!.execute("tool-17", {
+      template: "action_buttons",
+      title: "Review",
+      text: "Choose an action.",
+      buttons: [
+        { text: "Approve", action_id: "review.approve", style: "primary", value: "approve" },
+        { text: "Reject", action_id: "review.reject", style: "danger", value: "reject" },
+      ],
+    });
+
+    expect(response.content?.[0]?.text).toContain("Use this JSON as the blocks parameter");
+    expect(response.details).toMatchObject({
+      template: "action_buttons",
+      fallbackText: expect.stringContaining("Choose an action."),
+      blocks: [
+        { type: "header" },
+        { type: "section" },
+        { type: "actions", elements: expect.any(Array) },
+      ],
+    });
+  });
 });

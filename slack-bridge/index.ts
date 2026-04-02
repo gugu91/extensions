@@ -101,6 +101,10 @@ import {
 } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
 import {
+  extractSlackBlockActionsPayloadFromEnvelope,
+  normalizeSlackBlockActionPayload,
+} from "./slack-block-kit.js";
+import {
   createFollowerDeliveryState,
   drainFollowerAckBatches,
   hasDeliveredFollowerInboxIds,
@@ -745,6 +749,12 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      const interactivePayload = extractSlackBlockActionsPayloadFromEnvelope(data);
+      if (interactivePayload) {
+        await onBlockActions(interactivePayload, ctx);
+        return;
+      }
+
       if (data.type !== "events_api") return;
 
       const evt = (data.payload as { event: Record<string, unknown> }).event;
@@ -1063,6 +1073,76 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function onBlockActions(
+    payload: Record<string, unknown>,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    if (shuttingDown) return;
+
+    const normalized = normalizeSlackBlockActionPayload(payload);
+    if (!normalized) return;
+
+    if (!threads.has(normalized.threadTs)) {
+      threads.set(normalized.threadTs, {
+        channelId: normalized.channel,
+        threadTs: normalized.threadTs,
+        userId: normalized.userId,
+      });
+    }
+
+    const localOwner = threads.get(normalized.threadTs)?.owner;
+    if (localOwner && localOwner !== agentName) return;
+
+    if (!localOwner && !unclaimedThreads.has(normalized.threadTs)) {
+      const remoteOwner = await resolveThreadOwner(normalized.channel, normalized.threadTs);
+      if (shuttingDown) return;
+      if (remoteOwner && remoteOwner !== agentName) {
+        const thread = threads.get(normalized.threadTs);
+        if (thread) thread.owner = remoteOwner;
+        return;
+      }
+      if (remoteOwner === agentName) {
+        const thread = threads.get(normalized.threadTs);
+        if (thread) thread.owner = agentName;
+      }
+      if (!remoteOwner) {
+        unclaimedThreads.add(normalized.threadTs);
+      }
+    }
+
+    if (!isUserAllowed(normalized.userId)) {
+      await slack("chat.postMessage", botToken!, {
+        channel: normalized.channel,
+        thread_ts: normalized.threadTs,
+        text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
+      });
+      return;
+    }
+
+    if (normalized.channel.startsWith("D")) {
+      lastDmChannel = normalized.channel;
+    }
+    persistState();
+
+    const name = await resolveUser(normalized.userId);
+    if (shuttingDown) return;
+    ctx.ui.notify(`${name}: ${normalized.text.slice(0, 100)}`, "info");
+
+    inbox.push({
+      channel: normalized.channel,
+      threadTs: normalized.threadTs,
+      userId: normalized.userId,
+      text: normalized.text,
+      timestamp: normalized.timestamp,
+      metadata: normalized.metadata,
+    });
+    updateBadge();
+
+    if (ctx.isIdle?.()) {
+      drainInbox();
+    }
+  }
+
   // ─── Reconnect / status ─────────────────────────────
 
   function scheduleReconnect(ctx: ExtensionContext): void {
@@ -1229,6 +1309,7 @@ export default function (pi: ExtensionAPI) {
         text: item.message.body,
         timestamp: item.message.createdAt,
         brokerInboxId: item.entry.id,
+        metadata: meta,
       });
     }
 
@@ -2155,6 +2236,7 @@ export default function (pi: ExtensionAPI) {
             userId: inMsg.userId,
             text: inMsg.text,
             timestamp: inMsg.timestamp,
+            metadata: inMsg.metadata ?? null,
           });
           updateBadge();
           if (extCtx?.isIdle?.()) drainInbox();

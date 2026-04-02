@@ -68,6 +68,7 @@ export interface InboxMessage {
   timestamp: string;
   isChannelMention?: boolean;
   brokerInboxId?: number;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface SqliteJournalModeResult {
@@ -90,16 +91,33 @@ export function buildSqliteWalFallbackWarning(
   return `[${component}] SQLite WAL mode not available, using ${getSqliteJournalMode(result)} journal mode fallback`;
 }
 
+function formatInboxMetadata(metadata: Record<string, unknown> | null | undefined): string {
+  if (!metadata || Object.keys(metadata).length === 0) return "";
+
+  if (metadata.kind === "slack_block_action") {
+    return ` | metadata=${JSON.stringify({
+      kind: metadata.kind,
+      actionId: metadata.actionId ?? null,
+      blockId: metadata.blockId ?? null,
+      value: metadata.value ?? null,
+      parsedValue: metadata.parsedValue ?? null,
+    })}`;
+  }
+
+  return "";
+}
+
 export function formatInboxMessages(
   messages: InboxMessage[],
   userNames: { get(key: string): string | undefined },
 ): string {
   const lines = messages.map((m) => {
     const n = userNames.get(m.userId) ?? m.userId;
+    const metadataSuffix = formatInboxMetadata(m.metadata);
     if (m.isChannelMention) {
-      return `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${n}: ${m.text}`;
+      return `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${n}: ${m.text}${metadataSuffix}`;
     }
-    return `[thread ${m.threadTs}] ${n}: ${m.text}`;
+    return `[thread ${m.threadTs}] ${n}: ${m.text}${metadataSuffix}`;
   });
 
   return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
@@ -1450,6 +1468,7 @@ export function syncFollowerInboxEntries(
       text: entry.message.body ?? "",
       timestamp: entry.message.createdAt ?? "",
       brokerInboxId: entry.inboxId,
+      metadata: meta,
     };
   });
 

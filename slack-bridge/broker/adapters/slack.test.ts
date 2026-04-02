@@ -73,6 +73,22 @@ describe("parseSocketFrame", () => {
     const result = parseSocketFrame(frame);
     expect(result?.event).toBeUndefined();
   });
+
+  it("extracts interactive block_actions payloads", () => {
+    const frame = JSON.stringify({
+      envelope_id: "env-1",
+      type: "interactive",
+      payload: {
+        type: "block_actions",
+        actions: [{ action_id: "review.approve" }],
+      },
+    });
+    const result = parseSocketFrame(frame);
+    expect(result?.interactivePayload).toEqual({
+      type: "block_actions",
+      actions: [{ action_id: "review.approve" }],
+    });
+  });
 });
 
 // ─── extractThreadStarted ────────────────────────────────
@@ -533,6 +549,80 @@ describe("SlackAdapter", () => {
     adapter.onInbound(handler);
     // handler is registered (can't easily verify without triggering a message)
     expect(adapter.name).toBe("slack");
+  });
+
+  it("emits normalized block action payloads with structured metadata", async () => {
+    const rememberKnownThread = vi.fn();
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      rememberKnownThread,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+    vi.spyOn(
+      adapter as unknown as { resolveUser: (userId: string) => Promise<string> },
+      "resolveUser",
+    ).mockResolvedValue("Will");
+
+    await (
+      adapter as unknown as {
+        onBlockActions: (payload: Record<string, unknown>) => Promise<void>;
+      }
+    ).onBlockActions({
+      type: "block_actions",
+      trigger_id: "trigger-1",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      container: {
+        channel_id: "C123",
+        message_ts: "123.456",
+        thread_ts: "123.000",
+      },
+      actions: [
+        {
+          action_id: "review.approve",
+          block_id: "review-actions",
+          type: "button",
+          text: { type: "plain_text", text: "Approve" },
+          value: '{"decision":"approve"}',
+          action_ts: "123.789",
+        },
+      ],
+    });
+
+    expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123");
+    expect(handler).toHaveBeenCalledWith({
+      source: "slack",
+      threadId: "123.000",
+      channel: "C123",
+      userId: "U123",
+      userName: "Will",
+      text: 'Clicked Slack "Approve" (action_id: review.approve).',
+      timestamp: "123.789",
+      metadata: {
+        kind: "slack_block_action",
+        actionId: "review.approve",
+        blockId: "review-actions",
+        value: '{"decision":"approve"}',
+        parsedValue: { decision: "approve" },
+        actionText: "Approve",
+        channel: "C123",
+        threadTs: "123.000",
+        messageTs: "123.456",
+        actions: [
+          {
+            actionId: "review.approve",
+            blockId: "review-actions",
+            text: "Approve",
+            type: "button",
+            style: null,
+            value: '{"decision":"approve"}',
+            parsedValue: { decision: "approve" },
+            actionTs: "123.789",
+          },
+        ],
+      },
+    });
   });
 });
 
