@@ -1227,6 +1227,12 @@ export default function (pi: ExtensionAPI) {
   let activeBroker: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let brokerClient: any = null;
+
+  // Deferred ACK tracking for follower mode.
+  // IDs are collected on poll and only ACK'd after drainInbox() successfully
+  // delivers messages to the agent. This prevents message loss when the
+  // follower crashes between ACK and drain (at-least-once semantics).
+  const pendingFollowerAckIds: number[] = [];
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -1792,7 +1798,13 @@ export default function (pi: ExtensionAPI) {
           const entries = await client.pollInbox();
           if (entries.length === 0) return;
 
-          const synced = syncFollowerInboxEntries(entries, threads, agentName, lastDmChannel);
+          // Dedup: skip entries already pending ACK (polled but not yet drained).
+          // This prevents double-push when the poll interval fires before drain.
+          const pendingSet = new Set(pendingFollowerAckIds);
+          const newEntries = entries.filter((entry) => !pendingSet.has(entry.inboxId));
+          if (newEntries.length === 0) return;
+
+          const synced = syncFollowerInboxEntries(newEntries, threads, agentName, lastDmChannel);
           for (const nextThread of synced.threadUpdates) {
             const existing = threads.get(nextThread.threadTs);
             if (!existing) {
@@ -1807,9 +1819,14 @@ export default function (pi: ExtensionAPI) {
           lastDmChannel = synced.lastDmChannel;
           inbox.push(...synced.inboxMessages);
 
-          const ids = entries.map((entry) => entry.inboxId);
+          // Track IDs for deferred ACK — don't ACK until drainInbox() succeeds.
+          // This ensures at-least-once delivery: if we crash before drain,
+          // the broker still has these as undelivered and will re-send them.
+          for (const entry of newEntries) {
+            pendingFollowerAckIds.push(entry.inboxId);
+          }
+
           if (synced.changed) persistState();
-          if (ids.length > 0) await client.ackMessages(ids);
           updateBadge();
           if (ctx.isIdle?.()) drainInbox();
         } catch {
@@ -2029,6 +2046,19 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // ACK follower inbox entries after successful delivery to the agent.
+  // Best-effort: if ACK fails, the broker re-delivers on next poll (at-least-once).
+  function ackPendingFollowerMessages(): void {
+    if (pendingFollowerAckIds.length === 0) return;
+    if (brokerRole !== "follower" || !brokerClient?.client) return;
+
+    const ids = pendingFollowerAckIds.splice(0, pendingFollowerAckIds.length);
+    void (brokerClient.client as BrokerClient).ackMessages(ids).catch(() => {
+      // ACK failed — messages may be re-delivered on next poll.
+      // This is intentional: at-least-once is safer than at-most-once.
+    });
+  }
+
   // Drain inbox: set thinking status, send to agent
   function drainInbox(): void {
     if (inbox.length === 0) return;
@@ -2044,15 +2074,25 @@ export default function (pi: ExtensionAPI) {
       prompt = securityPrompt + "\n\n" + prompt;
     }
 
+    let delivered = false;
     try {
       pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+      delivered = true;
     } catch {
       try {
         pi.sendUserMessage(prompt);
+        delivered = true;
       } catch {
         inbox.push(...pending);
         updateBadge();
       }
+    }
+
+    // Only ACK after the agent has received the messages.
+    // If delivery failed, messages are back in inbox[] and IDs stay
+    // in pendingFollowerAckIds for the next drain attempt.
+    if (delivered) {
+      ackPendingFollowerMessages();
     }
   }
 
@@ -2106,6 +2146,16 @@ export default function (pi: ExtensionAPI) {
     if (brokerClient) {
       try {
         clearInterval(brokerClient.pollInterval);
+        // Flush any pending follower ACKs before disconnecting.
+        // On clean shutdown the agent has processed these messages,
+        // so we should tell the broker they're delivered.
+        if (pendingFollowerAckIds.length > 0) {
+          await (brokerClient.client as BrokerClient)
+            .ackMessages(pendingFollowerAckIds.splice(0, pendingFollowerAckIds.length))
+            .catch(() => {
+              /* best effort — broker will re-deliver on next connect */
+            });
+        }
         await (brokerClient.client as BrokerClient).unregister().catch(() => {
           /* best effort */
         });
