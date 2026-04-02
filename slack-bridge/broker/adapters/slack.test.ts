@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   parseSocketFrame,
   extractThreadStarted,
+  extractAppHomeOpened,
   classifyMessage,
   parseMemberJoinedChannel,
   SlackAdapter,
@@ -161,6 +162,32 @@ describe("extractThreadStarted", () => {
     };
     const result = extractThreadStarted(evt);
     expect(result?.context).toBeUndefined();
+  });
+});
+
+describe("extractAppHomeOpened", () => {
+  it("extracts the user, tab, and event timestamp", () => {
+    expect(
+      extractAppHomeOpened({
+        type: "app_home_opened",
+        user: "U123",
+        tab: "home",
+        event_ts: "123.456",
+      }),
+    ).toEqual({
+      userId: "U123",
+      tab: "home",
+      eventTs: "123.456",
+    });
+  });
+
+  it("defaults the tab to home and rejects missing users", () => {
+    expect(extractAppHomeOpened({ user: "U123" })).toEqual({
+      userId: "U123",
+      tab: "home",
+      eventTs: null,
+    });
+    expect(extractAppHomeOpened({ tab: "home" })).toBeNull();
   });
 });
 
@@ -549,6 +576,79 @@ describe("SlackAdapter", () => {
     adapter.onInbound(handler);
     // handler is registered (can't easily verify without triggering a message)
     expect(adapter.name).toBe("slack");
+  });
+
+  it("forwards app_home_opened events to the configured callback", async () => {
+    const onAppHomeOpened = vi.fn(async () => undefined);
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      onAppHomeOpened,
+    });
+
+    await (
+      adapter as unknown as {
+        onAppHomeOpened: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onAppHomeOpened({
+      type: "app_home_opened",
+      user: "U123",
+      tab: "home",
+      event_ts: "123.456",
+    });
+
+    expect(onAppHomeOpened).toHaveBeenCalledWith({
+      userId: "U123",
+      tab: "home",
+      eventTs: "123.456",
+    });
+  });
+
+  it("ignores non-home app_home_opened events", async () => {
+    const onAppHomeOpened = vi.fn(async () => undefined);
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      onAppHomeOpened,
+    });
+
+    await (
+      adapter as unknown as {
+        onAppHomeOpened: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onAppHomeOpened({
+      type: "app_home_opened",
+      user: "U123",
+      tab: "messages",
+      event_ts: "123.456",
+    });
+
+    expect(onAppHomeOpened).not.toHaveBeenCalled();
+  });
+
+  it("contains app_home_opened callback failures", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      onAppHomeOpened: vi.fn(async () => {
+        throw new Error("views.publish failed");
+      }),
+    });
+
+    await expect(
+      (
+        adapter as unknown as {
+          onAppHomeOpened: (evt: Record<string, unknown>) => Promise<void>;
+        }
+      ).onAppHomeOpened({
+        type: "app_home_opened",
+        user: "U123",
+        tab: "home",
+        event_ts: "123.456",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "[slack-adapter] Home tab callback failed: views.publish failed",
+    );
   });
 
   it("ignores duplicate Socket Mode message deliveries with the same Slack event_id", async () => {
