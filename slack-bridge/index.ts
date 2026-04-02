@@ -1237,7 +1237,6 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
   let lastBrokerRalphLoopSignature = "";
-  let lastBrokerRalphLoopFollowUpSignature = "";
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
   const lastBrokerNudges = new Map<string, number>();
@@ -1371,11 +1370,12 @@ export default function (pi: ExtensionAPI) {
 
       const signature = buildRalphLoopAnomalySignature(evaluation);
       const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      // Keep cooldown state across transient clean cycles so flapping anomalies
+      // do not immediately re-notify when they return.
       const shouldDeliverFollowUp =
         followUpPrompt != null &&
         shouldDeliverRalphLoopFollowUp({
           signature,
-          previousSignature: lastBrokerRalphLoopFollowUpSignature,
           lastDeliveredAt: lastBrokerRalphLoopFollowUpAt,
           now,
           cooldownMs: DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
@@ -1386,7 +1386,6 @@ export default function (pi: ExtensionAPI) {
         const markFollowUpDelivered = () => {
           brokerRalphLoopFollowUpPending = true;
           lastBrokerRalphLoopFollowUpAt = now;
-          lastBrokerRalphLoopFollowUpSignature = signature;
         };
 
         try {
@@ -1401,10 +1400,6 @@ export default function (pi: ExtensionAPI) {
           }
         }
       }
-      if (!signature) {
-        lastBrokerRalphLoopFollowUpSignature = "";
-      }
-
       if (signature && signature !== lastBrokerRalphLoopSignature) {
         ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
       } else if (!signature && lastBrokerRalphLoopSignature) {
@@ -1434,7 +1429,6 @@ export default function (pi: ExtensionAPI) {
     }
     lastBrokerNudges.clear();
     lastBrokerRalphLoopSignature = "";
-    lastBrokerRalphLoopFollowUpSignature = "";
     lastBrokerRalphLoopFollowUpAt = 0;
     brokerRalphLoopFollowUpPending = false;
   }

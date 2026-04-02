@@ -608,7 +608,6 @@ export function buildRalphLoopAnomalySignature(evaluation: RalphLoopEvaluationRe
 
 export interface RalphLoopFollowUpDeliveryOptions {
   signature: string;
-  previousSignature?: string;
   lastDeliveredAt?: number;
   now?: number;
   cooldownMs?: number;
@@ -618,13 +617,12 @@ export interface RalphLoopFollowUpDeliveryOptions {
 
 export function shouldDeliverRalphLoopFollowUp(options: RalphLoopFollowUpDeliveryOptions): boolean {
   const now = options.now ?? Date.now();
-  const previousSignature = options.previousSignature ?? "";
   const lastDeliveredAt = options.lastDeliveredAt ?? 0;
   const cooldownMs = options.cooldownMs ?? DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS;
   const pending = options.pending ?? false;
   const idle = options.idle ?? true;
 
-  if (!options.signature || options.signature === previousSignature) {
+  if (!options.signature) {
     return false;
   }
   if (pending || !idle) {
