@@ -150,6 +150,9 @@ describe("BrokerDB", () => {
     const inspectDb = new DatabaseSync(dbPath);
     const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
     const columns = inspectDb.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+    const backlogColumns = inspectDb.prepare("PRAGMA table_info(unrouted_backlog)").all() as Array<{
+      name: string;
+    }>;
     inspectDb.close();
 
     expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
@@ -162,6 +165,63 @@ describe("BrokerDB", () => {
         "disconnected_at",
         "resumable_until",
       ]),
+    );
+    expect(backlogColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["preferred_agent_id"]),
+    );
+  });
+
+  it("adds backlog recipient-affinity columns when migrating from schema v3", () => {
+    const dbPath = path.join(dir, "legacy-backlog.db");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        last_heartbeat TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT,
+        resumable_until TEXT
+      );
+
+      CREATE TABLE unrouted_backlog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        message_id INTEGER NOT NULL UNIQUE,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
+        assigned_agent_id TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      PRAGMA user_version = 3;
+    `);
+    legacyDb.close();
+
+    const migratedDb = new BrokerDB(dbPath);
+    expect(() => migratedDb.initialize()).not.toThrow();
+    migratedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    const backlogColumns = inspectDb.prepare("PRAGMA table_info(unrouted_backlog)").all() as Array<{
+      name: string;
+    }>;
+    inspectDb.close();
+
+    expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    expect(backlogColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["preferred_agent_id"]),
     );
   });
 
@@ -275,9 +335,24 @@ describe("BrokerDB", () => {
     restartedDb.close();
   });
 
-  it("unregisterAgent hides agent from connected list, keeps the record, and releases claims", () => {
+  it("unregisterAgent requeues undelivered work, deletes inbox rows, and releases claims", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
     db.createThread("t-unregister", "slack", "#general", "a1");
+    db.insertMessage("t-unregister", "slack", "inbound", "U1", "pending slack work", ["a1"], {
+      channel: "#general",
+    });
+    db.insertMessage("t-unregister", "agent", "inbound", "broker-1", "pending a2a work", ["a1"], {
+      senderAgent: "Broker",
+      a2a: true,
+    });
+    db.insertMessage("t-unregister", "agent", "outbound", "a1", "already sent", ["a1"]);
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    expect(
+      sqlite.prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ?").get("a1") as {
+        count: number;
+      },
+    ).toEqual({ count: 3 });
 
     db.unregisterAgent("a1");
 
@@ -285,6 +360,17 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")?.name).toBe("Agent");
     expect(db.getAgentById("a1")?.resumableUntil).toBeNull();
     expect(db.getThread("t-unregister")?.ownerAgent).toBeNull();
+    expect(db.getPendingBacklog().map((entry) => entry.messageId)).toHaveLength(2);
+    expect(db.getPendingBacklog().map((entry) => entry.threadId)).toEqual([
+      "t-unregister",
+      "t-unregister",
+    ]);
+    expect(db.getInbox("a1")).toHaveLength(0);
+    expect(
+      sqlite.prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ?").get("a1") as {
+        count: number;
+      },
+    ).toEqual({ count: 0 });
   });
 
   it("getAllAgents includes recently disconnected agents for visibility", () => {
@@ -413,6 +499,33 @@ describe("BrokerDB", () => {
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue");
+    expect(db.getPendingBacklog()[0].preferredAgentId).toBeNull();
+  });
+
+  it("requeueUndeliveredMessages also requeues pending agent-to-agent work", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    db.createThread("t-requeue-a2a", "agent", "", "worker-1");
+    db.insertMessage(
+      "t-requeue-a2a",
+      "agent",
+      "inbound",
+      "broker-1",
+      "follow up with the user",
+      ["worker-1"],
+      {
+        senderAgent: "Broker",
+        a2a: true,
+      },
+    );
+
+    const moved = db.requeueUndeliveredMessages("worker-1");
+
+    expect(moved).toBe(1);
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue-a2a");
+    expect(db.getPendingBacklog()[0].channel).toBe("");
+    expect(db.getPendingBacklog()[0].preferredAgentId).toBe("worker-1");
   });
 
   it("maintenance requeues messages orphaned in a disconnected agent inbox", () => {

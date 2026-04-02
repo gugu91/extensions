@@ -324,6 +324,55 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("requeued a2a work stays bound to the intended recipient after unregister", async () => {
+    const sender = await client.register(
+      "sender-agent",
+      "📤",
+      undefined,
+      "host:session:/tmp/sender",
+    );
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    const receiverStableId = "host:session:/tmp/receiver";
+    const reg2 = await client2.register("receiver-agent", "📥", undefined, receiverStableId);
+
+    const messageId = await client.sendAgentMessage("receiver-agent", "Hold for receiver only");
+    expect(messageId).toBeGreaterThan(0);
+    await waitFor(() => db.getInbox(reg2.agentId).length === 1);
+
+    await client2.unregister();
+
+    let result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(db.getPendingBacklog()[0].preferredAgentId).toBe(reg2.agentId);
+    expect(await client.pollInbox()).toHaveLength(0);
+
+    const reg3 = await client2.register("receiver-agent", "📥", undefined, receiverStableId);
+    expect(reg3.agentId).toBe(reg2.agentId);
+
+    result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:20.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(1);
+    const inbox = await client2.pollInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].message.body).toBe("Hold for receiver only");
+    expect(inbox[0].message.threadId).toBe(`a2a:${sender.agentId}:${reg2.agentId}`);
+    expect(await client.pollInbox()).toHaveLength(0);
+
+    client2.disconnect();
+  });
+
   it("agent.message returns error for unknown target", async () => {
     await client.register("lonely-agent", "😢");
     await expect(client.sendAgentMessage("ghost-agent", "Hello?")).rejects.toThrow(

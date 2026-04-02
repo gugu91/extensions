@@ -54,9 +54,7 @@ export function selectBacklogAssignee(
     return null;
   }
 
-  const idle = agentLoads
-    .filter((entry) => entry.agent.status === "idle")
-    .sort(compareAgentLoad);
+  const idle = agentLoads.filter((entry) => entry.agent.status === "idle").sort(compareAgentLoad);
   if (idle.length > 0) {
     return idle[0].agent;
   }
@@ -99,10 +97,19 @@ export function runBrokerMaintenancePass(
   let assignedBacklogCount = 0;
 
   for (const backlog of db.getPendingBacklog(options.backlogLimit ?? 50)) {
+    const preferredAgent = backlog.preferredAgentId
+      ? (agents.find((agent) => agent.id === backlog.preferredAgentId) ?? null)
+      : null;
+    if (backlog.preferredAgentId && !preferredAgent) {
+      continue;
+    }
+
     const threadOwner = db.getThread(backlog.threadId)?.ownerAgent ?? null;
     const ownerAgent = threadOwner ? agents.find((agent) => agent.id === threadOwner) : null;
     const assignee =
-      ownerAgent ?? selectBacklogAssignee(backlog, agentLoads, now, busyAssignmentAgeMs);
+      preferredAgent ??
+      ownerAgent ??
+      selectBacklogAssignee(backlog, agentLoads, now, busyAssignmentAgeMs);
 
     if (!assignee) {
       continue;
@@ -126,7 +133,9 @@ export function runBrokerMaintenancePass(
   const anomalies: string[] = [];
 
   if (reapedAgentIds.length > 0) {
-    anomalies.push(`reaped ${reapedAgentIds.length} stale agent${reapedAgentIds.length === 1 ? "" : "s"}`);
+    anomalies.push(
+      `reaped ${reapedAgentIds.length} stale agent${reapedAgentIds.length === 1 ? "" : "s"}`,
+    );
   }
   if (repairedThreadClaims > 0) {
     anomalies.push(
@@ -135,7 +144,10 @@ export function runBrokerMaintenancePass(
   }
   if (pendingBacklogCount > 0 && agentLoads.length === 0) {
     anomalies.push("pending unrouted backlog has no live workers");
-  } else if (pendingBacklogCount > 0 && !agentLoads.some((entry) => entry.agent.status === "idle")) {
+  } else if (
+    pendingBacklogCount > 0 &&
+    !agentLoads.some((entry) => entry.agent.status === "idle")
+  ) {
     anomalies.push("pending unrouted backlog is waiting for an idle worker");
   }
 
