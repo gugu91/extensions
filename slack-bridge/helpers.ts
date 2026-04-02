@@ -64,6 +64,26 @@ export interface InboxMessage {
   isChannelMention?: boolean;
 }
 
+export interface SqliteJournalModeResult {
+  journal_mode?: string | null;
+}
+
+export function getSqliteJournalMode(result?: SqliteJournalModeResult): string {
+  const mode = result?.journal_mode?.trim().toLowerCase();
+  return mode && mode.length > 0 ? mode : "unknown";
+}
+
+export function isSqliteWalEnabled(result?: SqliteJournalModeResult): boolean {
+  return getSqliteJournalMode(result) === "wal";
+}
+
+export function buildSqliteWalFallbackWarning(
+  component: string,
+  result?: SqliteJournalModeResult,
+): string {
+  return `[${component}] SQLite WAL mode not available, using ${getSqliteJournalMode(result)} journal mode fallback`;
+}
+
 export function formatInboxMessages(
   messages: InboxMessage[],
   userNames: Map<string, string>,

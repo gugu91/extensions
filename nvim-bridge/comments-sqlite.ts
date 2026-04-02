@@ -44,6 +44,15 @@ interface IdRow {
   id: string;
 }
 
+interface SqliteJournalModeResult {
+  journal_mode?: string | null;
+}
+
+function getSqliteJournalMode(result?: SqliteJournalModeResult): string {
+  const mode = result?.journal_mode?.trim().toLowerCase();
+  return mode && mode.length > 0 ? mode : "unknown";
+}
+
 function rowToCommentRecord(row: CommentRow): CommentRecord {
   const context: CommentContext | undefined =
     row.context_file != null
@@ -84,7 +93,14 @@ export class SqliteCommentStore implements ICommentStore {
 
     this.db = new DatabaseSync(this.dbPath, { timeout: 5000 });
 
-    this.db.exec("PRAGMA journal_mode=WAL");
+    const journalMode = this.db.prepare("PRAGMA journal_mode=WAL").get() as
+      | SqliteJournalModeResult
+      | undefined;
+    if (getSqliteJournalMode(journalMode) !== "wal") {
+      console.warn(
+        `[SqliteCommentStore] SQLite WAL mode not available, using ${getSqliteJournalMode(journalMode)} journal mode fallback`,
+      );
+    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS comments (
