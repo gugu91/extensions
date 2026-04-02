@@ -25,6 +25,7 @@ If the agent is idle, incoming messages are processed immediately.
 | ----------------------------------------------------------------------------------- | -------------------------------------------- |
 | `slack_send(text, thread_ts?, blocks?)`                                             | Reply in a thread or start new               |
 | `slack_react(emoji, thread_ts?, timestamp?, channel?)`                              | Add an emoji reaction to a Slack message     |
+| `slack_presence(user?, users?)`                                                     | Check active/away/DND status for Slack users |
 | `slack_upload(content?, path?, filename?, filetype?, title?, channel?, thread_ts?)` | Upload a file/snippet into Slack or a thread |
 | `slack_schedule(text, channel?, thread_ts?, delay?, at?)`                           | Schedule a Slack message for later           |
 | `slack_pin(action, message_ts, channel?, thread_ts?)`                               | Pin or unpin a Slack message                 |
@@ -54,6 +55,12 @@ runbooks.
 authors, timestamps, and attachment links so it can be archived into docs,
 files, canvases, or follow-up summaries.
 
+`slack_presence` checks one or more Slack users via `users.getPresence` and
+`dnd.info`, so the agent can see whether people are active, away, or currently
+in Do Not Disturb before sending review requests or other pings. It accepts a
+single `user` or batch `users`, supports user IDs / mentions / names, and uses
+a short cache to avoid hammering Slack.
+
 ## Features
 
 - **Slack Assistant** — appears in Slack's sidebar, native conversation UI
@@ -69,6 +76,7 @@ files, canvases, or follow-up summaries.
 - **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
 - **Scheduled & delayed messages** — queue reminders, timed announcements, and follow-ups without waiting around
 - **Pins & bookmarks** — highlight key messages and manage durable channel-header links
+- **Presence-aware messaging** — check whether teammates are active, away, or in DND before pinging them
 - **Thread export & archival** — convert Slack threads into reusable markdown, plain text, or JSON
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
@@ -157,8 +165,9 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 
 The `manifest.yaml` includes all required scopes and events, including `files:write`
 for `slack_upload`, `chat:write` for `slack_schedule`, bookmark/pin scopes for
-`slack_bookmark` and `slack_pin`, and `reaction_added` + `reactions:read` for
-emoji-triggered actions. Use it when creating the app (**From a manifest**) or
+`slack_bookmark` and `slack_pin`, `users:read` + `users.getPresence` / `dnd.info`
+for presence checks, and `reaction_added` + `reactions:read` plus `presence_change`
+for Slack-side awareness events. Use it when creating the app (**From a manifest**) or
 paste it into **App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:

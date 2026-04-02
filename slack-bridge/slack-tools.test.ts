@@ -29,6 +29,13 @@ describe("registerSlackTools", () => {
     let securityPrompt = "INITIAL SECURITY PROMPT";
     let resolveUser = async (userId: string) => userId;
     let conversationsRepliesResponses: SlackResult[] = [];
+    let usersListResponse: SlackResult = {
+      ok: true,
+      members: [],
+      response_metadata: { next_cursor: "" },
+    } as SlackResult;
+    const presenceResponses = new Map<string, SlackResult>();
+    const dndResponses = new Map<string, SlackResult>();
 
     const slack = vi.fn<
       (method: string, token: string, body?: Record<string, unknown>) => Promise<SlackResult>
@@ -99,6 +106,26 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
+      if (method === "users.getPresence") {
+        const user = typeof body?.user === "string" ? body.user : "";
+        return (
+          presenceResponses.get(user) ??
+          ({ ok: true, token, body, presence: "away", online: false } as SlackResult)
+        );
+      }
+
+      if (method === "dnd.info") {
+        const user = typeof body?.user === "string" ? body.user : "";
+        return (
+          dndResponses.get(user) ??
+          ({ ok: true, token, body, dnd_enabled: false, snooze_enabled: false } as SlackResult)
+        );
+      }
+
+      if (method === "users.list") {
+        return usersListResponse;
+      }
+
       if (method === "conversations.replies" && conversationsRepliesResponses.length > 0) {
         return conversationsRepliesResponses.shift() as SlackResult;
       }
@@ -154,6 +181,15 @@ describe("registerSlackTools", () => {
       },
       setConversationsReplies: (responses: SlackResult[]) => {
         conversationsRepliesResponses = [...responses];
+      },
+      setUsersListResponse: (response: SlackResult) => {
+        usersListResponse = response;
+      },
+      setPresenceResponse: (userId: string, response: SlackResult) => {
+        presenceResponses.set(userId, response);
+      },
+      setDndResponse: (userId: string, response: SlackResult) => {
+        dndResponses.set(userId, response);
       },
       setResolveFollowerReplyChannel: (
         fn: (threadTs: string | undefined) => Promise<string | null>,
@@ -213,6 +249,94 @@ describe("registerSlackTools", () => {
       ts: "123.456",
       limit: 20,
     });
+  });
+
+  it("reports presence and dnd status for a single user", async () => {
+    const { tools, setPresenceResponse, setDndResponse, setResolveUser } = setup();
+    setResolveUser(async (userId: string) => (userId === "U123" ? "Alice" : userId));
+    setPresenceResponse("U123", {
+      ok: true,
+      presence: "active",
+      online: true,
+      auto_away: false,
+      manual_away: false,
+      connection_count: 2,
+      last_activity: 1_700_000_000,
+    } as SlackResult);
+    setDndResponse("U123", {
+      ok: true,
+      dnd_enabled: true,
+      next_dnd_end_ts: 1_800_000_000,
+      snooze_enabled: false,
+    } as SlackResult);
+
+    const response = await tools.get("slack_presence")!.execute("tool-4", { user: "U123" });
+
+    expect(response.content?.[0]?.text).toContain("Alice (U123) | presence: active");
+    expect(response.content?.[0]?.text).toContain("DND: on until 2027-01-15T08:00:00.000Z");
+    expect(response.details?.count).toBe(1);
+  });
+
+  it("supports batch presence lookups by name via users.list", async () => {
+    const { slack, tools, setUsersListResponse, setPresenceResponse, setDndResponse } = setup();
+    setUsersListResponse({
+      ok: true,
+      members: [
+        {
+          id: "U123",
+          name: "alice",
+          real_name: "Alice Example",
+          profile: { display_name: "Ali" },
+        },
+        {
+          id: "U456",
+          name: "bob",
+          real_name: "Bob Example",
+          profile: { display_name: "Bobby" },
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    } as SlackResult);
+    setPresenceResponse("U123", { ok: true, presence: "active", online: true } as SlackResult);
+    setPresenceResponse("U456", { ok: true, presence: "away", online: false } as SlackResult);
+    setDndResponse("U123", {
+      ok: true,
+      dnd_enabled: false,
+      snooze_enabled: false,
+    } as SlackResult);
+    setDndResponse("U456", {
+      ok: true,
+      dnd_enabled: false,
+      snooze_enabled: false,
+    } as SlackResult);
+
+    const response = await tools.get("slack_presence")!.execute("tool-5", {
+      users: ["Ali", "@bob"],
+    });
+
+    expect(slack).toHaveBeenCalledWith("users.list", "xoxb-initial", {
+      limit: 1000,
+    });
+    expect(response.content?.[0]?.text).toContain("Ali (U123)");
+    expect(response.content?.[0]?.text).toContain("Bobby (U456)");
+    expect(response.details?.count).toBe(2);
+  });
+
+  it("caches presence lookups briefly to avoid duplicate Slack API calls", async () => {
+    const { slack, tools, setPresenceResponse, setDndResponse, setResolveUser } = setup();
+    setResolveUser(async (userId: string) => userId);
+    setPresenceResponse("U123", { ok: true, presence: "active", online: true } as SlackResult);
+    setDndResponse("U123", {
+      ok: true,
+      dnd_enabled: false,
+      snooze_enabled: false,
+    } as SlackResult);
+
+    await tools.get("slack_presence")!.execute("tool-6", { user: "U123" });
+    await tools.get("slack_presence")!.execute("tool-7", { user: "U123" });
+
+    expect(slack.mock.calls.filter(([method]) => method === "users.getPresence")).toHaveLength(1);
+    expect(slack.mock.calls.filter(([method]) => method === "dnd.info")).toHaveLength(1);
   });
 
   it("adds reactions with normalized emoji names via slack_react", async () => {

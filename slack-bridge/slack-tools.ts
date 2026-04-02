@@ -19,6 +19,18 @@ import {
   type SlackBlockButtonInput,
 } from "./slack-block-kit.js";
 import {
+  findSlackPresenceDirectoryUser,
+  formatSlackPresenceLine,
+  formatSlackPresenceTimestamp,
+  getBestSlackPresenceUserName,
+  isSlackUserId,
+  resolveSlackPresenceDndEndTs,
+  stripSlackUserReference,
+  type SlackDndInfoLike,
+  type SlackPresenceDirectoryUser,
+  type SlackPresenceSnapshot,
+} from "./slack-presence.js";
+import {
   buildSlackThreadExport,
   filterSlackExportMessagesByRange,
   parseSlackExportBoundaryTs,
@@ -26,6 +38,7 @@ import {
 import { normalizeReactionName } from "./reaction-triggers.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
+import { TtlCache } from "./ttl-cache.js";
 
 export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
@@ -66,6 +79,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
     "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
     "Use slack_export to archive or document a Slack thread as markdown, plain text, or JSON before writing it into docs, canvases, or files.",
+    "Use slack_presence before pinging reviewers or scheduling follow-ups when timing matters — it tells you whether someone is active, away, or in DND.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
@@ -343,6 +357,151 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         : "Provide channel when reacting to a message outside the current tracked thread.",
     );
   }
+
+  const presenceCache = new TtlCache<string, SlackPresenceSnapshot>({
+    maxSize: 512,
+    ttlMs: 30_000,
+  });
+  let presenceDirectoryCache: { fetchedAt: number; users: SlackPresenceDirectoryUser[] } | null =
+    null;
+
+  function normalizeSlackPresenceTargets(
+    user: string | undefined,
+    users: string[] | undefined,
+  ): string[] {
+    const requested = [user, ...(users ?? [])]
+      .map((value) => value?.trim() ?? "")
+      .filter((value) => value.length > 0);
+
+    if (requested.length === 0) {
+      throw new Error("Provide user or users so Slack knows whose presence to check.");
+    }
+
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const value of requested) {
+      const key = stripSlackUserReference(value).toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(value);
+      }
+    }
+    return deduped;
+  }
+
+  async function listSlackPresenceDirectoryUsers(): Promise<SlackPresenceDirectoryUser[]> {
+    const now = Date.now();
+    if (presenceDirectoryCache && now - presenceDirectoryCache.fetchedAt <= 5 * 60_000) {
+      return presenceDirectoryCache.users;
+    }
+
+    const users: SlackPresenceDirectoryUser[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await slack("users.list", getBotToken(), {
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      });
+      const batch = Array.isArray(response.members)
+        ? (response.members as SlackPresenceDirectoryUser[])
+        : [];
+      users.push(...batch.filter((member) => member.deleted !== true));
+
+      const nextCursor = (response.response_metadata as { next_cursor?: string } | undefined)
+        ?.next_cursor;
+      cursor = typeof nextCursor === "string" && nextCursor.length > 0 ? nextCursor : undefined;
+    } while (cursor);
+
+    presenceDirectoryCache = { fetchedAt: now, users };
+    return users;
+  }
+
+  async function resolveSlackPresenceTarget(
+    identifier: string,
+  ): Promise<{ userId: string; userName?: string }> {
+    const normalized = stripSlackUserReference(identifier);
+    if (!normalized) {
+      throw new Error("Slack user identifier cannot be empty.");
+    }
+
+    if (isSlackUserId(normalized)) {
+      return { userId: normalized.toUpperCase() };
+    }
+
+    const users = await listSlackPresenceDirectoryUsers();
+    const match = findSlackPresenceDirectoryUser(users, normalized);
+    if (!match?.id) {
+      throw new Error(`Slack user '${identifier}' was not found.`);
+    }
+
+    return {
+      userId: match.id,
+      userName: getBestSlackPresenceUserName(match),
+    };
+  }
+
+  function parseSlackPresenceNumber(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
+  async function fetchSlackPresenceSnapshot(
+    userId: string,
+    userNameHint?: string,
+  ): Promise<SlackPresenceSnapshot> {
+    const cached = presenceCache.get(userId);
+    if (cached) {
+      if (userNameHint && cached.userName !== userNameHint) {
+        const hydrated = { ...cached, userName: userNameHint };
+        presenceCache.set(userId, hydrated);
+        return hydrated;
+      }
+      return cached;
+    }
+
+    const [presenceResponse, dndResponse] = await Promise.all([
+      slack("users.getPresence", getBotToken(), { user: userId }),
+      slack("dnd.info", getBotToken(), { user: userId }),
+    ]);
+
+    const dndEndTs = resolveSlackPresenceDndEndTs(dndResponse as SlackDndInfoLike);
+    const presenceValue =
+      typeof presenceResponse.presence === "string" ? presenceResponse.presence : "unknown";
+    const lastActivity = parseSlackPresenceNumber(presenceResponse.last_activity);
+    const snapshot: SlackPresenceSnapshot = {
+      userId,
+      userName: userNameHint ?? (await resolveUser(userId)),
+      presence: presenceValue,
+      dndEnabled: dndResponse.dnd_enabled === true || dndResponse.snooze_enabled === true,
+      dndEndTs,
+      dndEndAt: formatSlackPresenceTimestamp(dndEndTs),
+      autoAway: presenceResponse.auto_away === true,
+      manualAway: presenceResponse.manual_away === true,
+      connectionCount: parseSlackPresenceNumber(presenceResponse.connection_count),
+      lastActivity,
+      online:
+        typeof presenceResponse.online === "boolean"
+          ? presenceResponse.online
+          : presenceValue === "active"
+            ? true
+            : presenceValue === "away"
+              ? false
+              : undefined,
+    };
+
+    presenceCache.set(userId, snapshot);
+    return snapshot;
+  }
+
   pi.registerTool({
     name: "slack_inbox",
     label: "Slack Inbox",
@@ -762,6 +921,67 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: messages.length },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_presence",
+    label: "Slack Presence",
+    description:
+      "Check whether one or more Slack users are active, away, or in Do Not Disturb before messaging them.",
+    promptSnippet:
+      "Check whether Slack users are active, away, or in DND before pinging them, routing work, or deciding whether to schedule a follow-up.",
+    parameters: Type.Object({
+      user: Type.Optional(
+        Type.String({
+          description: "Single Slack user ID, mention, @handle, display name, or real name",
+        }),
+      ),
+      users: Type.Optional(
+        Type.Array(
+          Type.String({
+            description: "Multiple Slack user IDs, mentions, @handles, or names to check in batch",
+          }),
+        ),
+      ),
+    }),
+    async execute(_id, params) {
+      const targets = normalizeSlackPresenceTargets(params.user, params.users);
+      requireToolPolicy(
+        "slack_presence",
+        undefined,
+        `user=${params.user ?? ""} | users=${targets.join(",")}`,
+      );
+
+      const resolvedTargets = await Promise.all(
+        targets.map(async (target) => ({
+          target,
+          ...(await resolveSlackPresenceTarget(target)),
+        })),
+      );
+      const snapshots = await Promise.all(
+        resolvedTargets.map(({ userId, userName }) => fetchSlackPresenceSnapshot(userId, userName)),
+      );
+
+      return {
+        content: [{ type: "text", text: snapshots.map(formatSlackPresenceLine).join("\n") }],
+        details: {
+          count: snapshots.length,
+          results: snapshots.map((snapshot) => ({
+            user: snapshot.userId,
+            user_name: snapshot.userName,
+            presence: snapshot.presence,
+            online: snapshot.online,
+            auto_away: snapshot.autoAway,
+            manual_away: snapshot.manualAway,
+            dnd_enabled: snapshot.dndEnabled,
+            dnd_end_ts: snapshot.dndEndTs,
+            dnd_end_at: snapshot.dndEndAt,
+            connection_count: snapshot.connectionCount,
+            last_activity: snapshot.lastActivity,
+          })),
+        },
       };
     },
   });
