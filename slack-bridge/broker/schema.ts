@@ -13,6 +13,8 @@ import type {
   ChannelAssignment,
   TaskAssignmentInfo,
   TaskAssignmentStatus,
+  ScheduledWakeupInfo,
+  ScheduledWakeupDelivery,
 } from "./types.js";
 import {
   buildSqliteWalFallbackWarning,
@@ -74,6 +76,16 @@ interface TaskAssignmentRow {
   source_message_id: number | null;
   created_at: string;
   updated_at: string;
+}
+
+interface ScheduledWakeupRow {
+  id: number;
+  agent_id: string;
+  agent_stable_id: string | null;
+  thread_id: string;
+  body: string;
+  fire_at: string;
+  created_at: string;
 }
 
 // ─── Mappers ─────────────────────────────────────────────
@@ -156,6 +168,17 @@ function rowToTaskAssignment(row: TaskAssignmentRow): TaskAssignmentInfo {
   };
 }
 
+function rowToScheduledWakeup(row: ScheduledWakeupRow): ScheduledWakeupInfo {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    threadId: row.thread_id,
+    body: row.body,
+    fireAt: row.fire_at,
+    createdAt: row.created_at,
+  };
+}
+
 // ─── Default DB path ─────────────────────────────────────
 
 export function defaultDbPath(): string {
@@ -164,7 +187,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 7;
+export const CURRENT_BROKER_SCHEMA_VERSION = 9;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -428,6 +451,45 @@ function migrateTaskAssignmentsToIssueOwnership(db: DatabaseSync): void {
   `);
 }
 
+function createScheduledWakeupsTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduled_wakeups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      agent_stable_id TEXT,
+      thread_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      fire_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scheduled_wakeups_fire_target
+      ON scheduled_wakeups(fire_at, agent_stable_id, agent_id);
+  `);
+}
+
+function addScheduledWakeupStableIdColumn(db: DatabaseSync): void {
+  ensureColumn(
+    db,
+    "scheduled_wakeups",
+    "agent_stable_id",
+    "ALTER TABLE scheduled_wakeups ADD COLUMN agent_stable_id TEXT",
+  );
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_scheduled_wakeups_fire_target
+      ON scheduled_wakeups(fire_at, agent_stable_id, agent_id);
+  `);
+
+  db.prepare(
+    `UPDATE scheduled_wakeups
+     SET agent_stable_id = (
+       SELECT stable_id FROM agents WHERE agents.id = scheduled_wakeups.agent_id
+     )
+     WHERE agent_stable_id IS NULL`,
+  ).run();
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -462,6 +524,12 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 7:
           migrateTaskAssignmentsToIssueOwnership(db);
+          break;
+        case 8:
+          createScheduledWakeupsTable(db);
+          break;
+        case 9:
+          addScheduledWakeupStableIdColumn(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -1163,6 +1231,137 @@ export class BrokerDB implements BrokerDBInterface {
            updated_at = ?
        WHERE id = ?`,
     ).run(status, prNumber, new Date().toISOString(), id);
+  }
+
+  // ─── Scheduled wake-ups ──────────────────────────────
+
+  scheduleWakeup(
+    agentId: string,
+    body: string,
+    fireAt: string,
+    threadId = `wakeup:${agentId}`,
+  ): ScheduledWakeupInfo {
+    const db = this.getDb();
+    const createdAt = new Date().toISOString();
+    const canonicalFireAt = new Date(fireAt).toISOString();
+    const agentStableId = this.getAgentRowById(agentId)?.stable_id ?? null;
+
+    const info = db
+      .prepare(
+        `INSERT INTO scheduled_wakeups (
+           agent_id,
+           agent_stable_id,
+           thread_id,
+           body,
+           fire_at,
+           created_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(agentId, agentStableId, threadId, body, canonicalFireAt, createdAt);
+
+    const row = db
+      .prepare("SELECT * FROM scheduled_wakeups WHERE id = ?")
+      .get(Number(info.lastInsertRowid)) as ScheduledWakeupRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to create scheduled wake-up for ${agentId}`);
+    }
+    return rowToScheduledWakeup(row);
+  }
+
+  listScheduledWakeups(agentId?: string): ScheduledWakeupInfo[] {
+    const db = this.getDb();
+    const agentStableId = agentId ? (this.getAgentRowById(agentId)?.stable_id ?? null) : null;
+    const rows = (agentId
+      ? agentStableId
+        ? db
+            .prepare(
+              `SELECT * FROM scheduled_wakeups
+               WHERE agent_stable_id = ?
+                  OR (agent_stable_id IS NULL AND agent_id = ?)
+               ORDER BY fire_at ASC, id ASC`,
+            )
+            .all(agentStableId, agentId)
+        : db
+            .prepare(
+              `SELECT * FROM scheduled_wakeups
+               WHERE agent_id = ?
+               ORDER BY fire_at ASC, id ASC`,
+            )
+            .all(agentId)
+      : db
+          .prepare(
+            `SELECT * FROM scheduled_wakeups
+             ORDER BY fire_at ASC, id ASC`,
+          )
+          .all()) as unknown as ScheduledWakeupRow[];
+    return rows.map(rowToScheduledWakeup);
+  }
+
+  deliverDueScheduledWakeups(
+    now = new Date().toISOString(),
+    limit = 50,
+  ): ScheduledWakeupDelivery[] {
+    const db = this.getDb();
+
+    return this.withTransaction(() => {
+      const rows = db
+        .prepare(
+          `SELECT
+             sw.*,
+             COALESCE(stable_agent.id, direct_agent.id) AS target_agent_id
+           FROM scheduled_wakeups sw
+           LEFT JOIN agents stable_agent
+             ON sw.agent_stable_id IS NOT NULL
+            AND stable_agent.stable_id = sw.agent_stable_id
+            AND stable_agent.disconnected_at IS NULL
+           LEFT JOIN agents direct_agent
+             ON sw.agent_stable_id IS NULL
+            AND direct_agent.id = sw.agent_id
+            AND direct_agent.disconnected_at IS NULL
+           WHERE sw.fire_at <= ?
+             AND COALESCE(stable_agent.id, direct_agent.id) IS NOT NULL
+           ORDER BY sw.fire_at ASC, sw.id ASC
+           LIMIT ?`,
+        )
+        .all(now, limit) as unknown as Array<ScheduledWakeupRow & { target_agent_id: string }>;
+
+      if (rows.length === 0) {
+        return [];
+      }
+
+      const deleteWakeup = db.prepare("DELETE FROM scheduled_wakeups WHERE id = ?");
+      const deliveries: ScheduledWakeupDelivery[] = [];
+
+      for (const row of rows) {
+        const targetAgentId = row.target_agent_id;
+
+        if (!this.getThread(row.thread_id)) {
+          this.createThread(row.thread_id, "agent", "", targetAgentId);
+        } else {
+          this.updateThread(row.thread_id, { ownerAgent: targetAgentId });
+        }
+
+        const message = this.insertMessage(
+          row.thread_id,
+          "agent",
+          "inbound",
+          "scheduler",
+          row.body,
+          [targetAgentId],
+          {
+            senderAgent: "Pinet Scheduler",
+            scheduledWakeup: true,
+            wakeupId: row.id,
+            fireAt: row.fire_at,
+          },
+        );
+        deleteWakeup.run(row.id);
+        deliveries.push({ wakeup: rowToScheduledWakeup(row), message });
+      }
+
+      return deliveries;
+    });
   }
 
   // ─── Ralph cycles ────────────────────────────────────

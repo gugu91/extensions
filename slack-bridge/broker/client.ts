@@ -42,6 +42,12 @@ export interface AgentInfo {
   lastActivity?: string | null;
 }
 
+export interface ScheduledWakeupInfo {
+  id: number;
+  threadId: string;
+  fireAt: string;
+}
+
 // ─── JSON-RPC types ──────────────────────────────────────
 
 interface JsonRpcRequest {
@@ -279,6 +285,17 @@ export class BrokerClient {
     };
   }
 
+  async scheduleWakeup(fireAt: string, body: string): Promise<ScheduledWakeupInfo> {
+    const result = (await this.request("schedule.create", {
+      fireAt,
+      body,
+    })) as { id: number; threadId: string; fireAt: string };
+    return {
+      id: result.id,
+      threadId: result.threadId,
+      fireAt: result.fireAt,
+    };
+  }
   // ─── Queries ─────────────────────────────────────────
 
   async listThreads(): Promise<ThreadInfo[]> {

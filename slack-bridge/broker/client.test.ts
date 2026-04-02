@@ -799,6 +799,48 @@ describe("BrokerClient — sendAgentBroadcast", () => {
   });
 });
 
+describe("BrokerClient — scheduleWakeup", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends schedule.create RPC and returns the scheduled wake-up", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const wakeupPromise = client.scheduleWakeup("2026-04-02T14:05:00.000Z", "Check PR #62");
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { fireAt: string; body: string };
+    };
+    expect(req.method).toBe("schedule.create");
+    expect(req.params.fireAt).toBe("2026-04-02T14:05:00.000Z");
+    expect(req.params.body).toBe("Check PR #62");
+
+    mock.respondTo(mock.connections[0], req.id, {
+      id: 7,
+      threadId: "wakeup:agent-1",
+      fireAt: "2026-04-02T14:05:00.000Z",
+    });
+
+    await expect(wakeupPromise).resolves.toEqual({
+      id: 7,
+      threadId: "wakeup:agent-1",
+      fireAt: "2026-04-02T14:05:00.000Z",
+    });
+
+    client.disconnect();
+  });
+});
 describe("BrokerClient — slackProxy", () => {
   let mock: MockServer;
 

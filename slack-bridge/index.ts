@@ -74,6 +74,7 @@ import {
 } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { startBroker, type Broker } from "./broker/index.js";
+import type { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
@@ -105,6 +106,15 @@ import {
   hasTaskAssignmentStatusChange,
   resolveTaskAssignments,
 } from "./task-assignments.js";
+import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
+import {
+  createBrokerDeliveryState,
+  getBrokerInboxIds,
+  isBrokerInboxIdTracked,
+  markBrokerInboxIdsHandled,
+  queueBrokerInboxIds,
+  resetBrokerDeliveryState,
+} from "./broker-delivery.js";
 import { getMainCheckoutToolBlockReason } from "./worktree-policy.js";
 
 // Settings and helpers imported from ./helpers.js
@@ -383,6 +393,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Inbox queue ────────────────────────────────────
 
   const inbox: InboxMessage[] = [];
+  const brokerDeliveryState = createBrokerDeliveryState();
   let extCtx: ExtensionContext | null = null; // cached for badge updates
 
   function updateBadge(): void {
@@ -1011,8 +1022,10 @@ export default function (pi: ExtensionAPI) {
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceTimer: ReturnType<typeof setInterval> | null = null;
   let brokerRalphLoopTimer: ReturnType<typeof setInterval> | null = null;
+  let brokerScheduledWakeupTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceRunning = false;
   let brokerRalphLoopRunning = false;
+  let brokerScheduledWakeupRunning = false;
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
   let lastBrokerRalphLoopNonGhostSignature = "";
@@ -1026,6 +1039,39 @@ export default function (pi: ExtensionAPI) {
 
   function getPinetRegistrationBlockReason(): string {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
+  }
+
+  function syncBrokerDbInbox(agentId: string, db: BrokerDB): void {
+    const pending = db
+      .getInbox(agentId)
+      .filter((item) => !isBrokerInboxIdTracked(brokerDeliveryState, item.entry.id));
+    if (pending.length === 0) {
+      return;
+    }
+
+    queueBrokerInboxIds(
+      brokerDeliveryState,
+      pending.map((item) => item.entry.id),
+    );
+
+    for (const item of pending) {
+      const meta = item.message.metadata ?? {};
+      const senderName =
+        typeof meta.senderAgent === "string" ? meta.senderAgent : item.message.sender;
+      inbox.push({
+        channel: "",
+        threadTs: item.message.threadId,
+        userId: senderName,
+        text: item.message.body,
+        timestamp: item.message.createdAt,
+        brokerInboxId: item.entry.id,
+      });
+    }
+
+    updateBadge();
+    if (extCtx?.isIdle?.()) {
+      drainInbox();
+    }
   }
 
   function startBrokerHeartbeat(): void {
@@ -1088,6 +1134,38 @@ export default function (pi: ExtensionAPI) {
     if (!brokerMaintenanceTimer) return;
     clearInterval(brokerMaintenanceTimer);
     brokerMaintenanceTimer = null;
+  }
+
+  function runBrokerScheduledWakeups(ctx: ExtensionContext): void {
+    if (!activeBroker || brokerScheduledWakeupRunning) return;
+
+    brokerScheduledWakeupRunning = true;
+    try {
+      const deliveries = (activeBroker.db as BrokerDB).deliverDueScheduledWakeups();
+      if (deliveries.length > 0 && activeSelfId) {
+        syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB);
+      }
+    } catch (err) {
+      ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(err)}`, "error");
+    } finally {
+      brokerScheduledWakeupRunning = false;
+    }
+  }
+
+  function startBrokerScheduledWakeups(ctx: ExtensionContext): void {
+    stopBrokerScheduledWakeups();
+    brokerScheduledWakeupTimer = setInterval(() => {
+      runBrokerScheduledWakeups(ctx);
+    }, 1000);
+    brokerScheduledWakeupTimer.unref?.();
+    runBrokerScheduledWakeups(ctx);
+  }
+
+  function stopBrokerScheduledWakeups(): void {
+    brokerScheduledWakeupRunning = false;
+    if (!brokerScheduledWakeupTimer) return;
+    clearInterval(brokerScheduledWakeupTimer);
+    brokerScheduledWakeupTimer = null;
   }
 
   function sendBrokerMaintenanceMessage(targetAgentId: string, body: string): void {
@@ -1402,6 +1480,7 @@ export default function (pi: ExtensionAPI) {
     stopBrokerHeartbeat();
     stopBrokerMaintenance();
     stopBrokerRalphLoop();
+    stopBrokerScheduledWakeups();
 
     if (activeBroker) {
       try {
@@ -1421,6 +1500,7 @@ export default function (pi: ExtensionAPI) {
     lastBrokerRalphLoopNonGhostSignature = "";
     lastBrokerRalphLoopHadOutstandingAnomalies = false;
     lastReportedGhostIds.clear();
+    resetBrokerDeliveryState(brokerDeliveryState);
 
     if (brokerClient) {
       if (options.releaseIdentity) {
@@ -1604,6 +1684,69 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "pinet_schedule",
+    label: "Pinet Schedule",
+    description: "Schedule a future wake-up message for the current Pinet agent.",
+    promptSnippet:
+      "Schedule a future wake-up for yourself via the Pinet broker. Use this instead of busy-waiting when you need to check back later.",
+    parameters: Type.Object({
+      delay: Type.Optional(
+        Type.String({ description: "Relative delay like 5m, 30s, 1h30m, or 1d" }),
+      ),
+      at: Type.Optional(
+        Type.String({ description: "Absolute ISO-8601 UTC time, e.g. 2026-04-02T14:30:00Z" }),
+      ),
+      message: Type.String({ description: "Reminder or wake-up message to deliver later" }),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "pinet_schedule",
+        undefined,
+        `delay=${params.delay ?? ""} | at=${params.at ?? ""} | message=${params.message}`,
+      );
+
+      if (!pinetEnabled) {
+        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      }
+
+      const message = params.message.trim();
+      if (!message) {
+        throw new Error("message is required");
+      }
+
+      const fireAt = resolveScheduledWakeupFireAt({ delay: params.delay, at: params.at });
+
+      if (brokerRole === "broker" && activeBroker && activeSelfId) {
+        const wakeup = (activeBroker.db as BrokerDB).scheduleWakeup(activeSelfId, message, fireAt);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
+            },
+          ],
+          details: wakeup,
+        };
+      }
+
+      if (brokerRole === "follower" && brokerClient) {
+        const wakeup = await (brokerClient.client as BrokerClient).scheduleWakeup(fireAt, message);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
+            },
+          ],
+          details: wakeup,
+        };
+      }
+
+      throw new Error("Pinet is in an unexpected state.");
+    },
+  });
+
+  pi.registerTool({
     name: "pinet_agents",
     label: "Pinet Agents",
     description: "List Pinet agents, including liveness and capability visibility.",
@@ -1744,14 +1887,10 @@ export default function (pi: ExtensionAPI) {
   // ─── Commands ───────────────────────────────────────
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
-    if (!botToken || !appToken) {
-      throw new Error("Slack tokens are not configured. Update settings and try again.");
-    }
-
     const broker = await startBroker();
     const adapter = new SlackAdapter({
-      botToken,
-      appToken,
+      botToken: botToken!,
+      appToken: appToken!,
       allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
       suggestedPrompts: settings.suggestedPrompts,
       isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
@@ -1774,14 +1913,12 @@ export default function (pi: ExtensionAPI) {
       selfId = selfAgent.id;
       applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
-      const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(
-        selfId,
-        "broker_delegate",
-      );
+      resetBrokerDeliveryState(brokerDeliveryState);
+      const recoveredBrokerMessages = broker.db.getPendingInboxCount(selfId);
       const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
       if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
         ctx.ui.notify(
-          `Pinet broker reclaimed ${recoveredBrokerMessages} message${recoveredBrokerMessages === 1 ? "" : "s"} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
+          `Pinet broker recovered ${recoveredBrokerMessages} pending message${recoveredBrokerMessages === 1 ? "" : "s"} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
           "info",
         );
       }
@@ -1806,11 +1943,6 @@ export default function (pi: ExtensionAPI) {
 
         if (decision.action === "deliver" || decision.action === "unrouted") {
           // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
-          // Previously, broker-routed messages were queued to `unrouted_backlog` with
-          // reason "broker_delegate" and then assigned to random workers by maintenance.
-          // Since maintenance explicitly excludes the broker from assignment candidates,
-          // the messages ended up on the wrong agent. Fix: always deliver to the broker
-          // in-memory inbox so it can handle them directly. (#121)
           inbox.push({
             channel: inMsg.channel,
             threadTs: inMsg.threadId,
@@ -1830,11 +1962,11 @@ export default function (pi: ExtensionAPI) {
       activeBroker = broker;
       activeRouter = router;
       activeSelfId = selfId;
+      syncBrokerDbInbox(selfId, broker.db);
 
-      // When a worker sends a pinet_message targeting the broker, the
-      // socket server writes to the DB inbox but the broker only reads
-      // its in-memory inbox. Bridge the gap here: push a2a messages
-      // targeting ourselves into the in-memory inbox and trigger drain.
+      // When a worker sends a pinet_message targeting the broker, the socket server writes to the
+      // DB inbox but the broker only reads its in-memory inbox. Sync the durable inbox into memory
+      // without acknowledging the row until the broker has actually consumed it.
       broker.server.onAgentMessage((targetAgentId, brokerMsg, meta) => {
         if (targetAgentId !== selfId) return;
 
@@ -1855,22 +1987,13 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        const senderName = (meta.senderAgent as string) ?? brokerMsg.sender;
-        inbox.push({
-          channel: "",
-          threadTs: brokerMsg.threadId,
-          userId: senderName,
-          text: brokerMsg.body,
-          timestamp: brokerMsg.createdAt,
-        });
-        broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
-        updateBadge();
-        if (extCtx?.isIdle?.()) drainInbox();
+        syncBrokerDbInbox(selfId, broker.db);
       });
 
       startBrokerHeartbeat();
       startBrokerMaintenance(ctx);
       startBrokerRalphLoop(ctx);
+      startBrokerScheduledWakeups(ctx);
       brokerRole = "broker";
       pinetEnabled = true;
       setExtStatus(ctx, "ok");
@@ -2433,14 +2556,6 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function getFollowerBrokerInboxIds(messages: InboxMessage[]): number[] {
-    return [
-      ...new Set(
-        messages.flatMap((message) => (message.brokerInboxId ? [message.brokerInboxId] : [])),
-      ),
-    ];
-  }
-
   async function flushDeliveredFollowerAcks(): Promise<void> {
     if (followerAckPromise) {
       await followerAckPromise;
@@ -2466,7 +2581,7 @@ export default function (pi: ExtensionAPI) {
     if (inbox.length === 0) return;
 
     const pending = inbox.splice(0, inbox.length);
-    const deliveredFollowerIds = getFollowerBrokerInboxIds(pending);
+    const brokerInboxIds = getBrokerInboxIds(pending);
     updateBadge();
     reportStatus("working");
 
@@ -2478,9 +2593,18 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (deliverFollowUpMessage(prompt)) {
-      if (deliveredFollowerIds.length > 0) {
-        markFollowerInboxIdsDelivered(followerDeliveryState, deliveredFollowerIds);
-        void flushDeliveredFollowerAcks();
+      if (brokerInboxIds.length > 0) {
+        if (brokerRole === "follower") {
+          markFollowerInboxIdsDelivered(followerDeliveryState, brokerInboxIds);
+          void flushDeliveredFollowerAcks();
+        } else if (brokerRole === "broker" && activeBroker && activeSelfId) {
+          try {
+            activeBroker.db.markDelivered(brokerInboxIds, activeSelfId);
+            markBrokerInboxIdsHandled(brokerDeliveryState, brokerInboxIds);
+          } catch {
+            /* best effort */
+          }
+        }
       }
       return;
     }
