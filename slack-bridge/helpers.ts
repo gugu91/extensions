@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ReactionCommandSettings } from "./reaction-triggers.js";
 import { matchesToolPattern } from "./guardrails.js";
 
 // ─── Settings ────────────────────────────────────────────
@@ -13,6 +14,7 @@ export interface SlackBridgeSettings {
   allowedUsers?: string[];
   defaultChannel?: string;
   suggestedPrompts?: { title: string; message: string }[];
+  reactionCommands?: ReactionCommandSettings;
   autoConnect?: boolean;
   autoFollow?: boolean;
   agentName?: string;

@@ -24,6 +24,7 @@ If the agent is idle, incoming messages are processed immediately.
 | Tool                                                                                | Description                                  |
 | ----------------------------------------------------------------------------------- | -------------------------------------------- |
 | `slack_send(text, thread_ts?)`                                                      | Reply in a thread or start new               |
+| `slack_react(emoji, thread_ts?, timestamp?, channel?)`                              | Add an emoji reaction to a Slack message     |
 | `slack_upload(content?, path?, filename?, filetype?, title?, channel?, thread_ts?)` | Upload a file/snippet into Slack or a thread |
 | `slack_schedule(text, channel?, thread_ts?, delay?, at?)`                           | Schedule a Slack message for later           |
 | `slack_pin(action, message_ts, channel?, thread_ts?)`                               | Pin or unpin a Slack message                 |
@@ -57,7 +58,7 @@ files, canvases, or follow-up summaries.
 - **Slack Assistant** — appears in Slack's sidebar, native conversation UI
 - **Queued inbox** — messages don't interrupt the agent mid-task
 - **Auto-drain** — inbox processed when agent is idle or finishes a task
-- **Reactions** — 👀 on receive, removed on reply
+- **Reactions** — 👀 on receive, removed on reply; reaction-triggered commands can queue work from emoji alone
 - **Suggested prompts** — shown when a user opens a new conversation
 - **Multi-user** — handles concurrent conversations from different users
 - **@mentions** — tag Pinet in any channel and it responds in-thread
@@ -103,6 +104,13 @@ Add to `~/.pi/agent/settings.json`:
     "appConfigToken": "xoxe.xoxp-...",
     "allowedUsers": ["U09GWL270LA"],
     "defaultChannel": "C0APL58LB1R",
+    "reactionCommands": {
+      "📝": "summarize",
+      "🐛": "file-issue",
+      "👀": "review",
+      "✅": "approve",
+      "🔄": "retry"
+    },
     "suggestedPrompts": [
       { "title": "Status", "message": "What are you working on?" },
       { "title": "Help", "message": "I need help with something" }
@@ -119,6 +127,7 @@ Add to `~/.pi/agent/settings.json`:
 | `appConfigToken`   | deploy   | App configuration token (`xoxe.xoxp-...`)        |
 | `allowedUsers`     | no       | Slack user IDs allowed to interact               |
 | `defaultChannel`   | no       | Default channel for `slack_post_channel`         |
+| `reactionCommands` | no       | Emoji/name → action mapping for `reaction_added` |
 | `suggestedPrompts` | no       | Prompts shown on new assistant thread            |
 
 > Runtime tokens can also be set via `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`
@@ -127,6 +136,11 @@ Add to `~/.pi/agent/settings.json`:
 > Manifest deploy also reads `SLACK_APP_ID` and `SLACK_APP_CONFIG_TOKEN`
 > (or `SLACK_CONFIG_TOKEN`). The Socket Mode `xapp-...` token cannot be used
 > with `apps.manifest.update`.
+
+`reactionCommands` accepts either Slack reaction names (`eyes`, `repeat`) or the
+emoji characters themselves (`👀`, `🔄`). The default mappings include `📝`
+→ summarize and `🐛` → file-issue, and you can extend them with review /
+approve / retry style actions as needed.
 
 ### 4. Install extension
 
@@ -139,9 +153,10 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 ## Manifest
 
 The `manifest.yaml` includes all required scopes and events, including `files:write`
-for `slack_upload`, `chat:write` for `slack_schedule`, and bookmark/pin scopes
-for `slack_bookmark` and `slack_pin`. Use it when creating the app (**From a
-manifest**) or paste it into **App Manifest** in settings.
+for `slack_upload`, `chat:write` for `slack_schedule`, bookmark/pin scopes for
+`slack_bookmark` and `slack_pin`, and `reaction_added` + `reactions:read` for
+emoji-triggered actions. Use it when creating the app (**From a manifest**) or
+paste it into **App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:
 

@@ -6,6 +6,12 @@ import {
   isUserAllowed,
   stripBotMention,
 } from "../../helpers.js";
+import {
+  buildReactionTriggerMessage,
+  normalizeReactionName,
+  resolveReactionCommands,
+  type ReactionCommandSettings,
+} from "../../reaction-triggers.js";
 import { TtlCache } from "../../ttl-cache.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
@@ -16,6 +22,7 @@ export interface SlackAdapterConfig {
   appToken: string;
   allowedUsers?: string[];
   suggestedPrompts?: { title: string; message: string }[];
+  reactionCommands?: ReactionCommandSettings;
   /** Check whether a thread_ts belongs to a known thread in the broker DB. */
   isKnownThread?: (threadTs: string) => boolean;
   /** Persist thread metadata in the broker DB without claiming ownership. */
@@ -182,6 +189,7 @@ export class SlackAdapter implements MessageAdapter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shuttingDown = false;
   private inboundHandler: ((msg: InboundMessage) => void) | null = null;
+  private readonly reactionCommands: Map<string, { action: string; prompt: string }>;
 
   private readonly threads = new Map<string, SlackThreadInfo>();
   private readonly userNames = new TtlCache<string, string>({
@@ -193,6 +201,7 @@ export class SlackAdapter implements MessageAdapter {
   constructor(config: SlackAdapterConfig) {
     this.config = config;
     this.allowlist = buildAllowlist({ allowedUsers: config.allowedUsers }, undefined);
+    this.reactionCommands = resolveReactionCommands(config.reactionCommands);
   }
 
   private async callSlack(method: string, token: string, body?: Record<string, unknown>) {
@@ -334,6 +343,9 @@ export class SlackAdapter implements MessageAdapter {
       case "message":
         await this.onMessage(evt);
         break;
+      case "reaction_added":
+        await this.onReactionAdded(evt);
+        break;
       case "member_joined_channel":
         this.onMemberJoined(evt);
         break;
@@ -382,6 +394,116 @@ export class SlackAdapter implements MessageAdapter {
         channelId: ctx.channel_id,
         teamId: ctx.team_id ?? "",
       };
+    }
+  }
+
+  private async fetchMessageByTs(
+    channel: string,
+    messageTs: string,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const response = await this.callSlack("conversations.history", this.config.botToken, {
+        channel,
+        oldest: messageTs,
+        latest: messageTs,
+        inclusive: true,
+        limit: 1,
+      });
+      const messages = (response.messages as Record<string, unknown>[]) ?? [];
+      return messages.find((message) => message.ts === messageTs) ?? messages[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async onReactionAdded(evt: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
+    const item = evt.item as { type?: string; channel?: string; ts?: string } | undefined;
+    const userId = evt.user as string | undefined;
+    const rawReaction = evt.reaction as string | undefined;
+    if (!item || item.type !== "message" || !item.channel || !item.ts || !userId || !rawReaction) {
+      return;
+    }
+
+    if (userId === this.botUserId) return;
+
+    let reactionName: string;
+    try {
+      reactionName = normalizeReactionName(rawReaction);
+    } catch {
+      return;
+    }
+
+    const command = this.reactionCommands.get(reactionName);
+    if (!command || !isUserAllowed(this.allowlist, userId)) {
+      return;
+    }
+
+    try {
+      const reactedMessage = await this.fetchMessageByTs(item.channel, item.ts);
+      if (!reactedMessage) {
+        throw new Error(`Unable to fetch reacted message ${item.ts} in channel ${item.channel}`);
+      }
+
+      const threadTs =
+        (reactedMessage.thread_ts as string | undefined) ??
+        (reactedMessage.ts as string | undefined) ??
+        item.ts;
+
+      if (!this.threads.has(threadTs)) {
+        this.threads.set(threadTs, {
+          channelId: item.channel,
+          threadTs,
+          userId: (reactedMessage.user as string | undefined) ?? userId,
+        });
+        try {
+          this.config.rememberKnownThread?.(threadTs, item.channel);
+        } catch {
+          /* best effort — DB cache sync must not break reaction handling */
+        }
+      }
+
+      const reactorName = await this.resolveUser(userId);
+      if (this.shuttingDown) return;
+      const reactedMessageAuthorId =
+        (reactedMessage.user as string | undefined) ?? (evt.item_user as string | undefined);
+      const reactedMessageAuthor = reactedMessageAuthorId
+        ? await this.resolveUser(reactedMessageAuthorId)
+        : (reactedMessage.bot_id as string | undefined)
+          ? "bot"
+          : "unknown";
+      if (this.shuttingDown) return;
+
+      const reactedMessageText =
+        typeof reactedMessage.text === "string" && reactedMessage.text.trim().length > 0
+          ? reactedMessage.text
+          : "(no text)";
+
+      this.inboundHandler?.({
+        source: "slack",
+        threadId: threadTs,
+        channel: item.channel,
+        userId,
+        userName: reactorName,
+        text: buildReactionTriggerMessage({
+          reactionName,
+          command,
+          reactorName,
+          channel: item.channel,
+          threadTs,
+          messageTs: item.ts,
+          reactedMessageText,
+          reactedMessageAuthor,
+        }),
+        timestamp: (evt.event_ts as string) ?? item.ts,
+      });
+
+      await this.addReaction(item.channel, item.ts, "white_check_mark");
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[slack-adapter] reaction trigger failed: ${errorMsg}`);
+      await this.addReaction(item.channel, item.ts, "x");
     }
   }
 
