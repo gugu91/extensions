@@ -12,6 +12,11 @@ import type {
   InboundMessage,
   ChannelAssignment,
 } from "./types.js";
+import {
+  buildSqliteWalFallbackWarning,
+  isSqliteWalEnabled,
+  type SqliteJournalModeResult,
+} from "../helpers.js";
 
 // ─── Row types (raw SQLite rows) ─────────────────────────
 
@@ -1311,7 +1316,12 @@ export class BrokerDB implements BrokerDBInterface {
 
   private openDatabase(): DatabaseSync {
     const db = new DatabaseSync(this.dbPath, { timeout: 5000 });
-    db.exec("PRAGMA journal_mode=WAL");
+    const journalMode = db.prepare("PRAGMA journal_mode=WAL").get() as
+      | SqliteJournalModeResult
+      | undefined;
+    if (!isSqliteWalEnabled(journalMode)) {
+      console.warn(buildSqliteWalFallbackWarning("BrokerDB", journalMode));
+    }
     db.exec("PRAGMA busy_timeout=5000");
     return db;
   }

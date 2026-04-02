@@ -7,6 +7,9 @@ import {
   buildAllowlist,
   isUserAllowed,
   formatInboxMessages,
+  getSqliteJournalMode,
+  isSqliteWalEnabled,
+  buildSqliteWalFallbackWarning,
   formatAgentList,
   shortenPath,
   buildAgentDisplayInfo,
@@ -258,6 +261,32 @@ describe("formatInboxMessages", () => {
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("will: first");
     expect(result).toContain("will: second");
+  });
+});
+
+// ─── SQLite journal mode helpers ─────────────────────────
+
+describe("SQLite journal mode helpers", () => {
+  it("parses the reported journal mode", () => {
+    expect(getSqliteJournalMode({ journal_mode: "wal" })).toBe("wal");
+    expect(getSqliteJournalMode({ journal_mode: "DELETE" })).toBe("delete");
+    expect(getSqliteJournalMode({ journal_mode: null })).toBe("unknown");
+    expect(getSqliteJournalMode(undefined)).toBe("unknown");
+  });
+
+  it("detects whether WAL is enabled", () => {
+    expect(isSqliteWalEnabled({ journal_mode: "wal" })).toBe(true);
+    expect(isSqliteWalEnabled({ journal_mode: "delete" })).toBe(false);
+    expect(isSqliteWalEnabled(undefined)).toBe(false);
+  });
+
+  it("builds a helpful fallback warning", () => {
+    expect(buildSqliteWalFallbackWarning("BrokerDB", { journal_mode: "delete" })).toBe(
+      "[BrokerDB] SQLite WAL mode not available, using delete journal mode fallback",
+    );
+    expect(buildSqliteWalFallbackWarning("SqliteCommentStore", undefined)).toContain(
+      "using unknown journal mode fallback",
+    );
   });
 });
 
