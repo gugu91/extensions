@@ -34,6 +34,7 @@ Global (`~/.pi/agent/settings.json`):
     "injectIntoBash": true,
     "injectPythonShim": true,
     "logPath": ".pi/neon-psql-tunnel.log",
+    "psqlBin": "/custom/path/to/psql",
     "sourceEnv": {
       "host": "DB_HOST",
       "port": "DB_PORT",
@@ -100,5 +101,16 @@ cp ~/.pi/agent/extensions/neon-psql/config.example.json ~/.pi/agent/extensions/n
 - `source_database`
 
 Unknown values are treated as literals. `source:ENV_NAME` copies from an arbitrary source env var.
+
+## psql binary lookup
+
+By default the extension resolves `psql` in this order:
+
+1. `psql` on `PATH`
+2. `/opt/homebrew/opt/libpq/bin/psql`
+3. `/usr/local/opt/libpq/bin/psql`
+4. `/usr/bin/psql`
+
+If your installation lives elsewhere, set `neon-psql.psqlBin` in settings.
 
 See `config.example.json`.

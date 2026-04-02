@@ -149,4 +149,15 @@ describe("loadConfig", () => {
 
     expect(result?.logPath).toBe(absoluteLogPath);
   });
+
+  it("loads an optional psql binary override", () => {
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ "neon-psql": { psqlBin: " /custom/psql " } }),
+    );
+
+    const result = loadConfig({ cwd, agentDir, extensionDir, env: {} });
+
+    expect(result?.psqlBin).toBe("/custom/psql");
+  });
 });

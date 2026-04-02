@@ -3,6 +3,7 @@
   "injectIntoBash": true,
   "injectPythonShim": true,
   "logPath": ".pi/neon-psql-tunnel.log",
+  "psqlBin": "/custom/path/to/psql",
   "sourceEnv": {
     "host": "DB_HOST",
     "port": "DB_PORT",
