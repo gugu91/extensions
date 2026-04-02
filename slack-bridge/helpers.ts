@@ -111,10 +111,8 @@ export function getPinetControlCommandFromText(
   text: string | undefined,
 ): PinetControlCommand | null {
   const trimmed = text?.trim();
-  if (!trimmed) return null;
-  const [head] = trimmed.split(/\s+/, 1);
-  if (head === "/reload") return "reload";
-  if (head === "/exit") return "exit";
+  if (trimmed === "/reload") return "reload";
+  if (trimmed === "/exit") return "exit";
   return null;
 }
 

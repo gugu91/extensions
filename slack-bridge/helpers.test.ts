@@ -277,9 +277,10 @@ describe("Pinet control helpers", () => {
     expect(parsePinetControlCommand("noop")).toBeNull();
   });
 
-  it("detects control commands from message text", () => {
+  it("detects control commands from exact message text", () => {
     expect(getPinetControlCommandFromText("/reload")).toBe("reload");
-    expect(getPinetControlCommandFromText(" /exit now please ")).toBe("exit");
+    expect(getPinetControlCommandFromText(" /exit ")).toBe("exit");
+    expect(getPinetControlCommandFromText("/exit now please")).toBeNull();
     expect(getPinetControlCommandFromText("please /reload")).toBeNull();
   });
 
@@ -300,14 +301,21 @@ describe("Pinet control helpers", () => {
     ).toBe("reload");
   });
 
-  it("falls back to slash commands for a2a messages", () => {
+  it("falls back to exact slash commands for a2a messages", () => {
     expect(
       extractPinetControlCommand({
         threadId: "a2a:sender:target",
-        body: "/exit stale config",
+        body: "/exit",
         metadata: { a2a: true },
       }),
     ).toBe("exit");
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "/exit now please",
+        metadata: { a2a: true },
+      }),
+    ).toBeNull();
   });
 
   it("ignores slash commands from non-a2a messages", () => {
