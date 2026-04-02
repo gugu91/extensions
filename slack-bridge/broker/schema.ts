@@ -28,6 +28,8 @@ interface AgentRow {
   status: string;
   disconnected_at: string | null;
   resumable_until: string | null;
+  idle_since: string | null;
+  last_activity: string | null;
 }
 
 interface ThreadRow {
@@ -55,6 +57,22 @@ interface BacklogRow {
 
 // ─── Mappers ─────────────────────────────────────────────
 
+interface RalphCycleRow {
+  id: number;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  ghost_agent_ids: string;
+  nudge_agent_ids: string;
+  idle_drain_agent_ids: string;
+  stuck_agent_ids: string;
+  anomalies: string;
+  anomaly_signature: string;
+  follow_up_delivered: number;
+  agent_count: number;
+  backlog_count: number;
+}
+
 function rowToAgent(row: AgentRow): AgentInfo {
   return {
     id: row.id,
@@ -68,6 +86,8 @@ function rowToAgent(row: AgentRow): AgentInfo {
     status: row.status === "working" ? "working" : "idle",
     disconnectedAt: row.disconnected_at,
     resumableUntil: row.resumable_until,
+    idleSince: row.idle_since,
+    lastActivity: row.last_activity,
   };
 }
 
@@ -107,7 +127,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 3;
+export const CURRENT_BROKER_SCHEMA_VERSION = 4;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -245,6 +265,39 @@ function addAgentLifecycleColumns(db: DatabaseSync): void {
   `);
 }
 
+function addObservabilityColumns(db: DatabaseSync): void {
+  ensureColumn(db, "agents", "idle_since", "ALTER TABLE agents ADD COLUMN idle_since TEXT");
+  ensureColumn(db, "agents", "last_activity", "ALTER TABLE agents ADD COLUMN last_activity TEXT");
+
+  // Set idle_since for currently idle agents that lack it
+  db.exec(`
+    UPDATE agents
+    SET idle_since = COALESCE(idle_since, last_seen)
+    WHERE status = 'idle' AND idle_since IS NULL;
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ralph_cycles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      duration_ms INTEGER,
+      ghost_agent_ids TEXT NOT NULL DEFAULT '[]',
+      nudge_agent_ids TEXT NOT NULL DEFAULT '[]',
+      idle_drain_agent_ids TEXT NOT NULL DEFAULT '[]',
+      stuck_agent_ids TEXT NOT NULL DEFAULT '[]',
+      anomalies TEXT NOT NULL DEFAULT '[]',
+      anomaly_signature TEXT NOT NULL DEFAULT '',
+      follow_up_delivered INTEGER NOT NULL DEFAULT 0,
+      agent_count INTEGER NOT NULL DEFAULT 0,
+      backlog_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ralph_cycles_started
+      ON ralph_cycles(started_at);
+  `);
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -267,6 +320,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 3:
           addAgentLifecycleColumns(db);
+          break;
+        case 4:
+          addObservabilityColumns(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -382,9 +438,10 @@ export class BrokerDB implements BrokerDBInterface {
       `INSERT INTO agents (
          id, stable_id, name, emoji, pid,
          connected_at, last_seen, last_heartbeat,
-         metadata, status, disconnected_at, resumable_until
+         metadata, status, disconnected_at, resumable_until,
+         idle_since, last_activity
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', NULL, NULL)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', NULL, NULL, ?, NULL)
        ON CONFLICT(id) DO UPDATE SET
          stable_id = COALESCE(excluded.stable_id, agents.stable_id),
          name = excluded.name,
@@ -396,8 +453,10 @@ export class BrokerDB implements BrokerDBInterface {
          metadata = excluded.metadata,
          status = 'idle',
          disconnected_at = NULL,
-         resumable_until = NULL`,
-    ).run(agentId, persistedStableId, finalName, finalEmoji, pid, now, now, now, meta);
+         resumable_until = NULL,
+         idle_since = excluded.idle_since,
+         last_activity = NULL`,
+    ).run(agentId, persistedStableId, finalName, finalEmoji, pid, now, now, now, meta, now);
 
     return {
       id: agentId,
@@ -409,6 +468,8 @@ export class BrokerDB implements BrokerDBInterface {
       lastHeartbeat: now,
       metadata: metadata ?? null,
       status: "idle" as const,
+      idleSince: now,
+      lastActivity: null,
     };
   }
 
@@ -541,8 +602,27 @@ export class BrokerDB implements BrokerDBInterface {
 
   updateAgentStatus(id: string, status: "working" | "idle"): void {
     const db = this.getDb();
-    db.prepare("UPDATE agents SET status = ?, last_seen = ? WHERE id = ?").run(
-      status,
+    const now = new Date().toISOString();
+    if (status === "idle") {
+      // Transitioning to idle: set idle_since, preserve last_activity
+      db.prepare(
+        `UPDATE agents
+         SET status = ?, last_seen = ?,
+             idle_since = COALESCE(CASE WHEN status = 'idle' THEN idle_since ELSE NULL END, ?)
+         WHERE id = ?`,
+      ).run(status, now, now, id);
+    } else {
+      // Transitioning to working: clear idle_since, update last_activity
+      db.prepare(
+        "UPDATE agents SET status = ?, last_seen = ?, idle_since = NULL, last_activity = ? WHERE id = ?",
+      ).run(status, now, now, id);
+    }
+  }
+
+  touchAgentActivity(id: string): void {
+    const db = this.getDb();
+    db.prepare("UPDATE agents SET last_activity = ?, last_seen = ? WHERE id = ?").run(
+      new Date().toISOString(),
       new Date().toISOString(),
       id,
     );
@@ -812,6 +892,85 @@ export class BrokerDB implements BrokerDBInterface {
       .prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?")
       .run(agentId);
     return Number(result.changes ?? 0);
+  }
+
+  // ─── Ralph cycles ────────────────────────────────────
+
+  recordRalphCycle(record: {
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+    ghostAgentIds: string[];
+    nudgeAgentIds: string[];
+    idleDrainAgentIds: string[];
+    stuckAgentIds: string[];
+    anomalies: string[];
+    anomalySignature: string;
+    followUpDelivered: boolean;
+    agentCount: number;
+    backlogCount: number;
+  }): number {
+    const db = this.getDb();
+    const info = db
+      .prepare(
+        `INSERT INTO ralph_cycles (
+           started_at, completed_at, duration_ms,
+           ghost_agent_ids, nudge_agent_ids, idle_drain_agent_ids, stuck_agent_ids,
+           anomalies, anomaly_signature, follow_up_delivered,
+           agent_count, backlog_count
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.startedAt,
+        record.completedAt,
+        record.durationMs,
+        JSON.stringify(record.ghostAgentIds),
+        JSON.stringify(record.nudgeAgentIds),
+        JSON.stringify(record.idleDrainAgentIds),
+        JSON.stringify(record.stuckAgentIds),
+        JSON.stringify(record.anomalies),
+        record.anomalySignature,
+        record.followUpDelivered ? 1 : 0,
+        record.agentCount,
+        record.backlogCount,
+      );
+    return Number(info.lastInsertRowid);
+  }
+
+  getRecentRalphCycles(limit = 20): Array<{
+    id: number;
+    startedAt: string;
+    completedAt: string | null;
+    durationMs: number | null;
+    ghostAgentIds: string[];
+    nudgeAgentIds: string[];
+    idleDrainAgentIds: string[];
+    stuckAgentIds: string[];
+    anomalies: string[];
+    anomalySignature: string;
+    followUpDelivered: boolean;
+    agentCount: number;
+    backlogCount: number;
+  }> {
+    const db = this.getDb();
+    const rows = db
+      .prepare("SELECT * FROM ralph_cycles ORDER BY started_at DESC LIMIT ?")
+      .all(limit) as unknown as RalphCycleRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      durationMs: row.duration_ms,
+      ghostAgentIds: JSON.parse(row.ghost_agent_ids) as string[],
+      nudgeAgentIds: JSON.parse(row.nudge_agent_ids) as string[],
+      idleDrainAgentIds: JSON.parse(row.idle_drain_agent_ids) as string[],
+      stuckAgentIds: JSON.parse(row.stuck_agent_ids) as string[],
+      anomalies: JSON.parse(row.anomalies) as string[],
+      anomalySignature: row.anomaly_signature,
+      followUpDelivered: row.follow_up_delivered === 1,
+      agentCount: row.agent_count,
+      backlogCount: row.backlog_count,
+    }));
   }
 
   repairThreadOwnership(): { releasedClaimCount: number; releasedAgentIds: string[] } {

@@ -422,6 +422,12 @@ export class BrokerSocketServer {
     }
 
     this.db.markDelivered(ids as number[], state.agentId);
+
+    // Activity tracking: acknowledging messages proves the agent processed them
+    if (state.agentId) {
+      this.db.touchAgentActivity(state.agentId);
+    }
+
     return rpcOk(req.id, { ok: true });
   }
 
@@ -468,6 +474,9 @@ export class BrokerSocketServer {
       targetIds,
       metadata,
     );
+
+    // Activity tracking: sending a message proves the agent is working
+    this.db.touchAgentActivity(state.agentId);
 
     return rpcOk(req.id, { messageId: msg.id });
   }
@@ -580,6 +589,8 @@ export class BrokerSocketServer {
       this.agentMessageCallback(target.id, msg, enrichedMeta);
     }
 
+    // Activity tracking: sending agent-to-agent messages proves the agent is working
+    this.db.touchAgentActivity(state.agentId);
     return rpcOk(req.id, { ok: true, messageId: msg.id });
   }
 

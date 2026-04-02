@@ -25,6 +25,8 @@ import {
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
+  DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+  partitionFollowerInboxEntries,
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
@@ -1322,6 +1324,8 @@ export default function (pi: ExtensionAPI) {
     if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
 
     brokerRalphLoopRunning = true;
+    const cycleStartedAt = new Date().toISOString();
+    const cycleStartMs = Date.now();
     try {
       runBrokerMaintenance(ctx);
 
@@ -1338,11 +1342,13 @@ export default function (pi: ExtensionAPI) {
         pendingInboxCount: db.getPendingInboxCount(agent.id),
         ownedThreadCount: db.getOwnedThreadCount(agent.id),
       }));
+      const pendingBacklogCount = db.getBacklogCount("pending");
       const evaluation = evaluateRalphLoopCycle(workloads, {
         now: Date.now(),
         heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
         heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
-        pendingBacklogCount: db.getBacklogCount("pending"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        pendingBacklogCount,
         currentBranch,
         brokerHeartbeatActive: brokerHeartbeatTimer != null,
         brokerMaintenanceActive: brokerMaintenanceTimer != null,
@@ -1406,6 +1412,27 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("RALPH loop health recovered", "info");
       }
       lastBrokerRalphLoopSignature = signature;
+
+      // #103: Record ralph cycle for observability
+      try {
+        const cycleCompletedAt = new Date().toISOString();
+        db.recordRalphCycle({
+          startedAt: cycleStartedAt,
+          completedAt: cycleCompletedAt,
+          durationMs: Date.now() - cycleStartMs,
+          ghostAgentIds: evaluation.ghostAgentIds,
+          nudgeAgentIds: evaluation.nudgeAgentIds,
+          idleDrainAgentIds: evaluation.idleDrainAgentIds,
+          stuckAgentIds: evaluation.stuckAgentIds,
+          anomalies: evaluation.anomalies,
+          anomalySignature: signature,
+          followUpDelivered: shouldDeliverFollowUp,
+          agentCount: workloads.filter((w) => !w.disconnectedAt).length,
+          backlogCount: pendingBacklogCount,
+        });
+      } catch {
+        /* best effort — don't let cycle recording break the loop */
+      }
     } catch (err) {
       ctx.ui.notify(`RALPH loop failed: ${msg(err)}`, "error");
     } finally {
@@ -1792,7 +1819,30 @@ export default function (pi: ExtensionAPI) {
           const entries = await client.pollInbox();
           if (entries.length === 0) return;
 
-          const synced = syncFollowerInboxEntries(entries, threads, agentName, lastDmChannel);
+          // #102: Partition nudges from regular messages for direct delivery
+          const { nudges, regular } = partitionFollowerInboxEntries(entries);
+
+          // Deliver nudges immediately via pi.sendUserMessage (followUp)
+          if (nudges.length > 0) {
+            const nudgeText = nudges
+              .map((n) => n.message.body ?? "")
+              .filter(Boolean)
+              .join("\n");
+            if (nudgeText) {
+              try {
+                pi.sendUserMessage(nudgeText, { deliverAs: "followUp" });
+              } catch {
+                try {
+                  pi.sendUserMessage(nudgeText);
+                } catch {
+                  /* best effort */
+                }
+              }
+            }
+          }
+
+          // Process regular messages through normal inbox flow
+          const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
           for (const nextThread of synced.threadUpdates) {
             const existing = threads.get(nextThread.threadTs);
             if (!existing) {
@@ -1807,6 +1857,7 @@ export default function (pi: ExtensionAPI) {
           lastDmChannel = synced.lastDmChannel;
           inbox.push(...synced.inboxMessages);
 
+          // ACK all entries (nudges + regular)
           const ids = entries.map((entry) => entry.inboxId);
           if (synced.changed) persistState();
           if (ids.length > 0) await client.ackMessages(ids);
@@ -1842,6 +1893,11 @@ export default function (pi: ExtensionAPI) {
           applyBrokerIdentity(registration.name, registration.emoji);
         }
         await resumeThreadClaims();
+        // #103: Re-report idle/working status on reconnect for resilience
+        const currentlyIdle = ctx.isIdle?.() ?? true;
+        void client.updateStatus(currentlyIdle ? "idle" : "working").catch(() => {
+          /* best effort */
+        });
         startPolling();
         setExtStatus(ctx, "ok");
         const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
