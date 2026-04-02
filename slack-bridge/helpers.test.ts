@@ -43,9 +43,16 @@ import {
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
+  normalizeThreadConfirmationState,
+  isThreadConfirmationStateEmpty,
+  confirmationRequestMatches,
+  consumeMatchingConfirmationRequest,
+  registerThreadConfirmationRequest,
+  DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
   type InboxMessage,
   type AgentDisplayInfo,
   type FollowerThreadState,
+  type ThreadConfirmationState,
 } from "./helpers.js";
 
 type NudgeTestEntry = {
@@ -1578,6 +1585,177 @@ describe("getFollowerOwnedThreadClaims", () => {
     ]);
 
     expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
+  });
+});
+
+// ─── confirmation state cleanup ─────────────────────────
+
+describe("normalizeThreadConfirmationState", () => {
+  function makeState(): ThreadConfirmationState {
+    return {
+      pending: [],
+      approved: [],
+      rejected: [],
+    };
+  }
+
+  it("expires stale pending, approved, and rejected requests", () => {
+    const now = Date.now();
+    const fresh = now - 1_000;
+    const stale = now - DEFAULT_CONFIRMATION_REQUEST_TTL_MS - 1_000;
+    const state: ThreadConfirmationState = {
+      pending: [
+        { toolPattern: "bash", action: "fresh pending", requestedAt: fresh },
+        { toolPattern: "edit", action: "stale pending", requestedAt: stale },
+      ],
+      approved: [
+        { toolPattern: "write", action: "fresh approved", requestedAt: fresh },
+        { toolPattern: "memory_write", action: "stale approved", requestedAt: stale },
+      ],
+      rejected: [
+        { toolPattern: "bash", action: "fresh rejected", requestedAt: fresh },
+        { toolPattern: "edit", action: "stale rejected", requestedAt: stale },
+      ],
+    };
+
+    expect(normalizeThreadConfirmationState(state, now)).toEqual({
+      pending: [{ toolPattern: "bash", action: "fresh pending", requestedAt: fresh }],
+      approved: [{ toolPattern: "write", action: "fresh approved", requestedAt: fresh }],
+      rejected: [{ toolPattern: "bash", action: "fresh rejected", requestedAt: fresh }],
+    });
+  });
+
+  it("clears ambiguous pending requests instead of guessing which one a reply belongs to", () => {
+    const now = Date.now();
+    const state: ThreadConfirmationState = {
+      pending: [
+        { toolPattern: "bash", action: "first", requestedAt: now - 2_000 },
+        { toolPattern: "edit", action: "second", requestedAt: now - 1_000 },
+      ],
+      approved: [],
+      rejected: [],
+    };
+
+    expect(normalizeThreadConfirmationState(state, now).pending).toEqual([]);
+  });
+
+  it("detects when a confirmation state is empty", () => {
+    expect(isThreadConfirmationStateEmpty(makeState())).toBe(true);
+    expect(
+      isThreadConfirmationStateEmpty({
+        pending: [{ toolPattern: "bash", action: "run", requestedAt: Date.now() }],
+        approved: [],
+        rejected: [],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("confirmationRequestMatches", () => {
+  it("matches only when both tool pattern and action line up", () => {
+    const request = {
+      toolPattern: "bash",
+      action: "run: echo hello",
+      requestedAt: Date.now(),
+    };
+
+    expect(confirmationRequestMatches(request, "bash", "run: echo hello")).toBe(true);
+    expect(confirmationRequestMatches(request, "bash", "run: echo goodbye")).toBe(false);
+    expect(confirmationRequestMatches(request, "edit", "run: echo hello")).toBe(false);
+  });
+});
+
+describe("consumeMatchingConfirmationRequest", () => {
+  it("consumes only the exact approved or rejected action", () => {
+    const list = [
+      { toolPattern: "bash", action: "run: echo hello", requestedAt: Date.now() - 2_000 },
+      { toolPattern: "bash", action: "run: echo goodbye", requestedAt: Date.now() - 1_000 },
+    ];
+
+    const consumed = consumeMatchingConfirmationRequest(list, "bash", "run: echo goodbye");
+
+    expect(consumed?.action).toBe("run: echo goodbye");
+    expect(list.map((request) => request.action)).toEqual(["run: echo hello"]);
+    expect(consumeMatchingConfirmationRequest(list, "bash", "run: echo unknown")).toBeNull();
+  });
+});
+
+describe("registerThreadConfirmationRequest", () => {
+  it("creates a new pending request when the thread is clear", () => {
+    const now = Date.now();
+    const result = registerThreadConfirmationRequest(
+      { pending: [], approved: [], rejected: [] },
+      { toolPattern: "bash", action: "run: ls", requestedAt: now },
+      now,
+    );
+
+    expect(result.status).toBe("created");
+    expect(result.state.pending).toEqual([
+      { toolPattern: "bash", action: "run: ls", requestedAt: now },
+    ]);
+  });
+
+  it("refreshes an identical pending request without duplicating it", () => {
+    const now = Date.now();
+    const result = registerThreadConfirmationRequest(
+      {
+        pending: [{ toolPattern: "bash", action: "run: ls", requestedAt: now - 5_000 }],
+        approved: [],
+        rejected: [],
+      },
+      { toolPattern: "bash", action: "run: ls", requestedAt: now },
+      now,
+    );
+
+    expect(result.status).toBe("refreshed");
+    expect(result.state.pending).toEqual([
+      { toolPattern: "bash", action: "run: ls", requestedAt: now },
+    ]);
+  });
+
+  it("rejects a different pending request so a plain yes/no cannot bind to the wrong action", () => {
+    const now = Date.now();
+    const result = registerThreadConfirmationRequest(
+      {
+        pending: [{ toolPattern: "bash", action: "run: ls", requestedAt: now - 5_000 }],
+        approved: [],
+        rejected: [],
+      },
+      { toolPattern: "edit", action: "edit: README.md", requestedAt: now },
+      now,
+    );
+
+    expect(result.status).toBe("conflict");
+    expect(result.conflict).toEqual({
+      toolPattern: "bash",
+      action: "run: ls",
+      requestedAt: now - 5_000,
+    });
+    expect(result.state.pending).toEqual([
+      { toolPattern: "bash", action: "run: ls", requestedAt: now - 5_000 },
+    ]);
+  });
+
+  it("drops stale matching approvals when requesting a fresh confirmation for the same action", () => {
+    const now = Date.now();
+    const result = registerThreadConfirmationRequest(
+      {
+        pending: [],
+        approved: [{ toolPattern: "bash", action: "run: ls", requestedAt: now - 2_000 }],
+        rejected: [{ toolPattern: "bash", action: "run: cat", requestedAt: now - 1_000 }],
+      },
+      { toolPattern: "bash", action: "run: ls", requestedAt: now },
+      now,
+    );
+
+    expect(result.status).toBe("created");
+    expect(result.state.approved).toEqual([]);
+    expect(result.state.rejected).toEqual([
+      { toolPattern: "bash", action: "run: cat", requestedAt: now - 1_000 },
+    ]);
+    expect(result.state.pending).toEqual([
+      { toolPattern: "bash", action: "run: ls", requestedAt: now },
+    ]);
   });
 });
 

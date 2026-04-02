@@ -7,6 +7,8 @@ import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-me
 import {
   type InboxMessage,
   type AgentDisplayInfo,
+  type ConfirmationRequest,
+  type ThreadConfirmationState,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   isUserAllowed as checkUserAllowed,
@@ -29,6 +31,7 @@ import {
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+  DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
   partitionFollowerInboxEntries,
   generateAgentName,
   resolveAgentIdentity,
@@ -42,6 +45,11 @@ import {
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
+  normalizeThreadConfirmationState,
+  isThreadConfirmationStateEmpty,
+  confirmationRequestMatches,
+  consumeMatchingConfirmationRequest,
+  registerThreadConfirmationRequest,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import {
@@ -49,7 +57,6 @@ import {
   isConfirmationApproval,
   isConfirmationRejection,
   isToolBlocked,
-  matchesToolPattern,
   toolNeedsConfirmation,
   isBrokerForbiddenTool,
   buildBrokerToolGuardrailsPrompt,
@@ -207,21 +214,37 @@ export default function (pi: ExtensionAPI) {
   const channelCache = new TtlCache<string, string>({ maxSize: 500, ttlMs: 30 * 60 * 1000 });
   const unclaimedThreads = new TtlSet<string>({ maxSize: 5000, ttlMs: 5 * 60 * 1000 });
 
-  interface ConfirmationRequest {
-    toolPattern: string;
-    action: string;
-    requestedAt: number;
-  }
-
-  interface ThreadConfirmationState {
-    pending: ConfirmationRequest[];
-    approved: ConfirmationRequest[];
-    rejected: ConfirmationRequest[];
-  }
-
   const threadConfirmationStates = new Map<string, ThreadConfirmationState>();
 
+  function storeThreadConfirmationState(
+    threadTs: string,
+    state: ThreadConfirmationState,
+    now = Date.now(),
+  ): ThreadConfirmationState | null {
+    const normalized = normalizeThreadConfirmationState(
+      state,
+      now,
+      DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
+    );
+
+    if (isThreadConfirmationStateEmpty(normalized)) {
+      threadConfirmationStates.delete(threadTs);
+      return null;
+    }
+
+    threadConfirmationStates.set(threadTs, normalized);
+    return normalized;
+  }
+
+  function sweepThreadConfirmationStates(now = Date.now()): void {
+    for (const [threadTs, state] of threadConfirmationStates) {
+      storeThreadConfirmationState(threadTs, state, now);
+    }
+  }
+
   function getThreadConfirmationState(threadTs: string): ThreadConfirmationState {
+    sweepThreadConfirmationStates();
+
     let state = threadConfirmationStates.get(threadTs);
     if (!state) {
       state = { pending: [], approved: [], rejected: [] };
@@ -233,9 +256,7 @@ export default function (pi: ExtensionAPI) {
   function cleanupThreadConfirmationState(threadTs: string): void {
     const state = threadConfirmationStates.get(threadTs);
     if (!state) return;
-    if (state.pending.length === 0 && state.approved.length === 0 && state.rejected.length === 0) {
-      threadConfirmationStates.delete(threadTs);
-    }
+    storeThreadConfirmationState(threadTs, state);
   }
 
   // ─── State persistence ──────────────────────────────
@@ -397,25 +418,34 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function removeMatchingToolPattern(
-    list: ConfirmationRequest[],
-    toolName: string,
-  ): ConfirmationRequest | null {
-    const idx = list.findIndex((req) => matchesToolPattern(toolName, [req.toolPattern]));
-    if (idx === -1) return null;
-    const [match] = list.splice(idx, 1);
-    return match;
+  function formatConfirmationAction(action: string): string {
+    return JSON.stringify(action);
   }
 
-  function registerConfirmationRequest(threadTs: string, tool: string, action: string): void {
-    getThreadConfirmationState(threadTs).pending.push({
-      toolPattern: tool,
-      action,
-      requestedAt: Date.now(),
-    });
+  function registerConfirmationRequest(
+    threadTs: string,
+    tool: string,
+    action: string,
+  ): { status: "created" | "refreshed" | "conflict"; conflict?: ConfirmationRequest } {
+    const now = Date.now();
+    const result = registerThreadConfirmationRequest(
+      getThreadConfirmationState(threadTs),
+      {
+        toolPattern: tool,
+        action,
+        requestedAt: now,
+      },
+      now,
+    );
+    storeThreadConfirmationState(threadTs, result.state, now);
+    return {
+      status: result.status,
+      conflict: result.conflict,
+    };
   }
 
   function consumeConfirmationReply(threadTs: string, text: string): { approved: boolean } | null {
+    sweepThreadConfirmationStates();
     const state = threadConfirmationStates.get(threadTs);
     if (!state || state.pending.length === 0) return null;
 
@@ -438,17 +468,22 @@ export default function (pi: ExtensionAPI) {
     return { approved: false };
   }
 
-  function getConfirmationDecision(threadTs: string, toolName: string): boolean | null {
+  function getConfirmationDecision(
+    threadTs: string,
+    toolName: string,
+    action: string,
+  ): boolean | null {
+    sweepThreadConfirmationStates();
     const state = threadConfirmationStates.get(threadTs);
     if (!state) return null;
 
-    const approved = removeMatchingToolPattern(state.approved, toolName);
+    const approved = consumeMatchingConfirmationRequest(state.approved, toolName, action);
     if (approved) {
       cleanupThreadConfirmationState(threadTs);
       return true;
     }
 
-    const rejected = removeMatchingToolPattern(state.rejected, toolName);
+    const rejected = consumeMatchingConfirmationRequest(state.rejected, toolName, action);
     if (rejected) {
       cleanupThreadConfirmationState(threadTs);
       return false;
@@ -457,7 +492,7 @@ export default function (pi: ExtensionAPI) {
     return null;
   }
 
-  function requireToolPolicy(toolName: string, threadTs: string | undefined): void {
+  function requireToolPolicy(toolName: string, threadTs: string | undefined, action: string): void {
     if (isToolBlocked(toolName, guardrails)) {
       throw new Error(`Tool "${toolName}" is blocked by Slack security guardrails.`);
     }
@@ -466,28 +501,41 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    const quotedAction = formatConfirmationAction(action);
     if (!threadTs) {
       throw new Error(
-        `Tool "${toolName}" requires confirmation. Include a thread_ts and call slack_confirm_action before executing this tool.`,
+        `Tool "${toolName}" requires confirmation for action ${quotedAction}. Include a thread_ts and call slack_confirm_action before executing this tool.`,
       );
     }
 
-    const decision = getConfirmationDecision(threadTs, toolName);
+    const decision = getConfirmationDecision(threadTs, toolName, action);
     if (decision === true) return;
     if (decision === false) {
-      throw new Error(`Tool "${toolName}" was denied by Slack user confirmation.`);
+      throw new Error(
+        `Tool "${toolName}" was denied by Slack user confirmation for action ${quotedAction}.`,
+      );
     }
 
+    sweepThreadConfirmationStates();
     const state = threadConfirmationStates.get(threadTs);
-    const pending = !!state?.pending.some((req) => matchesToolPattern(toolName, [req.toolPattern]));
-    if (!pending) {
+    const pendingMatch =
+      state?.pending.find((request) => confirmationRequestMatches(request, toolName, action)) ??
+      null;
+    if (pendingMatch) {
       throw new Error(
-        `Tool "${toolName}" requires confirmation. Call slack_confirm_action in thread ${threadTs} and wait for the user's approval first.`,
+        `Tool "${toolName}" requires confirmation for action ${quotedAction}. A matching confirmation request is already pending in thread ${threadTs}; wait for the user's approval first.`,
+      );
+    }
+
+    const pendingConflict = state?.pending[0];
+    if (pendingConflict) {
+      throw new Error(
+        `Thread ${threadTs} already has a pending confirmation for tool "${pendingConflict.toolPattern}" and action ${formatConfirmationAction(pendingConflict.action)}. Wait for a reply or expiry before requesting another action in the same thread.`,
       );
     }
 
     throw new Error(
-      `Tool "${toolName}" requires confirmation. Call slack_confirm_action in thread ${threadTs} and wait for the user's approval first.`,
+      `Tool "${toolName}" requires confirmation for action ${quotedAction}. Call slack_confirm_action in thread ${threadTs} with tool "${toolName}" and action ${quotedAction}, then wait for the user's approval first.`,
     );
   }
 
@@ -1134,7 +1182,7 @@ export default function (pi: ExtensionAPI) {
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_id, params) {
-      requireToolPolicy("pinet_message", undefined);
+      requireToolPolicy("pinet_message", undefined, `to=${params.to} | message=${params.message}`);
 
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
@@ -1213,7 +1261,11 @@ export default function (pi: ExtensionAPI) {
       task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
     }),
     async execute(_toolCallId, params) {
-      requireToolPolicy("pinet_agents", undefined);
+      requireToolPolicy(
+        "pinet_agents",
+        undefined,
+        `repo=${params.repo ?? ""} | branch=${params.branch ?? ""} | role=${params.role ?? ""} | required_tools=${params.required_tools ?? ""} | task=${params.task ?? ""}`,
+      );
 
       if (!pinetEnabled) {
         throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");

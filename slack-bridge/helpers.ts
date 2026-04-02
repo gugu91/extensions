@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { matchesToolPattern } from "./guardrails.js";
 
 // ─── Settings ────────────────────────────────────────────
 
@@ -1426,6 +1427,113 @@ export function resolveAgentIdentity(
 
   // 3. Fully generated
   return generateAgentName(seed);
+}
+
+// ─── Confirmation state cleanup ─────────────────────────
+
+export interface ConfirmationRequest {
+  toolPattern: string;
+  action: string;
+  requestedAt: number;
+}
+
+export interface ThreadConfirmationState {
+  pending: ConfirmationRequest[];
+  approved: ConfirmationRequest[];
+  rejected: ConfirmationRequest[];
+}
+
+export interface RegisterThreadConfirmationRequestResult {
+  state: ThreadConfirmationState;
+  status: "created" | "refreshed" | "conflict";
+  conflict?: ConfirmationRequest;
+}
+
+export const DEFAULT_CONFIRMATION_REQUEST_TTL_MS = 5 * 60_000;
+
+export function normalizeThreadConfirmationState(
+  state: ThreadConfirmationState,
+  now = Date.now(),
+  ttlMs = DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
+): ThreadConfirmationState {
+  const keepFresh = (request: ConfirmationRequest) => now - request.requestedAt < ttlMs;
+  const pending = state.pending.filter(keepFresh);
+
+  return {
+    pending: pending.length > 1 ? [] : pending,
+    approved: state.approved.filter(keepFresh),
+    rejected: state.rejected.filter(keepFresh),
+  };
+}
+
+export function isThreadConfirmationStateEmpty(state: ThreadConfirmationState): boolean {
+  return state.pending.length === 0 && state.approved.length === 0 && state.rejected.length === 0;
+}
+
+export function confirmationRequestMatches(
+  request: ConfirmationRequest,
+  toolName: string,
+  action: string,
+): boolean {
+  return matchesToolPattern(toolName, [request.toolPattern]) && request.action === action;
+}
+
+export function consumeMatchingConfirmationRequest(
+  list: ConfirmationRequest[],
+  toolName: string,
+  action: string,
+): ConfirmationRequest | null {
+  const idx = list.findIndex((request) => confirmationRequestMatches(request, toolName, action));
+  if (idx === -1) return null;
+  const [match] = list.splice(idx, 1);
+  return match;
+}
+
+export function registerThreadConfirmationRequest(
+  state: ThreadConfirmationState,
+  request: ConfirmationRequest,
+  now = Date.now(),
+): RegisterThreadConfirmationRequestResult {
+  const normalized = normalizeThreadConfirmationState(state, now);
+  const nextState: ThreadConfirmationState = {
+    pending: normalized.pending,
+    approved: normalized.approved.filter(
+      (entry) => !confirmationRequestMatches(entry, request.toolPattern, request.action),
+    ),
+    rejected: normalized.rejected.filter(
+      (entry) => !confirmationRequestMatches(entry, request.toolPattern, request.action),
+    ),
+  };
+  const existingPending = nextState.pending[0];
+
+  if (!existingPending) {
+    return {
+      state: {
+        ...nextState,
+        pending: [request],
+      },
+      status: "created",
+    };
+  }
+
+  if (
+    existingPending.toolPattern === request.toolPattern &&
+    existingPending.action === request.action
+  ) {
+    return {
+      state: {
+        ...nextState,
+        pending: [{ ...existingPending, requestedAt: request.requestedAt }],
+      },
+      status: "refreshed",
+    };
+  }
+
+  return {
+    state: nextState,
+    status: "conflict",
+    conflict: existingPending,
+  };
 }
 
 // ─── Slack API client (unified) ──────────────────────────
