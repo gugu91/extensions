@@ -3,5 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared ambient type declarations for pi extensions"
+  "description": "Shared ambient type declarations and workspace helpers for pi extensions",
+  "exports": {
+    "./typebox": "./typebox.js"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.41"
+  }
 }
