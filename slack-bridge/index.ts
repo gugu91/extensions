@@ -49,6 +49,7 @@ import {
   resolveRuntimeAgentIdentity,
   shortenPath,
   buildIdentityReplyGuidelines,
+  buildAgentPersonalityGuidelines,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
   resolveAgentStableId,
@@ -2665,7 +2666,7 @@ export default function (pi: ExtensionAPI) {
 
   // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
   pi.on("before_agent_start", async (event) => {
-    const guidelines = [...getIdentityGuidelines()];
+    const guidelines = [...getIdentityGuidelines(), ...buildAgentPersonalityGuidelines(agentName)];
     if (brokerRole === "broker") {
       guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
       guidelines.push(buildBrokerToolGuardrailsPrompt());

@@ -1136,6 +1136,174 @@ export function buildIdentityReplyGuidelines(
   ];
 }
 
+export interface AgentPersonalityProfile {
+  descriptor?: string;
+  animal?: string;
+  traits: string[];
+}
+
+const DEFAULT_PERSONALITY_TRAITS = ["thoughtful", "steady", "clear"];
+const DESCRIPTOR_PERSONALITY_TRAITS: Record<string, string[]> = {};
+const ANIMAL_PERSONALITY_TRAITS: Record<string, string[]> = {};
+
+function assignPersonalityTraits(
+  target: Record<string, string[]>,
+  names: string[],
+  traits: string[],
+): void {
+  for (const name of names) {
+    target[name] = traits;
+  }
+}
+
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Rocket", "Turbo", "Hyper", "Ultra", "Mega", "Sonic", "Rapid"],
+  ["fast", "playful", "bold"],
+);
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Silent", "Shadow", "Velvet", "Frozen", "Glacial"],
+  ["quiet", "patient", "precise"],
+);
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Cosmic", "Solar", "Stellar", "Galactic", "Lunar", "Nova", "Aurora", "Nimbus", "Orbit", "Comet"],
+  ["far-seeing", "thoughtful", "imaginative"],
+);
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Quantum", "Pixel", "Cyber", "Atomic", "Binary", "Vector", "Prism", "Ionic", "Laser"],
+  ["analytical", "curious", "precise"],
+);
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Neon", "Electric", "Radiant", "Blazing", "Thunder", "Ember", "Echo"],
+  ["energetic", "expressive", "confident"],
+);
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Crystal", "Mystic", "Jade"],
+  ["elegant", "intuitive", "thoughtful"],
+);
+assignPersonalityTraits(
+  DESCRIPTOR_PERSONALITY_TRAITS,
+  ["Golden", "Silver", "Scarlet", "Cobalt", "Iron", "Obsidian", "Slate"],
+  ["steady", "composed", "direct"],
+);
+
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  ["Dolphin"],
+  ["intelligent", "agile", "friendly"],
+);
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  ["Crocodile"],
+  ["patient", "precise", "formidable"],
+);
+assignPersonalityTraits(ANIMAL_PERSONALITY_TRAITS, ["Crane"], ["elegant", "observant", "poised"]);
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  ["Eagle", "Owl", "Raven", "Parrot", "Goose"],
+  ["observant", "articulate", "far-seeing"],
+);
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  ["Fox", "Wolf", "Lynx", "Jaguar", "Tiger", "Lion", "Cobra", "Shark", "Dragon"],
+  ["sharp", "decisive", "confident"],
+);
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  [
+    "Badger",
+    "Beaver",
+    "Bison",
+    "Buffalo",
+    "Boar",
+    "Bear",
+    "Rhino",
+    "Elephant",
+    "Moose",
+    "Horse",
+    "Camel",
+    "Goat",
+  ],
+  ["steady", "resilient", "grounded"],
+);
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  [
+    "Otter",
+    "Rabbit",
+    "Koala",
+    "Panda",
+    "Monkey",
+    "Sloth",
+    "Turtle",
+    "Whale",
+    "Kangaroo",
+    "Llama",
+    "Deer",
+    "Giraffe",
+    "Hippo",
+    "Zebra",
+  ],
+  ["warm", "calm", "approachable"],
+);
+assignPersonalityTraits(
+  ANIMAL_PERSONALITY_TRAITS,
+  ["Raccoon", "Hedgehog", "Gecko", "Mantis"],
+  ["meticulous", "curious", "nimble"],
+);
+
+function mergePersonalityTraits(descriptorTraits: string[], animalTraits: string[]): string[] {
+  const merged: string[] = [];
+  const push = (trait?: string) => {
+    if (!trait || merged.includes(trait)) return;
+    merged.push(trait);
+  };
+
+  const limit = Math.max(descriptorTraits.length, animalTraits.length);
+  for (let index = 0; index < limit; index++) {
+    push(descriptorTraits[index]);
+    push(animalTraits[index]);
+  }
+
+  if (merged.length === 0) {
+    for (const trait of DEFAULT_PERSONALITY_TRAITS) {
+      push(trait);
+    }
+  }
+
+  return merged.slice(0, 4);
+}
+
+export function resolveAgentPersonality(agentName: string): AgentPersonalityProfile {
+  const tokens = agentName.trim().split(/\s+/).filter(Boolean);
+  const descriptor = tokens[0];
+  const animal = tokens.length >= 2 ? tokens.at(-1) : undefined;
+
+  return {
+    descriptor,
+    animal,
+    traits: mergePersonalityTraits(
+      descriptor ? (DESCRIPTOR_PERSONALITY_TRAITS[descriptor] ?? []) : [],
+      animal ? (ANIMAL_PERSONALITY_TRAITS[animal] ?? []) : [],
+    ),
+  };
+}
+
+export function buildAgentPersonalityGuidelines(agentName: string): string[] {
+  const personality = resolveAgentPersonality(agentName);
+  return [
+    "COMMUNICATION STYLE: Let your wording lightly reflect your agent name so your updates feel like the persona behind the name.",
+    `For \`${agentName}\`, aim for a ${personality.traits.join(", ")} tone in Slack and Pinet messages.`,
+    "Keep the style subtle: shape cadence, word choice, and flavor — not the underlying facts or recommendations.",
+    "PERSONALITY SAFETY RAIL: This must NOT change task execution quality, correctness, honesty, safety, technical rigor, or willingness to surface blockers and test results.",
+  ];
+}
+
 export function resolvePersistedAgentIdentity(
   settings: SlackBridgeSettings,
   persistedName?: string,
