@@ -19,8 +19,9 @@ import {
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
 } from "../../slack-socket-dedup.js";
 import {
-  extractSlackBlockActionsPayloadFromEnvelope,
+  extractSlackInteractivePayloadFromEnvelope,
   normalizeSlackBlockActionPayload,
+  normalizeSlackViewSubmissionPayload,
 } from "../../slack-block-kit.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
@@ -79,7 +80,7 @@ export function parseSocketFrame(raw: string): ParsedEnvelope | null {
       result.event = payload?.event;
     }
 
-    const interactivePayload = extractSlackBlockActionsPayloadFromEnvelope(data);
+    const interactivePayload = extractSlackInteractivePayloadFromEnvelope(data);
     if (interactivePayload) {
       result.interactivePayload = interactivePayload;
     }
@@ -364,7 +365,11 @@ export class SlackAdapter implements MessageAdapter {
       }
 
       if (envelope.interactivePayload) {
-        await this.onBlockActions(envelope.interactivePayload);
+        if (envelope.interactivePayload.type === "block_actions") {
+          await this.onBlockActions(envelope.interactivePayload);
+        } else if (envelope.interactivePayload.type === "view_submission") {
+          await this.onViewSubmission(envelope.interactivePayload);
+        }
         return;
       }
 
@@ -600,12 +605,14 @@ export class SlackAdapter implements MessageAdapter {
     });
   }
 
-  private async onBlockActions(payload: Record<string, unknown>): Promise<void> {
-    if (this.shuttingDown) return;
-
-    const normalized = normalizeSlackBlockActionPayload(payload);
-    if (!normalized) return;
-
+  private async emitInteractiveInbound(normalized: {
+    channel: string;
+    threadTs: string;
+    userId: string;
+    text: string;
+    timestamp: string;
+    metadata: Record<string, unknown>;
+  }): Promise<void> {
     if (!this.threads.has(normalized.threadTs)) {
       this.threads.set(normalized.threadTs, {
         channelId: normalized.channel,
@@ -635,6 +642,22 @@ export class SlackAdapter implements MessageAdapter {
       timestamp: normalized.timestamp,
       metadata: normalized.metadata,
     });
+  }
+
+  private async onBlockActions(payload: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
+    const normalized = normalizeSlackBlockActionPayload(payload);
+    if (!normalized) return;
+    await this.emitInteractiveInbound(normalized);
+  }
+
+  private async onViewSubmission(payload: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
+    const normalized = normalizeSlackViewSubmissionPayload(payload);
+    if (!normalized) return;
+    await this.emitInteractiveInbound(normalized);
   }
 
   private onMemberJoined(evt: Record<string, unknown>): void {

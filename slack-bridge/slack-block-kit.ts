@@ -1,3 +1,5 @@
+import { decodeSlackModalPrivateMetadata } from "./slack-modals.js";
+
 export type SlackBlock = Record<string, unknown>;
 
 export interface SlackBlockFieldInput {
@@ -52,6 +54,17 @@ export interface SlackBlockActionInboxEvent {
   metadata: Record<string, unknown>;
 }
 
+export interface SlackViewSubmissionInboxEvent {
+  channel: string;
+  threadTs: string;
+  userId: string;
+  text: string;
+  timestamp: string;
+  metadata: Record<string, unknown>;
+}
+
+export type SlackInteractiveInboxEvent = SlackBlockActionInboxEvent | SlackViewSubmissionInboxEvent;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -78,6 +91,49 @@ function tryParseJson(value: string | undefined): unknown {
   } catch {
     return undefined;
   }
+}
+
+function normalizeViewStateValue(value: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  if (typeof value.type === "string") {
+    result.type = value.type;
+  }
+  if (typeof value.value === "string") {
+    result.value = value.value;
+  }
+  if (typeof value.selected_date === "string") {
+    result.selectedDate = value.selected_date;
+  }
+  if (typeof value.selected_time === "string") {
+    result.selectedTime = value.selected_time;
+  }
+  if (typeof value.selected_conversation === "string") {
+    result.selectedConversation = value.selected_conversation;
+  }
+  if (typeof value.selected_channel === "string") {
+    result.selectedChannel = value.selected_channel;
+  }
+  if (typeof value.selected_user === "string") {
+    result.selectedUser = value.selected_user;
+  }
+  if (typeof value.selected_option === "object" && value.selected_option !== null) {
+    result.selectedOption = value.selected_option;
+  }
+  if (Array.isArray(value.selected_options)) {
+    result.selectedOptions = value.selected_options;
+  }
+  if (Array.isArray(value.selected_conversations)) {
+    result.selectedConversations = value.selected_conversations;
+  }
+  if (Array.isArray(value.selected_channels)) {
+    result.selectedChannels = value.selected_channels;
+  }
+  if (Array.isArray(value.selected_users)) {
+    result.selectedUsers = value.selected_users;
+  }
+
+  return result;
 }
 
 function joinNonEmpty(parts: Array<string | undefined>): string {
@@ -298,7 +354,7 @@ export function buildSlackBlocksTemplate(
   }
 }
 
-export function extractSlackBlockActionsPayloadFromEnvelope(
+export function extractSlackInteractivePayloadFromEnvelope(
   envelope: Record<string, unknown>,
 ): Record<string, unknown> | null {
   if (envelope.type !== "interactive") return null;
@@ -314,7 +370,14 @@ export function extractSlackBlockActionsPayloadFromEnvelope(
   }
 
   if (!isRecord(payload)) return null;
-  return payload.type === "block_actions" ? payload : null;
+  return payload;
+}
+
+export function extractSlackBlockActionsPayloadFromEnvelope(
+  envelope: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const payload = extractSlackInteractivePayloadFromEnvelope(envelope);
+  return payload?.type === "block_actions" ? payload : null;
 }
 
 export function normalizeSlackBlockActionPayload(
@@ -324,6 +387,7 @@ export function normalizeSlackBlockActionPayload(
   const container = asRecord(payload.container);
   const channel = asRecord(payload.channel);
   const message = asRecord(payload.message);
+  const view = asRecord(payload.view);
   const actions = Array.isArray(payload.actions)
     ? payload.actions
         .map((entry) => asRecord(entry))
@@ -335,19 +399,30 @@ export function normalizeSlackBlockActionPayload(
     .filter((action): action is SlackNormalizedBlockAction => Boolean(action));
   if (normalizedActions.length === 0) return null;
 
+  const modalMetadata = decodeSlackModalPrivateMetadata(asString(view?.private_metadata));
   const channelId =
     asString(container?.channel_id) ??
     asString(channel?.id) ??
-    asString((message?.channel as Record<string, unknown> | undefined)?.id);
+    asString((message?.channel as Record<string, unknown> | undefined)?.id) ??
+    modalMetadata.threadContext?.channel;
   const messageTs = asString(container?.message_ts) ?? asString(message?.ts);
-  const threadTs = asString(container?.thread_ts) ?? asString(message?.thread_ts) ?? messageTs;
+  const threadTs =
+    asString(container?.thread_ts) ??
+    asString(message?.thread_ts) ??
+    messageTs ??
+    modalMetadata.threadContext?.threadTs;
   const userId = asString(user?.id);
 
-  if (!channelId || !threadTs || !userId || !messageTs) return null;
+  if (!channelId || !threadTs || !userId) return null;
 
   const primaryAction = normalizedActions[0];
   const label = primaryAction.text?.trim() ? `"${primaryAction.text.trim()}"` : "button";
-  const timestamp = primaryAction.actionTs ?? messageTs;
+  const timestamp =
+    primaryAction.actionTs ??
+    asString(payload.action_ts) ??
+    asString(view?.hash) ??
+    messageTs ??
+    threadTs;
 
   return {
     channel: channelId,
@@ -357,15 +432,90 @@ export function normalizeSlackBlockActionPayload(
     timestamp,
     metadata: {
       kind: "slack_block_action",
-      actionId: primaryAction.actionId,
+      triggerId: asString(payload.trigger_id) ?? null,
+      viewId: asString(view?.id) ?? null,
+      callbackId: asString(view?.callback_id) ?? null,
+      viewHash: asString(view?.hash) ?? null,
       blockId: primaryAction.blockId ?? null,
+      actionId: primaryAction.actionId,
       value: primaryAction.value ?? null,
       parsedValue: primaryAction.parsedValue ?? null,
       actionText: primaryAction.text ?? null,
       channel: channelId,
       threadTs,
-      messageTs,
+      messageTs: messageTs ?? null,
+      modalPrivateMetadata: modalMetadata.value ?? null,
       actions: sanitizeNormalizedActions(normalizedActions),
     },
   };
+}
+
+export function normalizeSlackViewSubmissionPayload(
+  payload: Record<string, unknown>,
+): SlackViewSubmissionInboxEvent | null {
+  if (payload.type !== "view_submission") {
+    return null;
+  }
+
+  const user = asRecord(payload.user);
+  const view = asRecord(payload.view);
+  const state = asRecord(view?.state);
+  const stateValues = asRecord(state?.values);
+  const userId = asString(user?.id);
+  const viewId = asString(view?.id);
+  const modalMetadata = decodeSlackModalPrivateMetadata(asString(view?.private_metadata));
+  const threadTs = modalMetadata.threadContext?.threadTs;
+  const channel = modalMetadata.threadContext?.channel;
+
+  if (!userId || !threadTs || !channel || !viewId || !stateValues) {
+    return null;
+  }
+
+  const normalizedValues: Record<string, Record<string, unknown>> = {};
+  for (const [blockId, rawActions] of Object.entries(stateValues)) {
+    const actionMap = asRecord(rawActions);
+    if (!actionMap) continue;
+    normalizedValues[blockId] = Object.fromEntries(
+      Object.entries(actionMap).map(([actionId, rawValue]) => [
+        actionId,
+        normalizeViewStateValue(asRecord(rawValue) ?? {}),
+      ]),
+    );
+  }
+
+  const callbackId = asString(view?.callback_id);
+  const titleText = asString((asRecord(view?.title) ?? {}).text);
+  const timestamp = asString(payload.hash) ?? viewId;
+
+  return {
+    channel,
+    threadTs,
+    userId,
+    text: `Submitted Slack modal ${callbackId ? `(${callbackId}) ` : ""}${titleText ? `"${titleText}"` : `view ${viewId}`}.`,
+    timestamp,
+    metadata: {
+      kind: "slack_view_submission",
+      triggerId: asString(payload.trigger_id) ?? null,
+      callbackId: callbackId ?? null,
+      viewId,
+      externalId: asString(view?.external_id) ?? null,
+      viewHash: asString(view?.hash) ?? null,
+      channel,
+      threadTs,
+      privateMetadata: modalMetadata.value ?? null,
+      stateValues: normalizedValues,
+    },
+  };
+}
+
+export function normalizeSlackInteractivePayload(
+  payload: Record<string, unknown>,
+): SlackInteractiveInboxEvent | null {
+  if (payload.type === "block_actions") {
+    return normalizeSlackBlockActionPayload(payload);
+  }
+  if (payload.type === "view_submission") {
+    return normalizeSlackViewSubmissionPayload(payload);
+  }
+  return null;
 }

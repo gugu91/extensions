@@ -19,6 +19,14 @@ import {
   type SlackBlockButtonInput,
 } from "./slack-block-kit.js";
 import {
+  buildSlackModalPromptGuidelines,
+  buildSlackModalTemplate,
+  encodeSlackModalPrivateMetadata,
+  normalizeSlackModalViewInput,
+  type SlackModalFieldInput,
+  type SlackModalOptionInput,
+} from "./slack-modals.js";
+import {
   findSlackPresenceDirectoryUser,
   formatSlackPresenceLine,
   formatSlackPresenceTimestamp,
@@ -79,13 +87,18 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
     "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
     "Use slack_export to archive or document a Slack thread as markdown, plain text, or JSON before writing it into docs, canvases, or files.",
+    "Use Slack modals when you need structured input, explicit approvals, or multi-step workflows instead of free-form thread replies.",
     "Use slack_presence before pinging reviewers or scheduling follow-ups when timing matters — it tells you whether someone is active, away, or in DND.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
 
 function buildSlackRichMessagePromptGuidelines(): string[] {
-  return [...buildSlackInboxPromptGuidelines(), ...buildSlackBlockKitPromptGuidelines()];
+  return [
+    ...buildSlackInboxPromptGuidelines(),
+    ...buildSlackBlockKitPromptGuidelines(),
+    ...buildSlackModalPromptGuidelines(),
+  ];
 }
 
 function getSlackCanvasSummary(markdown?: string): string {
@@ -358,6 +371,53 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     );
   }
 
+  async function resolveSlackModalThreadContext(
+    threadTs: string | undefined,
+  ): Promise<{ threadTs: string; channel: string } | null> {
+    const normalizedThreadTs = threadTs?.trim();
+    if (!normalizedThreadTs) {
+      return null;
+    }
+
+    const channel = await resolveFollowerReplyChannel(normalizedThreadTs);
+    if (!channel) {
+      throw new Error(
+        `No active Slack thread for thread_ts ${normalizedThreadTs}. Pass a live Slack thread so modal submissions can route back correctly.`,
+      );
+    }
+
+    return {
+      threadTs: normalizedThreadTs,
+      channel,
+    };
+  }
+
+  async function buildSlackModalView(
+    view: unknown,
+    threadTs: string | undefined,
+  ): Promise<Record<string, unknown>> {
+    const normalizedView = normalizeSlackModalViewInput(view);
+    const threadContext = await resolveSlackModalThreadContext(threadTs);
+    const privateMetadata =
+      typeof normalizedView.private_metadata === "string"
+        ? normalizedView.private_metadata
+        : undefined;
+    const encodedPrivateMetadata = encodeSlackModalPrivateMetadata(privateMetadata, threadContext);
+    if (encodedPrivateMetadata !== undefined) {
+      normalizedView.private_metadata = encodedPrivateMetadata;
+    }
+    return normalizedView;
+  }
+
+  function rethrowSlackModalError(err: unknown, action: "open" | "push" | "update"): never {
+    if (isSlackMethodError(err, `views.${action}`, "invalid_trigger")) {
+      throw new Error(
+        `Slack trigger_id expired before views.${action} could run. Ask the user to click the button or retry the interaction again, then immediately reopen the modal.`,
+      );
+    }
+    throw err;
+  }
+
   const presenceCache = new TtlCache<string, SlackPresenceSnapshot>({
     maxSize: 512,
     ttlMs: 30_000,
@@ -541,13 +601,23 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           message.metadata?.kind === "slack_block_action"
             ? ` | metadata=${JSON.stringify({
                 kind: message.metadata.kind,
+                triggerId: message.metadata.triggerId ?? null,
                 actionId: message.metadata.actionId ?? null,
                 value: message.metadata.value ?? null,
                 parsedValue: message.metadata.parsedValue ?? null,
+                viewId: message.metadata.viewId ?? null,
               })}`
-            : message.metadata?.kind
-              ? ` | metadata.kind=${String(message.metadata.kind)}`
-              : "";
+            : message.metadata?.kind === "slack_view_submission"
+              ? ` | metadata=${JSON.stringify({
+                  kind: message.metadata.kind,
+                  triggerId: message.metadata.triggerId ?? null,
+                  callbackId: message.metadata.callbackId ?? null,
+                  viewId: message.metadata.viewId ?? null,
+                  stateValues: message.metadata.stateValues ?? null,
+                })}`
+              : message.metadata?.kind
+                ? ` | metadata.kind=${String(message.metadata.kind)}`
+                : "";
         lines.push(`${prefix} (${message.timestamp}): ${message.text}${metadataSuffix}`);
       }
 
@@ -640,6 +710,293 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           blocks: result.blocks,
         },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_modal_build",
+    label: "Slack Modal Build",
+    description:
+      "Build Slack modal JSON for common templates like confirmation dialogs, forms, and multi-select workflows.",
+    promptSnippet: "Build Slack modal JSON for a structured Slack workflow.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
+    parameters: Type.Object({
+      template: Type.String({
+        description: "Template name: confirmation | form | multi_select",
+      }),
+      title: Type.Optional(Type.String({ description: "Modal title" })),
+      submit_label: Type.Optional(Type.String({ description: "Submit button label" })),
+      close_label: Type.Optional(Type.String({ description: "Close button label" })),
+      callback_id: Type.Optional(Type.String({ description: "Optional Slack callback_id" })),
+      external_id: Type.Optional(Type.String({ description: "Optional Slack external_id" })),
+      private_metadata: Type.Optional(
+        Type.String({ description: "Optional custom private_metadata string" }),
+      ),
+      text: Type.Optional(
+        Type.String({ description: "Primary explanatory text for confirmation modals" }),
+      ),
+      confirm_phrase: Type.Optional(
+        Type.String({ description: "Optional phrase the user must type before submitting" }),
+      ),
+      confirm_label: Type.Optional(
+        Type.String({ description: "Optional label for the confirmation input" }),
+      ),
+      confirm_action_id: Type.Optional(
+        Type.String({ description: "Optional action_id for the confirmation input" }),
+      ),
+      confirm_placeholder: Type.Optional(
+        Type.String({ description: "Optional placeholder for the confirmation input" }),
+      ),
+      fields: Type.Optional(
+        Type.Array(
+          Type.Object({
+            label: Type.String({ description: "Visible field label" }),
+            action_id: Type.String({ description: "Stable Slack action_id for the input" }),
+            block_id: Type.Optional(Type.String({ description: "Optional block_id override" })),
+            placeholder: Type.Optional(Type.String({ description: "Optional placeholder text" })),
+            hint: Type.Optional(Type.String({ description: "Optional hint text" })),
+            initial_value: Type.Optional(Type.String({ description: "Optional initial value" })),
+            multiline: Type.Optional(
+              Type.Boolean({ description: "Whether the input is multiline" }),
+            ),
+            optional: Type.Optional(Type.Boolean({ description: "Whether the field is optional" })),
+          }),
+        ),
+      ),
+      label: Type.Optional(Type.String({ description: "Input label for multi_select" })),
+      action_id: Type.Optional(Type.String({ description: "action_id for multi_select" })),
+      placeholder: Type.Optional(
+        Type.String({ description: "Optional placeholder for multi_select" }),
+      ),
+      options: Type.Optional(
+        Type.Array(
+          Type.Object({
+            text: Type.String({ description: "Visible option label" }),
+            value: Type.String({ description: "Stable option value" }),
+          }),
+        ),
+      ),
+      initial_values: Type.Optional(
+        Type.Array(Type.String({ description: "Initially selected multi_select values" })),
+      ),
+      max_selected_items: Type.Optional(
+        Type.Number({ description: "Optional max_selected_items for multi_select" }),
+      ),
+      optional: Type.Optional(Type.Boolean({ description: "Whether multi_select is optional" })),
+    }),
+    async execute(_id, params) {
+      const result = buildSlackModalTemplate({
+        template: params.template,
+        title: params.title,
+        submit_label: params.submit_label,
+        close_label: params.close_label,
+        callback_id: params.callback_id,
+        external_id: params.external_id,
+        private_metadata: params.private_metadata,
+        text: params.text,
+        confirm_phrase: params.confirm_phrase,
+        confirm_label: params.confirm_label,
+        confirm_action_id: params.confirm_action_id,
+        confirm_placeholder: params.confirm_placeholder,
+        fields: params.fields as SlackModalFieldInput[] | undefined,
+        label: params.label,
+        action_id: params.action_id,
+        placeholder: params.placeholder,
+        options: params.options as SlackModalOptionInput[] | undefined,
+        initial_values: params.initial_values,
+        max_selected_items: params.max_selected_items,
+        optional: params.optional,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Built Slack modal template ${JSON.stringify(params.template)}. ` +
+              `Use this JSON as the view parameter:\n\n${JSON.stringify(result.view, null, 2)}`,
+          },
+        ],
+        details: {
+          template: params.template,
+          summary: result.summary,
+          view: result.view,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_modal_open",
+    label: "Slack Modal Open",
+    description: "Open a Slack modal with views.open using a fresh trigger_id.",
+    promptSnippet: "Open a Slack modal to collect structured input or approvals.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
+    parameters: Type.Object({
+      trigger_id: Type.String({ description: "Fresh Slack trigger_id from a recent interaction" }),
+      view: Type.Record(Type.String(), Type.Unknown(), {
+        description: "Slack modal view JSON object (type='modal')",
+      }),
+      thread_ts: Type.Optional(
+        Type.String({
+          description:
+            "Optional Slack thread to bind into private_metadata so view submissions route back into the thread",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_modal_open",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts ?? ""} | trigger_id=${params.trigger_id} | view=modal`,
+      );
+
+      try {
+        const view = await buildSlackModalView(params.view, params.thread_ts);
+        const response = await slack("views.open", getBotToken(), {
+          trigger_id: params.trigger_id,
+          view,
+        });
+        const modalView = response.view as Record<string, unknown> | undefined;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Opened Slack modal${params.thread_ts ? ` for thread ${params.thread_ts}` : ""}.`,
+            },
+          ],
+          details: {
+            thread_ts: params.thread_ts ?? null,
+            view_id: typeof modalView?.id === "string" ? modalView.id : null,
+            external_id: typeof modalView?.external_id === "string" ? modalView.external_id : null,
+            hash: typeof modalView?.hash === "string" ? modalView.hash : null,
+            view,
+          },
+        };
+      } catch (err) {
+        rethrowSlackModalError(err, "open");
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_modal_push",
+    label: "Slack Modal Push",
+    description: "Push a new view onto an open Slack modal stack using views.push.",
+    promptSnippet: "Push another Slack modal view for a multi-step workflow.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
+    parameters: Type.Object({
+      trigger_id: Type.String({ description: "Fresh Slack trigger_id from a recent interaction" }),
+      view: Type.Record(Type.String(), Type.Unknown(), {
+        description: "Slack modal view JSON object (type='modal')",
+      }),
+      thread_ts: Type.Optional(
+        Type.String({
+          description:
+            "Optional Slack thread to bind into private_metadata so later submissions route back into the thread",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_modal_push",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts ?? ""} | trigger_id=${params.trigger_id} | view=modal`,
+      );
+
+      try {
+        const view = await buildSlackModalView(params.view, params.thread_ts);
+        const response = await slack("views.push", getBotToken(), {
+          trigger_id: params.trigger_id,
+          view,
+        });
+        const modalView = response.view as Record<string, unknown> | undefined;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Pushed a new Slack modal view${params.thread_ts ? ` for thread ${params.thread_ts}` : ""}.`,
+            },
+          ],
+          details: {
+            thread_ts: params.thread_ts ?? null,
+            view_id: typeof modalView?.id === "string" ? modalView.id : null,
+            external_id: typeof modalView?.external_id === "string" ? modalView.external_id : null,
+            hash: typeof modalView?.hash === "string" ? modalView.hash : null,
+            view,
+          },
+        };
+      } catch (err) {
+        rethrowSlackModalError(err, "push");
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_modal_update",
+    label: "Slack Modal Update",
+    description: "Update an open Slack modal using views.update.",
+    promptSnippet: "Update an existing Slack modal with a new view.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
+    parameters: Type.Object({
+      view: Type.Record(Type.String(), Type.Unknown(), {
+        description: "Slack modal view JSON object (type='modal')",
+      }),
+      view_id: Type.Optional(
+        Type.String({ description: "Slack view_id from a modal interaction" }),
+      ),
+      external_id: Type.Optional(Type.String({ description: "Slack external_id for the modal" })),
+      hash: Type.Optional(
+        Type.String({ description: "Optional modal hash for optimistic locking" }),
+      ),
+      thread_ts: Type.Optional(
+        Type.String({
+          description:
+            "Optional Slack thread to bind into private_metadata so later submissions route back into the thread",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_modal_update",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts ?? ""} | view_id=${params.view_id ?? ""} | external_id=${params.external_id ?? ""} | view=modal`,
+      );
+
+      if (!params.view_id && !params.external_id) {
+        throw new Error("Provide either view_id or external_id when updating a Slack modal.");
+      }
+
+      try {
+        const view = await buildSlackModalView(params.view, params.thread_ts);
+        const response = await slack("views.update", getBotToken(), {
+          ...(params.view_id ? { view_id: params.view_id } : {}),
+          ...(params.external_id ? { external_id: params.external_id } : {}),
+          ...(params.hash ? { hash: params.hash } : {}),
+          view,
+        });
+        const modalView = response.view as Record<string, unknown> | undefined;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Updated Slack modal${params.view_id ? ` ${params.view_id}` : ""}.`,
+            },
+          ],
+          details: {
+            thread_ts: params.thread_ts ?? null,
+            view_id: typeof modalView?.id === "string" ? modalView.id : (params.view_id ?? null),
+            external_id:
+              typeof modalView?.external_id === "string"
+                ? modalView.external_id
+                : (params.external_id ?? null),
+            hash: typeof modalView?.hash === "string" ? modalView.hash : (params.hash ?? null),
+            view,
+          },
+        };
+      } catch (err) {
+        rethrowSlackModalError(err, "update");
+      }
     },
   });
 

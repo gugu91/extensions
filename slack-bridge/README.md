@@ -34,6 +34,10 @@ If the agent is idle, incoming messages are processed immediately.
 | `slack_read(thread_ts, limit?)`                                                     | Read thread messages                         |
 | `slack_inbox()`                                                                     | Check pending messages manually              |
 | `slack_blocks_build(template, ...)`                                                 | Build common Block Kit payloads              |
+| `slack_modal_build(template, ...)`                                                  | Build common Slack modal payloads            |
+| `slack_modal_open(trigger_id, view, thread_ts?)`                                    | Open a Slack modal                           |
+| `slack_modal_push(trigger_id, view, thread_ts?)`                                    | Push a new modal step onto the stack         |
+| `slack_modal_update(view, view_id?, external_id?, hash?, thread_ts?)`               | Update an existing open modal                |
 | `slack_create_channel(name, topic?, purpose?)`                                      | Create a project channel                     |
 | `slack_post_channel(channel?, text, thread_ts?, blocks?)`                           | Post to a channel                            |
 | `slack_read_channel(channel, thread_ts?, limit?)`                                   | Read channel history or thread               |
@@ -73,7 +77,8 @@ a short cache to avoid hammering Slack.
 - **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
 - **Broker control plane canvas** — the broker can maintain a live Slack canvas with agent roster, task/PR state, and RALPH health on every cycle
 - **Block Kit messages** — send rich Slack layouts via the optional `blocks` parameter
-- **Interactive buttons** — `block_actions` button clicks are routed back into the inbox as structured events
+- **Interactive workflows** — `block_actions` button clicks and `view_submission` modal submits are routed back into the inbox as structured events
+- **Slack modals** — open, push, and update modal views for confirmations, forms, and multi-step workflows
 - **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
 - **Scheduled & delayed messages** — queue reminders, timed announcements, and follow-ups without waiting around
 - **Pins & bookmarks** — highlight key messages and manage durable channel-header links
@@ -177,9 +182,10 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 The `manifest.yaml` includes all required scopes and events, including `files:write`
 for `slack_upload`, `chat:write` for `slack_schedule`, bookmark/pin scopes for
 `slack_bookmark` and `slack_pin`, `users:read` + `users.getPresence` / `dnd.info`
-for presence checks, and `reaction_added` + `reactions:read` plus `presence_change`
-for Slack-side awareness events. Use it when creating the app (**From a manifest**) or
-paste it into **App Manifest** in settings.
+for presence checks, `reaction_added` + `reactions:read` plus `presence_change`
+for Slack-side awareness events, and `interactivity.is_enabled: true` for buttons
+and modals. Use it when creating the app (**From a manifest**) or paste it into
+**App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:
 
@@ -225,7 +231,33 @@ Example `slack_send` payload:
 }
 ```
 
-Button clicks arrive back through the inbox as structured events with metadata like `kind=slack_block_action`, `actionId`, `value`, and best-effort `parsedValue` when the button value is JSON.
+Button clicks arrive back through the inbox as structured events with metadata like `kind=slack_block_action`, `triggerId`, `actionId`, `value`, and best-effort `parsedValue` when the button value is JSON.
+
+## Modal workflows
+
+Use `slack_modal_build` to generate common modal payloads, then pass the returned `view`
+into `slack_modal_open`, `slack_modal_push`, or `slack_modal_update`.
+
+- `slack_modal_open` / `slack_modal_push` need a fresh `trigger_id` from a recent
+  Slack interaction (button click or modal submit). Trigger IDs expire after roughly
+  3 seconds, so if Slack returns `invalid_trigger`, ask the user to click again and
+  reopen the modal immediately.
+- Pass `thread_ts` when opening or pushing a modal if you want later `view_submission`
+  payloads routed back into the original Slack thread.
+- Modal submissions arrive through the inbox as `kind=slack_view_submission` with
+  `callbackId`, `viewId`, and parsed `stateValues`.
+
+Example `slack_modal_build` confirmation request:
+
+```json
+{
+  "template": "confirmation",
+  "title": "Deploy approval",
+  "text": "Ready to deploy to production.",
+  "confirm_phrase": "CONFIRM",
+  "callback_id": "deploy.confirm"
+}
+```
 
 ## Security
 

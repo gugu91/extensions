@@ -60,6 +60,20 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
+      if (method === "views.open" || method === "views.push" || method === "views.update") {
+        return {
+          ok: true,
+          token,
+          body,
+          view: {
+            id: "V123",
+            external_id: typeof body?.external_id === "string" ? body.external_id : undefined,
+            hash: "hash-123",
+            ...(body?.view as Record<string, unknown> | undefined),
+          },
+        } as SlackResult;
+      }
+
       if (method === "pins.add" || method === "pins.remove") {
         return {
           ok: true,
@@ -678,9 +692,8 @@ describe("registerSlackTools", () => {
 
     const response = await tools.get("slack_inbox")!.execute("tool-16", {});
 
-    expect(response.content?.[0]?.text).toContain(
-      'metadata={"kind":"slack_block_action","actionId":"review.approve"',
-    );
+    expect(response.content?.[0]?.text).toContain('metadata={"kind":"slack_block_action"');
+    expect(response.content?.[0]?.text).toContain('"actionId":"review.approve"');
     expect(response.details).toEqual({
       count: 1,
       messages: [
@@ -721,6 +734,138 @@ describe("registerSlackTools", () => {
         { type: "header" },
         { type: "section" },
         { type: "actions", elements: expect.any(Array) },
+      ],
+    });
+  });
+
+  it("builds modal templates via slack_modal_build", async () => {
+    const { tools } = setup();
+
+    const response = await tools.get("slack_modal_build")!.execute("tool-18", {
+      template: "confirmation",
+      title: "Deploy approval",
+      text: "Ready to deploy to production.",
+      confirm_phrase: "CONFIRM",
+      callback_id: "deploy.confirm",
+    });
+
+    expect(response.content?.[0]?.text).toContain("Use this JSON as the view parameter");
+    expect(response.details).toMatchObject({
+      template: "confirmation",
+      view: {
+        type: "modal",
+        callback_id: "deploy.confirm",
+        blocks: expect.any(Array),
+      },
+    });
+  });
+
+  it("opens a modal and embeds thread context in private_metadata", async () => {
+    const { slack, tools, setResolveFollowerReplyChannel } = setup();
+    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+
+    const response = await tools.get("slack_modal_open")!.execute("tool-19", {
+      trigger_id: "trigger-1",
+      thread_ts: "123.456",
+      view: {
+        type: "modal",
+        title: { type: "plain_text", text: "Deploy" },
+        submit: { type: "plain_text", text: "Approve" },
+        close: { type: "plain_text", text: "Cancel" },
+        private_metadata: JSON.stringify({ workflow: "deploy" }),
+        blocks: [],
+      },
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "views.open",
+      "xoxb-initial",
+      expect.objectContaining({
+        trigger_id: "trigger-1",
+        view: expect.objectContaining({
+          private_metadata: expect.stringContaining("123.456"),
+        }),
+      }),
+    );
+    expect(response.details).toMatchObject({
+      thread_ts: "123.456",
+      view_id: "V123",
+    });
+  });
+
+  it("updates a modal by view_id", async () => {
+    const { slack, tools } = setup();
+
+    await tools.get("slack_modal_update")!.execute("tool-20", {
+      view_id: "V555",
+      view: {
+        type: "modal",
+        title: { type: "plain_text", text: "Step 2" },
+        submit: { type: "plain_text", text: "Continue" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [],
+      },
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "views.update",
+      "xoxb-initial",
+      expect.objectContaining({
+        view_id: "V555",
+        view: expect.objectContaining({ type: "modal" }),
+      }),
+    );
+  });
+
+  it("returns structured inbox messages including modal submission metadata", async () => {
+    const { inbox, tools } = setup();
+    inbox.push({
+      channel: "C123",
+      threadTs: "123.456",
+      userId: "U123",
+      text: 'Submitted Slack modal (deploy.confirm) "Deploy approval".',
+      timestamp: "hash-123",
+      metadata: {
+        kind: "slack_view_submission",
+        triggerId: "trigger-1",
+        callbackId: "deploy.confirm",
+        viewId: "V123",
+        stateValues: {
+          confirm_phrase: {
+            confirm_phrase: { type: "plain_text_input", value: "CONFIRM" },
+          },
+        },
+      },
+    });
+
+    const response = await tools.get("slack_inbox")!.execute("tool-21", {});
+
+    expect(response.content?.[0]?.text).toContain('metadata={"kind":"slack_view_submission"');
+    expect(response.content?.[0]?.text).toContain('"triggerId":"trigger-1"');
+    expect(response.details).toEqual({
+      count: 1,
+      messages: [
+        {
+          channel: "C123",
+          threadTs: "123.456",
+          userId: "U123",
+          text: 'Submitted Slack modal (deploy.confirm) "Deploy approval".',
+          timestamp: "hash-123",
+          metadata: {
+            kind: "slack_view_submission",
+            triggerId: "trigger-1",
+            callbackId: "deploy.confirm",
+            viewId: "V123",
+            stateValues: {
+              confirm_phrase: {
+                confirm_phrase: { type: "plain_text_input", value: "CONFIRM" },
+              },
+            },
+          },
+        },
       ],
     });
   });

@@ -3,6 +3,7 @@ import {
   extractSlackBlockActionDedupKey,
   extractSlackEventDedupKey,
   extractSlackSocketDedupKey,
+  extractSlackViewSubmissionDedupKey,
 } from "./slack-socket-dedup.js";
 
 describe("extractSlackSocketDedupKey", () => {
@@ -80,6 +81,22 @@ describe("extractSlackEventDedupKey", () => {
         },
       }),
     ).toBe("reaction_added:C123:111.333:U_REACTOR:eyes:999.000");
+  });
+});
+
+describe("extractSlackViewSubmissionDedupKey", () => {
+  it("derives a stable key for modal submissions", () => {
+    expect(
+      extractSlackViewSubmissionDedupKey({
+        type: "view_submission",
+        user: { id: "U1" },
+        view: {
+          id: "V123",
+          hash: "hash-1",
+          callback_id: "deploy.confirm",
+        },
+      }),
+    ).toBe("view_submission:U1:V123:hash-1:deploy.confirm");
   });
 });
 
