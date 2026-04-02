@@ -154,6 +154,20 @@ export class BrokerClient {
     this.connected = false;
   }
 
+  async disconnectGracefully(): Promise<void> {
+    this.shuttingDown = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopHeartbeat();
+    try {
+      await this.unregister();
+    } finally {
+      this.disconnect();
+    }
+  }
+
   isConnected(): boolean {
     return this.connected;
   }

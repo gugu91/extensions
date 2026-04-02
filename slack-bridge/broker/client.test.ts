@@ -305,6 +305,64 @@ describe("BrokerClient — heartbeat / unregister", () => {
 
     client.disconnect();
   });
+
+  it("disconnectGracefully unregisters, stops heartbeat, and closes the socket", async () => {
+    const clearIntervalSpy = vi.spyOn(global, "clearInterval");
+
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const registerPromise = client.register("GracefulBot", "👋");
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "grace-2",
+      name: "GracefulBot",
+      emoji: "👋",
+    });
+    await registerPromise;
+
+    const disconnectPromise = client.disconnectGracefully();
+    await waitFor(() => mock.received.length > 1);
+
+    const unregisterReq = JSON.parse(mock.received[1]) as { id: number; method: string };
+    expect(unregisterReq.method).toBe("unregister");
+
+    mock.respondTo(mock.connections[0], unregisterReq.id, { ok: true });
+    await disconnectPromise;
+
+    await waitFor(() => mock.connections[0]?.destroyed === true);
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(client.isConnected()).toBe(false);
+
+    clearIntervalSpy.mockRestore();
+  });
+
+  it("disconnectGracefully still disconnects locally when unregister fails", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const registerPromise = client.register("GracefulBot", "👋");
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "grace-3",
+      name: "GracefulBot",
+      emoji: "👋",
+    });
+    await registerPromise;
+
+    const disconnectPromise = client.disconnectGracefully();
+    await waitFor(() => mock.received.length > 1);
+
+    const unregisterReq = JSON.parse(mock.received[1]) as { id: number; method: string };
+    expect(unregisterReq.method).toBe("unregister");
+
+    mock.respondError(mock.connections[0], unregisterReq.id, -32000, "broker unavailable");
+    await expect(disconnectPromise).rejects.toThrow("broker unavailable");
+    await waitFor(() => mock.connections[0]?.destroyed === true);
+    expect(client.isConnected()).toBe(false);
+  });
 });
 
 describe("BrokerClient — pollInbox", () => {
