@@ -331,6 +331,84 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     );
   });
 
+  it("onAgentMessage callback fires when a message targets an agent", async () => {
+    await client.register("sender-worker", "📤");
+
+    // Register a second client as the target
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    const reg2 = await client2.register("target-agent", "🎯");
+
+    // Set up the callback
+    const received: { targetId: string; body: string; meta: Record<string, unknown> }[] = [];
+    server.onAgentMessage((targetId, msg, meta) => {
+      received.push({ targetId, body: msg.body, meta });
+    });
+
+    // Worker sends a message to the target
+    await client.sendAgentMessage("target-agent", "Hello broker!");
+
+    // Callback should have fired with the target agent's ID
+    expect(received).toHaveLength(1);
+    expect(received[0].targetId).toBe(reg2.agentId);
+    expect(received[0].body).toBe("Hello broker!");
+    expect(received[0].meta.senderAgent).toBe("sender-worker");
+    expect(received[0].meta.a2a).toBe(true);
+
+    client2.disconnect();
+  });
+
+  it("onAgentMessage callback not called for unrelated targets", async () => {
+    await client.register("worker-a", "🅰️");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("worker-b", "🅱️");
+
+    // Callback that only fires for a specific agent
+    const brokerId = "fake-broker-id";
+    const received: string[] = [];
+    server.onAgentMessage((targetId, msg) => {
+      if (targetId === brokerId) received.push(msg.body);
+    });
+
+    // Message goes to worker-b, not fake-broker-id
+    await client.sendAgentMessage("worker-b", "Not for broker");
+    expect(received).toHaveLength(0);
+
+    client2.disconnect();
+  });
+
+  it("markDeliveredByMessageId marks DB inbox rows as delivered", async () => {
+    const reg = await client.register("sender", "📤");
+
+    // Register target directly in DB (simulating broker agent)
+    const brokerAgent = db.registerAgent("broker-self", "Broker", "🤖", process.pid, {});
+
+    // Insert a message targeting the broker
+    const threadId = `a2a:${reg.agentId}:${brokerAgent.id}`;
+    db.createThread(threadId, "agent", "", reg.agentId);
+    const msg = db.insertMessage(threadId, "agent", "inbound", reg.agentId, "Test", [
+      brokerAgent.id,
+    ]);
+
+    // Inbox should have an undelivered entry
+    const before = db.getInbox(brokerAgent.id);
+    expect(before).toHaveLength(1);
+    expect(before[0].entry.delivered).toBe(false);
+
+    // Mark delivered by message ID
+    db.markDeliveredByMessageId(msg.id, brokerAgent.id);
+
+    // Inbox should now be empty (delivered = 1)
+    const after = db.getInbox(brokerAgent.id);
+    expect(after).toHaveLength(0);
+  });
+
   it("slack.proxy returns error when not configured", async () => {
     await client.register("proxy-tester", "🔌");
     await expect(client.slackProxy("chat.postMessage", { channel: "C1" })).rejects.toThrow(

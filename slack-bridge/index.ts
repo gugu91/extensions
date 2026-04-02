@@ -1719,6 +1719,27 @@ export default function (pi: ExtensionAPI) {
         activeBroker = broker;
         activeRouter = router;
         activeSelfId = selfId;
+
+        // When a worker sends a pinet_message targeting the broker, the
+        // socket server writes to the DB inbox but the broker only reads
+        // its in-memory inbox.  Bridge the gap here: push a2a messages
+        // targeting ourselves into the in-memory inbox and trigger drain.
+        broker.server.onAgentMessage((targetAgentId, brokerMsg, meta) => {
+          if (targetAgentId !== selfId) return;
+          const senderName = (meta.senderAgent as string) ?? brokerMsg.sender;
+          inbox.push({
+            channel: "",
+            threadTs: brokerMsg.threadId,
+            userId: senderName,
+            text: brokerMsg.body,
+            timestamp: brokerMsg.createdAt,
+          });
+          // Mark delivered so the DB row doesn't linger.
+          broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
+          updateBadge();
+          if (extCtx?.isIdle?.()) drainInbox();
+        });
+
         startBrokerHeartbeat();
         startBrokerMaintenance(ctx);
         startBrokerRalphLoop(ctx);

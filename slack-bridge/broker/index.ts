@@ -5,6 +5,7 @@ import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
 export { BrokerSocketServer } from "./socket-server.js";
+export type { AgentMessageCallback } from "./socket-server.js";
 export type {
   AgentInfo,
   ThreadInfo,

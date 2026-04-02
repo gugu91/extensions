@@ -516,7 +516,7 @@ export class BrokerDB implements BrokerDBInterface {
           `SELECT id FROM agents
            WHERE disconnected_at IS NOT NULL
              AND disconnected_at <= ?
-             AND (resumable_until IS NULL OR resumable_until <= ?)`
+             AND (resumable_until IS NULL OR resumable_until <= ?)`,
         )
         .all(cutoff, nowIso) as Array<{ id: string }>;
 
@@ -532,7 +532,7 @@ export class BrokerDB implements BrokerDBInterface {
         `DELETE FROM agents
          WHERE disconnected_at IS NOT NULL
            AND disconnected_at <= ?
-           AND (resumable_until IS NULL OR resumable_until <= ?)`
+           AND (resumable_until IS NULL OR resumable_until <= ?)`,
       ).run(cutoff, nowIso);
 
       return rows.map((row) => row.id);
@@ -990,6 +990,14 @@ export class BrokerDB implements BrokerDBInterface {
         stmt.run(id);
       }
     }
+  }
+
+  /** Mark all undelivered inbox rows for a given message+agent as delivered. */
+  markDeliveredByMessageId(messageId: number, agentId: string): void {
+    const db = this.getDb();
+    db.prepare(
+      "UPDATE inbox SET delivered = 1 WHERE message_id = ? AND agent_id = ? AND delivered = 0",
+    ).run(messageId, agentId);
   }
 
   // ─── Internal ────────────────────────────────────────

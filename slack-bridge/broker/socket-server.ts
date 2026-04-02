@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as crypto from "node:crypto";
 import type { BrokerDB } from "./schema.js";
 import { MessageRouter } from "./router.js";
-import type { JsonRpcRequest, JsonRpcResponse, JsonRpcError } from "./types.js";
+import type { BrokerMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcError } from "./types.js";
 import {
   RPC_PARSE_ERROR,
   RPC_INVALID_REQUEST,
@@ -33,6 +33,12 @@ export const DEFAULT_PRUNE_INTERVAL_MS = 5_000;
 export type ListenTarget =
   | { type: "unix"; path: string }
   | { type: "tcp"; host: string; port: number };
+
+export type AgentMessageCallback = (
+  targetAgentId: string,
+  msg: BrokerMessage,
+  metadata: Record<string, unknown>,
+) => void;
 
 export interface BrokerSocketServerOptions {
   heartbeatTimeoutMs?: number;
@@ -76,6 +82,7 @@ export class BrokerSocketServer {
   private readonly pruneIntervalMs: number;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private assignedPort: number | null = null;
+  private agentMessageCallback: AgentMessageCallback | null = null;
 
   constructor(
     db: BrokerDB,
@@ -181,6 +188,15 @@ export class BrokerSocketServer {
       host: this.target.host,
       port: this.assignedPort ?? this.target.port,
     };
+  }
+
+  /**
+   * Register a callback invoked whenever a worker sends an agent-to-agent
+   * message via the socket server.  The broker uses this to push messages
+   * targeting itself into its in-memory inbox.
+   */
+  onAgentMessage(cb: AgentMessageCallback): void {
+    this.agentMessageCallback = cb;
   }
 
   private startPruning(): void {
@@ -557,6 +573,12 @@ export class BrokerSocketServer {
       [target.id],
       enrichedMeta,
     );
+
+    // Notify callback so the broker can push to its in-memory inbox
+    // when the target is the broker itself.
+    if (this.agentMessageCallback) {
+      this.agentMessageCallback(target.id, msg, enrichedMeta);
+    }
 
     return rpcOk(req.id, { ok: true, messageId: msg.id });
   }
