@@ -1176,3 +1176,39 @@ export function resolveAgentIdentity(
   // 3. Fully generated
   return generateAgentName(seed);
 }
+
+// ─── Confirmation state cleanup ─────────────────────────
+
+export interface ConfirmationRequest {
+  toolPattern: string;
+  action: string;
+  requestedAt: number;
+}
+
+export interface ThreadConfirmationState {
+  pending: ConfirmationRequest[];
+  approved: ConfirmationRequest[];
+  rejected: ConfirmationRequest[];
+}
+
+export const DEFAULT_CONFIRMATION_REQUEST_TTL_MS = 5 * 60_000;
+export const MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD = 3;
+
+export function normalizeThreadConfirmationState(
+  state: ThreadConfirmationState,
+  now = Date.now(),
+  ttlMs = DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
+  maxPending = MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD,
+): ThreadConfirmationState {
+  const keepFresh = (request: ConfirmationRequest) => now - request.requestedAt < ttlMs;
+
+  return {
+    pending: state.pending.filter(keepFresh).slice(-maxPending),
+    approved: state.approved.filter(keepFresh),
+    rejected: state.rejected.filter(keepFresh),
+  };
+}
+
+export function isThreadConfirmationStateEmpty(state: ThreadConfirmationState): boolean {
+  return state.pending.length === 0 && state.approved.length === 0 && state.rejected.length === 0;
+}

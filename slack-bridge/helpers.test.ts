@@ -33,9 +33,14 @@ import {
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
+  normalizeThreadConfirmationState,
+  isThreadConfirmationStateEmpty,
+  DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
+  MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD,
   type InboxMessage,
   type AgentDisplayInfo,
   type FollowerThreadState,
+  type ThreadConfirmationState,
 } from "./helpers.js";
 
 // ─── loadSettings ─────────────────────────────────────────
@@ -1247,5 +1252,79 @@ describe("getFollowerOwnedThreadClaims", () => {
     ]);
 
     expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
+  });
+});
+
+// ─── confirmation state cleanup ─────────────────────────
+
+describe("normalizeThreadConfirmationState", () => {
+  function makeState(): ThreadConfirmationState {
+    return {
+      pending: [],
+      approved: [],
+      rejected: [],
+    };
+  }
+
+  it("expires stale pending, approved, and rejected requests", () => {
+    const now = Date.now();
+    const fresh = now - 1_000;
+    const stale = now - DEFAULT_CONFIRMATION_REQUEST_TTL_MS - 1_000;
+    const state: ThreadConfirmationState = {
+      pending: [
+        { toolPattern: "bash", action: "fresh pending", requestedAt: fresh },
+        { toolPattern: "edit", action: "stale pending", requestedAt: stale },
+      ],
+      approved: [
+        { toolPattern: "write", action: "fresh approved", requestedAt: fresh },
+        { toolPattern: "memory_write", action: "stale approved", requestedAt: stale },
+      ],
+      rejected: [
+        { toolPattern: "bash", action: "fresh rejected", requestedAt: fresh },
+        { toolPattern: "edit", action: "stale rejected", requestedAt: stale },
+      ],
+    };
+
+    expect(normalizeThreadConfirmationState(state, now)).toEqual({
+      pending: [{ toolPattern: "bash", action: "fresh pending", requestedAt: fresh }],
+      approved: [{ toolPattern: "write", action: "fresh approved", requestedAt: fresh }],
+      rejected: [{ toolPattern: "bash", action: "fresh rejected", requestedAt: fresh }],
+    });
+  });
+
+  it("caps pending requests per thread to the newest entries", () => {
+    const now = Date.now();
+    const state: ThreadConfirmationState = {
+      pending: Array.from(
+        { length: MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD + 2 },
+        (_, idx) => ({
+          toolPattern: `tool-${idx}`,
+          action: `action-${idx}`,
+          requestedAt: now - (MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD + 2 - idx) * 1_000,
+        }),
+      ),
+      approved: [],
+      rejected: [],
+    };
+
+    const result = normalizeThreadConfirmationState(state, now);
+
+    expect(result.pending).toHaveLength(MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD);
+    expect(result.pending.map((request) => request.toolPattern)).toEqual([
+      `tool-2`,
+      `tool-3`,
+      `tool-4`,
+    ]);
+  });
+
+  it("detects when a confirmation state is empty", () => {
+    expect(isThreadConfirmationStateEmpty(makeState())).toBe(true);
+    expect(
+      isThreadConfirmationStateEmpty({
+        pending: [{ toolPattern: "bash", action: "run", requestedAt: Date.now() }],
+        approved: [],
+        rejected: [],
+      }),
+    ).toBe(false);
   });
 });

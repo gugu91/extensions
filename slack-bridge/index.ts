@@ -7,6 +7,8 @@ import { Type } from "@sinclair/typebox";
 import {
   type InboxMessage,
   type AgentDisplayInfo,
+  type ConfirmationRequest,
+  type ThreadConfirmationState,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   isUserAllowed as checkUserAllowed,
@@ -25,6 +27,8 @@ import {
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
+  DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
+  MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD,
   generateAgentName,
   resolveAgentIdentity,
   shortenPath,
@@ -36,6 +40,8 @@ import {
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
+  normalizeThreadConfirmationState,
+  isThreadConfirmationStateEmpty,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import {
@@ -221,21 +227,38 @@ export default function (pi: ExtensionAPI) {
   const channelCache = new Map<string, string>();
   const unclaimedThreads = new Set<string>(); // negative cache for resolveThreadOwner
 
-  interface ConfirmationRequest {
-    toolPattern: string;
-    action: string;
-    requestedAt: number;
-  }
-
-  interface ThreadConfirmationState {
-    pending: ConfirmationRequest[];
-    approved: ConfirmationRequest[];
-    rejected: ConfirmationRequest[];
-  }
-
   const threadConfirmationStates = new Map<string, ThreadConfirmationState>();
 
+  function storeThreadConfirmationState(
+    threadTs: string,
+    state: ThreadConfirmationState,
+    now = Date.now(),
+  ): ThreadConfirmationState | null {
+    const normalized = normalizeThreadConfirmationState(
+      state,
+      now,
+      DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
+      MAX_PENDING_CONFIRMATION_REQUESTS_PER_THREAD,
+    );
+
+    if (isThreadConfirmationStateEmpty(normalized)) {
+      threadConfirmationStates.delete(threadTs);
+      return null;
+    }
+
+    threadConfirmationStates.set(threadTs, normalized);
+    return normalized;
+  }
+
+  function sweepThreadConfirmationStates(now = Date.now()): void {
+    for (const [threadTs, state] of threadConfirmationStates) {
+      storeThreadConfirmationState(threadTs, state, now);
+    }
+  }
+
   function getThreadConfirmationState(threadTs: string): ThreadConfirmationState {
+    sweepThreadConfirmationStates();
+
     let state = threadConfirmationStates.get(threadTs);
     if (!state) {
       state = { pending: [], approved: [], rejected: [] };
@@ -247,9 +270,7 @@ export default function (pi: ExtensionAPI) {
   function cleanupThreadConfirmationState(threadTs: string): void {
     const state = threadConfirmationStates.get(threadTs);
     if (!state) return;
-    if (state.pending.length === 0 && state.approved.length === 0 && state.rejected.length === 0) {
-      threadConfirmationStates.delete(threadTs);
-    }
+    storeThreadConfirmationState(threadTs, state);
   }
 
   // ─── State persistence ──────────────────────────────
@@ -422,14 +443,17 @@ export default function (pi: ExtensionAPI) {
   }
 
   function registerConfirmationRequest(threadTs: string, tool: string, action: string): void {
-    getThreadConfirmationState(threadTs).pending.push({
+    const state = getThreadConfirmationState(threadTs);
+    state.pending.push({
       toolPattern: tool,
       action,
       requestedAt: Date.now(),
     });
+    storeThreadConfirmationState(threadTs, state);
   }
 
   function consumeConfirmationReply(threadTs: string, text: string): { approved: boolean } | null {
+    sweepThreadConfirmationStates();
     const state = threadConfirmationStates.get(threadTs);
     if (!state || state.pending.length === 0) return null;
 
@@ -453,6 +477,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getConfirmationDecision(threadTs: string, toolName: string): boolean | null {
+    sweepThreadConfirmationStates();
     const state = threadConfirmationStates.get(threadTs);
     if (!state) return null;
 
