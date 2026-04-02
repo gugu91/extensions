@@ -129,6 +129,12 @@ import {
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
 } from "./task-assignments.js";
+import {
+  formatRecentActivityLogEntries,
+  SlackActivityLogger,
+  type ActivityLogEntry,
+  type ActivityLogTone,
+} from "./activity-log.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import {
   createBrokerDeliveryState,
@@ -475,6 +481,7 @@ export default function (pi: ExtensionAPI) {
   const inbox: InboxMessage[] = [];
   const brokerDeliveryState = createBrokerDeliveryState();
   let extCtx: ExtensionContext | null = null; // cached for badge updates
+  let lastActivityLogFailureAt = 0;
 
   function updateBadge(): void {
     if (!extCtx?.hasUI) return;
@@ -544,6 +551,78 @@ export default function (pi: ExtensionAPI) {
     } while (cursor);
 
     throw new Error(`Channel "${name}" not found.`);
+  }
+
+  const activityLogger = new SlackActivityLogger({
+    getBotToken: () => botToken,
+    getLogChannel: () => settings.logChannel,
+    getLogLevel: () => settings.logLevel,
+    getAgentName: () => agentName,
+    getAgentEmoji: () => agentEmoji,
+    resolveChannel,
+    slack,
+    onError: (error) => {
+      console.error(`[slack-bridge] activity log failed: ${msg(error)}`);
+      const now = Date.now();
+      if (!extCtx?.hasUI || now - lastActivityLogFailureAt < 60_000) {
+        return;
+      }
+      lastActivityLogFailureAt = now;
+      extCtx.ui.notify(`Pinet activity log failed: ${msg(error)}`, "warning");
+    },
+  });
+
+  function logBrokerActivity(entry: ActivityLogEntry): void {
+    if (!settings.logChannel) {
+      return;
+    }
+    if (brokerRole !== "broker" && activeBroker == null) {
+      return;
+    }
+    activityLogger.log(entry);
+  }
+
+  function formatTrackedAgent(agentId: string): string {
+    const agent = activeBroker?.db.getAgentById(agentId);
+    if (!agent) {
+      return agentId;
+    }
+    return `${agent.emoji} ${agent.name}`.trim();
+  }
+
+  function summarizeTrackedAssignmentStatus(
+    status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed",
+    prNumber: number | null,
+    branch: string | null,
+  ): { summary: string; tone: ActivityLogTone } {
+    switch (status) {
+      case "pr_merged":
+        return {
+          summary: `PR #${prNumber ?? "?"} merged`,
+          tone: "success",
+        };
+      case "pr_open":
+        return {
+          summary: `PR #${prNumber ?? "?"} opened for review`,
+          tone: "success",
+        };
+      case "pr_closed":
+        return {
+          summary: `PR #${prNumber ?? "?"} closed without merge`,
+          tone: "warning",
+        };
+      case "branch_pushed":
+        return {
+          summary: `commits pushed on ${branch ?? "tracked branch"}`,
+          tone: "info",
+        };
+      case "assigned":
+      default:
+        return {
+          summary: "assigned",
+          tone: "info",
+        };
+    }
   }
 
   async function resolveFollowerReplyChannel(threadTs: string | undefined): Promise<string | null> {
@@ -1450,14 +1529,70 @@ export default function (pi: ExtensionAPI) {
       lastBrokerMaintenance = result;
 
       const signature = result.anomalies.join("|");
-      if (signature && signature !== lastBrokerMaintenanceSignature) {
+      const previousSignature = lastBrokerMaintenanceSignature;
+      if (signature && signature !== previousSignature) {
         ctx.ui.notify(`Pinet broker: ${result.anomalies.join("; ")}`, "warning");
-      } else if (!signature && lastBrokerMaintenanceSignature) {
+      } else if (!signature && previousSignature) {
         ctx.ui.notify("Pinet broker health recovered", "info");
       }
+
+      const maintenanceDetails: string[] = [];
+      if (result.assignedBacklogCount > 0) {
+        maintenanceDetails.push(
+          `assigned ${result.assignedBacklogCount} backlog item${result.assignedBacklogCount === 1 ? "" : "s"}`,
+        );
+      }
+      if (result.reapedAgentIds.length > 0) {
+        maintenanceDetails.push(
+          `reaped stale agents: ${result.reapedAgentIds.map((agentId) => formatTrackedAgent(agentId)).join(", ")}`,
+        );
+      }
+      if (result.repairedThreadClaims > 0) {
+        maintenanceDetails.push(
+          `released ${result.repairedThreadClaims} orphaned thread claim${result.repairedThreadClaims === 1 ? "" : "s"}`,
+        );
+      }
+      maintenanceDetails.push(...result.anomalies);
+
+      const hasMaintenanceActions =
+        result.assignedBacklogCount > 0 ||
+        result.reapedAgentIds.length > 0 ||
+        result.repairedThreadClaims > 0;
+      const shouldLogMaintenance = hasMaintenanceActions || previousSignature !== signature;
+      if (shouldLogMaintenance) {
+        logBrokerActivity({
+          kind: "broker_maintenance",
+          level: hasMaintenanceActions ? "actions" : "verbose",
+          title: signature ? "Broker maintenance anomaly" : "Broker maintenance recovery",
+          summary: signature
+            ? `Broker maintenance recorded ${maintenanceDetails.length} noteworthy event${maintenanceDetails.length === 1 ? "" : "s"}.`
+            : "Broker maintenance is healthy again.",
+          details:
+            signature && maintenanceDetails.length > 0
+              ? maintenanceDetails
+              : previousSignature
+                ? ["Previous anomalies cleared."]
+                : undefined,
+          fields: [
+            { label: "Backlog", value: result.pendingBacklogCount },
+            { label: "Assigned", value: result.assignedBacklogCount },
+            { label: "Reaped", value: result.reapedAgentIds.length },
+            { label: "Repaired", value: result.repairedThreadClaims },
+          ],
+          tone: signature ? "warning" : "success",
+        });
+      }
+
       lastBrokerMaintenanceSignature = signature;
     } catch (err) {
       ctx.ui.notify(`Pinet maintenance failed: ${msg(err)}`, "error");
+      logBrokerActivity({
+        kind: "broker_maintenance_error",
+        level: "errors",
+        title: "Broker maintenance failed",
+        summary: msg(err),
+        tone: "error",
+      });
     } finally {
       brokerMaintenanceRunning = false;
     }
@@ -1489,6 +1624,13 @@ export default function (pi: ExtensionAPI) {
       }
     } catch (err) {
       ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(err)}`, "error");
+      logBrokerActivity({
+        kind: "scheduled_wakeup_error",
+        level: "errors",
+        title: "Scheduled wake-up delivery failed",
+        summary: msg(err),
+        tone: "error",
+      });
     } finally {
       brokerScheduledWakeupRunning = false;
     }
@@ -1725,6 +1867,7 @@ export default function (pi: ExtensionAPI) {
         lastBrokerTaskAssignmentReportSignature = "";
       } else {
         const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
+        const changedAssignments = resolvedAssignments.filter(hasTaskAssignmentStatusChange);
         projectedAssignments = resolvedAssignments.map((assignment) => {
           if (hasTaskAssignmentStatusChange(assignment)) {
             db.updateTaskAssignmentProgress(
@@ -1740,6 +1883,68 @@ export default function (pi: ExtensionAPI) {
             prNumber: assignment.nextPrNumber,
           };
         });
+
+        if (changedAssignments.length > 0) {
+          const openedCount = changedAssignments.filter(
+            (assignment) => assignment.nextStatus === "pr_open",
+          ).length;
+          const mergedCount = changedAssignments.filter(
+            (assignment) => assignment.nextStatus === "pr_merged",
+          ).length;
+          const closedCount = changedAssignments.filter(
+            (assignment) => assignment.nextStatus === "pr_closed",
+          ).length;
+          const tone: ActivityLogTone =
+            closedCount > 0 ? "warning" : mergedCount > 0 || openedCount > 0 ? "success" : "info";
+          const title =
+            mergedCount > 0
+              ? mergedCount === 1
+                ? "Task merged"
+                : "Tasks merged"
+              : openedCount > 0
+                ? openedCount === 1
+                  ? "Worker completion recorded"
+                  : "Worker completions recorded"
+                : "Task progress updated";
+          const summaryParts = [];
+          if (openedCount > 0) {
+            summaryParts.push(
+              `${openedCount} worker completion${openedCount === 1 ? "" : "s"} moved to PR open`,
+            );
+          }
+          if (mergedCount > 0) {
+            summaryParts.push(`${mergedCount} PR${mergedCount === 1 ? "" : "s"} merged`);
+          }
+          if (closedCount > 0) {
+            summaryParts.push(`${closedCount} PR${closedCount === 1 ? "" : "s"} closed`);
+          }
+          if (summaryParts.length === 0) {
+            summaryParts.push(
+              `${changedAssignments.length} tracked assignment${changedAssignments.length === 1 ? " changed" : "s changed"}`,
+            );
+          }
+          logBrokerActivity({
+            kind: "task_progress",
+            level: "actions",
+            title,
+            summary: summaryParts.join("; "),
+            details: changedAssignments.map((assignment) => {
+              const next = summarizeTrackedAssignmentStatus(
+                assignment.nextStatus,
+                assignment.nextPrNumber,
+                assignment.branch,
+              );
+              return `${formatTrackedAgent(assignment.agentId)} — #${assignment.issueNumber}: ${next.summary}`;
+            }),
+            fields: [
+              { label: "Updated", value: changedAssignments.length },
+              { label: "Merged", value: mergedCount },
+              { label: "PR open", value: openedCount },
+              { label: "Cycle", value: cycleStartedAt },
+            ],
+            tone,
+          });
+        }
 
         pendingBrokerTaskAssignmentReport = getPendingTaskAssignmentReport(
           projectedAssignments,
@@ -1786,6 +1991,56 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected", "info");
       } else if (!hasOutstandingAnomalies && lastBrokerRalphLoopHadOutstandingAnomalies) {
         ctx.ui.notify(ralphNotifications.recoveryStatus, "info");
+      }
+
+      if (shouldWarn || shouldInform) {
+        logBrokerActivity({
+          kind: "ralph_event",
+          level: "actions",
+          title: shouldWarn ? "RALPH anomaly detected" : "RALPH status updated",
+          summary: ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected",
+          details: visibleEvaluation.anomalies,
+          fields: [
+            { label: "Ghosts", value: visibleEvaluation.ghostAgentIds.length },
+            { label: "Stuck", value: visibleEvaluation.stuckAgentIds.length },
+            { label: "Nudged", value: visibleEvaluation.nudgeAgentIds.length },
+            { label: "Backlog", value: pendingBacklogCount },
+            { label: "Follow-up", value: shouldDeliverFollowUp },
+          ],
+          tone: shouldWarn ? "warning" : "info",
+        });
+      } else if (!hasOutstandingAnomalies && lastBrokerRalphLoopHadOutstandingAnomalies) {
+        logBrokerActivity({
+          kind: "ralph_event",
+          level: "actions",
+          title: "RALPH recovered",
+          summary: ralphNotifications.recoveryStatus,
+          details: ["Previous ghost/stall/backlog anomalies cleared."],
+          fields: [
+            { label: "Backlog", value: pendingBacklogCount },
+            { label: "Idle workers", value: visibleEvaluation.idleDrainAgentIds.length },
+          ],
+          tone: "success",
+        });
+      } else {
+        logBrokerActivity({
+          kind: "ralph_cycle",
+          level: "verbose",
+          title: "RALPH cycle",
+          summary:
+            visibleEvaluation.anomalies.length > 0
+              ? `${visibleEvaluation.anomalies.length} anomaly entries observed this cycle.`
+              : "Broker health steady this cycle.",
+          details: visibleEvaluation.anomalies.length > 0 ? visibleEvaluation.anomalies : undefined,
+          fields: [
+            { label: "Ghosts", value: visibleEvaluation.ghostAgentIds.length },
+            { label: "Stuck", value: visibleEvaluation.stuckAgentIds.length },
+            { label: "Nudged", value: visibleEvaluation.nudgeAgentIds.length },
+            { label: "Idle", value: visibleEvaluation.idleDrainAgentIds.length },
+            { label: "Backlog", value: pendingBacklogCount },
+          ],
+          tone: visibleEvaluation.anomalies.length > 0 ? "warning" : "info",
+        });
       }
       lastBrokerRalphLoopNonGhostSignature = nonGhostSignature;
       lastBrokerRalphLoopHadOutstandingAnomalies = hasOutstandingAnomalies;
@@ -1855,6 +2110,14 @@ export default function (pi: ExtensionAPI) {
       }
     } catch (err) {
       ctx.ui.notify(buildRalphLoopStatusMessage(`failed: ${msg(err)}`, cycleStartedAt), "error");
+      logBrokerActivity({
+        kind: "ralph_error",
+        level: "errors",
+        title: "RALPH loop failed",
+        summary: msg(err),
+        fields: [{ label: "Cycle", value: cycleStartedAt }],
+        tone: "error",
+      });
     } finally {
       brokerRalphLoopRunning = false;
     }
@@ -1926,14 +2189,36 @@ export default function (pi: ExtensionAPI) {
         metadata: finalMetadata,
       });
 
+      const recordedAssignments = [] as Array<{ issueNumber: number; branch: string | null }>;
       for (const assignment of extractTaskAssignmentsFromMessage(body)) {
-        db.recordTaskAssignment(
+        const tracked = db.recordTaskAssignment(
           result.target.id,
           assignment.issueNumber,
           assignment.branch,
           result.threadId,
           result.messageId,
         );
+        recordedAssignments.push({ issueNumber: tracked.issueNumber, branch: tracked.branch });
+      }
+
+      if (recordedAssignments.length > 0) {
+        logBrokerActivity({
+          kind: "task_assignment",
+          level: "actions",
+          title: recordedAssignments.length === 1 ? "Task assigned" : "Tasks assigned",
+          summary: `Assigned ${recordedAssignments.map((assignment) => `#${assignment.issueNumber}`).join(", ")} to ${formatTrackedAgent(result.target.id)}.`,
+          details: recordedAssignments.map((assignment) =>
+            assignment.branch
+              ? `#${assignment.issueNumber} on \`${assignment.branch}\``
+              : `#${assignment.issueNumber}`,
+          ),
+          fields: [
+            { label: "Worker", value: formatTrackedAgent(result.target.id) },
+            { label: "Thread", value: result.threadId },
+            { label: "Message", value: result.messageId },
+          ],
+          tone: "info",
+        });
       }
 
       return { messageId: result.messageId, target: result.target.name };
@@ -2011,6 +2296,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     await disconnect();
+    activityLogger.clearPending();
     brokerRole = null;
     pinetEnabled = false;
     setExtStatus(ctx, "off");
@@ -2519,20 +2805,48 @@ export default function (pi: ExtensionAPI) {
 
         syncBrokerDbInbox(selfId, broker.db);
       });
-      broker.server.onAgentStatusChange((_agentId, status) => {
+      broker.server.onAgentStatusChange((changedAgentId, status) => {
         if (status === "idle") {
           runBrokerMaintenance(ctx);
         }
+
+        logBrokerActivity({
+          kind: "agent_status",
+          level: "verbose",
+          title: status === "idle" ? "Worker available" : "Worker busy",
+          summary: `${formatTrackedAgent(changedAgentId)} marked itself ${status}.`,
+          fields: [{ label: "Agent", value: formatTrackedAgent(changedAgentId) }],
+          tone: status === "idle" ? "success" : "info",
+        });
       });
 
+      brokerRole = "broker";
+      pinetEnabled = true;
+      applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
       startBrokerHeartbeat();
       startBrokerMaintenance(ctx);
       startBrokerRalphLoop(ctx);
       startBrokerScheduledWakeups(ctx);
-      brokerRole = "broker";
-      pinetEnabled = true;
-      applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
       setExtStatus(ctx, "ok");
+      logBrokerActivity({
+        kind: "broker_started",
+        level: "actions",
+        title: "Broker started",
+        summary: `${agentEmoji} ${agentName} is online and coordinating the mesh.`,
+        details:
+          recoveredBrokerMessages > 0 || releasedBrokerClaims > 0
+            ? [
+                `Recovered ${recoveredBrokerMessages} pending broker inbox item${recoveredBrokerMessages === 1 ? "" : "s"}.`,
+                `Released ${releasedBrokerClaims} stale broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}.`,
+              ]
+            : undefined,
+        fields: [
+          { label: "Bot", value: botUserId ?? "unknown" },
+          { label: "Log channel", value: settings.logChannel ?? "disabled" },
+          { label: "Log level", value: settings.logLevel ?? "actions" },
+        ],
+        tone: "success",
+      });
       ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
     } catch (err) {
       try {
@@ -2947,6 +3261,9 @@ export default function (pi: ExtensionAPI) {
       const defaultChInfo = settings.defaultChannel
         ? `Default channel: ${settings.defaultChannel}`
         : "Default channel: none";
+      const activityLogInfo = settings.logChannel
+        ? `Activity log: ${settings.logChannel} (${settings.logLevel ?? "actions"})`
+        : "Activity log: disabled";
       const brokerHealthInfo =
         mode === "broker" && lastBrokerMaintenance
           ? [
@@ -2984,12 +3301,36 @@ export default function (pi: ExtensionAPI) {
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
           defaultChInfo,
+          activityLogInfo,
           ...brokerHealthInfo,
           ...brokerCanvasInfo,
         ].join("\n"),
         "info",
       );
     },
+  });
+
+  const showActivityLogs = async (_args: string, ctx: ExtensionContext) => {
+    const channelInfo = settings.logChannel
+      ? `${settings.logChannel} (${settings.logLevel ?? "actions"})`
+      : "disabled";
+    ctx.ui.notify(
+      [
+        `Activity log channel: ${channelInfo}`,
+        formatRecentActivityLogEntries(activityLogger.getRecentEntries(10)),
+      ].join("\n\n"),
+      settings.logChannel ? "info" : "warning",
+    );
+  };
+
+  pi.registerCommand("pinet-logs", {
+    description: "Show recent broker activity log entries",
+    handler: showActivityLogs,
+  });
+
+  pi.registerCommand("slack-logs", {
+    description: "Show recent broker activity log entries",
+    handler: showActivityLogs,
   });
 
   pi.registerCommand("pinet-rename", {

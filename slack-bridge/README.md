@@ -84,6 +84,7 @@ a short cache to avoid hammering Slack.
 - **Pins & bookmarks** — highlight key messages and manage durable channel-header links
 - **Presence-aware messaging** — check whether teammates are active, away, or in DND before pinging them
 - **Thread export & archival** — convert Slack threads into reusable markdown, plain text, or JSON
+- **Activity log channel** — broker-side assignments, completions, merges, stalls, and RALPH events can be mirrored into a dedicated Slack log thread
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
 - **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
@@ -121,6 +122,8 @@ Add to `~/.pi/agent/settings.json`:
     "appConfigToken": "xoxe.xoxp-...",
     "allowedUsers": ["U09GWL270LA"],
     "defaultChannel": "C0APL58LB1R",
+    "logChannel": "#pinet-logs",
+    "logLevel": "actions",
     "controlPlaneCanvasEnabled": true,
     "controlPlaneCanvasChannel": "C0APL58LB1R",
     "controlPlaneCanvasTitle": "Pinet Broker Control Plane",
@@ -147,6 +150,8 @@ Add to `~/.pi/agent/settings.json`:
 | `appConfigToken`            | deploy   | App configuration token (`xoxe.xoxp-...`)                                  |
 | `allowedUsers`              | no       | Slack user IDs allowed to interact                                         |
 | `defaultChannel`            | no       | Default channel for `slack_post_channel` and control-plane canvas fallback |
+| `logChannel`                | no       | Broker activity log channel name or ID                                     |
+| `logLevel`                  | no       | `errors`, `actions` (default), or `verbose`                                |
 | `controlPlaneCanvasEnabled` | no       | Enable the broker-maintained control plane canvas (defaults to true)       |
 | `controlPlaneCanvasId`      | no       | Existing canvas ID to update instead of creating/finding a channel canvas  |
 | `controlPlaneCanvasChannel` | no       | Channel ID/name used to create or recover the broker control plane canvas  |
@@ -168,6 +173,13 @@ Add to `~/.pi/agent/settings.json`:
 emoji characters themselves (`👀`, `🔄`). The default mappings include `📝`
 → summarize and `🐛` → file-issue, and you can extend them with review /
 approve / retry style actions as needed.
+
+`logChannel` enables a broker-only observability feed. When configured, the
+broker posts structured activity updates into a daily thread in that channel.
+Default `logLevel` is `actions`, which captures worker task assignments,
+completion/PR-open transitions, merges, stalls, maintenance anomalies, and
+RALPH events. Use `errors` for failures only or `verbose` to also include
+routine broker/worker status chatter.
 
 ### 4. Install extension
 
@@ -282,6 +294,7 @@ Use these local commands to control another connected Pinet agent by name or ID:
 - `/pinet-reload <agent>` — ask the target agent to reload cleanly
 - `/pinet-exit <agent>` — ask the target agent to disconnect cleanly and exit
 - `/pinet-free` — mark this agent idle/free and available for new work
+- `/pinet-logs` / `/slack-logs` — show the most recent broker activity log entries captured this session
 
 Agents can also send the exact A2A message `/reload` or `/exit` via `pinet_message`; the
 receiver handles it automatically instead of surfacing it to the LLM as normal work.

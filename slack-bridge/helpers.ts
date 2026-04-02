@@ -13,6 +13,8 @@ export interface SlackBridgeSettings {
   appConfigToken?: string;
   allowedUsers?: string[];
   defaultChannel?: string;
+  logChannel?: string;
+  logLevel?: "errors" | "actions" | "verbose";
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   autoConnect?: boolean;

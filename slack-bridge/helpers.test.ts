@@ -121,6 +121,8 @@ describe("loadSettings", () => {
         autoConnect: true,
         allowedUsers: ["U123"],
         defaultChannel: "C456",
+        logChannel: "#pinet-logs",
+        logLevel: "verbose",
       },
     };
     fs.writeFileSync(p, JSON.stringify(settings));
@@ -130,6 +132,8 @@ describe("loadSettings", () => {
     expect(result.autoConnect).toBe(true);
     expect(result.allowedUsers).toEqual(["U123"]);
     expect(result.defaultChannel).toBe("C456");
+    expect(result.logChannel).toBe("#pinet-logs");
+    expect(result.logLevel).toBe("verbose");
   });
 
   it("returns autoFollow setting", () => {
@@ -183,6 +187,22 @@ describe("loadSettings", () => {
     fs.writeFileSync(p, JSON.stringify(settings));
     const result = loadSettings(p);
     expect(result.suggestedPrompts).toEqual([{ title: "Hi", message: "Hello!" }]);
+  });
+
+  it("returns activity log settings", () => {
+    const p = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(
+      p,
+      JSON.stringify({
+        "slack-bridge": {
+          logChannel: "CLOGS",
+          logLevel: "errors",
+        },
+      }),
+    );
+    const result = loadSettings(p);
+    expect(result.logChannel).toBe("CLOGS");
+    expect(result.logLevel).toBe("errors");
   });
 
   it("returns control plane canvas settings", () => {
