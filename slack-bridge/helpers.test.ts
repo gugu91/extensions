@@ -969,7 +969,7 @@ describe("resolveAgentIdentity", () => {
     const result = resolveAgentIdentity({});
     expect(typeof result.name).toBe("string");
     expect(result.name.length).toBeGreaterThan(0);
-    expect(result.name).toMatch(/^\w+ \w+$/); // "Adjective Animal"
+    expect(result.name).toMatch(/^\w+ \w+ \w+$/); // "Adjective Color Animal"
     expect(typeof result.emoji).toBe("string");
   });
 

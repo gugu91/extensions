@@ -1013,7 +1013,7 @@ const ADJECTIVES = [
   "Silver",
   "Scarlet",
   "Cobalt",
-  "Amber",
+  "Slate",
   "Obsidian",
   "Rapid",
   "Silent",
@@ -1081,6 +1081,29 @@ const ANIMALS = [
   "Parrot",
 ];
 
+const COLORS = [
+  "Slate",
+  "Azure",
+  "Blush",
+  "Bronze",
+  "Burgundy",
+  "Chalk",
+  "Coral",
+  "Crimson",
+  "Ebony",
+  "Emerald",
+  "Hazel",
+  "Indigo",
+  "Ivory",
+  "Lime",
+  "Magenta",
+  "Navy",
+  "Olive",
+  "Pearl",
+  "Rose",
+  "Rust",
+];
+
 const EMOJIS = [
   "🦡",
   "🐧",
@@ -1145,12 +1168,15 @@ export function generateAgentName(seed?: string): { name: string; emoji: string 
   const adjectiveIndex = seed
     ? hashString(`${seed}:adjective`) % ADJECTIVES.length
     : Math.floor(Math.random() * ADJECTIVES.length);
+  const colorIndex = seed
+    ? hashString(`${seed}:color`) % COLORS.length
+    : Math.floor(Math.random() * COLORS.length);
   const animalIndex = seed
     ? hashString(`${seed}:animal`) % ANIMALS.length
     : Math.floor(Math.random() * ANIMALS.length);
 
   return {
-    name: `${ADJECTIVES[adjectiveIndex]} ${ANIMALS[animalIndex]}`,
+    name: `${ADJECTIVES[adjectiveIndex]} ${COLORS[colorIndex]} ${ANIMALS[animalIndex]}`,
     emoji: EMOJIS[animalIndex],
   };
 }
