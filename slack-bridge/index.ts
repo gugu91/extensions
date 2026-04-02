@@ -26,7 +26,8 @@ import {
   rewriteRalphLoopGhostAnomalies,
   buildRalphLoopNudgeMessage,
   buildRalphLoopAnomalySignature,
-  buildRalphLoopFollowUpMessage,
+  buildRalphLoopCycleNotifications,
+  buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
@@ -1104,12 +1105,16 @@ export default function (pi: ExtensionAPI) {
       const visibleSignature = buildRalphLoopAnomalySignature(visibleEvaluation);
       const nonGhostSignature = ghostRewrite.nonGhostAnomalies.join("|");
       const hasOutstandingAnomalies = evaluation.anomalies.length > 0;
+      const ralphNotifications = buildRalphLoopCycleNotifications(
+        visibleEvaluation,
+        cycleStartedAt,
+      );
       const followUpPrompt =
         ghostRewrite.newGhostIds.length === 0 &&
         ghostRewrite.clearedGhostIds.length > 0 &&
         ghostRewrite.nonGhostAnomalies.length === 0
           ? null
-          : buildRalphLoopFollowUpMessage(visibleEvaluation);
+          : ralphNotifications.followUpPrompt;
 
       const agentsById = new Map(
         workloads.map((workload) => [workload.id, { emoji: workload.emoji, name: workload.name }]),
@@ -1184,11 +1189,11 @@ export default function (pi: ExtensionAPI) {
       const shouldInform =
         ghostRewrite.clearedGhostIds.length > 0 && visibleEvaluation.anomalies.length > 0;
       if (shouldWarn) {
-        ctx.ui.notify(`RALPH loop: ${visibleEvaluation.anomalies.join("; ")}`, "warning");
+        ctx.ui.notify(ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected", "warning");
       } else if (shouldInform) {
-        ctx.ui.notify(`RALPH loop: ${visibleEvaluation.anomalies.join("; ")}`, "info");
+        ctx.ui.notify(ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected", "info");
       } else if (!hasOutstandingAnomalies && lastBrokerRalphLoopHadOutstandingAnomalies) {
-        ctx.ui.notify("RALPH loop health recovered", "info");
+        ctx.ui.notify(ralphNotifications.recoveryStatus, "info");
       }
       lastBrokerRalphLoopNonGhostSignature = nonGhostSignature;
       lastBrokerRalphLoopHadOutstandingAnomalies = hasOutstandingAnomalies;
@@ -1214,7 +1219,7 @@ export default function (pi: ExtensionAPI) {
         /* best effort — don't let cycle recording break the loop */
       }
     } catch (err) {
-      ctx.ui.notify(`RALPH loop failed: ${msg(err)}`, "error");
+      ctx.ui.notify(buildRalphLoopStatusMessage(`failed: ${msg(err)}`, cycleStartedAt), "error");
     } finally {
       brokerRalphLoopRunning = false;
     }

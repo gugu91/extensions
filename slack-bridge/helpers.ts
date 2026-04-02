@@ -815,6 +815,10 @@ export function buildRalphLoopAnomalySignature(evaluation: RalphLoopEvaluationRe
   return evaluation.anomalies.join("|");
 }
 
+export function buildRalphLoopStatusMessage(summary: string, cycleStartedAt: string): string {
+  return `RALPH loop (${cycleStartedAt}): ${summary}`;
+}
+
 export interface RalphLoopFollowUpDeliveryOptions {
   signature: string;
   lastDeliveredAt?: number;
@@ -845,6 +849,7 @@ export function shouldDeliverRalphLoopFollowUp(options: RalphLoopFollowUpDeliver
 
 export function buildRalphLoopFollowUpMessage(
   evaluation: RalphLoopEvaluationResult,
+  cycleStartedAt: string,
 ): string | null {
   if (evaluation.anomalies.length === 0) {
     return null;
@@ -852,10 +857,31 @@ export function buildRalphLoopFollowUpMessage(
 
   return [
     "RALPH LOOP CYCLE:",
+    `Timestamp: ${cycleStartedAt}`,
     ...evaluation.anomalies.map((anomaly) => `- ${anomaly}`),
     "",
     "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
   ].join("\n");
+}
+
+export interface RalphLoopCycleNotifications {
+  followUpPrompt: string | null;
+  anomalyStatus: string | null;
+  recoveryStatus: string;
+}
+
+export function buildRalphLoopCycleNotifications(
+  evaluation: RalphLoopEvaluationResult,
+  cycleStartedAt: string,
+): RalphLoopCycleNotifications {
+  return {
+    followUpPrompt: buildRalphLoopFollowUpMessage(evaluation, cycleStartedAt),
+    anomalyStatus:
+      evaluation.anomalies.length > 0
+        ? buildRalphLoopStatusMessage(evaluation.anomalies.join("; "), cycleStartedAt)
+        : null,
+    recoveryStatus: buildRalphLoopStatusMessage("health recovered", cycleStartedAt),
+  };
 }
 
 export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: string): string[] {

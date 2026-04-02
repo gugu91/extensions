@@ -19,7 +19,9 @@ import {
   rewriteRalphLoopGhostAnomalies,
   buildRalphLoopNudgeMessage,
   buildRalphLoopAnomalySignature,
+  buildRalphLoopCycleNotifications,
   buildRalphLoopFollowUpMessage,
+  buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -1276,23 +1278,72 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
   });
 });
 
+describe("buildRalphLoopStatusMessage", () => {
+  it("formats inline Ralph notifications with the captured cycle timestamp", () => {
+    expect(
+      buildRalphLoopStatusMessage(
+        "ghost agents detected: ghost-1; Idle Gecko idle with assigned work",
+        "2026-04-02T14:10:00.000Z",
+      ),
+    ).toBe(
+      "RALPH loop (2026-04-02T14:10:00.000Z): ghost agents detected: ghost-1; Idle Gecko idle with assigned work",
+    );
+  });
+});
+
+describe("buildRalphLoopCycleNotifications", () => {
+  it("threads the captured cycle timestamp through follow-up and inline status output", () => {
+    expect(
+      buildRalphLoopCycleNotifications(
+        {
+          ghostAgentIds: ["ghost-1"],
+          nudgeAgentIds: ["idle-1"],
+          idleDrainAgentIds: ["ready-1"],
+          stuckAgentIds: [],
+          anomalies: [
+            "ghost agents detected: ghost-1",
+            "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+          ],
+        },
+        "2026-04-02T14:10:00.000Z",
+      ),
+    ).toEqual({
+      followUpPrompt: [
+        "RALPH LOOP CYCLE:",
+        "Timestamp: 2026-04-02T14:10:00.000Z",
+        "- ghost agents detected: ghost-1",
+        "- Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+        "",
+        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+      ].join("\n"),
+      anomalyStatus:
+        "RALPH loop (2026-04-02T14:10:00.000Z): ghost agents detected: ghost-1; Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+      recoveryStatus: "RALPH loop (2026-04-02T14:10:00.000Z): health recovered",
+    });
+  });
+});
+
 describe("buildRalphLoopFollowUpMessage", () => {
   it("formats actionable anomalies into a broker follow-up prompt", () => {
     expect(
-      buildRalphLoopFollowUpMessage({
-        ghostAgentIds: ["ghost-1"],
-        nudgeAgentIds: ["idle-1"],
-        idleDrainAgentIds: ["ready-1"],
-        stuckAgentIds: [],
-        anomalies: [
-          "ghost agents detected: ghost-1",
-          "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
-          "main checkout is on `feat/not-main`, expected `main`",
-        ],
-      }),
+      buildRalphLoopFollowUpMessage(
+        {
+          ghostAgentIds: ["ghost-1"],
+          nudgeAgentIds: ["idle-1"],
+          idleDrainAgentIds: ["ready-1"],
+          stuckAgentIds: [],
+          anomalies: [
+            "ghost agents detected: ghost-1",
+            "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
+            "main checkout is on `feat/not-main`, expected `main`",
+          ],
+        },
+        "2026-04-02T14:10:00.000Z",
+      ),
     ).toBe(
       [
         "RALPH LOOP CYCLE:",
+        "Timestamp: 2026-04-02T14:10:00.000Z",
         "- ghost agents detected: ghost-1",
         "- Idle Gecko idle with assigned work (2 inbox, 1 threads)",
         "- main checkout is on `feat/not-main`, expected `main`",
@@ -1304,13 +1355,16 @@ describe("buildRalphLoopFollowUpMessage", () => {
 
   it("returns null when there is nothing actionable", () => {
     expect(
-      buildRalphLoopFollowUpMessage({
-        ghostAgentIds: [],
-        nudgeAgentIds: [],
-        idleDrainAgentIds: [],
-        stuckAgentIds: [],
-        anomalies: [],
-      }),
+      buildRalphLoopFollowUpMessage(
+        {
+          ghostAgentIds: [],
+          nudgeAgentIds: [],
+          idleDrainAgentIds: [],
+          stuckAgentIds: [],
+          anomalies: [],
+        },
+        "2026-04-02T14:10:00.000Z",
+      ),
     ).toBeNull();
   });
 });
