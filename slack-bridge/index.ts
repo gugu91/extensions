@@ -2615,8 +2615,9 @@ export default function (pi: ExtensionAPI) {
     }
 
     reportStatus("idle");
-    if (brokerRole === "broker" && ctx) {
-      runBrokerMaintenance(ctx);
+    const maintenanceCtx = ctx ?? extCtx ?? undefined;
+    if (brokerRole === "broker" && maintenanceCtx) {
+      runBrokerMaintenance(maintenanceCtx);
     }
 
     const queuedInboxCount = inbox.length;
