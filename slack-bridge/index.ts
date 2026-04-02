@@ -1726,13 +1726,13 @@ export default function (pi: ExtensionAPI) {
             return;
           }
 
-          if (decision.action === "deliver") {
-            // Message routed to broker itself — queue for maintenance pickup
-            broker.db.queueUnroutedMessage(inMsg, "broker_delegate");
-            runBrokerMaintenance(ctx);
-          } else if (decision.action === "unrouted") {
-            // No route found — deliver to broker's own inbox (broker is the default handler)
-            trackBrokerInboundThread(threads, inMsg);
+          if (decision.action === "deliver" || decision.action === "unrouted") {
+            // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
+            // Previously, broker-routed messages were queued to `unrouted_backlog` with
+            // reason "broker_delegate" and then assigned to random workers by maintenance.
+            // Since maintenance explicitly excludes the broker from assignment candidates,
+            // the messages ended up on the wrong agent. Fix: always deliver to the broker
+            // in-memory inbox so it can handle them directly. (#121)
             inbox.push({
               channel: inMsg.channel,
               threadTs: inMsg.threadId,
