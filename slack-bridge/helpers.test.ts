@@ -7,6 +7,7 @@ import {
   buildAllowlist,
   isUserAllowed,
   formatInboxMessages,
+  formatPinetInboxMessages,
   getSqliteJournalMode,
   isSqliteWalEnabled,
   buildSqliteWalFallbackWarning,
@@ -22,6 +23,7 @@ import {
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   isRalphNudgeEntry,
+  isAgentToAgentEntry,
   partitionFollowerInboxEntries,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
@@ -261,6 +263,42 @@ describe("formatInboxMessages", () => {
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("will: first");
     expect(result).toContain("will: second");
+  });
+});
+
+describe("formatPinetInboxMessages", () => {
+  it("formats agent messages with reply guidance", () => {
+    const result = formatPinetInboxMessages([
+      {
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker-id",
+          body: "Take issue #175",
+          metadata: { senderAgent: "Broker Bunny", a2a: true },
+        },
+      },
+    ]);
+
+    expect(result).toContain("New Pinet messages:");
+    expect(result).toContain(
+      "[thread a2a:broker:worker] broker-id (Broker Bunny): Take issue #175",
+    );
+    expect(result).toContain("Reply via pinet_message.");
+  });
+
+  it("falls back to the sender id when no senderAgent metadata exists", () => {
+    const result = formatPinetInboxMessages([
+      {
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker-id",
+          body: "hello",
+          metadata: { a2a: true },
+        },
+      },
+    ]);
+
+    expect(result).toContain("[thread a2a:broker:worker] broker-id: hello");
   });
 });
 
@@ -1545,8 +1583,52 @@ describe("isRalphNudgeEntry", () => {
   });
 });
 
+describe("isAgentToAgentEntry", () => {
+  it("returns true for a2a thread ids", () => {
+    const entry: NudgeTestEntry = {
+      inboxId: 1,
+      message: {
+        threadId: "a2a:broker:worker",
+        sender: "broker",
+        body: "do work",
+        metadata: null,
+      },
+    };
+
+    expect(isAgentToAgentEntry(entry)).toBe(true);
+  });
+
+  it("returns true when a2a metadata is set", () => {
+    const entry: NudgeTestEntry = {
+      inboxId: 2,
+      message: {
+        threadId: "thread-1",
+        sender: "broker",
+        body: "do work",
+        metadata: { a2a: true },
+      },
+    };
+
+    expect(isAgentToAgentEntry(entry)).toBe(true);
+  });
+
+  it("returns false for regular slack threads", () => {
+    const entry: NudgeTestEntry = {
+      inboxId: 3,
+      message: {
+        threadId: "1712073599.123456",
+        sender: "U123",
+        body: "hello",
+        metadata: { channel: "C456" },
+      },
+    };
+
+    expect(isAgentToAgentEntry(entry)).toBe(false);
+  });
+});
+
 describe("partitionFollowerInboxEntries", () => {
-  it("separates nudges from regular messages", () => {
+  it("separates nudges, agent messages, and regular slack messages", () => {
     const entries: NudgeTestEntry[] = [
       {
         inboxId: 1,
@@ -1560,7 +1642,7 @@ describe("partitionFollowerInboxEntries", () => {
       {
         inboxId: 2,
         message: {
-          threadId: "t-1",
+          threadId: "1712073599.123456",
           sender: "U123",
           body: "hello",
           metadata: { channel: "C456" },
@@ -1571,27 +1653,29 @@ describe("partitionFollowerInboxEntries", () => {
         message: {
           threadId: "a2a:broker:worker",
           sender: "broker",
-          body: "second nudge",
-          metadata: { kind: "ralph_loop_nudge" },
+          body: "please take #175",
+          metadata: { a2a: true, senderAgent: "Broker Bunny" },
         },
       },
     ];
 
     const result = partitionFollowerInboxEntries(entries);
-    expect(result.nudges).toHaveLength(2);
+    expect(result.nudges).toHaveLength(1);
+    expect(result.agentMessages).toHaveLength(1);
     expect(result.regular).toHaveLength(1);
     expect(result.nudges[0].inboxId).toBe(1);
-    expect(result.nudges[1].inboxId).toBe(3);
+    expect(result.agentMessages[0].inboxId).toBe(3);
     expect(result.regular[0].inboxId).toBe(2);
   });
 
   it("returns empty arrays when no entries", () => {
     const result = partitionFollowerInboxEntries([]);
     expect(result.nudges).toEqual([]);
+    expect(result.agentMessages).toEqual([]);
     expect(result.regular).toEqual([]);
   });
 
-  it("puts all entries in regular when no nudges", () => {
+  it("puts all entries in regular when no nudges or agent messages", () => {
     const entries: NudgeTestEntry[] = [
       {
         inboxId: 1,
@@ -1605,6 +1689,7 @@ describe("partitionFollowerInboxEntries", () => {
     ];
     const result = partitionFollowerInboxEntries(entries);
     expect(result.nudges).toEqual([]);
+    expect(result.agentMessages).toEqual([]);
     expect(result.regular).toHaveLength(1);
   });
 });

@@ -99,6 +99,28 @@ export function formatInboxMessages(
   return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
 }
 
+function getPinetSenderLabel(message: FollowerInboxEntry["message"]): string {
+  const senderId = message.sender?.trim() ?? "";
+  const senderAgent =
+    typeof message.metadata?.senderAgent === "string" ? message.metadata.senderAgent.trim() : "";
+
+  if (senderId && senderAgent && senderAgent !== senderId) {
+    return `${senderId} (${senderAgent})`;
+  }
+
+  return senderId || senderAgent || "unknown-agent";
+}
+
+export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string {
+  const lines = entries.map((entry) => {
+    const threadTs = entry.message.threadId ?? "";
+    const sender = getPinetSenderLabel(entry.message);
+    return `[thread ${threadTs}] ${sender}: ${entry.message.body ?? ""}`;
+  });
+
+  return `New Pinet messages:\n${lines.join("\n")}\n\nReply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.`;
+}
+
 // ─── Slack API encoding ──────────────────────────────────
 
 export const FORM_METHODS = new Set([
@@ -1349,7 +1371,7 @@ export async function callSlackAPI(
   return data;
 }
 
-// ─── Follower nudge detection (#102) ─────────────────────
+// ─── Follower inbox partitioning (#102, #175) ───────────
 
 export function isRalphNudgeEntry(entry: {
   message: { metadata?: Record<string, unknown> | null };
@@ -1357,19 +1379,29 @@ export function isRalphNudgeEntry(entry: {
   return entry.message.metadata?.kind === "ralph_loop_nudge";
 }
 
+export function isAgentToAgentEntry(entry: {
+  message: { threadId?: string; metadata?: Record<string, unknown> | null };
+}): boolean {
+  const threadId = entry.message.threadId ?? "";
+  return threadId.startsWith("a2a:") || entry.message.metadata?.a2a === true;
+}
+
 export function partitionFollowerInboxEntries<
-  T extends { message: { metadata?: Record<string, unknown> | null } },
->(entries: T[]): { nudges: T[]; regular: T[] } {
+  T extends { message: { threadId?: string; metadata?: Record<string, unknown> | null } },
+>(entries: T[]): { nudges: T[]; agentMessages: T[]; regular: T[] } {
   const nudges: T[] = [];
+  const agentMessages: T[] = [];
   const regular: T[] = [];
   for (const entry of entries) {
     if (isRalphNudgeEntry(entry)) {
       nudges.push(entry);
+    } else if (isAgentToAgentEntry(entry)) {
+      agentMessages.push(entry);
     } else {
       regular.push(entry);
     }
   }
-  return { nudges, regular };
+  return { nudges, agentMessages, regular };
 }
 
 // ─── Ralph cycle records (#103) ──────────────────────────
