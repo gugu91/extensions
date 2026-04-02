@@ -430,19 +430,23 @@ describe("Pinet control helpers", () => {
 // ─── Safe reload orchestration ───────────────────────────
 
 describe("reloadPinetRuntimeSafely", () => {
-  it("validates refreshed settings before stopping the current runtime", async () => {
-    const stopRuntime = async () => {
+  it("restores the snapshot when validation fails after refresh mutates live state", async () => {
+    let activeConfig = "previous";
+    const restoreState = vi.fn((snapshot: string) => {
+      activeConfig = snapshot;
+    });
+    const stopRuntime = vi.fn(async () => {
       throw new Error("should not stop");
-    };
+    });
 
     await expect(
       reloadPinetRuntimeSafely({
         getCurrentRole: () => "broker",
-        snapshotState: () => "previous",
-        restoreState: () => {
-          throw new Error("should not restore");
+        snapshotState: () => activeConfig,
+        restoreState,
+        refreshState: () => {
+          activeConfig = "refreshed";
         },
-        refreshState: () => {},
         validateRefreshedState: () => {
           throw new Error("bad config");
         },
@@ -452,6 +456,10 @@ describe("reloadPinetRuntimeSafely", () => {
         },
       }),
     ).rejects.toThrow("bad config");
+
+    expect(activeConfig).toBe("previous");
+    expect(restoreState).toHaveBeenCalledWith("previous");
+    expect(stopRuntime).not.toHaveBeenCalled();
   });
 
   it("restores the previous runtime when the refreshed runtime fails to start", async () => {

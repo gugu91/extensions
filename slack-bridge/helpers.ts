@@ -209,8 +209,15 @@ export async function reloadPinetRuntimeSafely<State>(
   }
 
   const snapshot = reloader.snapshotState();
-  reloader.refreshState();
-  await reloader.validateRefreshedState();
+
+  try {
+    reloader.refreshState();
+    await reloader.validateRefreshedState();
+  } catch (validationErr) {
+    reloader.restoreState(snapshot);
+    throw validationErr;
+  }
+
   await reloader.stopRuntime();
 
   try {
