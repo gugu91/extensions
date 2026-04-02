@@ -773,6 +773,22 @@ describe("BrokerSocketServer", () => {
     return server.getConnectInfo() as { type: "tcp"; host: string; port: number };
   }
 
+  async function sendRawLine(line: string): Promise<JsonRpcResponse> {
+    const socket = await connectRawSocket(getInfo());
+
+    const response = new Promise<JsonRpcResponse>((resolve) => {
+      socket.once("data", (chunk) => {
+        const payload = chunk.toString("utf-8").trim();
+        resolve(JSON.parse(payload) as JsonRpcResponse);
+      });
+    });
+
+    socket.write(line + "\n");
+    const result = await response;
+    socket.destroy();
+    return result;
+  }
+
   it("accepts connections", async () => {
     const client = await connectClient(getInfo());
     client.destroy();
@@ -971,22 +987,51 @@ describe("BrokerSocketServer", () => {
   });
 
   it("invalid JSON returns parse error", async () => {
-    const socket = await connectRawSocket(getInfo());
-
-    const response = new Promise<JsonRpcResponse>((resolve) => {
-      socket.on("data", (chunk) => {
-        const line = chunk.toString("utf-8").trim();
-        resolve(JSON.parse(line) as JsonRpcResponse);
-      });
-    });
-
-    socket.write("not valid json\n");
-    const res = await response;
+    const res = await sendRawLine("not valid json");
 
     expect(res.error).toBeDefined();
     expect(res.error!.code).toBe(-32700);
+    expect(res.id).toBeNull();
+  });
 
-    socket.destroy();
+  it("rejects non-object JSON-RPC payloads as invalid requests", async () => {
+    for (const payload of ["null", "[]", "true", "123"]) {
+      const res = await sendRawLine(payload);
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32600);
+      expect(res.id).toBeNull();
+    }
+  });
+
+  it("rejects requests with the wrong jsonrpc version", async () => {
+    const res = await sendRawLine(
+      JSON.stringify({ jsonrpc: "1.0", id: 7, method: "register", params: {} }),
+    );
+
+    expect(res.error).toBeDefined();
+    expect(res.error!.code).toBe(-32600);
+    expect(res.id).toBe(7);
+  });
+
+  it("rejects requests with invalid ids", async () => {
+    for (const id of [null, false, 0, ""]) {
+      const res = await sendRawLine(
+        JSON.stringify({ jsonrpc: "2.0", id, method: "register", params: {} }),
+      );
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32600);
+      expect(res.id).toBeNull();
+    }
+  });
+
+  it("rejects requests with non-object params", async () => {
+    const res = await sendRawLine(
+      JSON.stringify({ jsonrpc: "2.0", id: 9, method: "register", params: [] }),
+    );
+
+    expect(res.error).toBeDefined();
+    expect(res.error!.code).toBe(-32600);
+    expect(res.id).toBe(9);
   });
 
   it("cleans up agent on disconnect", async () => {
