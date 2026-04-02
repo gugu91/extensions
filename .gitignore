@@ -9,4 +9,5 @@ dist/
 .nvimlog
 neon-psql/config.json
 __pycache__/
+.firecrawl/
 .env*

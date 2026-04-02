@@ -62,6 +62,9 @@ paste `manifest.yaml` from this directory.
   with `connections:write` scope → copy the `xapp-...` token
 - **Bot Token:** OAuth & Permissions → Install to Workspace → copy the
   `xoxb-...` token
+- **App Config Token:** App settings page → **Your App Configuration Tokens** →
+  Generate Token → copy the `xoxe.xoxp-...` token
+- **App ID:** Basic Information → **App Credentials** → copy the `A...` app ID
 
 ### 3. Configure
 
@@ -72,6 +75,8 @@ Add to `~/.pi/agent/settings.json`:
   "slack-bridge": {
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
+    "appId": "A0123456789",
+    "appConfigToken": "xoxe.xoxp-...",
     "allowedUsers": ["U09GWL270LA"],
     "defaultChannel": "C0APL58LB1R",
     "suggestedPrompts": [
@@ -82,16 +87,22 @@ Add to `~/.pi/agent/settings.json`:
 }
 ```
 
-| Key                | Required | Description                                  |
-| ------------------ | -------- | -------------------------------------------- |
-| `botToken`         | yes      | Bot User OAuth Token (`xoxb-...`)            |
-| `appToken`         | yes      | App-Level Token for Socket Mode (`xapp-...`) |
-| `allowedUsers`     | no       | Slack user IDs allowed to interact           |
-| `defaultChannel`   | no       | Default channel for `slack_post_channel`     |
-| `suggestedPrompts` | no       | Prompts shown on new assistant thread        |
+| Key                | Required | Description                                      |
+| ------------------ | -------- | ------------------------------------------------ |
+| `botToken`         | yes      | Bot User OAuth Token (`xoxb-...`)                |
+| `appToken`         | yes      | App-Level Token for Socket Mode (`xapp-...`)     |
+| `appId`            | deploy   | Slack app ID (`A...`) for manifest deploy/update |
+| `appConfigToken`   | deploy   | App configuration token (`xoxe.xoxp-...`)        |
+| `allowedUsers`     | no       | Slack user IDs allowed to interact               |
+| `defaultChannel`   | no       | Default channel for `slack_post_channel`         |
+| `suggestedPrompts` | no       | Prompts shown on new assistant thread            |
 
-> Tokens can also be set via `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` env vars
-> (settings.json takes priority).
+> Runtime tokens can also be set via `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`
+> env vars (settings.json takes priority).
+>
+> Manifest deploy also reads `SLACK_APP_ID` and `SLACK_APP_CONFIG_TOKEN`
+> (or `SLACK_CONFIG_TOKEN`). The Socket Mode `xapp-...` token cannot be used
+> with `apps.manifest.update`.
 
 ### 4. Install extension
 
@@ -106,6 +117,16 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 The `manifest.yaml` includes all required scopes and events. Use it when
 creating the app (**From a manifest**) or paste it into **App Manifest** in
 settings.
+
+To push the checked-in manifest back to Slack, run:
+
+```bash
+pnpm deploy:slack
+```
+
+The deploy command validates `slack-bridge/manifest.yaml`, updates the target
+Slack app through `apps.manifest.update`, and reports any bot/user scope
+changes.
 
 ## Security
 

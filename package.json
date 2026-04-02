@@ -24,6 +24,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "deploy:slack": "node --experimental-strip-types ./slack-bridge/deploy-manifest.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm format:check",
     "prepush": "pnpm lint && pnpm typecheck && pnpm test",
     "lint-staged": "lint-staged",

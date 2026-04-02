@@ -8,6 +8,8 @@ import { matchesToolPattern } from "./guardrails.js";
 export interface SlackBridgeSettings {
   botToken?: string;
   appToken?: string;
+  appId?: string;
+  appConfigToken?: string;
   allowedUsers?: string[];
   defaultChannel?: string;
   suggestedPrompts?: { title: string; message: string }[];
