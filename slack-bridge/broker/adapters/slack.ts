@@ -1,9 +1,4 @@
-import {
-  buildSlackRequest,
-  buildAllowlist,
-  isUserAllowed,
-  stripBotMention,
-} from "../../helpers.js";
+import { callSlackAPI, buildAllowlist, isUserAllowed, stripBotMention } from "../../helpers.js";
 import { TtlCache } from "../../ttl-cache.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
@@ -18,16 +13,6 @@ export interface SlackAdapterConfig {
   isOwnedThread?: (threadTs: string) => boolean;
 }
 
-// ─── Slack API result ────────────────────────────────────
-
-interface SlackResult {
-  ok: boolean;
-  error?: string;
-  [k: string]: unknown;
-}
-
-// ─── Internal thread tracking ────────────────────────────
-
 interface SlackThreadInfo {
   channelId: string;
   threadTs: string;
@@ -35,34 +20,9 @@ interface SlackThreadInfo {
   context?: { channelId: string; teamId: string };
 }
 
-// ─── Slack API wrapper ───────────────────────────────────
+// ─── Internal thread tracking ────────────────────────────
 
-const SLACK_MAX_RETRIES = 3;
-
-async function callSlack(
-  method: string,
-  token: string,
-  body?: Record<string, unknown>,
-  _retryCount = 0,
-): Promise<SlackResult> {
-  const { url, init } = buildSlackRequest(method, token, body);
-  const res = await fetch(url, init);
-
-  if (res.status === 429) {
-    if (_retryCount >= SLACK_MAX_RETRIES) {
-      throw new Error(`Slack ${method}: rate limited after ${SLACK_MAX_RETRIES} retries`);
-    }
-    const wait = Number(res.headers.get("retry-after") ?? "3");
-    await new Promise((r) => setTimeout(r, wait * 1000));
-    return callSlack(method, token, body, _retryCount + 1);
-  }
-
-  const data = (await res.json()) as SlackResult;
-  if (!data.ok) throw new Error(`Slack ${method}: ${data.error ?? "unknown error"}`);
-  return data;
-}
-
-// ─── Pure parsing functions (exported for testing) ───────
+// ─── Slack API result ────────────────────────────────────
 
 export interface ParsedEnvelope {
   envelopeId?: string;
@@ -230,7 +190,7 @@ export class SlackAdapter implements MessageAdapter {
 
   async connect(): Promise<void> {
     this.shuttingDown = false;
-    const auth = await callSlack("auth.test", this.config.botToken);
+    const auth = await callSlackAPI("auth.test", this.config.botToken);
     this.botUserId = auth.user_id as string;
     await this.connectSocketMode();
   }
@@ -271,7 +231,7 @@ export class SlackAdapter implements MessageAdapter {
       };
     }
 
-    await callSlack("chat.postMessage", this.config.botToken, body);
+    await callSlackAPI("chat.postMessage", this.config.botToken, body);
 
     // Remove pending eyes for this thread
     const pending = this.pendingEyes.get(msg.threadId);
@@ -306,7 +266,7 @@ export class SlackAdapter implements MessageAdapter {
     if (this.shuttingDown) return;
 
     try {
-      const res = await callSlack("apps.connections.open", this.config.appToken);
+      const res = await callSlackAPI("apps.connections.open", this.config.appToken);
       this.ws = new WebSocket(res.url as string);
 
       this.ws.addEventListener("message", (event) => {
@@ -459,7 +419,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private async addReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await callSlack("reactions.add", this.config.botToken, {
+      await callSlackAPI("reactions.add", this.config.botToken, {
         channel,
         timestamp: ts,
         name: emoji,
@@ -471,7 +431,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private async removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await callSlack("reactions.remove", this.config.botToken, {
+      await callSlackAPI("reactions.remove", this.config.botToken, {
         channel,
         timestamp: ts,
         name: emoji,
@@ -485,7 +445,7 @@ export class SlackAdapter implements MessageAdapter {
     const cached = this.userNames.get(userId);
     if (cached) return cached;
     try {
-      const res = await callSlack("users.info", this.config.botToken, {
+      const res = await callSlackAPI("users.info", this.config.botToken, {
         user: userId,
       });
       const u = res.user as { real_name?: string; name?: string };
@@ -500,7 +460,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private async clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
     try {
-      await callSlack("assistant.threads.setStatus", this.config.botToken, {
+      await callSlackAPI("assistant.threads.setStatus", this.config.botToken, {
         channel_id: channelId,
         thread_ts: threadTs,
         status: "",
@@ -517,7 +477,7 @@ export class SlackAdapter implements MessageAdapter {
       { title: "Review", message: "Summarise the recent changes" },
     ];
     try {
-      await callSlack("assistant.threads.setSuggestedPrompts", this.config.botToken, {
+      await callSlackAPI("assistant.threads.setSuggestedPrompts", this.config.botToken, {
         channel_id: channelId,
         thread_ts: threadTs,
         prompts,
