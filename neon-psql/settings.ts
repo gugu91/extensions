@@ -55,6 +55,7 @@ export interface FileConfig {
   injectIntoBash?: boolean;
   injectPythonShim?: boolean;
   logPath?: string;
+  psqlBin?: string;
   sourceEnv?: Partial<SourceEnvConfig>;
   injectEnv?: Record<string, string>;
 }
@@ -64,6 +65,7 @@ export interface ResolvedConfig {
   injectIntoBash: boolean;
   injectPythonShim: boolean;
   logPath: string;
+  psqlBin?: string;
   sourceEnv: SourceEnvConfig;
   injectEnv: Record<string, string>;
 }
@@ -129,6 +131,7 @@ function normalizeConfig(cwd: string, source: RawConfigSource): ResolvedConfig |
     injectIntoBash: raw.injectIntoBash ?? true,
     injectPythonShim: raw.injectPythonShim ?? true,
     logPath: resolveLogPath(cwd, raw.logPath),
+    psqlBin: raw.psqlBin?.trim() || undefined,
     sourceEnv: {
       host: raw.sourceEnv?.host ?? DEFAULT_SOURCE_ENV.host,
       port: raw.sourceEnv?.port ?? DEFAULT_SOURCE_ENV.port,

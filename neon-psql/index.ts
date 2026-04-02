@@ -18,12 +18,12 @@ import {
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@gugu91/pi-ext-types/typebox";
 
+import { resolvePsqlBin } from "./psql-bin.js";
 import { loadConfig, type ResolvedConfig } from "./settings.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TUNNEL_SCRIPT = join(__dirname, "neon_socks_tunnel.py");
 const PYTHON_SHIM_DIR = join(__dirname, "python");
-const PSQL_BIN = "/opt/homebrew/opt/libpq/bin/psql";
 
 const SANDBOX_RUNTIME_ENTRY = join(
   getAgentDir(),
@@ -508,7 +508,7 @@ async function runPsqlQuery(
     });
   };
 
-  const child = spawn(PSQL_BIN, args, {
+  const child = spawn(resolvePsqlBin({ configuredPath: config.psqlBin }), args, {
     env: {
       ...process.env,
       ...injected,
