@@ -25,6 +25,7 @@ If the agent is idle, incoming messages are processed immediately.
 | ----------------------------------------------------------------------------------- | -------------------------------------------- |
 | `slack_send(text, thread_ts?)`                                                      | Reply in a thread or start new               |
 | `slack_upload(content?, path?, filename?, filetype?, title?, channel?, thread_ts?)` | Upload a file/snippet into Slack or a thread |
+| `slack_schedule(text, channel?, thread_ts?, delay?, at?)`                           | Schedule a Slack message for later           |
 | `slack_read(thread_ts, limit?)`                                                     | Read thread messages                         |
 | `slack_inbox()`                                                                     | Check pending messages manually              |
 | `slack_create_channel(name, topic?, purpose?)`                                      | Create a project channel                     |
@@ -37,6 +38,9 @@ If the agent is idle, incoming messages are processed immediately.
 safety, local uploads are limited to files inside the current working directory
 or the system temp directory.
 
+`slack_schedule` supports delayed messages via `delay` (for example `30m` or
+`2h`) and absolute scheduling via `at` (ISO-8601 UTC timestamp).
+
 ## Features
 
 - **Slack Assistant** — appears in Slack's sidebar, native conversation UI
@@ -48,6 +52,7 @@ or the system temp directory.
 - **@mentions** — tag Pinet in any channel and it responds in-thread
 - **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
 - **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
+- **Scheduled & delayed messages** — queue reminders, timed announcements, and follow-ups without waiting around
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
 - **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
@@ -121,8 +126,9 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 ## Manifest
 
 The `manifest.yaml` includes all required scopes and events, including `files:write`
-for `slack_upload`. Use it when creating the app (**From a manifest**) or paste
-it into **App Manifest** in settings.
+for `slack_upload`. `slack_schedule` uses Slack's existing `chat:write` scope, so
+no extra manifest scope is required. Use it when creating the app (**From a
+manifest**) or paste it into **App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:
 

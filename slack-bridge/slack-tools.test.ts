@@ -40,6 +40,17 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
+      if (method === "chat.scheduleMessage") {
+        return {
+          ok: true,
+          token,
+          body,
+          channel: typeof body?.channel === "string" ? body.channel : "C123",
+          post_at: typeof body?.post_at === "number" ? body.post_at : 1_800_000_000,
+          scheduled_message_id: "Q12345",
+        } as SlackResult;
+      }
+
       return {
         ok: true,
         token,
@@ -144,5 +155,56 @@ describe("registerSlackTools", () => {
       ts: "123.456",
       limit: 20,
     });
+  });
+
+  it("reads the latest bot token and default channel when slack_schedule executes", async () => {
+    const { slack, tools, setBotToken, setDefaultChannel } = setup();
+    setBotToken("xoxb-reloaded");
+    setDefaultChannel("ops-alerts");
+
+    await tools.get("slack_schedule")!.execute("tool-4", {
+      text: "hello from the future",
+      at: "2030-01-02T03:04:05Z",
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.scheduleMessage",
+      "xoxb-reloaded",
+      expect.objectContaining({
+        channel: "resolved:ops-alerts",
+        text: "hello from the future",
+        post_at: Math.floor(Date.parse("2030-01-02T03:04:05Z") / 1000),
+      }),
+    );
+  });
+
+  it("uses thread channel resolution for slack_schedule delays", async () => {
+    const { slack, tools, setResolveFollowerReplyChannel } = setup();
+    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-04-02T14:00:00Z"));
+    try {
+      await tools.get("slack_schedule")!.execute("tool-5", {
+        text: "follow up later",
+        thread_ts: "123.456",
+        delay: "30m",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.scheduleMessage",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel: "C-DB",
+        thread_ts: "123.456",
+        text: "follow up later",
+        post_at: Math.floor(Date.parse("2026-04-02T14:30:00.000Z") / 1000),
+      }),
+    );
   });
 });
