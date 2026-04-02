@@ -1,5 +1,6 @@
 packages:
   - slack-bridge
+  - slack-api
   - nvim-bridge
   - neon-psql
   - types

@@ -11,3 +11,5 @@ neon-psql/config.json
 __pycache__/
 .firecrawl/
 .env*
+.firecrawl/
+slack-api/.tmp/

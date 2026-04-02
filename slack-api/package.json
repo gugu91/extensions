@@ -1,0 +1,24 @@
+{
+  "name": "@gugu91/pi-slack-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed Slack Web API client and CLI generated from Slack's OpenAPI spec",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {},
+  "bin": {
+    "slack-api": "./bin/slack-api"
+  },
+  "scripts": {
+    "generate": "node --experimental-strip-types scripts/generate.ts",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "^0.95.0",
+    "yaml": "^2.8.1"
+  }
+}
