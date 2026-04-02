@@ -65,6 +65,7 @@ import {
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
   agentOwnsThread,
+  normalizeOwnedThreads,
   getFollowerOwnedThreadClaims,
   normalizeThreadConfirmationState,
   isThreadConfirmationStateEmpty,
@@ -2322,6 +2323,18 @@ describe("agentOwnsThread", () => {
     expect(agentOwnsThread("Old Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
     expect(agentOwnsThread(ownerToken, "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
     expect(agentOwnsThread("Other Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(false);
+  });
+
+  it("normalizes legacy owned threads onto the stable owner token", () => {
+    const ownerToken = buildPinetOwnerToken("host:session:/tmp/agent");
+    const threads = [{ owner: "Old Falcon" }, { owner: ownerToken }, { owner: "Other Falcon" }];
+
+    expect(normalizeOwnedThreads(threads, "Solar Falcon", ownerToken, ["Old Falcon"])).toBe(true);
+    expect(threads).toEqual([
+      { owner: ownerToken },
+      { owner: ownerToken },
+      { owner: "Other Falcon" },
+    ]);
   });
 });
 

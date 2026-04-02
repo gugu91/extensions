@@ -1633,6 +1633,22 @@ export function agentOwnsThread(
   return false;
 }
 
+export function normalizeOwnedThreads(
+  threads: Iterable<{ owner?: string }>,
+  agentName: string,
+  ownerToken: string,
+  agentAliases: Iterable<string> = [],
+): boolean {
+  let changed = false;
+  for (const thread of threads) {
+    if (!agentOwnsThread(thread.owner, agentName, agentAliases, ownerToken)) continue;
+    if (thread.owner === ownerToken) continue;
+    thread.owner = ownerToken;
+    changed = true;
+  }
+  return changed;
+}
+
 export function getFollowerOwnedThreadClaims(
   threads: ReadonlyMap<string, Pick<FollowerThreadState, "threadTs" | "channelId" | "owner">>,
   agentName: string,

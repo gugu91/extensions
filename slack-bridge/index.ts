@@ -70,6 +70,7 @@ import {
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
   normalizeThreadConfirmationState,
+  normalizeOwnedThreads,
   isThreadConfirmationStateEmpty,
   confirmationRequestMatches,
   consumeMatchingConfirmationRequest,
@@ -302,15 +303,11 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    rememberAgentAlias(previousName);
     agentName = nextName;
     agentEmoji = nextEmoji;
     agentPersonality = nextPersonality ?? null;
-    for (const thread of threads.values()) {
-      if (thread.owner === previousName) {
-        thread.owner = nextName;
-      }
-    }
+    rememberAgentAlias(previousName);
+    normalizeOwnedThreads(threads.values(), agentName, agentOwnerToken, agentAliases);
     persistState();
     updateBadge();
   }
@@ -1279,6 +1276,12 @@ export default function (pi: ExtensionAPI) {
     const localOwner = threads.get(effectiveTs)?.owner;
     if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
       return;
+    }
+    if (localOwner) {
+      const thread = threads.get(effectiveTs);
+      if (thread) {
+        normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
+      }
     }
 
     if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
