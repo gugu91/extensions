@@ -12,7 +12,12 @@ import {
   resolveReactionCommands,
   type ReactionCommandSettings,
 } from "../../reaction-triggers.js";
-import { TtlCache } from "../../ttl-cache.js";
+import { TtlCache, TtlSet } from "../../ttl-cache.js";
+import {
+  extractSlackSocketDedupKey,
+  SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
+  SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
+} from "../../slack-socket-dedup.js";
 import {
   extractSlackBlockActionsPayloadFromEnvelope,
   normalizeSlackBlockActionPayload,
@@ -47,6 +52,7 @@ interface SlackThreadInfo {
 export interface ParsedEnvelope {
   envelopeId?: string;
   type: string;
+  dedupKey?: string;
   event?: Record<string, unknown>;
   interactivePayload?: Record<string, unknown>;
 }
@@ -63,6 +69,10 @@ export function parseSocketFrame(raw: string): ParsedEnvelope | null {
     };
     if (data.envelope_id) {
       result.envelopeId = data.envelope_id as string;
+    }
+    const dedupKey = extractSlackSocketDedupKey(data);
+    if (dedupKey) {
+      result.dedupKey = dedupKey;
     }
     if (data.type === "events_api") {
       const payload = data.payload as { event?: Record<string, unknown> } | undefined;
@@ -206,6 +216,10 @@ export class SlackAdapter implements MessageAdapter {
     maxSize: 2000,
     ttlMs: 60 * 60 * 1000,
   });
+  private readonly processedSocketDeliveries = new TtlSet<string>({
+    maxSize: SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
+    ttlMs: SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
+  });
   private readonly pendingEyes = new Map<string, { channel: string; messageTs: string }[]>();
 
   constructor(config: SlackAdapterConfig) {
@@ -334,36 +348,52 @@ export class SlackAdapter implements MessageAdapter {
       this.ws?.send(JSON.stringify({ envelope_id: envelope.envelopeId }));
     }
 
-    if (envelope.type === "disconnect") {
-      this.scheduleReconnect();
-      return;
-    }
+    const dedupKey: string | null = envelope.dedupKey ?? null;
 
-    if (envelope.interactivePayload) {
-      await this.onBlockActions(envelope.interactivePayload);
-      return;
-    }
+    try {
+      if (dedupKey) {
+        if (this.processedSocketDeliveries.has(dedupKey)) {
+          return;
+        }
+        this.processedSocketDeliveries.add(dedupKey);
+      }
 
-    if (!envelope.event) return;
+      if (envelope.type === "disconnect") {
+        this.scheduleReconnect();
+        return;
+      }
 
-    const evt = envelope.event;
+      if (envelope.interactivePayload) {
+        await this.onBlockActions(envelope.interactivePayload);
+        return;
+      }
 
-    switch (evt.type) {
-      case "assistant_thread_started":
-        await this.onThreadStarted(evt);
-        break;
-      case "assistant_thread_context_changed":
-        this.onContextChanged(evt);
-        break;
-      case "message":
-        await this.onMessage(evt);
-        break;
-      case "reaction_added":
-        await this.onReactionAdded(evt);
-        break;
-      case "member_joined_channel":
-        this.onMemberJoined(evt);
-        break;
+      if (!envelope.event) return;
+
+      const evt = envelope.event;
+
+      switch (evt.type) {
+        case "assistant_thread_started":
+          await this.onThreadStarted(evt);
+          break;
+        case "assistant_thread_context_changed":
+          this.onContextChanged(evt);
+          break;
+        case "message":
+          await this.onMessage(evt);
+          break;
+        case "reaction_added":
+          await this.onReactionAdded(evt);
+          break;
+        case "member_joined_channel":
+          this.onMemberJoined(evt);
+          break;
+      }
+    } catch (err) {
+      if (dedupKey) {
+        this.processedSocketDeliveries.delete(dedupKey);
+      }
+      throw err;
     }
   }
 

@@ -551,6 +551,74 @@ describe("SlackAdapter", () => {
     expect(adapter.name).toBe("slack");
   });
 
+  it("ignores duplicate Socket Mode message deliveries with the same Slack event_id", async () => {
+    const adapter = new SlackAdapter(baseConfig);
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+    (adapter as unknown as { botUserId: string | null }).botUserId = "U_BOT";
+
+    const resolveUserSpy = vi
+      .spyOn(
+        adapter as unknown as { resolveUser: (userId: string) => Promise<string> },
+        "resolveUser",
+      )
+      .mockResolvedValue("Alice");
+    const addReactionSpy = vi
+      .spyOn(
+        adapter as unknown as {
+          addReaction: (channel: string, ts: string, emoji: string) => Promise<void>;
+        },
+        "addReaction",
+      )
+      .mockResolvedValue(undefined);
+
+    const firstFrame = JSON.stringify({
+      envelope_id: "env-1",
+      type: "events_api",
+      payload: {
+        event_id: "Ev-duplicate",
+        event: {
+          type: "message",
+          user: "U1",
+          text: "hello",
+          channel: "D1",
+          channel_type: "im",
+          ts: "1.1",
+        },
+      },
+    });
+    const secondFrame = JSON.stringify({
+      envelope_id: "env-2",
+      type: "events_api",
+      payload: {
+        event_id: "Ev-duplicate",
+        event: {
+          type: "message",
+          user: "U1",
+          text: "hello",
+          channel: "D1",
+          channel_type: "im",
+          ts: "1.1",
+        },
+      },
+    });
+
+    await (
+      adapter as unknown as {
+        handleFrame: (raw: string) => Promise<void>;
+      }
+    ).handleFrame(firstFrame);
+    await (
+      adapter as unknown as {
+        handleFrame: (raw: string) => Promise<void>;
+      }
+    ).handleFrame(secondFrame);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(resolveUserSpy).toHaveBeenCalledTimes(1);
+    expect(addReactionSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("emits normalized block action payloads with structured metadata", async () => {
     const rememberKnownThread = vi.fn();
     const adapter = new SlackAdapter({
