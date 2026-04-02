@@ -76,6 +76,7 @@ a short cache to avoid hammering Slack.
 - **@mentions** — tag Pinet in any channel and it responds in-thread
 - **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
 - **Broker control plane canvas** — the broker can maintain a live Slack canvas with agent roster, task/PR state, and RALPH health on every cycle
+- **Home tab dashboard** — opening Pinet from Slack Apps publishes the same control-plane status into the app Home tab with Block Kit
 - **Block Kit messages** — send rich Slack layouts via the optional `blocks` parameter
 - **Interactive workflows** — `block_actions` button clicks and `view_submission` modal submits are routed back into the inbox as structured events
 - **Slack modals** — open, push, and update modal views for confirmations, forms, and multi-step workflows
@@ -194,10 +195,10 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 The `manifest.yaml` includes all required scopes and events, including `files:write`
 for `slack_upload`, `chat:write` for `slack_schedule`, bookmark/pin scopes for
 `slack_bookmark` and `slack_pin`, `users:read` + `users.getPresence` / `dnd.info`
-for presence checks, `reaction_added` + `reactions:read` plus `presence_change`
-for Slack-side awareness events, and `interactivity.is_enabled: true` for buttons
-and modals. Use it when creating the app (**From a manifest**) or paste it into
-**App Manifest** in settings.
+for presence checks, `app_home_opened` for the Home tab dashboard, `reaction_added`
++ `reactions:read` plus `presence_change` for Slack-side awareness events, and
+`interactivity.is_enabled: true` for buttons and modals. Use it when creating
+the app (**From a manifest**) or paste it into **App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:
 

@@ -42,6 +42,7 @@ settings:
   event_subscriptions:
     bot_events:
       - app_mention
+      - app_home_opened
       - assistant_thread_started
       - assistant_thread_context_changed
       - reaction_added

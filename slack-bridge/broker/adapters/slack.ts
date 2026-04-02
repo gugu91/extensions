@@ -37,6 +37,8 @@ export interface SlackAdapterConfig {
   isKnownThread?: (threadTs: string) => boolean;
   /** Persist thread metadata in the broker DB without claiming ownership. */
   rememberKnownThread?: (threadTs: string, channelId: string) => void;
+  /** Best-effort callback for Home tab opens. */
+  onAppHomeOpened?: (event: ParsedAppHomeOpened) => Promise<void> | void;
 }
 
 interface SlackThreadInfo {
@@ -98,6 +100,12 @@ export interface ParsedThreadStarted {
   context?: { channelId: string; teamId: string };
 }
 
+export interface ParsedAppHomeOpened {
+  userId: string;
+  tab: string;
+  eventTs: string | null;
+}
+
 /**
  * Extract thread info from an assistant_thread_started event.
  */
@@ -117,6 +125,18 @@ export function extractThreadStarted(evt: Record<string, unknown>): ParsedThread
   }
 
   return result;
+}
+
+export function extractAppHomeOpened(evt: Record<string, unknown>): ParsedAppHomeOpened | null {
+  const userId = typeof evt.user === "string" && evt.user.length > 0 ? evt.user : null;
+  if (!userId) return null;
+
+  const tab = typeof evt.tab === "string" && evt.tab.length > 0 ? evt.tab : "home";
+  return {
+    userId,
+    tab,
+    eventTs: typeof evt.event_ts === "string" && evt.event_ts.length > 0 ? evt.event_ts : null,
+  };
 }
 
 /**
@@ -393,6 +413,9 @@ export class SlackAdapter implements MessageAdapter {
         case "member_joined_channel":
           this.onMemberJoined(evt);
           break;
+        case "app_home_opened":
+          await this.onAppHomeOpened(evt);
+          break;
       }
     } catch (err) {
       if (dedupKey) {
@@ -444,6 +467,21 @@ export class SlackAdapter implements MessageAdapter {
         channelId: ctx.channel_id,
         teamId: ctx.team_id ?? "",
       };
+    }
+  }
+
+  private async onAppHomeOpened(evt: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
+    const parsed = extractAppHomeOpened(evt);
+    if (!parsed || parsed.tab !== "home") {
+      return;
+    }
+
+    try {
+      await this.config.onAppHomeOpened?.(parsed);
+    } catch (err) {
+      console.error(`[slack-adapter] Home tab callback failed: ${errorMsg(err)}`);
     }
   }
 
