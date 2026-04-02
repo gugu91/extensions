@@ -285,7 +285,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       requireToolPolicy(
         "slack_post_channel",
         params.thread_ts,
-        `channel=${params.channel ?? defaultChannel ?? ""} | thread_ts=${params.thread_ts ?? ""} | text=${params.text}`,
+        `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | text=${params.text}`,
       );
 
       const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);

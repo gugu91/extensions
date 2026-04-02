@@ -1336,7 +1336,7 @@ export default function (pi: ExtensionAPI) {
     const finalMetadata = Object.keys(effectiveMetadata).length > 0 ? effectiveMetadata : undefined;
 
     if (brokerRole === "broker" && activeBroker) {
-      const db = activeBroker.db as BrokerDB;
+      const db = activeBroker.db;
       const allAgents = db.getAgents();
       const target =
         allAgents.find((a: { id: string }) => a.id === targetRef) ??
@@ -2080,6 +2080,39 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function disconnectFollower(
+    ctx: ExtensionContext,
+  ): Promise<{ unregisterError: string | null }> {
+    const current = brokerClient;
+
+    if (current?.pollInterval) {
+      clearInterval(current.pollInterval);
+      current.pollInterval = null;
+    }
+
+    await flushDeliveredFollowerAcks().catch(() => {
+      /* best effort */
+    });
+
+    let unregisterError: string | null = null;
+    if (current) {
+      try {
+        await current.client.disconnectGracefully();
+      } catch (err) {
+        unregisterError = msg(err);
+      }
+    }
+
+    brokerClient = null;
+    resetFollowerDeliveryState(followerDeliveryState);
+    followerAckPromise = null;
+    brokerRole = null;
+    pinetEnabled = false;
+    setExtStatus(ctx, "off");
+
+    return { unregisterError };
+  }
+
   pi.registerCommand("pinet-follow", {
     description: "Connect to an existing Pinet broker as a follower",
     handler: async (_args, ctx) => {
@@ -2445,7 +2478,6 @@ export default function (pi: ExtensionAPI) {
     remoteControlState = { currentCommand: null, queuedCommand: null };
     await stopPinetRuntime(ctx, { releaseIdentity: true });
     pinetRegistrationBlocked = false;
-    setExtStatus(ctx, "off");
   });
 }
 
