@@ -1,9 +1,9 @@
-import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { createGitContextCache, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
   type AgentDisplayInfo,
@@ -137,23 +137,14 @@ export default function (pi: ExtensionAPI) {
     return [...tools].sort();
   }
 
-  function getAgentMetadata(role: "broker" | "worker" = "worker"): Record<string, unknown> {
-    let branch = "";
-    let repoRoot = "";
-    try {
-      repoRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
-    } catch {
-      /* not in a git repo */
-    }
-    try {
-      branch = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
-    } catch {
-      /* not in a git repo */
-    }
+  const gitContextCache = createGitContextCache(() => probeGitContext(process.cwd()));
 
-    const cwd = process.cwd();
-    const resolvedRepoRoot = repoRoot || cwd;
-    const repo = path.basename(resolvedRepoRoot);
+  async function getAgentMetadata(
+    role: "broker" | "worker" = "worker",
+  ): Promise<Record<string, unknown>> {
+    const gitContext = await gitContextCache.get();
+    const { cwd, repo, repoRoot, branch } = gitContext;
+    const resolvedRepoRoot = repoRoot ?? cwd;
     const tools = detectProjectTools(resolvedRepoRoot, cwd);
     const tags = [
       `role:${role}`,
@@ -168,11 +159,11 @@ export default function (pi: ExtensionAPI) {
       host: os.hostname(),
       role,
       repo,
-      repoRoot: repoRoot || undefined,
+      repoRoot,
       capabilities: {
         repo,
-        repoRoot: repoRoot || undefined,
-        branch: branch || undefined,
+        repoRoot,
+        branch,
         role,
         tools,
         tags,
@@ -1326,12 +1317,7 @@ export default function (pi: ExtensionAPI) {
       runBrokerMaintenance(ctx);
 
       const db = activeBroker.db as BrokerDB;
-      let currentBranch: string | null = null;
-      try {
-        currentBranch = execSync("git branch --show-current", { encoding: "utf-8" }).trim() || null;
-      } catch {
-        /* best effort */
-      }
+      const currentBranch = gitContextCache.peek()?.branch ?? null;
 
       const workloads = db.getAllAgents().map((agent) => ({
         ...agent,
@@ -1665,7 +1651,7 @@ export default function (pi: ExtensionAPI) {
           agentName,
           agentEmoji,
           process.pid,
-          getAgentMetadata("broker"),
+          await getAgentMetadata("broker"),
           agentStableId,
         );
         const selfId = selfAgent.id;
@@ -1760,7 +1746,7 @@ export default function (pi: ExtensionAPI) {
     const registration = await client.register(
       agentName,
       agentEmoji,
-      getAgentMetadata("worker"),
+      await getAgentMetadata("worker"),
       agentStableId,
     );
     applyBrokerIdentity(registration.name, registration.emoji);
