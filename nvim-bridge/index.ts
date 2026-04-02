@@ -13,7 +13,7 @@ import {
   type CommentRecord,
 } from "./comments.js";
 
-interface EditorState {
+export interface EditorState {
   file: string | null;
   line: number | null;
   visibleStart: number | null;
@@ -22,7 +22,7 @@ interface EditorState {
   selectionEnd: number | null;
 }
 
-type NvimEvent =
+export type NvimEvent =
   | { type: "buffer_focus"; file: string; line: number }
   | { type: "visible_range"; file: string; start: number; end: number }
   | { type: "selection"; file: string; start: number; end: number }
@@ -30,7 +30,7 @@ type NvimEvent =
 
 type NvimCommand = { type: "open_file"; file: string; line?: number };
 
-type CommentRpcRequest =
+export type CommentRpcRequest =
   | {
       id: string;
       type: "comment.list" | "comment.sync";
@@ -93,7 +93,7 @@ function computeSocketPath(repoInfo: RepoInfo): string {
   return path.join(dir, `${hash}.sock`);
 }
 
-function formatContext(state: EditorState): string {
+export function formatContext(state: EditorState): string {
   if (!state.file) return "";
 
   let msg = `User is viewing ${state.file}`;
@@ -114,7 +114,7 @@ function formatContext(state: EditorState): string {
   return msg;
 }
 
-function parseNvimEvent(value: unknown): NvimEvent | null {
+export function parseNvimEvent(value: unknown): NvimEvent | null {
   const event = asObject(value);
   if (!event || typeof event.type !== "string") return null;
 
@@ -166,7 +166,7 @@ function parseNvimEvent(value: unknown): NvimEvent | null {
   }
 }
 
-function parseCommentRpcRequest(value: unknown): CommentRpcRequest | null {
+export function parseCommentRpcRequest(value: unknown): CommentRpcRequest | null {
   const request = asObject(value);
   if (
     !request ||
@@ -326,7 +326,7 @@ function formatCommentForRead(comment: CommentRecord): string {
   return `${chunk}\n`;
 }
 
-function buildPiCommsReadPrompt(
+export function buildPiCommsReadPrompt(
   state: EditorState,
   comments: CommentRecord[],
   totalCount: number,
