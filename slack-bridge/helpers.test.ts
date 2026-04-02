@@ -38,6 +38,8 @@ import {
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
   buildIdentityReplyGuidelines,
+  buildAgentPersonalityGuidelines,
+  resolveAgentPersonality,
   resolvePersistedAgentIdentity,
   buildAgentStableId,
   resolveAgentStableId,
@@ -781,6 +783,38 @@ describe("buildIdentityReplyGuidelines", () => {
       "Follow-up messages in the same thread: keep the same full identity prefix — '🦅 `Sonic Eagle` <message>'",
     );
     expect(bareRule).toContain("emoji-only");
+  });
+});
+
+// ─── buildAgentPersonalityGuidelines / resolveAgentPersonality ─────────────
+
+describe("resolveAgentPersonality", () => {
+  it("blends adjective and animal traits for Rocket Dolphin", () => {
+    expect(resolveAgentPersonality("Rocket Dolphin").traits).toEqual(
+      expect.arrayContaining(["fast", "playful", "intelligent"]),
+    );
+  });
+
+  it("handles quiet, patient, precise personalities like Silent Crocodile", () => {
+    expect(resolveAgentPersonality("Silent Crocodile").traits).toEqual(
+      expect.arrayContaining(["quiet", "patient", "precise"]),
+    );
+  });
+
+  it("uses first and last words so generated color names still resolve", () => {
+    expect(resolveAgentPersonality("Cosmic Azure Crane").traits).toEqual(
+      expect.arrayContaining(["far-seeing", "thoughtful", "elegant"]),
+    );
+  });
+});
+
+describe("buildAgentPersonalityGuidelines", () => {
+  it("turns the resolved traits into communication-only prompt guidance", () => {
+    const joined = buildAgentPersonalityGuidelines("Silent Crocodile").join(" ");
+    expect(joined).toContain("quiet");
+    expect(joined).toContain("patient");
+    expect(joined).toContain("precise");
+    expect(joined).toContain("must NOT change task execution quality");
   });
 });
 

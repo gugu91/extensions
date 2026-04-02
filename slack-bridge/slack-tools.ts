@@ -92,7 +92,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     }
 
     const channelId = await resolveChannel(channelInput);
-    const info = await slack("conversations.info", botToken, { channel: channelId });
+    const info = await slack("conversations.info", getBotToken(), { channel: channelId });
     const resolvedCanvasId = extractSlackChannelCanvasId(info);
     if (!resolvedCanvasId) {
       throw new Error(
@@ -452,7 +452,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       ),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_canvas_create", undefined);
+      requireToolPolicy(
+        "slack_canvas_create",
+        undefined,
+        `kind=${params.kind ?? "standalone"} | channel=${params.channel ?? ""} | title=${params.title ?? ""}`,
+      );
 
       const channelInput = params.channel?.trim();
       const channelId = channelInput ? await resolveChannel(channelInput) : undefined;
@@ -467,7 +471,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         rememberChannel(channelInput.replace(/^#/, ""), channelId);
       }
 
-      const response = await slack(request.method, botToken, request.body);
+      const response = await slack(request.method, getBotToken(), request.body);
       const canvasId = response.canvas_id as string;
       const channelLabel = channelInput ?? channelId;
       const targetSummary =
@@ -525,7 +529,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       ),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_canvas_update", undefined);
+      requireToolPolicy(
+        "slack_canvas_update",
+        undefined,
+        `canvas_id=${params.canvas_id ?? ""} | channel=${params.channel ?? ""} | mode=${params.mode ?? "append"} | section_contains_text=${params.section_contains_text ?? ""}`,
+      );
 
       const mode = normalizeSlackCanvasUpdateMode(params.mode);
       if (params.section_contains_text && mode !== "replace") {
@@ -546,7 +554,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         });
         const response = await slack(
           "canvases.sections.lookup",
-          botToken,
+          getBotToken(),
           lookup as unknown as Record<string, unknown>,
         );
         const sections = response.sections as Array<{ id?: string }> | undefined;
@@ -566,7 +574,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         mode,
         sectionId,
       });
-      await slack("canvases.edit", botToken, request as unknown as Record<string, unknown>);
+      await slack("canvases.edit", getBotToken(), request as unknown as Record<string, unknown>);
 
       const sectionSummary = params.section_contains_text
         ? ` Replaced section matching '${params.section_contains_text}'.`
