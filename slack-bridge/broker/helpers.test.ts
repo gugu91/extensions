@@ -275,9 +275,24 @@ describe("BrokerDB", () => {
     restartedDb.close();
   });
 
-  it("unregisterAgent hides agent from connected list, keeps the record, and releases claims", () => {
+  it("unregisterAgent requeues undelivered work, deletes inbox rows, and releases claims", () => {
     db.registerAgent("a1", "Agent", "🤖", 1);
     db.createThread("t-unregister", "slack", "#general", "a1");
+    db.insertMessage("t-unregister", "slack", "inbound", "U1", "pending slack work", ["a1"], {
+      channel: "#general",
+    });
+    db.insertMessage("t-unregister", "agent", "inbound", "broker-1", "pending a2a work", ["a1"], {
+      senderAgent: "Broker",
+      a2a: true,
+    });
+    db.insertMessage("t-unregister", "agent", "outbound", "a1", "already sent", ["a1"]);
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    expect(
+      sqlite.prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ?").get("a1") as {
+        count: number;
+      },
+    ).toEqual({ count: 3 });
 
     db.unregisterAgent("a1");
 
@@ -285,6 +300,17 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("a1")?.name).toBe("Agent");
     expect(db.getAgentById("a1")?.resumableUntil).toBeNull();
     expect(db.getThread("t-unregister")?.ownerAgent).toBeNull();
+    expect(db.getPendingBacklog().map((entry) => entry.messageId)).toHaveLength(2);
+    expect(db.getPendingBacklog().map((entry) => entry.threadId)).toEqual([
+      "t-unregister",
+      "t-unregister",
+    ]);
+    expect(db.getInbox("a1")).toHaveLength(0);
+    expect(
+      sqlite.prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ?").get("a1") as {
+        count: number;
+      },
+    ).toEqual({ count: 0 });
   });
 
   it("getAllAgents includes recently disconnected agents for visibility", () => {
@@ -413,6 +439,31 @@ describe("BrokerDB", () => {
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue");
+  });
+
+  it("requeueUndeliveredMessages also requeues pending agent-to-agent work", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    db.createThread("t-requeue-a2a", "agent", "", "worker-1");
+    db.insertMessage(
+      "t-requeue-a2a",
+      "agent",
+      "inbound",
+      "broker-1",
+      "follow up with the user",
+      ["worker-1"],
+      {
+        senderAgent: "Broker",
+        a2a: true,
+      },
+    );
+
+    const moved = db.requeueUndeliveredMessages("worker-1");
+
+    expect(moved).toBe(1);
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue-a2a");
+    expect(db.getPendingBacklog()[0].channel).toBe("");
   });
 
   it("maintenance requeues messages orphaned in a disconnected agent inbox", () => {

@@ -481,11 +481,16 @@ export class BrokerDB implements BrokerDBInterface {
   unregisterAgent(id: string): void {
     const db = this.getDb();
     const now = new Date().toISOString();
-    db.prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?").run(
-      now,
-      id,
-    );
-    db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?").run(id);
+
+    this.withTransaction(() => {
+      this.requeueUndeliveredMessagesInternal(id, "agent_disconnected");
+      db.prepare("DELETE FROM inbox WHERE agent_id = ?").run(id);
+      db.prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?").run(
+        now,
+        id,
+      );
+      db.prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?").run(id);
+    });
   }
 
   disconnectAgent(id: string, resumableForMs = DEFAULT_RESUMABLE_WINDOW_MS): void {
@@ -1215,8 +1220,7 @@ export class BrokerDB implements BrokerDBInterface {
          JOIN messages m ON m.id = i.message_id
          WHERE i.agent_id = ?
            AND i.delivered = 0
-           AND m.direction = 'inbound'
-           AND m.source = 'slack'`,
+           AND m.direction = 'inbound'`,
       )
       .all(agentId) as Array<{
       inbox_id: number;
