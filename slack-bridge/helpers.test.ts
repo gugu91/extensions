@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -1473,31 +1473,49 @@ describe("syncFollowerInboxEntries", () => {
 // ─── resolveFollowerThreadChannel ─────────────────────────
 
 describe("resolveFollowerThreadChannel", () => {
-  it("returns the local channel without calling the broker", async () => {
-    const resolveThread = async () => {
-      throw new Error("should not be called");
-    };
+  it("prefers the resolver result over a stale local channel cache", async () => {
+    const resolveThread = vi.fn(async (threadTs: string) => {
+      expect(threadTs).toBe("1234.5678");
+      return "C999";
+    });
 
     await expect(
       resolveFollowerThreadChannel(
         "1234.5678",
         { channelId: "C123", threadTs: "1234.5678", userId: "U1", owner: "Bot" },
-        "follower",
+        resolveThread,
+      ),
+    ).resolves.toEqual({
+      channelId: "C999",
+      changed: true,
+      threadUpdate: {
+        channelId: "C999",
+        threadTs: "1234.5678",
+        userId: "U1",
+        owner: "Bot",
+      },
+    });
+    expect(resolveThread).toHaveBeenCalledWith("1234.5678");
+  });
+
+  it("returns the resolver result without a cache update when it matches local state", async () => {
+    const resolveThread = vi.fn(async () => "C123");
+
+    await expect(
+      resolveFollowerThreadChannel(
+        "1234.5678",
+        { channelId: "C123", threadTs: "1234.5678", userId: "U1", owner: "Bot" },
         resolveThread,
       ),
     ).resolves.toEqual({ channelId: "C123", changed: false });
+    expect(resolveThread).toHaveBeenCalledWith("1234.5678");
   });
 
-  it("asks the broker for the channel when the follower has no local thread", async () => {
-    const result = await resolveFollowerThreadChannel(
-      "1234.5678",
-      undefined,
-      "follower",
-      async (threadTs) => {
-        expect(threadTs).toBe("1234.5678");
-        return "C999";
-      },
-    );
+  it("asks the resolver for the channel when there is no local thread cache", async () => {
+    const result = await resolveFollowerThreadChannel("1234.5678", undefined, async (threadTs) => {
+      expect(threadTs).toBe("1234.5678");
+      return "C999";
+    });
 
     expect(result).toEqual({
       channelId: "C999",
@@ -1511,28 +1529,46 @@ describe("resolveFollowerThreadChannel", () => {
     });
   });
 
-  it("returns null when the broker cannot resolve the thread", async () => {
+  it("returns null when the resolver cannot find the thread, even if local cache exists", async () => {
     await expect(
-      resolveFollowerThreadChannel("1234.5678", undefined, "follower", async () => null),
-    ).resolves.toEqual({ channelId: null, changed: false });
+      resolveFollowerThreadChannel(
+        "1234.5678",
+        { channelId: "C123", threadTs: "1234.5678", userId: "U1", owner: "Bot" },
+        async () => null,
+      ),
+    ).resolves.toEqual({
+      channelId: null,
+      changed: false,
+    });
   });
 
-  it("returns null when the broker lookup throws", async () => {
+  it("returns null when the resolver throws", async () => {
     await expect(
-      resolveFollowerThreadChannel("1234.5678", undefined, "follower", async () => {
+      resolveFollowerThreadChannel("1234.5678", undefined, async () => {
         throw new Error("broker offline");
       }),
     ).resolves.toEqual({ channelId: null, changed: false });
   });
 
-  it("does not query the broker for non-followers", async () => {
-    const resolveThread = async () => {
-      throw new Error("should not be called");
-    };
-
+  it("falls back to the local cache when no resolver is available", async () => {
     await expect(
-      resolveFollowerThreadChannel("1234.5678", undefined, "broker", resolveThread),
-    ).resolves.toEqual({ channelId: null, changed: false });
+      resolveFollowerThreadChannel("1234.5678", {
+        channelId: "C123",
+        threadTs: "1234.5678",
+        userId: "U1",
+        owner: "Bot",
+      }),
+    ).resolves.toEqual({
+      channelId: "C123",
+      changed: false,
+    });
+  });
+
+  it("returns null when no resolver or local cache is available", async () => {
+    await expect(resolveFollowerThreadChannel("1234.5678", undefined)).resolves.toEqual({
+      channelId: null,
+      changed: false,
+    });
   });
 });
 

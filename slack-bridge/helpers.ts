@@ -1042,25 +1042,26 @@ export interface FollowerThreadChannelResolution {
 export async function resolveFollowerThreadChannel(
   threadTs: string | undefined,
   existingThread: FollowerThreadState | undefined,
-  brokerRole: "broker" | "follower" | null,
   resolveThread?: (threadTs: string) => Promise<string | null>,
 ): Promise<FollowerThreadChannelResolution> {
   if (!threadTs) {
     return { channelId: null, changed: false };
   }
 
-  if (existingThread?.channelId) {
-    return { channelId: existingThread.channelId, changed: false };
-  }
-
-  if (brokerRole !== "follower" || !resolveThread) {
-    return { channelId: null, changed: false };
+  if (!resolveThread) {
+    return existingThread?.channelId
+      ? { channelId: existingThread.channelId, changed: false }
+      : { channelId: null, changed: false };
   }
 
   try {
     const channelId = await resolveThread(threadTs);
     if (!channelId) {
       return { channelId: null, changed: false };
+    }
+
+    if (existingThread?.channelId === channelId) {
+      return { channelId, changed: false };
     }
 
     return {
@@ -1131,9 +1132,9 @@ export function getFollowerOwnedThreadClaims(
 }
 
 /**
- * Track a thread from a broker inbound message in the threads map.
- * Used by the broker onInbound callback so that slack_send can resolve
- * the channel for channel-mention messages.
+ * Cache a thread from a broker inbound message in the local threads map.
+ * The broker DB remains the source of truth; this is only a read-through
+ * cache so Slack tools can resolve channels without hitting the DB every time.
  */
 export function trackBrokerInboundThread(
   threads: Map<string, FollowerThreadState>,
