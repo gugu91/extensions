@@ -21,16 +21,21 @@ If the agent is idle, incoming messages are processed immediately.
 
 ## Tools
 
-| Tool                                                              | Description                                |
-| ----------------------------------------------------------------- | ------------------------------------------ |
-| `slack_send(text, thread_ts?)`                                    | Reply in a thread or start new             |
-| `slack_read(thread_ts, limit?)`                                   | Read thread messages                       |
-| `slack_inbox()`                                                   | Check pending messages manually            |
-| `slack_create_channel(name, topic?, purpose?)`                    | Create a project channel                   |
-| `slack_post_channel(channel?, text, thread_ts?)`                  | Post to a channel                          |
-| `slack_read_channel(channel, thread_ts?, limit?)`                 | Read channel history or thread             |
-| `slack_canvas_create(title?, markdown?, channel?, kind?)`         | Create standalone or channel canvases      |
-| `slack_canvas_update(canvas_id?, channel?, markdown, mode?, ...)` | Append, prepend, or replace canvas content |
+| Tool                                                                                | Description                                  |
+| ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| `slack_send(text, thread_ts?)`                                                      | Reply in a thread or start new               |
+| `slack_upload(content?, path?, filename?, filetype?, title?, channel?, thread_ts?)` | Upload a file/snippet into Slack or a thread |
+| `slack_read(thread_ts, limit?)`                                                     | Read thread messages                         |
+| `slack_inbox()`                                                                     | Check pending messages manually              |
+| `slack_create_channel(name, topic?, purpose?)`                                      | Create a project channel                     |
+| `slack_post_channel(channel?, text, thread_ts?)`                                    | Post to a channel                            |
+| `slack_read_channel(channel, thread_ts?, limit?)`                                   | Read channel history or thread               |
+| `slack_canvas_create(title?, markdown?, channel?, kind?)`                           | Create standalone or channel canvases        |
+| `slack_canvas_update(canvas_id?, channel?, markdown, mode?, ...)`                   | Append, prepend, or replace canvas content   |
+
+`slack_upload` supports either inline `content` or a guarded local `path`. For
+safety, local uploads are limited to files inside the current working directory
+or the system temp directory.
 
 ## Features
 
@@ -42,6 +47,7 @@ If the agent is idle, incoming messages are processed immediately.
 - **Multi-user** — handles concurrent conversations from different users
 - **@mentions** — tag Pinet in any channel and it responds in-thread
 - **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
+- **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
 - **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
@@ -114,9 +120,9 @@ Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
 
 ## Manifest
 
-The `manifest.yaml` includes all required scopes and events. Use it when
-creating the app (**From a manifest**) or paste it into **App Manifest** in
-settings.
+The `manifest.yaml` includes all required scopes and events, including `files:write`
+for `slack_upload`. Use it when creating the app (**From a manifest**) or paste
+it into **App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:
 

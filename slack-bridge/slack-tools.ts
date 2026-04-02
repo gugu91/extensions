@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@gugu91/pi-ext-types/typebox";
 import type { InboxMessage } from "./helpers.js";
@@ -10,6 +11,7 @@ import {
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
 } from "./canvases.js";
+import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
 
 export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
@@ -45,6 +47,8 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
     "Security guardrails may be active for Slack-triggered actions. Check the current security prompt in each message for restrictions.",
     "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
+    "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
+    "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
 
@@ -105,6 +109,39 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       channelId,
       channelLabel: channelInput,
     };
+  }
+
+  async function resolveUploadChannel(
+    threadTs: string | undefined,
+    channel: string | undefined,
+  ): Promise<string> {
+    const trackedThreadChannel = threadTs ? await resolveFollowerReplyChannel(threadTs) : null;
+    if (trackedThreadChannel) {
+      return trackedThreadChannel;
+    }
+
+    const channelInput = channel?.trim();
+    if (channelInput) {
+      return resolveChannel(channelInput);
+    }
+
+    if (!threadTs) {
+      const dmChannel = getLastDmChannel();
+      if (dmChannel) {
+        return dmChannel;
+      }
+
+      const defaultChannel = getDefaultChannel();
+      if (defaultChannel) {
+        return resolveChannel(defaultChannel);
+      }
+    }
+
+    throw new Error(
+      threadTs
+        ? "Unknown Slack thread. If you know the destination channel, pass channel explicitly."
+        : "No active Slack thread. Provide channel or configure defaultChannel in settings.json.",
+    );
   }
 
   pi.registerTool({
@@ -216,6 +253,105 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           },
         ],
         details: { ts, channel },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_upload",
+    label: "Slack Upload",
+    description:
+      "Upload a file or snippet into Slack using the external upload flow. Supports inline content and guarded local file paths.",
+    promptSnippet:
+      "Upload files, snippets, diffs, logs, screenshots, or generated artifacts into Slack threads when inline text would be awkward or too long.",
+    parameters: Type.Object({
+      content: Type.Optional(
+        Type.String({
+          description:
+            "Inline content to upload as a snippet or file. Provide exactly one of content or path.",
+        }),
+      ),
+      path: Type.Optional(
+        Type.String({
+          description:
+            "Local file path to upload. For safety, only files inside the current working directory or system temp directory are allowed.",
+        }),
+      ),
+      filename: Type.Optional(
+        Type.String({
+          description:
+            "Filename shown in Slack. Required for inline content, optional for path uploads.",
+        }),
+      ),
+      filetype: Type.Optional(
+        Type.String({
+          description: "Optional filetype/snippet language override, e.g. diff, typescript, json.",
+        }),
+      ),
+      title: Type.Optional(
+        Type.String({ description: "Optional Slack title for the uploaded file" }),
+      ),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Optional channel name or ID. Omit to use the current thread channel, active DM, or defaultChannel.",
+        }),
+      ),
+      thread_ts: Type.Optional(
+        Type.String({ description: "Optional thread timestamp to attach the upload to" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_upload",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts ?? ""} | channel=${params.channel ?? getDefaultChannel() ?? ""} | filename=${params.filename ?? ""} | path=${params.path ?? ""} | content_length=${params.content?.length ?? 0}`,
+      );
+
+      const upload = await prepareSlackUpload(params, process.cwd(), os.tmpdir());
+      const channelId = await resolveUploadChannel(params.thread_ts, params.channel);
+      const { fileId, response } = await performSlackUpload({
+        upload,
+        channelId,
+        threadTs: params.thread_ts,
+        slack,
+        token: getBotToken(),
+      });
+
+      if (params.thread_ts) {
+        trackOutboundThread(params.thread_ts, channelId);
+        claimThreadOwnership(params.thread_ts, channelId);
+        clearPendingEyes(params.thread_ts);
+      }
+
+      const uploadedFiles = Array.isArray(response.files)
+        ? (response.files as Record<string, unknown>[])
+        : [];
+      const uploadedFile = uploadedFiles[0];
+      const permalink =
+        uploadedFile && typeof uploadedFile.permalink === "string"
+          ? uploadedFile.permalink
+          : undefined;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: params.thread_ts
+              ? `Uploaded \`${upload.filename}\` to thread ${params.thread_ts}.`
+              : `Uploaded \`${upload.filename}\` to channel ${params.channel ?? channelId}.`,
+          },
+        ],
+        details: {
+          fileId,
+          channel: channelId,
+          filename: upload.filename,
+          title: upload.title,
+          source: upload.source,
+          ...(params.thread_ts ? { thread_ts: params.thread_ts } : {}),
+          ...(permalink ? { permalink } : {}),
+          ...(upload.resolvedPath ? { path: upload.resolvedPath } : {}),
+        },
       };
     },
   });
