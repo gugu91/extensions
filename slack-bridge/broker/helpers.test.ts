@@ -375,6 +375,9 @@ describe("BrokerDB", () => {
     expect(db.getAgentById("ghost")).toBeNull();
     expect(db.getAgentById("gone")).toBeNull();
     expect(db.getInbox("gone")).toHaveLength(0);
+    // Thread ownership should be released after purge
+    expect(db.getThread("t-gone")?.ownerAgent).toBeNull();
+    // Messages should be moved to backlog for reassignment
     expect(db.getPendingBacklog().map((entry) => entry.threadId)).toContain("t-gone");
   });
 
