@@ -433,11 +433,22 @@ export class BrokerClient {
       this.reconnectAttempt = 0;
       this.reconnectHandler?.();
     } catch {
+      // Re-registration failed after the socket connected. Clear the connection
+      // state immediately instead of waiting for the async "close" event so the
+      // client cannot stay in a broken "connected but not registered" state.
+      // Then schedule the next reconnect attempt ourselves. (#139)
+      const failedSocket = this.socket;
+      this.socket = null;
+      this.connected = false;
+      this.buffer = "";
+      this.stopHeartbeat();
+      this.rejectAllPending(new Error("Socket closed"));
       try {
-        this.socket?.destroy();
+        failedSocket?.destroy();
       } catch {
         /* ignore */
       }
+      this.scheduleReconnect();
     }
   }
 

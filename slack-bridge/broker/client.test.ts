@@ -966,6 +966,42 @@ describe("BrokerClient — onReconnect callback", () => {
     await mock.close();
   });
 
+  it("reconnectOnce clears broken connected state and reschedules when re-register fails", async () => {
+    const client = new BrokerClient({ host: "127.0.0.1", port: 1 });
+    const failedSocket = { destroy: vi.fn() } as unknown as net.Socket;
+    const scheduleReconnect = vi.fn();
+
+    (
+      client as unknown as { registrationSnapshot: { name: string; emoji: string } }
+    ).registrationSnapshot = {
+      name: "RetryBot",
+      emoji: "🔁",
+    };
+    (
+      client as unknown as {
+        connectSocket: () => Promise<void>;
+        socket: net.Socket | null;
+        connected: boolean;
+      }
+    ).connectSocket = vi.fn(async () => {
+      (client as unknown as { socket: net.Socket | null }).socket = failedSocket;
+      (client as unknown as { connected: boolean }).connected = true;
+    });
+    (client as unknown as { performRegister: () => Promise<unknown> }).performRegister = vi.fn(
+      async () => {
+        throw new Error("register failed");
+      },
+    );
+    (client as unknown as { scheduleReconnect: () => void }).scheduleReconnect = scheduleReconnect;
+
+    await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+
+    expect(failedSocket.destroy).toHaveBeenCalledTimes(1);
+    expect(client.isConnected()).toBe(false);
+    expect((client as unknown as { socket: net.Socket | null }).socket).toBeNull();
+    expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+  });
+
   it("scheduleReconnect fires onDisconnect then onReconnect after server restart", async () => {
     const mock = await createMockServer();
     const port = mock.port;
