@@ -153,6 +153,9 @@ describe("BrokerDB", () => {
     const backlogColumns = inspectDb.prepare("PRAGMA table_info(unrouted_backlog)").all() as Array<{
       name: string;
     }>;
+    const taskAssignmentTable = inspectDb
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_assignments'")
+      .get() as { name: string } | undefined;
     inspectDb.close();
 
     expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
@@ -169,6 +172,7 @@ describe("BrokerDB", () => {
     expect(backlogColumns.map((column) => column.name)).toEqual(
       expect.arrayContaining(["preferred_agent_id"]),
     );
+    expect(taskAssignmentTable?.name).toBe("task_assignments");
   });
 
   it("adds backlog recipient-affinity columns when migrating from schema v3", () => {
@@ -222,6 +226,89 @@ describe("BrokerDB", () => {
     expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
     expect(backlogColumns.map((column) => column.name)).toEqual(
       expect.arrayContaining(["preferred_agent_id"]),
+    );
+  });
+
+  it("adds task assignment tracking when migrating from schema v5", () => {
+    const dbPath = path.join(dir, "legacy-task-assignments.db");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        last_heartbeat TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT,
+        resumable_until TEXT,
+        idle_since TEXT,
+        last_activity TEXT
+      );
+
+      CREATE TABLE unrouted_backlog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        message_id INTEGER NOT NULL UNIQUE,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
+        preferred_agent_id TEXT,
+        assigned_agent_id TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE ralph_cycles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        duration_ms INTEGER,
+        ghost_agent_ids TEXT NOT NULL DEFAULT '[]',
+        nudge_agent_ids TEXT NOT NULL DEFAULT '[]',
+        idle_drain_agent_ids TEXT NOT NULL DEFAULT '[]',
+        stuck_agent_ids TEXT NOT NULL DEFAULT '[]',
+        anomalies TEXT NOT NULL DEFAULT '[]',
+        anomaly_signature TEXT NOT NULL DEFAULT '',
+        follow_up_delivered INTEGER NOT NULL DEFAULT 0,
+        agent_count INTEGER NOT NULL DEFAULT 0,
+        backlog_count INTEGER NOT NULL DEFAULT 0
+      );
+
+      PRAGMA user_version = 5;
+    `);
+    legacyDb.close();
+
+    const migratedDb = new BrokerDB(dbPath);
+    expect(() => migratedDb.initialize()).not.toThrow();
+    migratedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    const taskAssignmentColumns = inspectDb
+      .prepare("PRAGMA table_info(task_assignments)")
+      .all() as Array<{
+      name: string;
+    }>;
+    inspectDb.close();
+
+    expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    expect(taskAssignmentColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "agent_id",
+        "issue_number",
+        "branch",
+        "pr_number",
+        "status",
+        "thread_id",
+        "source_message_id",
+      ]),
     );
   });
 
@@ -292,6 +379,78 @@ describe("BrokerDB", () => {
     expect(first.name).toBe("Hyper Owl");
     expect(second.name).toBe("Hyper Owl 2");
     expect(db.getAgents().map((agent) => agent.name)).toEqual(["Hyper Owl", "Hyper Owl 2"]);
+  });
+
+  it("records and updates task assignment progress", () => {
+    db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
+
+    const created = db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "feat/ralph-completion-v2",
+      "a2a:broker:worker-1",
+      42,
+    );
+    expect(created.status).toBe("assigned");
+    expect(created.prNumber).toBeNull();
+
+    db.updateTaskAssignmentProgress(created.id, "pr_open", 201);
+    const updated = db.listTaskAssignments();
+    expect(updated).toHaveLength(1);
+    expect(updated[0].status).toBe("pr_open");
+    expect(updated[0].prNumber).toBe(201);
+  });
+
+  it("does not reset tracked progress when the broker sends a reminder on the same branch", () => {
+    db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
+
+    const created = db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "feat/ralph-completion-v2",
+      "a2a:broker:worker-1",
+      42,
+    );
+    db.updateTaskAssignmentProgress(created.id, "pr_open", 201);
+
+    const tracked = db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "feat/ralph-completion-v2",
+      "a2a:broker:worker-1",
+      43,
+    );
+
+    expect(tracked.id).toBe(created.id);
+    expect(tracked.status).toBe("pr_open");
+    expect(tracked.prNumber).toBe(201);
+    expect(tracked.sourceMessageId).toBe(43);
+  });
+
+  it("resets tracked progress when the broker reassigns the same issue to a new branch", () => {
+    db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
+
+    const created = db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "feat/ralph-completion-v1",
+      "a2a:broker:worker-1",
+      42,
+    );
+    db.updateTaskAssignmentProgress(created.id, "pr_merged", 201);
+
+    const reassigned = db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "feat/ralph-completion-v2",
+      "a2a:broker:worker-1",
+      44,
+    );
+
+    expect(reassigned.id).toBe(created.id);
+    expect(reassigned.branch).toBe("feat/ralph-completion-v2");
+    expect(reassigned.status).toBe("assigned");
+    expect(reassigned.prNumber).toBeNull();
   });
 
   it("startup reconciliation marks prior agents disconnected until they reconnect by stableId", () => {

@@ -21,6 +21,8 @@ export type {
   MessageAdapter,
   JsonRpcRequest,
   JsonRpcResponse,
+  TaskAssignmentInfo,
+  TaskAssignmentStatus,
 } from "./types.js";
 
 // ─── Broker orchestrator ─────────────────────────────────

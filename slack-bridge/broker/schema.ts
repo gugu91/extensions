@@ -11,6 +11,8 @@ import type {
   BrokerDBInterface,
   InboundMessage,
   ChannelAssignment,
+  TaskAssignmentInfo,
+  TaskAssignmentStatus,
 } from "./types.js";
 import {
   buildSqliteWalFallbackWarning,
@@ -57,6 +59,19 @@ interface BacklogRow {
   assigned_agent_id: string | null;
   attempt_count: number;
   last_attempt_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TaskAssignmentRow {
+  id: number;
+  agent_id: string;
+  issue_number: number;
+  branch: string | null;
+  pr_number: number | null;
+  status: string;
+  thread_id: string;
+  source_message_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,6 +141,21 @@ function rowToBacklog(row: BacklogRow): BacklogEntry {
   };
 }
 
+function rowToTaskAssignment(row: TaskAssignmentRow): TaskAssignmentInfo {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    issueNumber: row.issue_number,
+    branch: row.branch,
+    prNumber: row.pr_number,
+    status: row.status as TaskAssignmentStatus,
+    threadId: row.thread_id,
+    sourceMessageId: row.source_message_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 // ─── Default DB path ─────────────────────────────────────
 
 export function defaultDbPath(): string {
@@ -134,7 +164,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 5;
+export const CURRENT_BROKER_SCHEMA_VERSION = 6;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -322,6 +352,30 @@ function addBacklogAffinityColumns(db: DatabaseSync): void {
   `);
 }
 
+function createTaskAssignmentTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      issue_number INTEGER NOT NULL,
+      branch TEXT,
+      pr_number INTEGER,
+      status TEXT NOT NULL DEFAULT 'assigned'
+        CHECK(status IN ('assigned', 'branch_pushed', 'pr_open', 'pr_merged', 'pr_closed')),
+      thread_id TEXT NOT NULL,
+      source_message_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(agent_id, issue_number)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_task_assignments_agent_status
+      ON task_assignments(agent_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_task_assignments_branch
+      ON task_assignments(branch);
+  `);
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -350,6 +404,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 5:
           addBacklogAffinityColumns(db);
+          break;
+        case 6:
+          createTaskAssignmentTable(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -958,6 +1015,96 @@ export class BrokerDB implements BrokerDBInterface {
       .prepare("UPDATE threads SET owner_agent = NULL WHERE owner_agent = ?")
       .run(agentId);
     return Number(result.changes ?? 0);
+  }
+
+  // ─── Task assignments ───────────────────────────────
+
+  recordTaskAssignment(
+    agentId: string,
+    issueNumber: number,
+    branch: string | null,
+    threadId: string,
+    sourceMessageId: number | null,
+  ): TaskAssignmentInfo {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const existing = db
+      .prepare("SELECT * FROM task_assignments WHERE agent_id = ? AND issue_number = ?")
+      .get(agentId, issueNumber) as TaskAssignmentRow | undefined;
+
+    if (!existing) {
+      const info = db
+        .prepare(
+          `INSERT INTO task_assignments (
+             agent_id, issue_number, branch, pr_number, status,
+             thread_id, source_message_id, created_at, updated_at
+           ) VALUES (?, ?, ?, NULL, 'assigned', ?, ?, ?, ?)`,
+        )
+        .run(agentId, issueNumber, branch, threadId, sourceMessageId, now, now);
+
+      const row = db
+        .prepare("SELECT * FROM task_assignments WHERE id = ?")
+        .get(Number(info.lastInsertRowid)) as TaskAssignmentRow | undefined;
+      if (!row) {
+        throw new Error(`Failed to create task assignment for ${agentId}#${issueNumber}`);
+      }
+      return rowToTaskAssignment(row);
+    }
+
+    const nextBranch = branch ?? existing.branch;
+    const shouldResetProgress = !!existing.branch && !!branch && existing.branch !== branch;
+    db.prepare(
+      `UPDATE task_assignments
+       SET branch = ?,
+           pr_number = CASE WHEN ? THEN NULL ELSE pr_number END,
+           status = CASE WHEN ? THEN 'assigned' ELSE status END,
+           thread_id = ?,
+           source_message_id = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      nextBranch,
+      shouldResetProgress ? 1 : 0,
+      shouldResetProgress ? 1 : 0,
+      threadId,
+      sourceMessageId,
+      now,
+      existing.id,
+    );
+
+    const row = db.prepare("SELECT * FROM task_assignments WHERE id = ?").get(existing.id) as
+      | TaskAssignmentRow
+      | undefined;
+    if (!row) {
+      throw new Error(`Failed to update task assignment for ${agentId}#${issueNumber}`);
+    }
+    return rowToTaskAssignment(row);
+  }
+
+  listTaskAssignments(): TaskAssignmentInfo[] {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT * FROM task_assignments
+         ORDER BY updated_at DESC, created_at DESC, id DESC`,
+      )
+      .all() as unknown as TaskAssignmentRow[];
+    return rows.map(rowToTaskAssignment);
+  }
+
+  updateTaskAssignmentProgress(
+    id: number,
+    status: TaskAssignmentStatus,
+    prNumber: number | null,
+  ): void {
+    const db = this.getDb();
+    db.prepare(
+      `UPDATE task_assignments
+       SET status = ?,
+           pr_number = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(status, prNumber, new Date().toISOString(), id);
   }
 
   // ─── Ralph cycles ────────────────────────────────────
