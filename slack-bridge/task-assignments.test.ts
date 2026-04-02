@@ -246,6 +246,29 @@ describe("buildTaskAssignmentReport", () => {
       ].join("\n"),
     );
   });
+
+  it("includes a timestamp when one is provided", () => {
+    const report = buildTaskAssignmentReport(
+      [
+        makeAssignment({
+          id: 1,
+          agentId: "worker-2",
+          issueNumber: 103,
+          status: "assigned",
+        }),
+      ],
+      new Map([["worker-2", makeAgent("worker-2", "Frozen Raven", "🐦‍⬛")]]),
+      "2026-04-02T14:10:00.000Z",
+    );
+
+    expect(report).toBe(
+      [
+        "RALPH LOOP — WORKER STATUS:",
+        "Timestamp: 2026-04-02T14:10:00.000Z",
+        "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("getPendingTaskAssignmentReport", () => {
@@ -266,14 +289,23 @@ describe("getPendingTaskAssignmentReport", () => {
       ],
       agentsById,
       "",
+      "2026-04-02T14:10:00.000Z",
     );
 
-    expect(report).toBe(
-      ["RALPH LOOP — WORKER STATUS:", "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️"].join("\n"),
-    );
+    expect(report).toEqual({
+      signature: [
+        "RALPH LOOP — WORKER STATUS:",
+        "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️",
+      ].join("\n"),
+      message: [
+        "RALPH LOOP — WORKER STATUS:",
+        "Timestamp: 2026-04-02T14:10:00.000Z",
+        "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️",
+      ].join("\n"),
+    });
   });
 
-  it("does not queue a report when it matches the last delivered summary", () => {
+  it("does not queue a report when it matches the last delivered summary signature", () => {
     const lastDeliveredReport = [
       "RALPH LOOP — WORKER STATUS:",
       "- 🐎 Hyper Horse: #106 → PR #109 MERGED ✅",
@@ -291,6 +323,7 @@ describe("getPendingTaskAssignmentReport", () => {
       ],
       agentsById,
       lastDeliveredReport,
+      "2026-04-02T14:10:00.000Z",
     );
 
     expect(report).toBeNull();

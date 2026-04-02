@@ -392,6 +392,7 @@ export function buildTaskAssignmentReport(
     Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">
   >,
   agentsById: ReadonlyMap<string, Pick<AgentInfo, "emoji" | "name">>,
+  cycleStartedAt?: string,
 ): string | null {
   if (assignments.length === 0) {
     return null;
@@ -424,7 +425,15 @@ export function buildTaskAssignmentReport(
       return `- ${formatAgentLabel(agentId, agentsById)}: ${summary}`;
     });
 
-  return `RALPH LOOP — WORKER STATUS:\n${lines.join("\n")}`;
+  const header = cycleStartedAt
+    ? ["RALPH LOOP — WORKER STATUS:", `Timestamp: ${cycleStartedAt}`]
+    : ["RALPH LOOP — WORKER STATUS:"];
+  return [...header, ...lines].join("\n");
+}
+
+export interface PendingTaskAssignmentReport {
+  message: string;
+  signature: string;
 }
 
 export function getPendingTaskAssignmentReport(
@@ -432,11 +441,18 @@ export function getPendingTaskAssignmentReport(
     Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">
   >,
   agentsById: ReadonlyMap<string, Pick<AgentInfo, "emoji" | "name">>,
-  lastDeliveredReport: string,
-): string | null {
-  const report = buildTaskAssignmentReport(assignments, agentsById);
-  if (!report || report === lastDeliveredReport) {
+  lastDeliveredSignature: string,
+  cycleStartedAt?: string,
+): PendingTaskAssignmentReport | null {
+  const signature = buildTaskAssignmentReport(assignments, agentsById);
+  if (!signature || signature === lastDeliveredSignature) {
     return null;
   }
-  return report;
+
+  const message = buildTaskAssignmentReport(assignments, agentsById, cycleStartedAt);
+  if (!message) {
+    return null;
+  }
+
+  return { message, signature };
 }

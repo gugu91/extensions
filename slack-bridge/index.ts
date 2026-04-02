@@ -1033,8 +1033,8 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
   const lastReportedGhostIds = new Set<string>();
-  let lastBrokerTaskAssignmentReport = "";
-  let pendingBrokerTaskAssignmentReport: string | null = null;
+  let lastBrokerTaskAssignmentReportSignature = "";
+  let pendingBrokerTaskAssignmentReport: { message: string; signature: string } | null = null;
   const lastBrokerNudges = new Map<string, number>();
 
   function getPinetRegistrationBlockReason(): string {
@@ -1244,7 +1244,11 @@ export default function (pi: ExtensionAPI) {
 
         sendBrokerMaintenanceMessage(
           workload.id,
-          buildRalphLoopNudgeMessage(workload.pendingInboxCount, workload.ownedThreadCount),
+          buildRalphLoopNudgeMessage(
+            workload.pendingInboxCount,
+            workload.ownedThreadCount,
+            cycleStartedAt,
+          ),
         );
         lastBrokerNudges.set(workload.id, now);
       }
@@ -1276,7 +1280,7 @@ export default function (pi: ExtensionAPI) {
       const trackedAssignments = db.listTaskAssignments();
       if (trackedAssignments.length === 0) {
         pendingBrokerTaskAssignmentReport = null;
-        lastBrokerTaskAssignmentReport = "";
+        lastBrokerTaskAssignmentReportSignature = "";
       } else {
         const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
         const projectedAssignments = resolvedAssignments.map((assignment) => {
@@ -1298,7 +1302,8 @@ export default function (pi: ExtensionAPI) {
         pendingBrokerTaskAssignmentReport = getPendingTaskAssignmentReport(
           projectedAssignments,
           agentsById,
-          lastBrokerTaskAssignmentReport,
+          lastBrokerTaskAssignmentReportSignature,
+          cycleStartedAt,
         );
       }
       // Keep cooldown state across transient clean cycles so flapping anomalies
@@ -1319,18 +1324,12 @@ export default function (pi: ExtensionAPI) {
           lastBrokerRalphLoopFollowUpAt = now;
         });
       }
-      if (
-        pendingBrokerTaskAssignmentReport &&
-        (ctx.isIdle?.() ?? true) &&
-        pendingBrokerTaskAssignmentReport !== lastBrokerTaskAssignmentReport
-      ) {
+      if (pendingBrokerTaskAssignmentReport && (ctx.isIdle?.() ?? true)) {
         const reportToDeliver = pendingBrokerTaskAssignmentReport;
-        trySendBrokerFollowUp(reportToDeliver, () => {
-          lastBrokerTaskAssignmentReport = reportToDeliver;
+        trySendBrokerFollowUp(reportToDeliver.message, () => {
+          lastBrokerTaskAssignmentReportSignature = reportToDeliver.signature;
           pendingBrokerTaskAssignmentReport = null;
         });
-      } else if (pendingBrokerTaskAssignmentReport === lastBrokerTaskAssignmentReport) {
-        pendingBrokerTaskAssignmentReport = null;
       }
 
       const shouldWarn =
@@ -1396,7 +1395,7 @@ export default function (pi: ExtensionAPI) {
     lastBrokerRalphLoopHadOutstandingAnomalies = false;
     lastBrokerRalphLoopFollowUpAt = 0;
     brokerRalphLoopFollowUpPending = false;
-    lastBrokerTaskAssignmentReport = "";
+    lastBrokerTaskAssignmentReportSignature = "";
     pendingBrokerTaskAssignmentReport = null;
   }
 
