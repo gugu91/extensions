@@ -34,6 +34,7 @@ export const WRITE_TOOLS = new Set([
   "memory_init",
   "slack_create_channel",
   "slack_post_channel",
+  "pinet_schedule",
 ]);
 
 /**

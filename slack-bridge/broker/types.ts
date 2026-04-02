@@ -84,6 +84,19 @@ export interface TaskAssignmentInfo {
   updatedAt: string;
 }
 
+export interface ScheduledWakeupInfo {
+  id: number;
+  agentId: string;
+  threadId: string;
+  body: string;
+  fireAt: string;
+  createdAt: string;
+}
+
+export interface ScheduledWakeupDelivery {
+  wakeup: ScheduledWakeupInfo;
+  message: BrokerMessage;
+}
 // ─── Routing ──────────────────────────────────────────────
 
 export type RoutingDecision =

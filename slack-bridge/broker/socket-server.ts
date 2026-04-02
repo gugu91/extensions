@@ -370,6 +370,8 @@ export class BrokerSocketServer {
           return this.handleAgentMessage(req, state);
         case "agent.broadcast":
           return this.handleAgentBroadcast(req, state);
+        case "schedule.create":
+          return this.handleScheduleCreate(req, state);
         case "status.update":
           return this.handleStatusUpdate(req, state);
         case "slack.proxy":
@@ -633,6 +635,31 @@ export class BrokerSocketServer {
       RPC_INVALID_PARAMS,
       "Broadcast channels are broker-only and cannot be sent by connected clients.",
     );
+  }
+
+  private handleScheduleCreate(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const fireAt = typeof params.fireAt === "string" ? params.fireAt : null;
+    const body = typeof params.body === "string" ? params.body.trim() : null;
+
+    if (!fireAt || !body) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "fireAt and body are required");
+    }
+
+    if (Number.isNaN(Date.parse(fireAt))) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "fireAt must be a valid ISO timestamp");
+    }
+
+    const wakeup = this.db.scheduleWakeup(state.agentId, body, fireAt);
+    return rpcOk(req.id, {
+      id: wakeup.id,
+      threadId: wakeup.threadId,
+      fireAt: wakeup.fireAt,
+    });
   }
 
   // ─── Status update handler ─────────────────────────────

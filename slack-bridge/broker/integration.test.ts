@@ -144,6 +144,34 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("schedule.create persists a wake-up and delivers it once due", async () => {
+    const reg = await client.register("worker-agent", "⏰");
+
+    const wakeup = await client.scheduleWakeup(
+      "2026-04-02T14:05:00.000Z",
+      "Check whether PR #62 merged",
+    );
+
+    expect(wakeup.id).toBeGreaterThan(0);
+    expect(db.listScheduledWakeups(reg.agentId)).toHaveLength(1);
+
+    const earlyDeliveries = db.deliverDueScheduledWakeups("2026-04-02T14:04:59.000Z");
+    expect(earlyDeliveries).toHaveLength(0);
+
+    const deliveries = db.deliverDueScheduledWakeups("2026-04-02T14:05:00.000Z");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].wakeup.id).toBe(wakeup.id);
+    expect(deliveries[0].message.body).toBe("Check whether PR #62 merged");
+
+    const inbox = await client.pollInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].message.body).toBe("Check whether PR #62 merged");
+    expect((inbox[0].message.metadata as Record<string, unknown>).scheduledWakeup).toBe(true);
+
+    await client.ackMessages([inbox[0].inboxId]);
+    expect(db.listScheduledWakeups(reg.agentId)).toHaveLength(0);
+  });
+
   it("maintenance assigns unrouted backlog into a follower inbox", async () => {
     const info = server.getConnectInfo();
     if (info.type !== "tcp") throw new Error("Expected TCP");

@@ -414,6 +414,153 @@ describe("BrokerDB", () => {
     expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
   });
 
+  it("adds scheduled wake-up tracking when migrating from schema v7", () => {
+    const dbPath = path.join(dir, "legacy-scheduled-wakeups.db");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        last_heartbeat TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT,
+        resumable_until TEXT,
+        idle_since TEXT,
+        last_activity TEXT
+      );
+
+      CREATE TABLE task_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        branch TEXT,
+        pr_number INTEGER,
+        status TEXT NOT NULL DEFAULT 'assigned'
+          CHECK(status IN ('assigned', 'branch_pushed', 'pr_open', 'pr_merged', 'pr_closed')),
+        thread_id TEXT NOT NULL,
+        source_message_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(issue_number)
+      );
+
+      PRAGMA user_version = 7;
+    `);
+    legacyDb.close();
+
+    const migratedDb = new BrokerDB(dbPath);
+    expect(() => migratedDb.initialize()).not.toThrow();
+    migratedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    const columns = inspectDb.prepare("PRAGMA table_info(scheduled_wakeups)").all() as Array<{
+      name: string;
+    }>;
+    inspectDb.close();
+
+    expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "agent_id",
+        "agent_stable_id",
+        "thread_id",
+        "body",
+        "fire_at",
+        "created_at",
+      ]),
+    );
+  });
+
+  it("backfills scheduled wake-up stable ids when migrating from schema v8", () => {
+    const dbPath = path.join(dir, "legacy-scheduled-wakeups-v8.db");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        last_heartbeat TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT,
+        resumable_until TEXT,
+        idle_since TEXT,
+        last_activity TEXT
+      );
+
+      CREATE TABLE task_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        branch TEXT,
+        pr_number INTEGER,
+        status TEXT NOT NULL DEFAULT 'assigned'
+          CHECK(status IN ('assigned', 'branch_pushed', 'pr_open', 'pr_merged', 'pr_closed')),
+        thread_id TEXT NOT NULL,
+        source_message_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(issue_number)
+      );
+
+      CREATE TABLE scheduled_wakeups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        body TEXT NOT NULL,
+        fire_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO agents (
+        id, stable_id, name, emoji, pid,
+        connected_at, last_seen, last_heartbeat,
+        metadata, status, disconnected_at, resumable_until,
+        idle_since, last_activity
+      ) VALUES (
+        'worker-1', 'host:session:/tmp/worker-1', 'Worker', '⏰', 1,
+        '2026-04-02T14:00:00.000Z', '2026-04-02T14:00:00.000Z', '2026-04-02T14:00:00.000Z',
+        NULL, 'idle', NULL, NULL,
+        '2026-04-02T14:00:00.000Z', NULL
+      );
+
+      INSERT INTO scheduled_wakeups (agent_id, thread_id, body, fire_at, created_at)
+      VALUES (
+        'worker-1',
+        'wakeup:worker-1',
+        'Wake me later',
+        '2026-04-02T14:05:00.000Z',
+        '2026-04-02T14:00:00.000Z'
+      );
+
+      PRAGMA user_version = 8;
+    `);
+    legacyDb.close();
+
+    const migratedDb = new BrokerDB(dbPath);
+    expect(() => migratedDb.initialize()).not.toThrow();
+    migratedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const row = inspectDb
+      .prepare("SELECT agent_stable_id FROM scheduled_wakeups WHERE agent_id = ?")
+      .get("worker-1") as { agent_stable_id: string | null };
+    inspectDb.close();
+
+    expect(row.agent_stable_id).toBe("host:session:/tmp/worker-1");
+  });
+
   it("recreates an invalid database file from scratch instead of crashing", () => {
     const dbPath = path.join(dir, "invalid.db");
     fs.writeFileSync(dbPath, "not a sqlite database", "utf-8");
@@ -681,6 +828,95 @@ describe("BrokerDB", () => {
         count: number;
       },
     ).toEqual({ count: 0 });
+  });
+
+  it("schedules wake-ups and delivers them when due", () => {
+    db.registerAgent("worker-1", "Worker", "⏰", 1);
+
+    const scheduled = db.scheduleWakeup(
+      "worker-1",
+      "Check whether PR #62 merged",
+      "2026-04-02T14:05:00.000Z",
+    );
+
+    expect(db.listScheduledWakeups("worker-1")).toHaveLength(1);
+    expect(db.deliverDueScheduledWakeups("2026-04-02T14:04:59.000Z")).toHaveLength(0);
+
+    const deliveries = db.deliverDueScheduledWakeups("2026-04-02T14:05:00.000Z");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].wakeup.id).toBe(scheduled.id);
+    expect(deliveries[0].message.body).toBe("Check whether PR #62 merged");
+    expect(deliveries[0].message.threadId).toBe("wakeup:worker-1");
+    expect((deliveries[0].message.metadata as Record<string, unknown>).scheduledWakeup).toBe(true);
+    expect(db.listScheduledWakeups("worker-1")).toHaveLength(0);
+
+    const inbox = db.getInbox("worker-1");
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].message.body).toBe("Check whether PR #62 merged");
+  });
+
+  it("keeps due wake-ups pending until the target agent reconnects", () => {
+    db.registerAgent("worker-1", "Worker", "⏰", 1, undefined, "host:session:/tmp/worker-1");
+    db.disconnectAgent("worker-1", 60_000);
+    db.scheduleWakeup("worker-1", "Wake me when CI is done", "2026-04-02T14:05:00.000Z");
+
+    expect(db.deliverDueScheduledWakeups("2026-04-02T14:05:00.000Z")).toHaveLength(0);
+    expect(db.listScheduledWakeups("worker-1")).toHaveLength(1);
+
+    db.registerAgent("worker-1b", "Worker", "⏰", 2, undefined, "host:session:/tmp/worker-1");
+
+    const deliveries = db.deliverDueScheduledWakeups("2026-04-02T14:05:01.000Z");
+    expect(deliveries).toHaveLength(1);
+    expect(db.listScheduledWakeups("worker-1")).toHaveLength(0);
+    expect(db.getInbox("worker-1")).toHaveLength(1);
+  });
+
+  it("persists scheduled wake-ups across broker restart", () => {
+    const dbPath = path.join(dir, "scheduled-restart.db");
+    const firstDb = new BrokerDB(dbPath);
+    firstDb.initialize();
+    firstDb.registerAgent("worker-1", "Worker", "⏰", 1, undefined, "host:session:/tmp/restart");
+    firstDb.scheduleWakeup("worker-1", "Wake me after restart", "2026-04-02T14:05:00.000Z");
+    firstDb.close();
+
+    const restartedDb = new BrokerDB(dbPath);
+    restartedDb.initialize();
+    expect(restartedDb.listScheduledWakeups("worker-1")).toHaveLength(1);
+
+    const resumed = restartedDb.registerAgent(
+      "worker-2",
+      "Different Worker",
+      "🦎",
+      2,
+      undefined,
+      "host:session:/tmp/restart",
+    );
+    expect(resumed.id).toBe("worker-1");
+
+    const deliveries = restartedDb.deliverDueScheduledWakeups("2026-04-02T14:05:00.000Z");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].message.body).toBe("Wake me after restart");
+    restartedDb.close();
+  });
+
+  it("keeps scheduled wake-ups after purge and rebinds them by stable id", () => {
+    const stableId = "host:session:/tmp/purge-reconnect";
+    db.registerAgent("worker-1", "Worker", "⏰", 1, undefined, stableId);
+    db.scheduleWakeup("worker-1", "Wake me after purge", "2026-04-02T14:05:00.000Z");
+    db.unregisterAgent("worker-1");
+
+    expect(db.purgeDisconnectedAgents(0)).toEqual(["worker-1"]);
+    expect(db.listScheduledWakeups()).toHaveLength(1);
+
+    const resumed = db.registerAgent("worker-2", "Worker", "🦎", 2, undefined, stableId);
+    expect(resumed.id).toBe("worker-2");
+    expect(db.listScheduledWakeups(resumed.id)).toHaveLength(1);
+
+    const deliveries = db.deliverDueScheduledWakeups("2026-04-02T14:05:00.000Z");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].message.body).toBe("Wake me after purge");
+    expect(db.getInbox(resumed.id)).toHaveLength(1);
+    expect(db.listScheduledWakeups(resumed.id)).toHaveLength(0);
   });
 
   it("getAllAgents includes recently disconnected agents for visibility", () => {

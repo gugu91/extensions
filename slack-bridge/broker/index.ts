@@ -14,6 +14,8 @@ export type { AgentMessageCallback } from "./socket-server.js";
 export type {
   AgentInfo,
   ThreadInfo,
+  ScheduledWakeupInfo,
+  ScheduledWakeupDelivery,
   BrokerMessage,
   InboxEntry,
   InboundMessage,
