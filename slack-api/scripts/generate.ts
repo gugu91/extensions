@@ -162,7 +162,7 @@ function collectSlackOperations(spec: OpenApiSpec): SlackOperation[] {
 
 function collectSdkMethodExports(source: string): Map<string, string> {
   const methodExports = new Map<string, string>();
-  const pattern = /export const (\w+)\s*=.*?url:\s*'\/([^']+)'/gs;
+  const pattern = /export const (\w+)\s*=.*?url:\s*["']\/([^"']+)["']/gs;
 
   for (const match of source.matchAll(pattern)) {
     methodExports.set(match[2], match[1]);
@@ -233,7 +233,13 @@ function buildMethodIndexFile(
 
   for (const operation of operations) {
     const predictedExport = operationIdToSdkExportName(operation.operationId);
-    const resolvedExport = sdkMethodExports.get(operation.slackMethod) ?? predictedExport;
+    const resolvedExport = sdkMethodExports.get(operation.slackMethod);
+
+    if (!resolvedExport) {
+      throw new Error(
+        `Unable to resolve generated SDK export for ${operation.slackMethod}; expected something like ${predictedExport}`,
+      );
+    }
 
     parameterLocationEntries[operation.slackMethod] = operation.parameterLocations;
 
@@ -276,8 +282,34 @@ async function main(): Promise<void> {
     const methodIndexSource = buildMethodIndexFile(operations, sdkMethodExports);
     await writeFile(join(nextGeneratedDir, "methods.gen.ts"), methodIndexSource, "utf8");
 
-    await rm(GENERATED_DIR, { recursive: true, force: true });
-    await rename(nextGeneratedDir, GENERATED_DIR);
+    const backupGeneratedDir = join(tempDir, "generated-backup");
+    let movedExistingGenerated = false;
+
+    try {
+      await rename(GENERATED_DIR, backupGeneratedDir);
+      movedExistingGenerated = true;
+    } catch (error) {
+      const errorCode =
+        typeof error === "object" && error !== null && "code" in error
+          ? String(error.code)
+          : undefined;
+      if (errorCode !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    try {
+      await rename(nextGeneratedDir, GENERATED_DIR);
+    } catch (error) {
+      if (movedExistingGenerated) {
+        await rename(backupGeneratedDir, GENERATED_DIR);
+      }
+      throw error;
+    }
+
+    if (movedExistingGenerated) {
+      await rm(backupGeneratedDir, { recursive: true, force: true });
+    }
 
     console.log(
       `Generated ${operations.length} Slack Web API methods from ${downloadedSpec.source.label}: ${downloadedSpec.source.url}`,
