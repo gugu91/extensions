@@ -1,10 +1,14 @@
 import * as fs from "node:fs";
 import { BrokerDB } from "./schema.js";
 import { BrokerSocketServer, defaultSocketPath } from "./socket-server.js";
+import type { ListenTarget } from "./socket-server.js";
+import { LeaderLock } from "./leader.js";
 import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
 export { BrokerSocketServer } from "./socket-server.js";
+export { LeaderLock } from "./leader.js";
+export type { ListenTarget } from "./socket-server.js";
 export type { AgentMessageCallback } from "./socket-server.js";
 export type {
   AgentInfo,
@@ -22,39 +26,67 @@ export type {
 
 export interface BrokerOptions {
   dbPath?: string;
+  /** Unix socket path (shorthand for { type: "unix", path }) */
   socketPath?: string;
+  /** Full listen target — overrides socketPath when provided */
+  listenTarget?: ListenTarget;
+  lockPath?: string;
 }
 
 export interface Broker {
   db: BrokerDB;
   server: BrokerSocketServer;
+  lock: LeaderLock;
   adapters: MessageAdapter[];
   addAdapter(adapter: MessageAdapter): void;
   stop(): Promise<void>;
 }
 
 /**
- * Start the broker: initialize SQLite, start the Unix socket server.
- * Only one broker should run at a time — use /pinet-start explicitly.
+ * Start the broker: acquire leader lock, initialize SQLite, start the Unix socket server.
+ * Only one broker may run at a time — enforced by a PID lock file.
+ *
+ * Throws if another broker process already holds the lock.
  */
 export async function startBroker(options: BrokerOptions = {}): Promise<Broker> {
-  const db = new BrokerDB(options.dbPath);
-  db.initialize();
-
-  // Clean up stale socket file
-  const socketPath = options.socketPath ?? defaultSocketPath();
-  try {
-    const stat = fs.statSync(socketPath);
-    if (stat.isSocket()) fs.unlinkSync(socketPath);
-  } catch {
-    /* doesn't exist — fine */
+  // ── Leader lock: prevent split-brain (issue #119) ────
+  const lock = new LeaderLock(options.lockPath);
+  if (!lock.tryAcquire()) {
+    throw new Error(
+      "Another pinet broker is already running. Only one broker may be active at a time.",
+    );
   }
 
-  const server = new BrokerSocketServer(db, socketPath);
+  const db = new BrokerDB(options.dbPath);
+  try {
+    db.initialize();
+  } catch (err) {
+    lock.release();
+    throw err;
+  }
+
+  // Resolve listen target: explicit target > socketPath > default
+  const target: ListenTarget = options.listenTarget ?? {
+    type: "unix" as const,
+    path: options.socketPath ?? defaultSocketPath(),
+  };
+
+  // Clean up stale socket file (Unix only)
+  if (target.type === "unix") {
+    try {
+      const stat = fs.statSync(target.path);
+      if (stat.isSocket()) fs.unlinkSync(target.path);
+    } catch {
+      /* doesn't exist — fine */
+    }
+  }
+
+  const server = new BrokerSocketServer(db, target);
   try {
     await server.start();
   } catch (err) {
     db.close();
+    lock.release();
     throw err;
   }
 
@@ -63,6 +95,7 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
   const broker: Broker = {
     db,
     server,
+    lock,
     adapters,
 
     addAdapter(adapter: MessageAdapter): void {
@@ -80,6 +113,7 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
       adapters.length = 0;
       await server.stop();
       db.close();
+      lock.release();
     },
   };
 

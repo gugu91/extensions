@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as net from "node:net";
 import { BrokerDB, CURRENT_BROKER_SCHEMA_VERSION } from "./schema.js";
 import { LeaderLock } from "./leader.js";
+import { startBroker, type Broker } from "./index.js";
 import { runBrokerMaintenancePass } from "./maintenance.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "./types.js";
@@ -455,9 +456,7 @@ describe("BrokerDB", () => {
 
     const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
     sqlite
-      .prepare(
-        "UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?",
-      )
+      .prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?")
       .run(new Date(Date.now() - 2 * 60 * 60_000).toISOString(), "gone");
 
     runBrokerMaintenancePass(db, {
@@ -983,5 +982,104 @@ describe("BrokerSocketServer", () => {
     expect(res.error!.message).toContain("array");
 
     client.destroy();
+  });
+});
+
+// ─── startBroker leader lock integration ─────────────────
+// Use TCP with port 0 (auto-assign) since Unix sockets may be
+// blocked in sandboxed environments.
+
+describe("startBroker leader lock", () => {
+  const TCP_TARGET = { type: "tcp" as const, host: "127.0.0.1", port: 0 };
+  let dir: string;
+  const brokers: Broker[] = [];
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(async () => {
+    for (const b of brokers.splice(0)) {
+      await b.stop();
+    }
+    cleanup(dir);
+  });
+
+  /** Helper: start a broker with TCP + per-test dir, track for cleanup */
+  async function launch(overrides: { lockPath?: string; dbSuffix?: string } = {}): Promise<Broker> {
+    const b = await startBroker({
+      dbPath: path.join(dir, `${overrides.dbSuffix ?? "test"}.db`),
+      listenTarget: TCP_TARGET,
+      lockPath: overrides.lockPath ?? path.join(dir, "broker.lock"),
+    });
+    brokers.push(b);
+    return b;
+  }
+
+  it("acquires lock on startup and releases on stop", async () => {
+    const lockPath = path.join(dir, "broker.lock");
+    const broker = await launch({ lockPath });
+
+    // Lock file should exist with our PID
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(fs.readFileSync(lockPath, "utf-8").trim()).toBe(String(process.pid));
+
+    await broker.stop();
+    brokers.length = 0;
+
+    // Lock file should be cleaned up
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("rejects second broker while first is running", async () => {
+    const lockPath = path.join(dir, "broker.lock");
+    await launch({ lockPath });
+
+    await expect(
+      startBroker({
+        dbPath: path.join(dir, "test2.db"),
+        listenTarget: TCP_TARGET,
+        lockPath,
+      }),
+    ).rejects.toThrow("Another pinet broker is already running");
+  });
+
+  it("second broker starts after first stops", async () => {
+    const lockPath = path.join(dir, "broker.lock");
+    const broker1 = await launch({ lockPath });
+    await broker1.stop();
+    brokers.length = 0;
+
+    const broker2 = await launch({ lockPath, dbSuffix: "test2" });
+    expect(broker2.lock.isLeader()).toBe(true);
+  });
+
+  it("reclaims stale lock from dead process", async () => {
+    const lockPath = path.join(dir, "broker.lock");
+
+    // Simulate a crashed broker by writing a dead PID
+    fs.writeFileSync(lockPath, "2147483647", "utf-8");
+
+    const broker = await launch({ lockPath });
+    expect(broker.lock.isLeader()).toBe(true);
+  });
+
+  it("releases lock when db initialization fails", async () => {
+    const lockPath = path.join(dir, "broker.lock");
+
+    // Make the db path a directory so SQLite open fails
+    const badDbPath = path.join(dir, "bad.db");
+    fs.mkdirSync(badDbPath, { recursive: true });
+
+    await expect(
+      startBroker({
+        dbPath: badDbPath,
+        listenTarget: TCP_TARGET,
+        lockPath,
+      }),
+    ).rejects.toThrow();
+
+    // Lock should have been cleaned up on failure
+    expect(fs.existsSync(lockPath)).toBe(false);
   });
 });
