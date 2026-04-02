@@ -92,11 +92,13 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("edit", g)).toBe(false);
   });
 
-  it("classifies create/post channel tools as write-only", () => {
+  it("classifies Slack mutation tools as write-only", () => {
     expect(WRITE_TOOLS.has("slack_create_channel")).toBe(true);
     expect(WRITE_TOOLS.has("slack_post_channel")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_upload")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_create_channel")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_post_channel")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_upload")).toBe(false);
   });
 
   it("combines readOnly and blockedTools", () => {
