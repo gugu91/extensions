@@ -175,9 +175,12 @@ Use these local commands to control another connected Pinet agent by name or ID:
 
 - `/pinet-reload <agent>` — ask the target agent to reload cleanly
 - `/pinet-exit <agent>` — ask the target agent to disconnect cleanly and exit
+- `/pinet-free` — mark this agent idle/free and available for new work
 
 Agents can also send the exact A2A message `/reload` or `/exit` via `pinet_message`; the
 receiver handles it automatically instead of surfacing it to the LLM as normal work.
+When a worker finishes all assigned work, it can call the `pinet_free` tool (or `/pinet-free`)
+to explicitly signal availability for new assignments.
 
 ## Status
 

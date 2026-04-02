@@ -36,6 +36,8 @@ export type AgentMessageCallback = (
   metadata: Record<string, unknown>,
 ) => void;
 
+export type AgentStatusChangeCallback = (agentId: string, status: "working" | "idle") => void;
+
 export interface BrokerSocketServerOptions {
   heartbeatTimeoutMs?: number;
   pruneIntervalMs?: number;
@@ -120,6 +122,7 @@ export class BrokerSocketServer {
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private assignedPort: number | null = null;
   private agentMessageCallback: AgentMessageCallback | null = null;
+  private agentStatusChangeCallback: AgentStatusChangeCallback | null = null;
 
   constructor(
     db: BrokerDB,
@@ -229,11 +232,20 @@ export class BrokerSocketServer {
 
   /**
    * Register a callback invoked whenever a worker sends an agent-to-agent
-   * message via the socket server.  The broker uses this to push messages
+   * message via the socket server. The broker uses this to push messages
    * targeting itself into its in-memory inbox.
    */
   onAgentMessage(cb: AgentMessageCallback): void {
     this.agentMessageCallback = cb;
+  }
+
+  /**
+   * Register a callback invoked whenever a connected agent explicitly updates
+   * its broker status. The broker uses idle transitions to kick maintenance so
+   * backlog can be reassigned immediately.
+   */
+  onAgentStatusChange(cb: AgentStatusChangeCallback): void {
+    this.agentStatusChangeCallback = cb;
   }
 
   private startPruning(): void {
@@ -672,6 +684,11 @@ export class BrokerSocketServer {
     const params = req.params ?? {};
     const status = params.status === "working" ? "working" : "idle";
     this.db.updateAgentStatus(state.agentId, status);
+    try {
+      this.agentStatusChangeCallback?.(state.agentId, status);
+    } catch {
+      /* best effort */
+    }
     return rpcOk(req.id, { ok: true });
   }
 

@@ -1111,6 +1111,7 @@ export function buildWorkerPromptGuidelines(): string[] {
     "2. Do the work.",
     "3. If you hit a blocker, report it immediately and ask for what you need — blocked work must be visible so it can be unblocked or reassigned.",
     "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
+    "5. When you have finished all assigned work and are waiting for more, call `pinet_free` (or `/pinet-free`) to mark yourself idle/free for the broker.",
     "Always reply where the task came from.",
     "",
     "REPLY TOOL RULES:",

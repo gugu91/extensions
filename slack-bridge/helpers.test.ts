@@ -767,6 +767,14 @@ describe("buildWorkerPromptGuidelines", () => {
     expect(joined).toContain("ACKs, blockers, status updates, and final results");
     expect(joined).toContain("ack/work/ask/report");
   });
+
+  it("tells workers to explicitly mark themselves idle/free when work is done", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_free");
+    expect(joined).toContain("/pinet-free");
+    expect(joined).toContain("idle/free");
+  });
 });
 
 // ─── buildIdentityReplyGuidelines ─────────────────────────────

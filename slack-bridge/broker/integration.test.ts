@@ -144,6 +144,24 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("invokes status change callbacks when a client explicitly marks itself free", async () => {
+    const changes: Array<{ agentId: string; status: "working" | "idle" }> = [];
+    server.onAgentStatusChange((agentId, status) => {
+      changes.push({ agentId, status });
+    });
+
+    const reg = await client.register("free-agent", "🆓");
+
+    await client.updateStatus("working");
+    await client.updateStatus("idle");
+
+    expect(changes).toEqual([
+      { agentId: reg.agentId, status: "working" },
+      { agentId: reg.agentId, status: "idle" },
+    ]);
+    expect(db.getAgentById(reg.agentId)?.status).toBe("idle");
+  });
+
   it("schedule.create persists a wake-up and delivers it once due", async () => {
     const reg = await client.register("worker-agent", "⏰");
 
