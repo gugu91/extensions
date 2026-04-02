@@ -64,6 +64,7 @@ import {
   type BrokerMaintenanceResult,
 } from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import { registerSlackTools } from "./slack-tools.js";
 
 // Settings and helpers imported from ./helpers.js
 
@@ -774,420 +775,58 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Tools ──────────────────────────────────────────
 
-  pi.registerTool({
-    name: "slack_inbox",
-    label: "Slack Inbox",
-    description:
-      "Return pending Slack messages that arrived since the last check, then clear the queue.",
-    promptSnippet: "Check for new incoming Slack messages.",
-    promptGuidelines: [
-      "You are connected to Slack via the slack-bridge extension.",
-      "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
-      ...(securityPrompt
-        ? [
-            "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
-            ...(guardrails.requireConfirmation?.length
-              ? [
-                  `Before using tools matching these patterns: [${guardrails.requireConfirmation.join(", ")}], you MUST call slack_confirm_action first and wait for approval.`,
-                ]
-              : []),
-            ...(guardrails.readOnly
-              ? [
-                  "READ-ONLY MODE is active. Do NOT use write, edit, bash, or any tool that modifies files or state.",
-                ]
-              : []),
-          ]
-        : []),
-    ],
-    parameters: Type.Object({}),
-    async execute() {
-      const securityHeader = securityPrompt ? `${securityPrompt}\n\n` : "";
-
-      if (inbox.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${securityHeader}(no new messages) — you are ${agentEmoji} ${agentName}`,
-            },
-          ],
-          details: { count: 0 },
-        };
-      }
-
-      const pending = inbox.splice(0, inbox.length);
-      updateBadge();
-
-      const lines: string[] = [];
-      for (const m of pending) {
-        const name = await resolveUser(m.userId);
-        const prefix = m.isChannelMention
-          ? `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${name}`
-          : `[thread ${m.threadTs}] ${name}`;
-        lines.push(`${prefix} (${m.timestamp}): ${m.text}`);
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${securityHeader}You are ${agentEmoji} ${agentName}.\\n\\n${lines.join("\\n")}`,
-          },
-        ],
-        details: { count: pending.length },
-      };
+  registerSlackTools(pi, {
+    botToken: botToken!,
+    defaultChannel: settings.defaultChannel,
+    securityPrompt,
+    guardrails,
+    inbox,
+    slack: callSlackAPI,
+    getAgentName: () => agentName,
+    getAgentEmoji: () => agentEmoji,
+    getLastDmChannel: () => lastDmChannel,
+    updateBadge,
+    resolveUser,
+    resolveFollowerReplyChannel,
+    resolveChannel,
+    rememberChannel: (name, channelId) => {
+      channelCache.set(name, channelId);
     },
-  });
-
-  pi.registerTool({
-    name: "slack_send",
-    label: "Slack Send",
-    description: "Send a message in a Slack assistant thread.",
-    promptSnippet:
-      "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
-    parameters: Type.Object({
-      text: Type.String({ description: "Message text (Slack markdown)" }),
-      thread_ts: Type.Optional(
-        Type.String({
-          description: "Thread to reply in. Omit to start a new conversation.",
-        }),
-      ),
-    }),
-    async execute(_id, params) {
-      requireToolPolicy("slack_send", params.thread_ts);
-
-      const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? lastDmChannel;
-
-      if (!channel) {
-        throw new Error(
-          "No active Slack thread. If you know the channel and thread_ts, use slack_post_channel instead.",
-        );
-      }
-
-      const body: Record<string, unknown> = {
-        channel,
-        text: params.text,
-        metadata: {
-          event_type: "pi_agent_msg",
-          event_payload: { agent: agentName },
-        },
-      };
-      if (params.thread_ts) body.thread_ts = params.thread_ts;
-
-      const res = await callSlackAPI("chat.postMessage", botToken!, body);
-      const ts = (res.message as { ts: string }).ts;
-      const actualTs = params.thread_ts ?? ts;
-
-      // track + claim ownership (first-responder-wins)
-      if (!threads.has(actualTs)) {
-        threads.set(actualTs, {
-          channelId: channel,
-          threadTs: actualTs,
-          userId: "",
-          owner: agentName,
-        });
-      } else {
-        const t = threads.get(actualTs)!;
-        if (!t.owner) t.owner = agentName;
-      }
-      unclaimedThreads.delete(actualTs);
-      persistState();
-
-      // Claim in broker DB so inbound replies route back to us
-      if (brokerRole === "broker" && activeRouter && activeSelfId) {
-        activeRouter.claimThread(actualTs, activeSelfId);
-      } else if (brokerRole === "follower" && brokerClient?.client) {
-        void brokerClient.client.claimThread(actualTs, channel).catch(() => {
-          /* broker gone, best effort */
-        });
-      }
-
-      // Remove 👀 from all messages in this thread
-      if (params.thread_ts) {
-        const pending = pendingEyes.get(params.thread_ts);
-        if (pending) {
-          for (const p of pending) {
-            void removeReaction(p.channel, p.messageTs, "eyes");
-          }
-          pendingEyes.delete(params.thread_ts);
-        }
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: params.thread_ts
-              ? `Replied in thread ${params.thread_ts}.`
-              : `Sent message (thread_ts: ${ts}). Use this to continue the conversation.`,
-          },
-        ],
-        details: { ts, channel },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "slack_read",
-    label: "Slack Read",
-    description: "Read messages from a Slack assistant thread.",
-    promptSnippet: "Read messages from a Slack assistant thread.",
-    parameters: Type.Object({
-      thread_ts: Type.String({ description: "Thread to read." }),
-      limit: Type.Optional(Type.Number({ description: "Max messages (default 20)" })),
-    }),
-    async execute(_id, params) {
-      requireToolPolicy("slack_read", params.thread_ts);
-
-      const thread = threads.get(params.thread_ts);
-      const channel = thread?.channelId ?? lastDmChannel;
-      if (!channel) throw new Error("Unknown thread.");
-
-      const res = await callSlackAPI("conversations.replies", botToken!, {
-        channel,
-        ts: params.thread_ts,
-        limit: params.limit ?? 20,
-      });
-
-      const msgs = res.messages as Record<string, unknown>[];
-      const lines: string[] = [];
-
-      for (const m of msgs) {
-        const uid = m.user as string | undefined;
-        const name = uid ? await resolveUser(uid) : "bot";
-        const txt = (m.text as string) ?? "";
-        const ts = m.ts as string;
-        lines.push(`[${ts}] ${name}: ${txt}`);
-      }
-
-      return {
-        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
-        details: { count: msgs.length },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "slack_create_channel",
-    label: "Slack Create Channel",
-    description: "Create a new Slack channel, optionally setting its topic and purpose.",
-    promptSnippet: "Create a new Slack channel.",
-    parameters: Type.Object({
-      name: Type.String({
-        description: "Channel name (lowercase, no spaces, max 80 chars)",
-      }),
-      topic: Type.Optional(Type.String({ description: "Channel topic" })),
-      purpose: Type.Optional(Type.String({ description: "Channel purpose" })),
-    }),
-    async execute(_id, params) {
-      requireToolPolicy("slack_create_channel", undefined);
-
-      const res = await callSlackAPI("conversations.create", botToken!, {
-        name: params.name,
-      });
-      const ch = res.channel as { id: string; name: string };
-
-      if (params.topic) {
-        await callSlackAPI("conversations.setTopic", botToken!, {
-          channel: ch.id,
-          topic: params.topic,
-        });
-      }
-      if (params.purpose) {
-        await callSlackAPI("conversations.setPurpose", botToken!, {
-          channel: ch.id,
-          purpose: params.purpose,
-        });
-      }
-
-      channelCache.set(ch.name, ch.id);
-
-      return {
-        content: [{ type: "text", text: `Created channel #${ch.name} (${ch.id})` }],
-        details: { id: ch.id, name: ch.name },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "slack_post_channel",
-    label: "Slack Post Channel",
-    description:
-      "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
-    promptSnippet:
-      "Post a message to a Slack channel or thread. Use when you need to target a specific channel or thread by ID.",
-    parameters: Type.Object({
-      channel: Type.Optional(
-        Type.String({
-          description: "Channel name or ID (uses defaultChannel from settings if omitted)",
-        }),
-      ),
-      text: Type.String({ description: "Message text (Slack markdown)" }),
-      thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
-    }),
-    async execute(_id, params) {
-      requireToolPolicy("slack_post_channel", params.thread_ts);
-
-      const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);
-      const channelInput = params.channel ?? settings.defaultChannel;
-      let channelId = params.channel ? await resolveChannel(params.channel) : resolvedThreadChannel;
-
-      if (!channelId && channelInput) {
-        channelId = await resolveChannel(channelInput);
-      }
-      if (!channelId) {
-        throw new Error("No channel specified and no defaultChannel configured in settings.json.");
-      }
-
-      const body: Record<string, unknown> = {
-        channel: channelId,
-        text: params.text,
-        metadata: {
-          event_type: "pi_agent_msg",
-          event_payload: { agent: agentName },
-        },
-      };
-      if (params.thread_ts) body.thread_ts = params.thread_ts;
-
-      const res = await callSlackAPI("chat.postMessage", botToken!, body);
-      const ts = (res.message as { ts: string }).ts;
-      const actualTs = params.thread_ts ?? ts;
-
-      // Track + claim ownership so inbound replies route back to us
-      if (!threads.has(actualTs)) {
-        threads.set(actualTs, {
+    requireToolPolicy,
+    trackOutboundThread: (threadTs, channelId) => {
+      if (!threads.has(threadTs)) {
+        threads.set(threadTs, {
           channelId,
-          threadTs: actualTs,
+          threadTs,
           userId: "",
           owner: agentName,
         });
       } else {
-        const t = threads.get(actualTs)!;
-        if (!t.owner) t.owner = agentName;
+        const thread = threads.get(threadTs)!;
+        if (!thread.owner) thread.owner = agentName;
       }
-      unclaimedThreads.delete(actualTs);
+      unclaimedThreads.delete(threadTs);
       persistState();
-
+    },
+    claimThreadOwnership: (threadTs, channelId) => {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
-        activeRouter.claimThread(actualTs, activeSelfId);
+        activeRouter.claimThread(threadTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void brokerClient.client.claimThread(actualTs, channelId).catch(() => {
+        void brokerClient.client.claimThread(threadTs, channelId).catch(() => {
           /* broker gone, best effort */
         });
       }
-
-      const channelLabel = params.channel ?? resolvedThreadChannel ?? channelInput ?? channelId;
-      return {
-        content: [
-          {
-            type: "text",
-            text: params.thread_ts
-              ? `Replied in thread ${params.thread_ts} in channel ${channelLabel}.`
-              : `Posted to #${channelLabel} (ts: ${ts}).`,
-          },
-        ],
-        details: { ts, channel: channelId },
-      };
     },
-  });
-
-  pi.registerTool({
-    name: "slack_read_channel",
-    label: "Slack Read Channel",
-    description: "Read messages from a Slack channel or a thread within a channel.",
-    promptSnippet: "Read messages from a Slack channel.",
-    parameters: Type.Object({
-      channel: Type.String({ description: "Channel name or ID" }),
-      thread_ts: Type.Optional(
-        Type.String({ description: "Thread timestamp to read replies from" }),
-      ),
-      limit: Type.Optional(Type.Number({ description: "Max messages to return (default 20)" })),
-    }),
-    async execute(_id, params) {
-      requireToolPolicy("slack_read_channel", params.thread_ts);
-
-      const channelId = await resolveChannel(params.channel);
-      const limit = params.limit ?? 20;
-
-      let msgs: Record<string, unknown>[];
-      if (params.thread_ts) {
-        const res = await callSlackAPI("conversations.replies", botToken!, {
-          channel: channelId,
-          ts: params.thread_ts,
-          limit,
-        });
-        msgs = res.messages as Record<string, unknown>[];
-      } else {
-        const res = await callSlackAPI("conversations.history", botToken!, {
-          channel: channelId,
-          limit,
-        });
-        msgs = (res.messages as Record<string, unknown>[]).reverse();
+    clearPendingEyes: (threadTs) => {
+      const pending = pendingEyes.get(threadTs);
+      if (!pending) return;
+      for (const entry of pending) {
+        void removeReaction(entry.channel, entry.messageTs, "eyes");
       }
-
-      const lines: string[] = [];
-      for (const m of msgs) {
-        const uid = m.user as string | undefined;
-        const name = uid ? await resolveUser(uid) : "bot";
-        const txt = (m.text as string) ?? "";
-        const ts = m.ts as string;
-        lines.push(`[${ts}] ${name}: ${txt}`);
-      }
-
-      return {
-        content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
-        details: { count: msgs.length, channel: channelId },
-      };
+      pendingEyes.delete(threadTs);
     },
-  });
-
-  // ─── Security confirmation tool ─────────────────────
-
-  pi.registerTool({
-    name: "slack_confirm_action",
-    label: "Slack Confirm Action",
-    description:
-      "Request user confirmation in a Slack thread before performing a dangerous action. Use when security guardrails require confirmation for a tool.",
-    promptSnippet: "Request confirmation in Slack before dangerous actions.",
-    parameters: Type.Object({
-      thread_ts: Type.String({ description: "Thread to post confirmation request in" }),
-      action: Type.String({ description: "Description of the action needing approval" }),
-      tool: Type.String({ description: "Name of the tool that requires confirmation" }),
-    }),
-    async execute(_id, params) {
-      const thread = threads.get(params.thread_ts);
-      if (!thread) {
-        throw new Error(`No active Slack thread for thread_ts: ${params.thread_ts}`);
-      }
-
-      const confirmMsg =
-        `⚠️ *Action requires confirmation*\n\n` +
-        `Tool: \`${params.tool}\`\n` +
-        `Action: ${params.action}\n\n` +
-        `Reply *yes* to approve or *no* to reject.`;
-
-      registerConfirmationRequest(params.thread_ts, params.tool, params.action);
-
-      await callSlackAPI("chat.postMessage", botToken!, {
-        channel: thread.channelId,
-        thread_ts: params.thread_ts,
-        text: confirmMsg,
-        metadata: {
-          event_type: "pi_agent_msg",
-          event_payload: { agent: agentName },
-        },
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
-          },
-        ],
-        details: { thread_ts: params.thread_ts, tool: params.tool },
-      };
-    },
+    getThreadChannel: (threadTs) => threads.get(threadTs)?.channelId ?? null,
+    registerConfirmationRequest,
   });
 
   // ─── Agent-to-agent messaging tools ──────────────────
