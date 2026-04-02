@@ -15,5 +15,8 @@
   "scripts": {
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gugu91/pi-ext-types": "workspace:*"
   }
 }

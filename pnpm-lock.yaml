@@ -41,13 +41,29 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2(@types/node@22.19.11)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.11)(yaml@2.8.2))
 
-  neon-psql: {}
+  neon-psql:
+    dependencies:
+      "@gugu91/pi-ext-types":
+        specifier: workspace:*
+        version: link:../types
 
-  nvim-bridge: {}
+  nvim-bridge:
+    dependencies:
+      "@gugu91/pi-ext-types":
+        specifier: workspace:*
+        version: link:../types
 
-  slack-bridge: {}
+  slack-bridge:
+    dependencies:
+      "@gugu91/pi-ext-types":
+        specifier: workspace:*
+        version: link:../types
 
-  types: {}
+  types:
+    dependencies:
+      "@sinclair/typebox":
+        specifier: ^0.34.41
+        version: 0.34.49
 
 packages:
   "@emnapi/core@1.9.1":
@@ -320,6 +336,12 @@ packages:
     resolution:
       {
         integrity: sha512-HHMwmarRKvoFsJorqYlFeFRzXZqCt2ETQlEDOb9aqssrnVBB1/+xgTGtuTrIk5vzLNX1MjMtTf7W9z3tsSbrxw==,
+      }
+
+  "@sinclair/typebox@0.34.49":
+    resolution:
+      {
+        integrity: sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A==,
       }
 
   "@standard-schema/spec@1.1.0":
@@ -1888,6 +1910,8 @@ snapshots:
     optional: true
 
   "@rolldown/pluginutils@1.0.0-rc.12": {}
+
+  "@sinclair/typebox@0.34.49": {}
 
   "@standard-schema/spec@1.1.0": {}
 

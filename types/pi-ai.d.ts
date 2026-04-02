@@ -1,3 +1,5 @@
 declare module "@mariozechner/pi-ai" {
-  export function StringEnum(values: readonly string[], options?: Record<string, unknown>): unknown;
+  import type { TSchema } from "@sinclair/typebox";
+
+  export function StringEnum(values: readonly string[], options?: Record<string, unknown>): TSchema;
 }

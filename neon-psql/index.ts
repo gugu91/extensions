@@ -16,7 +16,7 @@ import {
   type TruncationResult,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "@gugu91/pi-ext-types/typebox";
 
 import { loadConfig, type ResolvedConfig } from "./settings.js";
 

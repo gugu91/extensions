@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "@gugu91/pi-ext-types/typebox";
 import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
