@@ -426,3 +426,17 @@ export function buildTaskAssignmentReport(
 
   return `RALPH LOOP — WORKER STATUS:\n${lines.join("\n")}`;
 }
+
+export function getPendingTaskAssignmentReport(
+  assignments: Array<
+    Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">
+  >,
+  agentsById: ReadonlyMap<string, Pick<AgentInfo, "emoji" | "name">>,
+  lastDeliveredReport: string,
+): string | null {
+  const report = buildTaskAssignmentReport(assignments, agentsById);
+  if (!report || report === lastDeliveredReport) {
+    return null;
+  }
+  return report;
+}
