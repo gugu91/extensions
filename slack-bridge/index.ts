@@ -105,6 +105,11 @@ import {
   normalizeSlackBlockActionPayload,
 } from "./slack-block-kit.js";
 import {
+  extractSlackSocketDedupKey,
+  SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
+  SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
+} from "./slack-socket-dedup.js";
+import {
   createFollowerDeliveryState,
   drainFollowerAckBatches,
   hasDeliveredFollowerInboxIds,
@@ -336,6 +341,10 @@ export default function (pi: ExtensionAPI) {
   let lastDmChannel: string | null = null;
   const channelCache = new TtlCache<string, string>({ maxSize: 500, ttlMs: 30 * 60 * 1000 });
   const unclaimedThreads = new TtlSet<string>({ maxSize: 5000, ttlMs: 5 * 60 * 1000 });
+  const processedSlackSocketDeliveries = new TtlSet<string>({
+    maxSize: SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
+    ttlMs: SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
+  });
 
   const threadConfirmationStates = new Map<string, ThreadConfirmationState>();
 
@@ -736,12 +745,22 @@ export default function (pi: ExtensionAPI) {
   async function handleFrame(raw: string, ctx: ExtensionContext): Promise<void> {
     if (shuttingDown) return;
 
+    let dedupKey: string | null = null;
+
     try {
       const data = JSON.parse(raw) as Record<string, unknown>;
 
       // ack every envelope
       if (data.envelope_id) {
         ws?.send(JSON.stringify({ envelope_id: data.envelope_id }));
+      }
+
+      dedupKey = extractSlackSocketDedupKey(data);
+      if (dedupKey) {
+        if (processedSlackSocketDeliveries.has(dedupKey)) {
+          return;
+        }
+        processedSlackSocketDeliveries.add(dedupKey);
       }
 
       if (data.type === "disconnect") {
@@ -789,6 +808,9 @@ export default function (pi: ExtensionAPI) {
           break;
       }
     } catch {
+      if (dedupKey) {
+        processedSlackSocketDeliveries.delete(dedupKey);
+      }
       /* malformed frame */
     }
   }
