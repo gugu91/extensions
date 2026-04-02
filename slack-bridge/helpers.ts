@@ -417,6 +417,8 @@ export interface AgentCapabilities {
   role?: string;
   tools?: string[];
   tags?: string[];
+  worktreePath?: string;
+  worktreeKind?: "main" | "linked";
 }
 
 export type AgentHealth = "healthy" | "stale" | "ghost" | "resumable";
@@ -432,9 +434,13 @@ export interface AgentDisplayInfo {
     branch?: string;
     host?: string;
     repo?: string;
+    repoRoot?: string;
     role?: string;
+    worktreePath?: string;
+    worktreeKind?: "main" | "linked";
     capabilities?: AgentCapabilities | null;
   } | null;
+  cleanupWorktreePath?: string | null;
   lastHeartbeat?: string;
   leaseExpiresAt?: string | null;
   heartbeatAgeMs?: number | null;
@@ -578,7 +584,31 @@ export function extractAgentCapabilities(
     role: asString(capabilitiesRecord?.role) ?? asString(record?.role),
     tools: asStringArray(capabilitiesRecord?.tools),
     tags: asStringArray(capabilitiesRecord?.tags),
+    worktreePath: asString(capabilitiesRecord?.worktreePath) ?? asString(record?.worktreePath),
+    worktreeKind:
+      (asString(capabilitiesRecord?.worktreeKind) ?? asString(record?.worktreeKind)) === "linked"
+        ? "linked"
+        : (asString(capabilitiesRecord?.worktreeKind) ?? asString(record?.worktreeKind)) === "main"
+          ? "main"
+          : undefined,
   };
+}
+
+function getCleanupWorktreePath(
+  metadata: Record<string, unknown> | null,
+  capabilities: AgentCapabilities,
+  health: AgentHealth,
+): string | null {
+  const worktreeKind =
+    ((asString(metadata?.worktreeKind) ?? capabilities.worktreeKind) as
+      | "main"
+      | "linked"
+      | undefined) ?? undefined;
+  const worktreePath = asString(metadata?.worktreePath) ?? capabilities.worktreePath;
+  if (health !== "ghost" || worktreeKind !== "linked" || !worktreePath) {
+    return null;
+  }
+  return worktreePath;
 }
 
 export function buildAgentCapabilityTags(capabilities: AgentCapabilities): string[] {
@@ -587,6 +617,7 @@ export function buildAgentCapabilityTags(capabilities: AgentCapabilities): strin
   if (capabilities.role) tags.add(`role:${capabilities.role}`);
   if (capabilities.repo) tags.add(`repo:${capabilities.repo}`);
   if (capabilities.branch) tags.add(`branch:${capabilities.branch}`);
+  if (capabilities.worktreeKind) tags.add(`checkout:${capabilities.worktreeKind}`);
   for (const tool of capabilities.tools ?? []) {
     tags.add(`tool:${tool}`);
   }
@@ -636,6 +667,7 @@ export function buildAgentDisplayInfo(
   const lastActivityMs = parseIsoMs(agent.lastActivity);
   const idleDurationMs = idleSinceMs == null ? null : Math.max(0, nowMs - idleSinceMs);
   const lastActivityAgeMs = lastActivityMs == null ? null : Math.max(0, nowMs - lastActivityMs);
+  const cleanupWorktreePath = getCleanupWorktreePath(metadata, capabilities, health);
 
   return {
     emoji: agent.emoji,
@@ -649,7 +681,14 @@ export function buildAgentDisplayInfo(
           branch: asString(metadata.branch),
           host: asString(metadata.host),
           repo: asString(metadata.repo) ?? capabilities.repo,
+          repoRoot: asString(metadata.repoRoot) ?? capabilities.repoRoot,
           role: asString(metadata.role) ?? capabilities.role,
+          worktreePath: asString(metadata.worktreePath) ?? capabilities.worktreePath,
+          worktreeKind:
+            ((asString(metadata.worktreeKind) ?? capabilities.worktreeKind) as
+              | "main"
+              | "linked"
+              | undefined) ?? undefined,
           capabilities,
         }
       : null,
@@ -666,6 +705,7 @@ export function buildAgentDisplayInfo(
     idleDuration: formatAge(idleDurationMs),
     lastActivityAge: formatAge(lastActivityAgeMs),
     capabilityTags,
+    cleanupWorktreePath,
   };
 }
 
@@ -838,6 +878,11 @@ export function evaluateRalphLoopCycle(
     const display = buildAgentDisplayInfo(workload, options);
     if (display.health === "ghost") {
       ghostAgentIds.push(workload.id);
+      if (display.cleanupWorktreePath) {
+        anomalies.push(
+          `orphaned worktree cleanup: ${workload.name} at \`${display.cleanupWorktreePath}\``,
+        );
+      }
       continue;
     }
 
@@ -1047,10 +1092,10 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
     "When a human asks for work to be done, ALWAYS check `pinet_agents` for idle workers and delegate via `pinet_message`. Pick the agent on the right repo/branch when possible.",
     "When delegating, include: the task description, relevant issue/PR numbers, branch to work on, and where to report back (Slack thread_ts).",
     "If no workers are available, tell the human and suggest they spin up a new agent. NEVER do the work yourself as a fallback.",
-    "WORKTREE RULE: The main repo checkout must ALWAYS stay on the `main` branch. NEVER run `git checkout <branch>` or `git switch <branch>` in the main checkout.",
+    "WORKTREE RULE: NEVER checkout a branch in the main repo. The main checkout must always stay on the `main` branch.",
     "For feature work, ALWAYS create a git worktree: `git worktree add .worktrees/<name> -b <branch>`. Tell delegated agents to do the same.",
     "When delegating to an agent, include the worktree setup command. Example: `git worktree add .worktrees/fix-foo-123 -b fix/foo-123 && cd .worktrees/fix-foo-123`",
-    "Clean up worktrees after PRs merge: `git worktree remove .worktrees/<name>`. Flag orphaned worktrees from dead agents for cleanup.",
+    "When work is done, ALWAYS run `git worktree remove .worktrees/<name>`. Flag orphaned worktrees from dead agents for cleanup.",
     "RALPH LOOP: Run autonomous maintenance every cycle. Don't wait to be asked. Proactively: (1) REAP — ping idle agents, mark non-responders as ghost. (2) NUDGE — check assigned work, poll branches for commits, escalate stalled agents. (3) REASSIGN — if an assigned agent is dead, reassign to next idle agent immediately. (4) DRAIN — find idle agents with no work, assign queued tasks. (5) SELF-REPAIR — verify main is on `main`, check mesh health, report anomalies.",
   ];
 }
@@ -1376,6 +1421,13 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
         line += `\n   ${cwd}${branch}${host}`;
       }
 
+      if (meta?.worktreeKind === "linked" && meta.worktreePath) {
+        const worktree = shortenPath(meta.worktreePath, homedir);
+        const mainRoot = meta.repoRoot ? shortenPath(meta.repoRoot, homedir) : "";
+        const mainSuffix = mainRoot && mainRoot !== worktree ? ` (main: ${mainRoot})` : "";
+        line += `\n   worktree: ${worktree}${mainSuffix}`;
+      }
+
       const heartbeat = a.heartbeatSummary ?? formatAge(a.heartbeatAgeMs);
       const lease = a.leaseSummary ?? null;
       const idleInfo = a.status === "idle" && a.idleDuration ? `idle ${a.idleDuration}` : null;
@@ -1395,6 +1447,10 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
       if (tags.length > 0) {
         const suffix = (a.capabilityTags?.length ?? 0) > tags.length ? " …" : "";
         line += `\n   caps: ${tags.join(", ")}${suffix}`;
+      }
+
+      if (a.cleanupWorktreePath) {
+        line += `\n   cleanup: git worktree remove ${shortenPath(a.cleanupWorktreePath, homedir)}`;
       }
 
       if (a.routingScore != null) {

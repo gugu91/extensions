@@ -23,15 +23,21 @@ describe("probeGitBranch", () => {
 });
 
 describe("probeGitContext", () => {
-  it("returns repo, repoRoot, and branch when git commands succeed", async () => {
+  it("returns canonical repo metadata for the main checkout", async () => {
     const runner: ExecFileAsyncLike = vi.fn(async (_file, args) => {
-      if (args[0] === "rev-parse") {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
         return { stdout: "/Users/alice/src/extensions\n" };
+      }
+      if (args[0] === "rev-parse" && args[1] === "--absolute-git-dir") {
+        return { stdout: "/Users/alice/src/extensions/.git\n" };
+      }
+      if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+        return { stdout: ".git\n" };
       }
       if (args[0] === "branch") {
         return { stdout: "main\n" };
       }
-      throw new Error("unexpected command");
+      throw new Error(`unexpected command: ${args.join(" ")}`);
     });
 
     await expect(
@@ -40,7 +46,38 @@ describe("probeGitContext", () => {
       cwd: "/Users/alice/src/extensions/slack-bridge",
       repo: "extensions",
       repoRoot: "/Users/alice/src/extensions",
+      worktreePath: "/Users/alice/src/extensions",
+      worktreeKind: "main",
       branch: "main",
+    });
+  });
+
+  it("keeps the canonical repo name when running from a linked worktree", async () => {
+    const runner: ExecFileAsyncLike = vi.fn(async (_file, args) => {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+        return { stdout: "/Users/alice/src/extensions/.worktrees/feat-87\n" };
+      }
+      if (args[0] === "rev-parse" && args[1] === "--absolute-git-dir") {
+        return { stdout: "/Users/alice/src/extensions/.git/worktrees/feat-87\n" };
+      }
+      if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+        return { stdout: "/Users/alice/src/extensions/.git\n" };
+      }
+      if (args[0] === "branch") {
+        return { stdout: "feat/enforce-worktree-rule\n" };
+      }
+      throw new Error(`unexpected command: ${args.join(" ")}`);
+    });
+
+    await expect(
+      probeGitContext("/Users/alice/src/extensions/.worktrees/feat-87/slack-bridge", runner),
+    ).resolves.toEqual({
+      cwd: "/Users/alice/src/extensions/.worktrees/feat-87/slack-bridge",
+      repo: "extensions",
+      repoRoot: "/Users/alice/src/extensions",
+      worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
+      worktreeKind: "linked",
+      branch: "feat/enforce-worktree-rule",
     });
   });
 
@@ -53,6 +90,8 @@ describe("probeGitContext", () => {
       cwd: "/tmp/scratch",
       repo: "scratch",
       repoRoot: undefined,
+      worktreePath: undefined,
+      worktreeKind: undefined,
       branch: undefined,
     });
   });
@@ -69,6 +108,8 @@ describe("probeGitContext", () => {
       cwd: "/tmp/scratch",
       repo: "scratch",
       repoRoot: undefined,
+      worktreePath: undefined,
+      worktreeKind: undefined,
       branch: undefined,
     });
   });
@@ -80,6 +121,8 @@ describe("createGitContextCache", () => {
       cwd: "/tmp/project",
       repo: "project",
       repoRoot: "/tmp/project",
+      worktreePath: "/tmp/project",
+      worktreeKind: "main" as const,
       branch: "main",
     }));
 
