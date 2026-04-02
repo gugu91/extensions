@@ -289,6 +289,26 @@ describe("formatInboxMessages", () => {
     expect(result).toContain("will: first");
     expect(result).toContain("will: second");
   });
+
+  it("includes compact metadata for block action inbox events", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C123",
+        threadTs: "123.456",
+        userId: "U1",
+        text: 'Clicked Slack "Approve" (action_id: review.approve).',
+        timestamp: "123.789",
+        metadata: {
+          kind: "slack_block_action",
+          actionId: "review.approve",
+          parsedValue: { decision: "approve" },
+        },
+      },
+    ];
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain('will: Clicked Slack "Approve" (action_id: review.approve).');
+    expect(result).toContain('metadata={"kind":"slack_block_action","actionId":"review.approve"');
+  });
 });
 
 describe("formatPinetInboxMessages", () => {
@@ -1998,6 +2018,41 @@ describe("syncFollowerInboxEntries", () => {
       null,
     );
     expect(result.changed).toBe(false);
+  });
+
+  it("preserves structured metadata on synced inbox messages", () => {
+    const threads = new Map<string, FollowerThreadState>();
+    const result = syncFollowerInboxEntries(
+      [
+        {
+          inboxId: 29,
+          message: {
+            threadId: "400.1",
+            sender: "U_ACTION",
+            body: 'Clicked Slack "Approve" (action_id: review.approve).',
+            createdAt: "400.2",
+            metadata: {
+              channel: "C_ACTION",
+              kind: "slack_block_action",
+              actionId: "review.approve",
+            },
+          },
+        },
+      ],
+      threads,
+      "Agent",
+      null,
+    );
+
+    expect(result.inboxMessages[0]).toMatchObject({
+      channel: "C_ACTION",
+      brokerInboxId: 29,
+      metadata: {
+        channel: "C_ACTION",
+        kind: "slack_block_action",
+        actionId: "review.approve",
+      },
+    });
   });
 });
 

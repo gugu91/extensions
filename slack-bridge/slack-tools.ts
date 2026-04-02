@@ -12,6 +12,13 @@ import {
   pickSlackCanvasSectionId,
 } from "./canvases.js";
 import {
+  buildSlackBlockKitPromptGuidelines,
+  buildSlackBlocksTemplate,
+  normalizeSlackBlocksInput,
+  summarizeSlackBlocksForPolicy,
+  type SlackBlockButtonInput,
+} from "./slack-block-kit.js";
+import {
   buildSlackThreadExport,
   filterSlackExportMessagesByRange,
   parseSlackExportBoundaryTs,
@@ -61,6 +68,10 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "Use slack_export to archive or document a Slack thread as markdown, plain text, or JSON before writing it into docs, canvases, or files.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
+}
+
+function buildSlackRichMessagePromptGuidelines(): string[] {
+  return [...buildSlackInboxPromptGuidelines(), ...buildSlackBlockKitPromptGuidelines()];
 }
 
 function getSlackCanvasSummary(markdown?: string): string {
@@ -354,7 +365,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
               text: `${securityHeader}(no new messages) — you are ${agentEmoji} ${agentName}`,
             },
           ],
-          details: { count: 0 },
+          details: { count: 0, messages: [] },
         };
       }
 
@@ -367,7 +378,18 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         const prefix = message.isChannelMention
           ? `[thread ${message.threadTs}] (channel mention in <#${message.channel}>) ${name}`
           : `[thread ${message.threadTs}] ${name}`;
-        lines.push(`${prefix} (${message.timestamp}): ${message.text}`);
+        const metadataSuffix =
+          message.metadata?.kind === "slack_block_action"
+            ? ` | metadata=${JSON.stringify({
+                kind: message.metadata.kind,
+                actionId: message.metadata.actionId ?? null,
+                value: message.metadata.value ?? null,
+                parsedValue: message.metadata.parsedValue ?? null,
+              })}`
+            : message.metadata?.kind
+              ? ` | metadata.kind=${String(message.metadata.kind)}`
+              : "";
+        lines.push(`${prefix} (${message.timestamp}): ${message.text}${metadataSuffix}`);
       }
 
       return {
@@ -377,7 +399,87 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             text: `${securityHeader}You are ${agentEmoji} ${agentName}.\n\n${lines.join("\n")}`,
           },
         ],
-        details: { count: pending.length },
+        details: { count: pending.length, messages: pending },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_blocks_build",
+    label: "Slack Blocks Build",
+    description:
+      "Build Slack Block Kit JSON for common rich-message templates like code snippets, status reports, action buttons, and diff views.",
+    promptSnippet: "Build Slack Block Kit JSON for a rich Slack message.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
+    parameters: Type.Object({
+      template: Type.String({
+        description: "Template name: code_snippet | status_report | action_buttons | diff_view",
+      }),
+      title: Type.Optional(Type.String({ description: "Optional header/title text" })),
+      text: Type.Optional(Type.String({ description: "Primary body text (mrkdwn)" })),
+      footer: Type.Optional(Type.String({ description: "Optional footer/context text" })),
+      language: Type.Optional(Type.String({ description: "Code language label" })),
+      code: Type.Optional(Type.String({ description: "Code body for code_snippet" })),
+      before: Type.Optional(Type.String({ description: "Before/removed text for diff_view" })),
+      after: Type.Optional(Type.String({ description: "After/added text for diff_view" })),
+      fields: Type.Optional(
+        Type.Array(
+          Type.Object({
+            label: Type.String({ description: "Field label" }),
+            value: Type.String({ description: "Field value" }),
+          }),
+        ),
+      ),
+      buttons: Type.Optional(
+        Type.Array(
+          Type.Object({
+            text: Type.String({ description: "Button label" }),
+            action_id: Type.String({ description: "Stable Slack action_id" }),
+            value: Type.Optional(Type.String({ description: "Optional button value string" })),
+            style: Type.Optional(
+              Type.String({ description: "Optional Slack button style: primary or danger" }),
+            ),
+            url: Type.Optional(Type.String({ description: "Optional URL button target" })),
+          }),
+        ),
+      ),
+    }),
+    async execute(_id, params) {
+      const result = buildSlackBlocksTemplate({
+        template: params.template,
+        title: params.title,
+        text: params.text,
+        footer: params.footer,
+        language: params.language,
+        code: params.code,
+        before: params.before,
+        after: params.after,
+        fields: params.fields,
+        buttons:
+          params.buttons?.map((button: SlackBlockButtonInput) => ({
+            text: button.text,
+            action_id: button.action_id,
+            value: button.value,
+            style:
+              button.style === "primary" || button.style === "danger" ? button.style : undefined,
+            url: button.url,
+          })) ?? [],
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Built Slack Block Kit template ${JSON.stringify(params.template)}. ` +
+              `Use this JSON as the blocks parameter:\n\n${JSON.stringify(result.blocks, null, 2)}`,
+          },
+        ],
+        details: {
+          template: params.template,
+          fallbackText: result.fallbackText,
+          blocks: result.blocks,
+        },
       };
     },
   });
@@ -388,6 +490,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
       "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(
@@ -395,12 +498,17 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           description: "Thread to reply in. Omit to start a new conversation.",
         }),
       ),
+      blocks: Type.Optional(
+        Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description: "Optional Slack Block Kit blocks JSON array",
+        }),
+      ),
     }),
     async execute(_id, params) {
       requireToolPolicy(
         "slack_send",
         params.thread_ts,
-        `thread_ts=${params.thread_ts ?? ""} | text=${params.text}`,
+        `thread_ts=${params.thread_ts ?? ""} | text=${params.text} | blocks=${summarizeSlackBlocksForPolicy(params.blocks)}`,
       );
 
       const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? getLastDmChannel();
@@ -418,6 +526,9 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           event_payload: { agent: getAgentName() },
         },
       };
+      if (params.blocks) {
+        body.blocks = normalizeSlackBlocksInput(params.blocks);
+      }
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
       const response = await slack("chat.postMessage", getBotToken(), body);
@@ -440,7 +551,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
               : `Sent message (thread_ts: ${ts}). Use this to continue the conversation.`,
           },
         ],
-        details: { ts, channel },
+        details: { ts, channel, blocksCount: params.blocks?.length ?? 0 },
       };
     },
   });
@@ -805,6 +916,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
     promptSnippet:
       "Post a message to a Slack channel or thread. Use when you need to target a specific channel or thread by ID.",
+    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       channel: Type.Optional(
         Type.String({
@@ -813,12 +925,17 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       ),
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
+      blocks: Type.Optional(
+        Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description: "Optional Slack Block Kit blocks JSON array",
+        }),
+      ),
     }),
     async execute(_id, params) {
       requireToolPolicy(
         "slack_post_channel",
         params.thread_ts,
-        `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | text=${params.text}`,
+        `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | text=${params.text} | blocks=${summarizeSlackBlocksForPolicy(params.blocks)}`,
       );
 
       const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);
@@ -840,6 +957,9 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           event_payload: { agent: getAgentName() },
         },
       };
+      if (params.blocks) {
+        body.blocks = normalizeSlackBlocksInput(params.blocks);
+      }
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
       const response = await slack("chat.postMessage", getBotToken(), body);
@@ -859,7 +979,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
               : `Posted to #${channelLabel} (ts: ${ts}).`,
           },
         ],
-        details: { ts, channel: channelId },
+        details: { ts, channel: channelId, blocksCount: params.blocks?.length ?? 0 },
       };
     },
   });

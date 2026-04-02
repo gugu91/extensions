@@ -23,7 +23,7 @@ If the agent is idle, incoming messages are processed immediately.
 
 | Tool                                                                                | Description                                  |
 | ----------------------------------------------------------------------------------- | -------------------------------------------- |
-| `slack_send(text, thread_ts?)`                                                      | Reply in a thread or start new               |
+| `slack_send(text, thread_ts?, blocks?)`                                             | Reply in a thread or start new               |
 | `slack_react(emoji, thread_ts?, timestamp?, channel?)`                              | Add an emoji reaction to a Slack message     |
 | `slack_upload(content?, path?, filename?, filetype?, title?, channel?, thread_ts?)` | Upload a file/snippet into Slack or a thread |
 | `slack_schedule(text, channel?, thread_ts?, delay?, at?)`                           | Schedule a Slack message for later           |
@@ -32,8 +32,9 @@ If the agent is idle, incoming messages are processed immediately.
 | `slack_export(thread_ts, channel?, format?, include_metadata?, oldest?, latest?)`   | Export a Slack thread for docs or archival   |
 | `slack_read(thread_ts, limit?)`                                                     | Read thread messages                         |
 | `slack_inbox()`                                                                     | Check pending messages manually              |
+| `slack_blocks_build(template, ...)`                                                 | Build common Block Kit payloads              |
 | `slack_create_channel(name, topic?, purpose?)`                                      | Create a project channel                     |
-| `slack_post_channel(channel?, text, thread_ts?)`                                    | Post to a channel                            |
+| `slack_post_channel(channel?, text, thread_ts?, blocks?)`                           | Post to a channel                            |
 | `slack_read_channel(channel, thread_ts?, limit?)`                                   | Read channel history or thread               |
 | `slack_canvas_create(title?, markdown?, channel?, kind?)`                           | Create standalone or channel canvases        |
 | `slack_canvas_update(canvas_id?, channel?, markdown, mode?, ...)`                   | Append, prepend, or replace canvas content   |
@@ -63,6 +64,8 @@ files, canvases, or follow-up summaries.
 - **Multi-user** — handles concurrent conversations from different users
 - **@mentions** — tag Pinet in any channel and it responds in-thread
 - **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
+- **Block Kit messages** — send rich Slack layouts via the optional `blocks` parameter
+- **Interactive buttons** — `block_actions` button clicks are routed back into the inbox as structured events
 - **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
 - **Scheduled & delayed messages** — queue reminders, timed announcements, and follow-ups without waiting around
 - **Pins & bookmarks** — highlight key messages and manage durable channel-header links
@@ -167,6 +170,42 @@ pnpm deploy:slack
 The deploy command validates `slack-bridge/manifest.yaml`, updates the target
 Slack app through `apps.manifest.update`, and reports any bot/user scope
 changes.
+
+## Block Kit examples
+
+Use `slack_blocks_build` for common templates, or pass raw Block Kit JSON directly to `slack_send` / `slack_post_channel`.
+
+Example `slack_send` payload:
+
+```json
+{
+  "thread_ts": "123.456",
+  "text": "Deploy complete",
+  "blocks": [
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Deploy complete*\nBranch: `main`\nCommit: `abc123`"
+      }
+    },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Rollback" },
+          "action_id": "deploy.rollback",
+          "style": "danger",
+          "value": "rollback:prod"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Button clicks arrive back through the inbox as structured events with metadata like `kind=slack_block_action`, `actionId`, `value`, and best-effort `parsedValue` when the button value is JSON.
 
 ## Security
 

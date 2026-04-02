@@ -13,6 +13,10 @@ import {
   type ReactionCommandSettings,
 } from "../../reaction-triggers.js";
 import { TtlCache } from "../../ttl-cache.js";
+import {
+  extractSlackBlockActionsPayloadFromEnvelope,
+  normalizeSlackBlockActionPayload,
+} from "../../slack-block-kit.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
 // ─── Config ──────────────────────────────────────────────
@@ -44,6 +48,7 @@ export interface ParsedEnvelope {
   envelopeId?: string;
   type: string;
   event?: Record<string, unknown>;
+  interactivePayload?: Record<string, unknown>;
 }
 
 /**
@@ -62,6 +67,11 @@ export function parseSocketFrame(raw: string): ParsedEnvelope | null {
     if (data.type === "events_api") {
       const payload = data.payload as { event?: Record<string, unknown> } | undefined;
       result.event = payload?.event;
+    }
+
+    const interactivePayload = extractSlackBlockActionsPayloadFromEnvelope(data);
+    if (interactivePayload) {
+      result.interactivePayload = interactivePayload;
     }
     return result;
   } catch {
@@ -329,6 +339,11 @@ export class SlackAdapter implements MessageAdapter {
       return;
     }
 
+    if (envelope.interactivePayload) {
+      await this.onBlockActions(envelope.interactivePayload);
+      return;
+    }
+
     if (!envelope.event) return;
 
     const evt = envelope.event;
@@ -552,6 +567,43 @@ export class SlackAdapter implements MessageAdapter {
       text,
       timestamp: messageTs,
       ...(isChannelMention ? { isChannelMention: true } : {}),
+    });
+  }
+
+  private async onBlockActions(payload: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
+    const normalized = normalizeSlackBlockActionPayload(payload);
+    if (!normalized) return;
+
+    if (!this.threads.has(normalized.threadTs)) {
+      this.threads.set(normalized.threadTs, {
+        channelId: normalized.channel,
+        threadTs: normalized.threadTs,
+        userId: normalized.userId,
+      });
+    }
+
+    try {
+      this.config.rememberKnownThread?.(normalized.threadTs, normalized.channel);
+    } catch {
+      /* best effort — DB cache sync must not break Slack event handling */
+    }
+
+    if (!isUserAllowed(this.allowlist, normalized.userId)) return;
+
+    const userName = await this.resolveUser(normalized.userId);
+    if (this.shuttingDown) return;
+
+    this.inboundHandler?.({
+      source: "slack",
+      threadId: normalized.threadTs,
+      channel: normalized.channel,
+      userId: normalized.userId,
+      userName,
+      text: normalized.text,
+      timestamp: normalized.timestamp,
+      metadata: normalized.metadata,
     });
   }
 
