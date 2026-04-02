@@ -164,7 +164,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 6;
+export const CURRENT_BROKER_SCHEMA_VERSION = 7;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -366,13 +366,65 @@ function createTaskAssignmentTable(db: DatabaseSync): void {
       source_message_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE(agent_id, issue_number)
+      UNIQUE(issue_number)
     );
 
     CREATE INDEX IF NOT EXISTS idx_task_assignments_agent_status
       ON task_assignments(agent_id, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_task_assignments_branch
       ON task_assignments(branch);
+  `);
+}
+
+function migrateTaskAssignmentsToIssueOwnership(db: DatabaseSync): void {
+  const existingTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_assignments'")
+    .get() as { name?: string } | undefined;
+  if (!existingTable) {
+    createTaskAssignmentTable(db);
+    return;
+  }
+
+  db.exec(`
+    ALTER TABLE task_assignments RENAME TO task_assignments_legacy;
+    DROP INDEX IF EXISTS idx_task_assignments_agent_status;
+    DROP INDEX IF EXISTS idx_task_assignments_branch;
+  `);
+
+  createTaskAssignmentTable(db);
+
+  db.exec(`
+    INSERT INTO task_assignments (
+      agent_id,
+      issue_number,
+      branch,
+      pr_number,
+      status,
+      thread_id,
+      source_message_id,
+      created_at,
+      updated_at
+    )
+    SELECT
+      legacy.agent_id,
+      legacy.issue_number,
+      legacy.branch,
+      legacy.pr_number,
+      legacy.status,
+      legacy.thread_id,
+      legacy.source_message_id,
+      legacy.created_at,
+      legacy.updated_at
+    FROM task_assignments_legacy AS legacy
+    WHERE legacy.id = (
+      SELECT latest.id
+      FROM task_assignments_legacy AS latest
+      WHERE latest.issue_number = legacy.issue_number
+      ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.id DESC
+      LIMIT 1
+    );
+
+    DROP TABLE task_assignments_legacy;
   `);
 }
 
@@ -407,6 +459,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 6:
           createTaskAssignmentTable(db);
+          break;
+        case 7:
+          migrateTaskAssignmentsToIssueOwnership(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -1029,8 +1084,8 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const now = new Date().toISOString();
     const existing = db
-      .prepare("SELECT * FROM task_assignments WHERE agent_id = ? AND issue_number = ?")
-      .get(agentId, issueNumber) as TaskAssignmentRow | undefined;
+      .prepare("SELECT * FROM task_assignments WHERE issue_number = ?")
+      .get(issueNumber) as TaskAssignmentRow | undefined;
 
     if (!existing) {
       const info = db
@@ -1051,11 +1106,13 @@ export class BrokerDB implements BrokerDBInterface {
       return rowToTaskAssignment(row);
     }
 
-    const nextBranch = branch ?? existing.branch;
-    const shouldResetProgress = !!existing.branch && !!branch && existing.branch !== branch;
+    const isReassignment = existing.agent_id !== agentId;
+    const nextBranch = isReassignment ? branch : (branch ?? existing.branch);
+    const shouldResetProgress = isReassignment || nextBranch !== existing.branch;
     db.prepare(
       `UPDATE task_assignments
-       SET branch = ?,
+       SET agent_id = ?,
+           branch = ?,
            pr_number = CASE WHEN ? THEN NULL ELSE pr_number END,
            status = CASE WHEN ? THEN 'assigned' ELSE status END,
            thread_id = ?,
@@ -1063,6 +1120,7 @@ export class BrokerDB implements BrokerDBInterface {
            updated_at = ?
        WHERE id = ?`,
     ).run(
+      agentId,
       nextBranch,
       shouldResetProgress ? 1 : 0,
       shouldResetProgress ? 1 : 0,
