@@ -30,6 +30,8 @@ import {
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   buildSlackRequest,
+  createAbortableOperationTracker,
+  abortableDelay,
   stripBotMention,
   isChannelId,
   FORM_METHODS,
@@ -333,6 +335,40 @@ describe("buildSlackRequest", () => {
         "application/x-www-form-urlencoded",
       );
     }
+  });
+});
+
+// ─── abort / shutdown helpers ───────────────────────────
+
+describe("abortableDelay", () => {
+  it("rejects with AbortError when the signal is aborted", async () => {
+    const controller = new AbortController();
+    const pending = abortableDelay(1_000, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("createAbortableOperationTracker", () => {
+  it("aborts pending operations and waits for them to settle", async () => {
+    const tracker = createAbortableOperationTracker();
+    const pending = tracker.run(async (signal) => {
+      await abortableDelay(60_000, signal);
+    });
+
+    await tracker.abortAndWait();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(tracker.isAborting()).toBe(true);
+  });
+
+  it("rejects new operations after shutdown begins", async () => {
+    const tracker = createAbortableOperationTracker();
+    await tracker.abortAndWait();
+
+    await expect(tracker.run(async () => Promise.resolve())).rejects.toThrow(
+      "shutdown in progress",
+    );
   });
 });
 

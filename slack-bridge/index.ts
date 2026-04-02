@@ -15,6 +15,8 @@ import {
   stripBotMention,
   isChannelId,
   callSlackAPI,
+  createAbortableOperationTracker,
+  isAbortError,
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
@@ -83,6 +85,12 @@ export default function (pi: ExtensionAPI) {
   const appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
 
   if (!botToken || !appToken) return;
+
+  let slackRequests = createAbortableOperationTracker();
+
+  async function slack(method: string, token: string, body?: Record<string, unknown>) {
+    return slackRequests.run((signal) => callSlackAPI(method, token, body, { signal }));
+  }
 
   // allowedUsers: settings.json takes priority, env var as fallback
   const allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
@@ -281,7 +289,7 @@ export default function (pi: ExtensionAPI) {
 
   async function addReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await callSlackAPI("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
+      await slack("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
     } catch {
       /* already_reacted or non-critical */
     }
@@ -289,7 +297,7 @@ export default function (pi: ExtensionAPI) {
 
   async function removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await callSlackAPI("reactions.remove", botToken!, { channel, timestamp: ts, name: emoji });
+      await slack("reactions.remove", botToken!, { channel, timestamp: ts, name: emoji });
     } catch {
       /* not_reacted or non-critical */
     }
@@ -299,7 +307,8 @@ export default function (pi: ExtensionAPI) {
     const cached = userNames.get(userId);
     if (cached) return cached;
     try {
-      const res = await callSlackAPI("users.info", botToken!, { user: userId });
+      const res = await slack("users.info", botToken!, { user: userId });
+      if (shuttingDown) return userId;
       const u = res.user as { real_name?: string; name?: string };
       const name = u.real_name ?? u.name ?? userId;
       userNames.set(userId, name);
@@ -323,7 +332,7 @@ export default function (pi: ExtensionAPI) {
         limit: 200,
       };
       if (cursor) body.cursor = cursor;
-      const res = await callSlackAPI("conversations.list", botToken!, body);
+      const res = await slack("conversations.list", botToken!, body);
       const channels = res.channels as { id: string; name: string }[];
       for (const ch of channels) {
         channelCache.set(ch.name, ch.id);
@@ -361,7 +370,7 @@ export default function (pi: ExtensionAPI) {
 
   async function clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
     try {
-      await callSlackAPI("assistant.threads.setStatus", botToken!, {
+      await slack("assistant.threads.setStatus", botToken!, {
         channel_id: channelId,
         thread_ts: threadTs,
         status: "",
@@ -378,7 +387,7 @@ export default function (pi: ExtensionAPI) {
       { title: "Review", message: `${agentName}, summarise the recent changes` },
     ];
     try {
-      await callSlackAPI("assistant.threads.setSuggestedPrompts", botToken!, {
+      await slack("assistant.threads.setSuggestedPrompts", botToken!, {
         channel_id: channelId,
         thread_ts: threadTs,
         prompts,
@@ -499,7 +508,7 @@ export default function (pi: ExtensionAPI) {
 
   async function resolveThreadOwner(channel: string, threadTs: string): Promise<string | null> {
     try {
-      const res = await callSlackAPI("conversations.replies", botToken!, {
+      const res = await slack("conversations.replies", botToken!, {
         channel,
         ts: threadTs,
         limit: 50,
@@ -527,7 +536,7 @@ export default function (pi: ExtensionAPI) {
     if (shuttingDown) return;
 
     try {
-      const res = await callSlackAPI("apps.connections.open", appToken!);
+      const res = await slack("apps.connections.open", appToken!);
       ws = new WebSocket(res.url as string);
 
       ws.addEventListener("open", () => setExtStatus(ctx, "ok"));
@@ -544,12 +553,16 @@ export default function (pi: ExtensionAPI) {
         /* close fires after */
       });
     } catch (err) {
-      console.error(`[slack-bridge] Socket Mode: ${msg(err)}`);
+      if (!isAbortError(err)) {
+        console.error(`[slack-bridge] Socket Mode: ${msg(err)}`);
+      }
       scheduleReconnect(ctx);
     }
   }
 
   async function handleFrame(raw: string, ctx: ExtensionContext): Promise<void> {
+    if (shuttingDown) return;
+
     try {
       const data = JSON.parse(raw) as Record<string, unknown>;
 
@@ -601,6 +614,8 @@ export default function (pi: ExtensionAPI) {
   // ─── Assistant events ───────────────────────────────
 
   async function onThreadStarted(evt: Record<string, unknown>): Promise<void> {
+    if (shuttingDown) return;
+
     const t = evt.assistant_thread as Record<string, unknown>;
     if (!t) return;
 
@@ -623,6 +638,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function onContextChanged(evt: Record<string, unknown>): void {
+    if (shuttingDown) return;
+
     const t = evt.assistant_thread as Record<string, unknown>;
     if (!t) return;
 
@@ -637,6 +654,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function onMessage(evt: Record<string, unknown>, ctx: ExtensionContext): Promise<void> {
+    if (shuttingDown) return;
+
     const text = (evt.text as string) ?? "";
     const user = evt.user as string;
     const threadTs = evt.thread_ts as string | undefined;
@@ -662,6 +681,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
       const remoteOwner = await resolveThreadOwner(channel, effectiveTs);
+      if (shuttingDown) return;
       if (remoteOwner && remoteOwner !== agentName) {
         const t = threads.get(effectiveTs);
         if (t) t.owner = remoteOwner; // cache so we skip instantly next time
@@ -678,7 +698,7 @@ export default function (pi: ExtensionAPI) {
 
     // ── User allowlist check ──
     if (!isUserAllowed(user)) {
-      await callSlackAPI("chat.postMessage", botToken!, {
+      await slack("chat.postMessage", botToken!, {
         channel,
         thread_ts: effectiveTs,
         text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
@@ -703,6 +723,7 @@ export default function (pi: ExtensionAPI) {
           : `${cleanText}\n\n❌ User denied security confirmation request in this thread.`;
 
     const name = await resolveUser(user);
+    if (shuttingDown) return;
     ctx.ui.notify(`${name}: ${cleanText.slice(0, 100)}`, "info");
 
     // React with 👀 to acknowledge (no chat lock)
@@ -740,7 +761,7 @@ export default function (pi: ExtensionAPI) {
     }, 5000);
   }
 
-  function disconnect(): void {
+  async function disconnect(): Promise<void> {
     shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -750,6 +771,7 @@ export default function (pi: ExtensionAPI) {
       /* ignore */
     }
     ws = null;
+    await slackRequests.abortAndWait();
   }
 
   function setExtStatus(
@@ -781,7 +803,7 @@ export default function (pi: ExtensionAPI) {
     securityPrompt,
     guardrails,
     inbox,
-    slack: callSlackAPI,
+    slack,
     getAgentName: () => agentName,
     getAgentEmoji: () => agentEmoji,
     getLastDmChannel: () => lastDmChannel,
@@ -1627,6 +1649,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
+    slackRequests = createAbortableOperationTracker();
     extCtx = ctx;
     const sessionHeader = (
       ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
@@ -1792,10 +1815,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    flushPersist();
+    shuttingDown = true;
     stopBrokerHeartbeat();
     stopBrokerMaintenance();
     stopBrokerRalphLoop();
+    await disconnect();
+    flushPersist();
     if (activeBroker) {
       try {
         if (activeSelfId) {
@@ -1826,7 +1851,6 @@ export default function (pi: ExtensionAPI) {
       }
       brokerClient = null;
     }
-    disconnect();
     brokerRole = null;
     pinetEnabled = false;
     pinetRegistrationBlocked = false;

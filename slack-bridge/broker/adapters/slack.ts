@@ -1,4 +1,11 @@
-import { callSlackAPI, buildAllowlist, isUserAllowed, stripBotMention } from "../../helpers.js";
+import {
+  callSlackAPI,
+  createAbortableOperationTracker,
+  isAbortError,
+  buildAllowlist,
+  isUserAllowed,
+  stripBotMention,
+} from "../../helpers.js";
 import { TtlCache } from "../../ttl-cache.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
@@ -168,6 +175,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private readonly config: SlackAdapterConfig;
   private readonly allowlist: Set<string> | null;
+  private slackRequests = createAbortableOperationTracker();
   private botUserId: string | null = null;
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -186,11 +194,16 @@ export class SlackAdapter implements MessageAdapter {
     this.allowlist = buildAllowlist({ allowedUsers: config.allowedUsers }, undefined);
   }
 
+  private async callSlack(method: string, token: string, body?: Record<string, unknown>) {
+    return this.slackRequests.run((signal) => callSlackAPI(method, token, body, { signal }));
+  }
+
   // ─── MessageAdapter interface ─────────────────────────
 
   async connect(): Promise<void> {
     this.shuttingDown = false;
-    const auth = await callSlackAPI("auth.test", this.config.botToken);
+    this.slackRequests = createAbortableOperationTracker();
+    const auth = await this.callSlack("auth.test", this.config.botToken);
     this.botUserId = auth.user_id as string;
     await this.connectSocketMode();
   }
@@ -207,6 +220,7 @@ export class SlackAdapter implements MessageAdapter {
       /* ignore close errors */
     }
     this.ws = null;
+    await this.slackRequests.abortAndWait();
   }
 
   onInbound(handler: (msg: InboundMessage) => void): void {
@@ -231,7 +245,8 @@ export class SlackAdapter implements MessageAdapter {
       };
     }
 
-    await callSlackAPI("chat.postMessage", this.config.botToken, body);
+    await this.callSlack("chat.postMessage", this.config.botToken, body);
+    if (this.shuttingDown) return;
 
     // Remove pending eyes for this thread
     const pending = this.pendingEyes.get(msg.threadId);
@@ -266,7 +281,7 @@ export class SlackAdapter implements MessageAdapter {
     if (this.shuttingDown) return;
 
     try {
-      const res = await callSlackAPI("apps.connections.open", this.config.appToken);
+      const res = await this.callSlack("apps.connections.open", this.config.appToken);
       this.ws = new WebSocket(res.url as string);
 
       this.ws.addEventListener("message", (event) => {
@@ -281,12 +296,16 @@ export class SlackAdapter implements MessageAdapter {
         /* close fires after error — handled there */
       });
     } catch (err) {
-      console.error(`[slack-adapter] Socket Mode: ${errorMsg(err)}`);
+      if (!isAbortError(err)) {
+        console.error(`[slack-adapter] Socket Mode: ${errorMsg(err)}`);
+      }
       this.scheduleReconnect();
     }
   }
 
   private async handleFrame(raw: string): Promise<void> {
+    if (this.shuttingDown) return;
+
     const envelope = parseSocketFrame(raw);
     if (!envelope) return;
 
@@ -323,6 +342,8 @@ export class SlackAdapter implements MessageAdapter {
   // ─── Event handlers ────────────────────────────────────
 
   private async onThreadStarted(evt: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
     const parsed = extractThreadStarted(evt);
     if (!parsed) return;
 
@@ -341,6 +362,8 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   private onContextChanged(evt: Record<string, unknown>): void {
+    if (this.shuttingDown) return;
+
     const t = evt.assistant_thread as Record<string, unknown> | undefined;
     if (!t) return;
 
@@ -357,6 +380,8 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   private async onMessage(evt: Record<string, unknown>): Promise<void> {
+    if (this.shuttingDown) return;
+
     const classified = classifyMessage(
       evt,
       this.botUserId,
@@ -387,6 +412,7 @@ export class SlackAdapter implements MessageAdapter {
 
     // Resolve user name
     const userName = await this.resolveUser(userId);
+    if (this.shuttingDown) return;
 
     // Emit inbound message
     this.inboundHandler?.({
@@ -419,7 +445,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private async addReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await callSlackAPI("reactions.add", this.config.botToken, {
+      await this.callSlack("reactions.add", this.config.botToken, {
         channel,
         timestamp: ts,
         name: emoji,
@@ -431,7 +457,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private async removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await callSlackAPI("reactions.remove", this.config.botToken, {
+      await this.callSlack("reactions.remove", this.config.botToken, {
         channel,
         timestamp: ts,
         name: emoji,
@@ -445,9 +471,10 @@ export class SlackAdapter implements MessageAdapter {
     const cached = this.userNames.get(userId);
     if (cached) return cached;
     try {
-      const res = await callSlackAPI("users.info", this.config.botToken, {
+      const res = await this.callSlack("users.info", this.config.botToken, {
         user: userId,
       });
+      if (this.shuttingDown) return userId;
       const u = res.user as { real_name?: string; name?: string };
       const name = u.real_name ?? u.name ?? userId;
       this.userNames.set(userId, name);
@@ -460,7 +487,7 @@ export class SlackAdapter implements MessageAdapter {
 
   private async clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
     try {
-      await callSlackAPI("assistant.threads.setStatus", this.config.botToken, {
+      await this.callSlack("assistant.threads.setStatus", this.config.botToken, {
         channel_id: channelId,
         thread_ts: threadTs,
         status: "",
@@ -477,7 +504,7 @@ export class SlackAdapter implements MessageAdapter {
       { title: "Review", message: "Summarise the recent changes" },
     ];
     try {
-      await callSlackAPI("assistant.threads.setSuggestedPrompts", this.config.botToken, {
+      await this.callSlack("assistant.threads.setSuggestedPrompts", this.config.botToken, {
         channel_id: channelId,
         thread_ts: threadTs,
         prompts,
