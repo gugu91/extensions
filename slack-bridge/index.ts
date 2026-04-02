@@ -1733,6 +1733,33 @@ export default function (pi: ExtensionAPI) {
     setExtStatus(ctx, "ok");
   }
 
+  async function disconnectFollower(
+    ctx: ExtensionContext,
+  ): Promise<{ unregisterError: string | null }> {
+    const current = brokerClient;
+    brokerClient = null;
+
+    if (current?.pollInterval) {
+      clearInterval(current.pollInterval);
+      current.pollInterval = null;
+    }
+
+    let unregisterError: string | null = null;
+    if (current) {
+      try {
+        await current.client.disconnectGracefully();
+      } catch (err) {
+        unregisterError = msg(err);
+      }
+    }
+
+    brokerRole = null;
+    pinetEnabled = false;
+    setExtStatus(ctx, "off");
+
+    return { unregisterError };
+  }
+
   pi.registerCommand("pinet-follow", {
     description: "Connect to an existing Pinet broker as a follower",
     handler: async (_args, ctx) => {
@@ -1753,6 +1780,38 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Pinet follow failed: ${msg(err)}`, "error");
         setExtStatus(ctx, "error");
       }
+    },
+  });
+
+  pi.registerCommand("pinet-unfollow", {
+    description: "Disconnect from the Pinet broker and keep working locally",
+    handler: async (_args, ctx) => {
+      if (!pinetEnabled || brokerRole == null) {
+        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
+        return;
+      }
+
+      if (brokerRole !== "follower") {
+        ctx.ui.notify(
+          "Pinet is running as broker; /pinet-unfollow only applies to followers.",
+          "warning",
+        );
+        return;
+      }
+
+      const { unregisterError } = await disconnectFollower(ctx);
+      if (unregisterError) {
+        ctx.ui.notify(
+          `Pinet follower disconnected locally, but broker deregistration failed: ${unregisterError}`,
+          "warning",
+        );
+        return;
+      }
+
+      ctx.ui.notify(
+        `${agentEmoji} ${agentName} — disconnected from broker; local session still running`,
+        "info",
+      );
     },
   });
 
@@ -2010,18 +2069,9 @@ export default function (pi: ExtensionAPI) {
     lastBrokerRalphLoopHadOutstandingAnomalies = false;
     lastReportedGhostIds.clear();
     if (brokerClient) {
-      try {
-        if (brokerClient.pollInterval) {
-          clearInterval(brokerClient.pollInterval);
-        }
-        await brokerClient.client.unregister().catch(() => {
-          /* best effort */
-        });
-        brokerClient.client.disconnect();
-      } catch {
+      await disconnectFollower(ctx).catch(() => {
         /* best effort */
-      }
-      brokerClient = null;
+      });
     }
     brokerRole = null;
     pinetEnabled = false;
