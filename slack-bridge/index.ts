@@ -34,6 +34,7 @@ import {
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
   resolveAgentStableId,
+  isLikelyLocalSubagentContext,
   syncFollowerInboxEntries,
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
@@ -1240,6 +1241,7 @@ export default function (pi: ExtensionAPI) {
   // Forward-declared — assigned in the Commands section below.
   let pinetEnabled = false;
   let brokerRole: "broker" | "follower" | null = null;
+  let pinetRegistrationBlocked = false;
   let activeBroker: Broker | null = null;
   let brokerClient: BrokerClientRef | null = null;
   let activeRouter: MessageRouter | null = null;
@@ -1255,6 +1257,10 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
   const lastBrokerNudges = new Map<string, number>();
+
+  function getPinetRegistrationBlockReason(): string {
+    return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
+  }
 
   function startBrokerHeartbeat(): void {
     stopBrokerHeartbeat();
@@ -1686,6 +1692,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("pinet-start", {
     description: "Start Pinet as the broker (Slack connection + message routing)",
     handler: async (_args, ctx) => {
+      if (pinetRegistrationBlocked) {
+        ctx.ui.notify(getPinetRegistrationBlockReason(), "warning");
+        return;
+      }
       if (pinetEnabled) {
         ctx.ui.notify(`Pinet already running (${brokerRole})`, "info");
         return;
@@ -1801,6 +1811,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
+    if (pinetRegistrationBlocked) {
+      throw new Error(getPinetRegistrationBlockReason());
+    }
+
     const client = new BrokerClient();
     await client.connect();
     const registration = await client.register(
@@ -1938,6 +1952,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("pinet-follow", {
     description: "Connect to an existing Pinet broker as a follower",
     handler: async (_args, ctx) => {
+      if (pinetRegistrationBlocked) {
+        ctx.ui.notify(getPinetRegistrationBlockReason(), "warning");
+        return;
+      }
       if (pinetEnabled) {
         ctx.ui.notify(`Pinet already running (${brokerRole})`, "info");
         return;
@@ -2018,6 +2036,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     extCtx = ctx;
+    const sessionHeader = (
+      ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
+    ).getHeader?.();
+    pinetRegistrationBlocked = isLikelyLocalSubagentContext({
+      sessionHeader,
+      argv: process.argv.slice(2),
+    });
 
     // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
@@ -2070,6 +2095,12 @@ export default function (pi: ExtensionAPI) {
       persistStateNow();
     } catch (err) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
+    }
+
+    if (pinetRegistrationBlocked) {
+      console.log("[slack-bridge] detected local subagent context; skipping Pinet registration");
+      setExtStatus(ctx, "off");
+      return;
     }
 
     // Auto-follow: if enabled and broker socket exists, connect as follower
@@ -2206,6 +2237,7 @@ export default function (pi: ExtensionAPI) {
     disconnect();
     brokerRole = null;
     pinetEnabled = false;
+    pinetRegistrationBlocked = false;
     setExtStatus(ctx, "off");
   });
 }
