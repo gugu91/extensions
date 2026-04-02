@@ -285,7 +285,7 @@ Find user IDs in Slack: click a user's profile → **More** → **Copy member ID
 - **Zero npm deps** — native `fetch` + `WebSocket` (Node 22+)
 - **Hybrid inbox** — queue when busy, auto-process when idle
 - **Reactions** — 👀 as lightweight "thinking" indicator (no chat lock)
-- **Agent naming** — LLM picks a fun name + emoji per task
+- **Agent naming** — Pinet can keep the default whimsical mesh skin or regenerate themed names/personalities for the whole mesh
 
 ## Pinet control commands
 
@@ -295,6 +295,7 @@ Use these local commands to control another connected Pinet agent by name or ID:
 - `/pinet-exit <agent>` — ask the target agent to disconnect cleanly and exit
 - `/pinet-free` — mark this agent idle/free and available for new work
 - `/pinet-logs` / `/slack-logs` — show the most recent broker activity log entries captured this session
+- `/pinet-skin <theme>` — broker-only mesh skin switch; `default` keeps the whimsical built-in skin, any other free-form theme regenerates themed names and personalities for the connected mesh
 
 Agents can also send the exact A2A message `/reload` or `/exit` via `pinet_message`; the
 receiver handles it automatically instead of surfacing it to the LLM as normal work.

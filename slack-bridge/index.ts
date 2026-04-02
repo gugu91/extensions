@@ -18,7 +18,11 @@ import {
   formatInboxMessages,
   formatPinetInboxMessages,
   buildPinetControlMetadata,
+  buildPinetSkinAssignment,
+  buildPinetSkinMetadata,
+  buildPinetSkinPromptGuideline,
   extractPinetControlCommand,
+  extractPinetSkinUpdate,
   getPinetControlCommandFromText,
   queuePinetRemoteControl,
   finishPinetRemoteControl,
@@ -46,6 +50,8 @@ import {
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
   partitionFollowerInboxEntries,
+  agentOwnsThread,
+  buildPinetOwnerToken,
   generateAgentName,
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
@@ -55,6 +61,8 @@ import {
   buildAgentPersonalityGuidelines,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
+  DEFAULT_PINET_SKIN_THEME,
+  normalizePinetSkinTheme,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   syncFollowerInboxEntries,
@@ -62,6 +70,7 @@ import {
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
   normalizeThreadConfirmationState,
+  normalizeOwnedThreads,
   isThreadConfirmationStateEmpty,
   confirmationRequestMatches,
   consumeMatchingConfirmationRequest,
@@ -192,6 +201,11 @@ export default function (pi: ExtensionAPI) {
   let agentName = initialIdentity.name;
   let agentEmoji = initialIdentity.emoji;
   let agentStableId = resolveAgentStableId(undefined, undefined, os.hostname(), process.cwd());
+  let agentOwnerToken = buildPinetOwnerToken(agentStableId);
+  let activeSkinTheme: string | null = null;
+  let agentPersonality: string | null = null;
+  const agentAliases = new Set<string>();
+  const PINET_SKIN_SETTING_KEY = "pinet.skinTheme";
 
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
@@ -242,6 +256,60 @@ export default function (pi: ExtensionAPI) {
     securityPrompt: string;
     agentName: string;
     agentEmoji: string;
+    activeSkinTheme: string | null;
+    agentPersonality: string | null;
+    agentAliases: string[];
+  }
+
+  function getSkinSeed(preferredSeed?: string): string {
+    return preferredSeed?.trim() || agentStableId;
+  }
+
+  function rememberAgentAlias(name: string | undefined): void {
+    const trimmed = name?.trim();
+    if (!trimmed || trimmed === agentName) return;
+    agentAliases.add(trimmed);
+    while (agentAliases.size > 24) {
+      const oldest = agentAliases.values().next().value;
+      if (!oldest) break;
+      agentAliases.delete(oldest);
+    }
+  }
+
+  function resolveSkinAssignment(
+    role: "broker" | "worker",
+    seed = getSkinSeed(),
+  ): { name: string; emoji: string; personality: string } | null {
+    if (!activeSkinTheme) return null;
+    const assignment = buildPinetSkinAssignment({ theme: activeSkinTheme, role, seed });
+    return {
+      name: assignment.name,
+      emoji: assignment.emoji,
+      personality: assignment.personality,
+    };
+  }
+
+  function applyLocalAgentIdentity(
+    nextName: string,
+    nextEmoji: string,
+    nextPersonality: string | null,
+  ): void {
+    const previousName = agentName;
+    if (
+      agentName === nextName &&
+      agentEmoji === nextEmoji &&
+      (agentPersonality ?? null) === (nextPersonality ?? null)
+    ) {
+      return;
+    }
+
+    agentName = nextName;
+    agentEmoji = nextEmoji;
+    agentPersonality = nextPersonality ?? null;
+    rememberAgentAlias(previousName);
+    normalizeOwnedThreads(threads.values(), agentName, agentOwnerToken, agentAliases);
+    persistState();
+    updateBadge();
   }
 
   function refreshSettings(): void {
@@ -253,15 +321,24 @@ export default function (pi: ExtensionAPI) {
     reactionCommands = resolveReactionCommands(settings.reactionCommands);
     securityPrompt = buildSecurityPrompt(guardrails);
     const identitySeed = extCtx?.sessionManager.getSessionFile() ?? agentStableId;
+    const role = brokerRole === "broker" ? "broker" : "worker";
+    const skinIdentity = resolveSkinAssignment(role, identitySeed);
+    if (skinIdentity) {
+      agentName = skinIdentity.name;
+      agentEmoji = skinIdentity.emoji;
+      agentPersonality = skinIdentity.personality;
+      return;
+    }
     const refreshedIdentity = resolveRuntimeAgentIdentity(
       { name: agentName, emoji: agentEmoji },
       settings,
       process.env.PI_NICKNAME,
       identitySeed,
-      brokerRole === "broker" ? "broker" : "worker",
+      role,
     );
     agentName = refreshedIdentity.name;
     agentEmoji = refreshedIdentity.emoji;
+    agentPersonality = null;
   }
 
   function snapshotReloadableRuntime(): ReloadableRuntimeSnapshot {
@@ -275,6 +352,9 @@ export default function (pi: ExtensionAPI) {
       securityPrompt,
       agentName,
       agentEmoji,
+      activeSkinTheme,
+      agentPersonality,
+      agentAliases: [...agentAliases],
     };
   }
 
@@ -288,6 +368,15 @@ export default function (pi: ExtensionAPI) {
     securityPrompt = snapshot.securityPrompt;
     agentName = snapshot.agentName;
     agentEmoji = snapshot.agentEmoji;
+    activeSkinTheme = snapshot.activeSkinTheme;
+    agentPersonality = snapshot.agentPersonality;
+    agentOwnerToken = buildPinetOwnerToken(agentStableId);
+    agentAliases.clear();
+    for (const alias of snapshot.agentAliases) {
+      if (alias && alias !== agentName) {
+        agentAliases.add(alias);
+      }
+    }
   }
 
   function detectProjectTools(repoRoot: string, cwd: string): string[] {
@@ -339,6 +428,8 @@ export default function (pi: ExtensionAPI) {
       repoRoot,
       worktreePath,
       worktreeKind,
+      ...(activeSkinTheme ? { skinTheme: activeSkinTheme } : {}),
+      ...(agentPersonality ? { personality: agentPersonality } : {}),
       capabilities: {
         repo,
         repoRoot,
@@ -352,24 +443,45 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  function asStringValue(value: unknown): string | undefined {
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  }
+
+  function getMeshRoleFromMetadata(
+    metadata: Record<string, unknown> | undefined,
+    fallback: "broker" | "worker" = "worker",
+  ): "broker" | "worker" {
+    return asStringValue(metadata?.role) === "broker" ? "broker" : fallback;
+  }
+
+  function buildSkinMetadata(
+    metadata: Record<string, unknown> | undefined,
+    personality: string,
+  ): Record<string, unknown> {
+    return {
+      ...(metadata ?? {}),
+      ...(activeSkinTheme ? { skinTheme: activeSkinTheme } : {}),
+      personality,
+    };
+  }
+
   const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
 
   function getIdentityGuidelines(): [string, string, string] {
     return buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
   }
 
-  function applyBrokerIdentity(nextName: string, nextEmoji: string): void {
-    if (agentName === nextName && agentEmoji === nextEmoji) return;
-    const previousName = agentName;
-    agentName = nextName;
-    agentEmoji = nextEmoji;
-    for (const thread of threads.values()) {
-      if (thread.owner === previousName) {
-        thread.owner = nextName;
-      }
-    }
-    persistState();
-    updateBadge();
+  function applyRegistrationIdentity(registration: {
+    name: string;
+    emoji: string;
+    metadata?: Record<string, unknown> | null;
+  }): void {
+    activeSkinTheme = asStringValue(registration.metadata?.skinTheme) ?? null;
+    applyLocalAgentIdentity(
+      registration.name,
+      registration.emoji,
+      asStringValue(registration.metadata?.personality) ?? null,
+    );
   }
 
   interface ThreadInfo {
@@ -456,6 +568,9 @@ export default function (pi: ExtensionAPI) {
         agentName,
         agentEmoji,
         agentStableId,
+        activeSkinTheme,
+        agentPersonality,
+        agentAliases: [...agentAliases],
         brokerControlPlaneCanvasId: brokerControlPlaneCanvasRuntimeId,
         brokerControlPlaneCanvasChannelId: brokerControlPlaneCanvasRuntimeChannelId,
       });
@@ -826,9 +941,16 @@ export default function (pi: ExtensionAPI) {
       for (const m of msgs) {
         if (!m.bot_id) continue;
         const meta = m.metadata as
-          | { event_type?: string; event_payload?: { agent?: string } }
+          | {
+              event_type?: string;
+              event_payload?: { agent?: string; agent_owner?: string };
+            }
           | undefined;
-        if (meta?.event_type === "pi_agent_msg" && meta.event_payload?.agent) {
+        if (meta?.event_type !== "pi_agent_msg") continue;
+        if (typeof meta.event_payload?.agent_owner === "string" && meta.event_payload.agent_owner) {
+          return meta.event_payload.agent_owner;
+        }
+        if (meta.event_payload?.agent) {
           return meta.event_payload.agent;
         }
       }
@@ -1152,19 +1274,27 @@ export default function (pi: ExtensionAPI) {
 
     // ── Thread ownership check (before allowlist so only the owning agent rejects) ──
     const localOwner = threads.get(effectiveTs)?.owner;
-    if (localOwner && localOwner !== agentName) return; // owned by another agent
+    if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
+      return;
+    }
+    if (localOwner) {
+      const thread = threads.get(effectiveTs);
+      if (thread) {
+        normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
+      }
+    }
 
     if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
       const remoteOwner = await resolveThreadOwner(channel, effectiveTs);
       if (shuttingDown) return;
-      if (remoteOwner && remoteOwner !== agentName) {
+      if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
         const t = threads.get(effectiveTs);
         if (t) t.owner = remoteOwner; // cache so we skip instantly next time
         return;
       }
-      if (remoteOwner === agentName) {
+      if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
         const t = threads.get(effectiveTs);
-        if (t) t.owner = agentName;
+        if (t) t.owner = agentOwnerToken;
       }
       if (!remoteOwner) {
         unclaimedThreads.add(effectiveTs); // negative cache: no owner found yet
@@ -1379,6 +1509,7 @@ export default function (pi: ExtensionAPI) {
     slack,
     getAgentName: () => agentName,
     getAgentEmoji: () => agentEmoji,
+    getAgentOwnerToken: () => agentOwnerToken,
     getLastDmChannel: () => lastDmChannel,
     updateBadge,
     resolveUser,
@@ -1394,11 +1525,11 @@ export default function (pi: ExtensionAPI) {
           channelId,
           threadTs,
           userId: "",
-          owner: agentName,
+          owner: agentOwnerToken,
         });
       } else {
         const thread = threads.get(threadTs)!;
-        if (!thread.owner) thread.owner = agentName;
+        if (!thread.owner) thread.owner = agentOwnerToken;
       }
       unclaimedThreads.delete(threadTs);
       persistState();
@@ -2233,6 +2364,66 @@ export default function (pi: ExtensionAPI) {
     throw new Error("Pinet is in an unexpected state.");
   }
 
+  function applyMeshSkin(themeInput: string): { theme: string; updatedAgents: string[] } {
+    if (brokerRole !== "broker" || !activeBroker) {
+      throw new Error("/pinet-skin can only run on the active broker.");
+    }
+
+    const theme = normalizePinetSkinTheme(themeInput);
+    if (!theme) {
+      throw new Error("Usage: /pinet-skin <theme>");
+    }
+
+    const selfId = activeSelfId;
+    if (!selfId) {
+      throw new Error("Broker agent identity is unavailable.");
+    }
+
+    activeSkinTheme = theme;
+    activeBroker.db.setSetting(PINET_SKIN_SETTING_KEY, theme);
+
+    const updatedAgents: string[] = [];
+    for (const agent of activeBroker.db.getAgents()) {
+      const role =
+        agent.id === selfId
+          ? "broker"
+          : getMeshRoleFromMetadata(agent.metadata ?? undefined, "worker");
+      const assignment = buildPinetSkinAssignment({
+        theme,
+        role,
+        seed: agent.stableId ?? agent.id,
+      });
+      const updated = activeBroker.db.updateAgentIdentity(agent.id, {
+        name: assignment.name,
+        emoji: assignment.emoji,
+        metadata: buildSkinMetadata(agent.metadata ?? undefined, assignment.personality),
+      });
+      if (!updated) continue;
+
+      if (agent.id === selfId) {
+        applyLocalAgentIdentity(updated.name, updated.emoji, assignment.personality);
+      } else {
+        dispatchDirectAgentMessage(activeBroker.db, {
+          senderAgentId: selfId,
+          senderAgentName: agentName,
+          target: updated.id,
+          body: `Mesh skin changed to ${theme}`,
+          metadata: buildPinetSkinMetadata({
+            theme,
+            name: updated.name,
+            emoji: updated.emoji,
+            personality: assignment.personality,
+          }),
+        });
+      }
+
+      updatedAgents.push(updated.name);
+    }
+
+    persistState();
+    return { theme, updatedAgents };
+  }
+
   let remoteControlState: PinetRemoteControlState = {
     currentCommand: null,
     queuedCommand: null,
@@ -2709,24 +2900,40 @@ export default function (pi: ExtensionAPI) {
     let selfId: string | null = null;
 
     try {
-      const brokerIdentity = resolveRuntimeAgentIdentity(
-        { name: agentName, emoji: agentEmoji },
-        settings,
-        process.env.PI_NICKNAME,
-        ctx.sessionManager.getSessionFile() ?? agentStableId,
-        "broker",
-      );
-
       const router = new MessageRouter(broker.db);
+      activeSkinTheme =
+        broker.db.getSetting<string>(PINET_SKIN_SETTING_KEY) ?? DEFAULT_PINET_SKIN_THEME;
+      broker.db.setSetting(PINET_SKIN_SETTING_KEY, activeSkinTheme);
+      broker.server.setAgentRegistrationResolver((registration) => {
+        const theme = activeSkinTheme ?? DEFAULT_PINET_SKIN_THEME;
+        const role = getMeshRoleFromMetadata(registration.metadata, "worker");
+        const assignment = buildPinetSkinAssignment({
+          theme,
+          role,
+          seed: registration.stableId ?? registration.agentId,
+        });
+        return {
+          name: assignment.name,
+          emoji: assignment.emoji,
+          metadata: buildSkinMetadata(registration.metadata, assignment.personality),
+        };
+      });
+
+      const selfAssignment = buildPinetSkinAssignment({
+        theme: activeSkinTheme,
+        role: "broker",
+        seed: agentStableId,
+      });
       const selfAgent = broker.db.registerAgent(
         ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
-        brokerIdentity.name,
-        brokerIdentity.emoji,
+        selfAssignment.name,
+        selfAssignment.emoji,
         process.pid,
-        await getAgentMetadata("broker"),
+        buildSkinMetadata(await getAgentMetadata("broker"), selfAssignment.personality),
         agentStableId,
       );
       selfId = selfAgent.id;
+      applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
 
       resetBrokerDeliveryState(brokerDeliveryState);
       const recoveredBrokerMessages = broker.db.getPendingInboxCount(selfId);
@@ -2822,7 +3029,6 @@ export default function (pi: ExtensionAPI) {
 
       brokerRole = "broker";
       pinetEnabled = true;
-      applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
       startBrokerHeartbeat();
       startBrokerMaintenance(ctx);
       startBrokerRalphLoop(ctx);
@@ -2915,7 +3121,7 @@ export default function (pi: ExtensionAPI) {
         await getAgentMetadata("worker"),
         agentStableId,
       );
-      const followerIdentity = { name: registration.name, emoji: registration.emoji };
+      applyRegistrationIdentity(registration);
 
       const brokerClientRef: BrokerClientRef = {
         client,
@@ -2926,8 +3132,13 @@ export default function (pi: ExtensionAPI) {
       let wasDisconnected = false;
       let followerPollRunning = false;
 
-      async function resumeThreadClaims(ownerName = agentName): Promise<void> {
-        for (const thread of getFollowerOwnedThreadClaims(threads, ownerName)) {
+      async function resumeThreadClaims(): Promise<void> {
+        for (const thread of getFollowerOwnedThreadClaims(
+          threads,
+          agentName,
+          agentAliases,
+          agentOwnerToken,
+        )) {
           try {
             await client.claimThread(thread.threadTs, thread.channelId);
           } catch {
@@ -2955,6 +3166,11 @@ export default function (pi: ExtensionAPI) {
             }
 
             const controlEntries: Array<{ inboxId: number; command: PinetControlCommand }> = [];
+            const skinEntries: Array<{
+              inboxId: number;
+              update: { theme: string; name: string; emoji: string; personality: string };
+            }> = [];
+            const remainingEntries = [];
             for (const entry of newEntries) {
               const command = extractPinetControlCommand({
                 threadId: entry.message.threadId,
@@ -2963,7 +3179,20 @@ export default function (pi: ExtensionAPI) {
               });
               if (command) {
                 controlEntries.push({ inboxId: entry.inboxId, command });
+                continue;
               }
+
+              const skinUpdate = extractPinetSkinUpdate({
+                threadId: entry.message.threadId,
+                body: entry.message.body,
+                metadata: entry.message.metadata,
+              });
+              if (skinUpdate) {
+                skinEntries.push({ inboxId: entry.inboxId, update: skinUpdate });
+                continue;
+              }
+
+              remainingEntries.push(entry);
             }
 
             if (controlEntries.length > 0) {
@@ -2979,8 +3208,21 @@ export default function (pi: ExtensionAPI) {
               return;
             }
 
+            if (skinEntries.length > 0) {
+              for (const entry of skinEntries) {
+                activeSkinTheme = entry.update.theme;
+                applyLocalAgentIdentity(
+                  entry.update.name,
+                  entry.update.emoji,
+                  entry.update.personality,
+                );
+              }
+              await client.ackMessages(skinEntries.map((entry) => entry.inboxId));
+            }
+
             // Partition nudges and a2a traffic out of the human Slack inbox flow.
-            const { nudges, agentMessages, regular } = partitionFollowerInboxEntries(newEntries);
+            const { nudges, agentMessages, regular } =
+              partitionFollowerInboxEntries(remainingEntries);
 
             if (nudges.length > 0) {
               const nudgeText = nudges
@@ -3012,7 +3254,12 @@ export default function (pi: ExtensionAPI) {
             }
 
             if (regular.length > 0) {
-              const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
+              const synced = syncFollowerInboxEntries(
+                regular,
+                threads,
+                agentOwnerToken,
+                lastDmChannel,
+              );
               for (const nextThread of synced.threadUpdates) {
                 const existing = threads.get(nextThread.threadTs);
                 if (!existing) {
@@ -3066,7 +3313,7 @@ export default function (pi: ExtensionAPI) {
         void (async () => {
           const registration = client.getRegisteredIdentity();
           if (registration) {
-            applyBrokerIdentity(registration.name, registration.emoji);
+            applyRegistrationIdentity(registration);
           }
           await resumeThreadClaims();
           const currentlyIdle = ctx.isIdle?.() ?? true;
@@ -3086,11 +3333,10 @@ export default function (pi: ExtensionAPI) {
         })();
       });
 
-      await resumeThreadClaims(followerIdentity.name);
+      await resumeThreadClaims();
       brokerClient = brokerClientRef;
       brokerRole = "follower";
       pinetEnabled = true;
-      applyBrokerIdentity(followerIdentity.name, followerIdentity.emoji);
       startPolling();
       setExtStatus(ctx, "ok");
     } catch (err) {
@@ -3245,6 +3491,31 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
+
+  pi.registerCommand("pinet-skin", {
+    description: "Regenerate the mesh naming/personality skin from a theme",
+    handler: async (args, ctx) => {
+      if (!pinetEnabled || brokerRole == null) {
+        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
+        return;
+      }
+      if (brokerRole !== "broker") {
+        ctx.ui.notify("/pinet-skin can only run on the active broker.", "warning");
+        return;
+      }
+
+      try {
+        const result = applyMeshSkin(args);
+        ctx.ui.notify(
+          `Applied mesh skin "${result.theme}" to ${result.updatedAgents.length} agent${result.updatedAgents.length === 1 ? "" : "s"}.`,
+          "info",
+        );
+      } catch (err) {
+        ctx.ui.notify(`Pinet skin failed: ${msg(err)}`, "error");
+      }
+    },
+  });
+
   pi.registerCommand("pinet-status", {
     description: "Show Pinet status",
     handler: async (_args, ctx) => {
@@ -3254,7 +3525,9 @@ export default function (pi: ExtensionAPI) {
       }
       const mode = brokerRole === "broker" ? "broker" : "follower";
       const socket = mode;
-      const ownedCount = [...threads.values()].filter((t) => t.owner === agentName).length;
+      const ownedCount = [...threads.values()].filter((t) =>
+        agentOwnsThread(t.owner, agentName, agentAliases, agentOwnerToken),
+      ).length;
       const allowlistInfo = allowedUsers
         ? `Allowed users: ${[...allowedUsers].join(", ")}`
         : "Allowed users: all (no allowlist set)";
@@ -3297,6 +3570,8 @@ export default function (pi: ExtensionAPI) {
           `Agent: ${agentEmoji} ${agentName}`,
           `Bot: ${botUserId ?? "unknown"}`,
           `Connection: ${socket}`,
+          `Skin: ${activeSkinTheme ?? "(legacy/manual)"}`,
+          ...(agentPersonality ? [`Persona: ${agentPersonality}`] : []),
           `Threads: ${threads.size} (${ownedCount} owned by ${agentName})`,
           `DM channel: ${lastDmChannel ?? "none yet"}`,
           allowlistInfo,
@@ -3339,12 +3614,10 @@ export default function (pi: ExtensionAPI) {
       const newName = args.trim();
       if (!newName) {
         const fresh = generateAgentName(undefined, brokerRole === "broker" ? "broker" : "worker");
-        agentName = fresh.name;
-        agentEmoji = fresh.emoji;
+        applyLocalAgentIdentity(fresh.name, fresh.emoji, agentPersonality);
       } else {
-        agentName = newName;
+        applyLocalAgentIdentity(newName, agentEmoji, agentPersonality);
       }
-      persistState();
       ctx.ui.notify(`${agentEmoji} Agent renamed to: ${agentName}`, "info");
     },
   });
@@ -3372,6 +3645,9 @@ export default function (pi: ExtensionAPI) {
       agentName?: string;
       agentEmoji?: string;
       agentStableId?: string;
+      activeSkinTheme?: string | null;
+      agentPersonality?: string | null;
+      agentAliases?: string[];
       brokerControlPlaneCanvasId?: string | null;
       brokerControlPlaneCanvasChannelId?: string | null;
     }
@@ -3390,13 +3666,23 @@ export default function (pi: ExtensionAPI) {
         ctx.cwd,
         ctx.sessionManager.getLeafId(),
       );
+      agentOwnerToken = buildPinetOwnerToken(agentStableId);
       const identitySeed = ctx.sessionManager.getSessionFile() ?? agentStableId;
+      activeSkinTheme = savedState?.activeSkinTheme ?? null;
+      agentPersonality = savedState?.agentPersonality ?? null;
+      agentAliases.clear();
+      for (const alias of savedState?.agentAliases ?? []) {
+        if (alias) {
+          agentAliases.add(alias);
+        }
+      }
       const restoredIdentity = resolvePersistedAgentIdentity(
         settings,
         savedState?.agentName,
         savedState?.agentEmoji,
         process.env.PI_NICKNAME,
         identitySeed,
+        brokerRole === "broker" ? "broker" : "worker",
       );
       agentName = restoredIdentity.name;
       agentEmoji = restoredIdentity.emoji;
@@ -3607,6 +3893,10 @@ export default function (pi: ExtensionAPI) {
       ...buildAgentPersonalityGuidelines(agentName),
       ...buildReactionPromptGuidelines(),
     ];
+    const skinGuideline = buildPinetSkinPromptGuideline(activeSkinTheme, agentPersonality);
+    if (skinGuideline) {
+      guidelines.push(skinGuideline);
+    }
     if (brokerRole === "broker") {
       guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
       guidelines.push(buildBrokerToolGuardrailsPrompt());

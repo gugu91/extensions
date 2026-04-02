@@ -282,6 +282,43 @@ export function buildPinetControlMetadata(command: PinetControlCommand): Record<
   return { kind: "pinet_control", command };
 }
 
+export interface PinetSkinUpdate {
+  theme: string;
+  name: string;
+  emoji: string;
+  personality: string;
+}
+
+export function buildPinetSkinMetadata(update: PinetSkinUpdate): Record<string, unknown> {
+  return {
+    kind: "pinet_skin",
+    theme: update.theme,
+    name: update.name,
+    emoji: update.emoji,
+    personality: update.personality,
+  };
+}
+
+export function extractPinetSkinUpdate(message: {
+  threadId?: string;
+  body?: string;
+  metadata?: Record<string, unknown> | null;
+}): PinetSkinUpdate | null {
+  const metadata = message.metadata ?? {};
+  const isAgentToAgent =
+    metadata.a2a === true ||
+    (typeof message.threadId === "string" && message.threadId.startsWith("a2a:"));
+  if (!isAgentToAgent || metadata.kind !== "pinet_skin") return null;
+
+  const theme = typeof metadata.theme === "string" ? metadata.theme.trim() : "";
+  const name = typeof metadata.name === "string" ? metadata.name.trim() : "";
+  const emoji = typeof metadata.emoji === "string" ? metadata.emoji.trim() : "";
+  const personality = typeof metadata.personality === "string" ? metadata.personality.trim() : "";
+  if (!theme || !name || !emoji || !personality) return null;
+
+  return { theme, name, emoji, personality };
+}
+
 export function extractPinetControlCommand(message: {
   threadId?: string;
   body?: string;
@@ -466,6 +503,8 @@ export interface AgentDisplayInfo {
     role?: string;
     worktreePath?: string;
     worktreeKind?: "main" | "linked";
+    skinTheme?: string;
+    personality?: string;
     capabilities?: AgentCapabilities | null;
   } | null;
   cleanupWorktreePath?: string | null;
@@ -717,6 +756,8 @@ export function buildAgentDisplayInfo(
               | "main"
               | "linked"
               | undefined) ?? undefined,
+          skinTheme: asString(metadata.skinTheme),
+          personality: asString(metadata.personality),
           capabilities,
         }
       : null,
@@ -1153,6 +1194,14 @@ export function buildWorkerPromptGuidelines(): string[] {
   ];
 }
 
+export function buildPinetSkinPromptGuideline(
+  theme: string | null | undefined,
+  personality: string | null | undefined,
+): string | null {
+  if (!theme || !personality) return null;
+  return `PINET SKIN: ${theme}. Persona: ${personality}`;
+}
+
 export function buildIdentityReplyGuidelines(
   agentEmoji: string,
   agentName: string,
@@ -1428,7 +1477,7 @@ export function isDirectMessageChannel(channel: string): boolean {
 export function syncFollowerInboxEntries(
   entries: FollowerInboxEntry[],
   existingThreads: ReadonlyMap<string, FollowerThreadState>,
-  agentName: string,
+  agentOwner: string,
   lastDmChannel: string | null,
 ): FollowerInboxSyncResult {
   let nextLastDmChannel = lastDmChannel;
@@ -1447,7 +1496,7 @@ export function syncFollowerInboxEntries(
         channelId: channel,
         threadTs,
         userId: existing?.userId || sender,
-        owner: existing?.owner ?? agentName,
+        owner: existing?.owner ?? agentOwner,
       };
 
       if (
@@ -1569,14 +1618,49 @@ export function getFollowerReconnectUiUpdate(
   };
 }
 
+export function agentOwnsThread(
+  owner: string | undefined,
+  agentName: string,
+  agentAliases: Iterable<string> = [],
+  ownerToken?: string,
+): boolean {
+  if (!owner) return false;
+  if (ownerToken && owner === ownerToken) return true;
+  if (owner === agentName) return true;
+  for (const alias of agentAliases) {
+    if (owner === alias) return true;
+  }
+  return false;
+}
+
+export function normalizeOwnedThreads(
+  threads: Iterable<{ owner?: string }>,
+  agentName: string,
+  ownerToken: string,
+  agentAliases: Iterable<string> = [],
+): boolean {
+  let changed = false;
+  for (const thread of threads) {
+    if (!agentOwnsThread(thread.owner, agentName, agentAliases, ownerToken)) continue;
+    if (thread.owner === ownerToken) continue;
+    thread.owner = ownerToken;
+    changed = true;
+  }
+  return changed;
+}
+
 export function getFollowerOwnedThreadClaims(
   threads: ReadonlyMap<string, Pick<FollowerThreadState, "threadTs" | "channelId" | "owner">>,
   agentName: string,
+  agentAliases: Iterable<string> = [],
+  ownerToken?: string,
 ): Array<{ threadTs: string; channelId: string }> {
   return [...threads.values()]
     .filter(
       (thread) =>
-        thread.owner === agentName && Boolean(thread.threadTs) && Boolean(thread.channelId),
+        agentOwnsThread(thread.owner, agentName, agentAliases, ownerToken) &&
+        Boolean(thread.threadTs) &&
+        Boolean(thread.channelId),
     )
     .map((thread) => ({
       threadTs: thread.threadTs,
@@ -1628,6 +1712,16 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
         const mainRoot = meta.repoRoot ? shortenPath(meta.repoRoot, homedir) : "";
         const mainSuffix = mainRoot && mainRoot !== worktree ? ` (main: ${mainRoot})` : "";
         line += `\n   worktree: ${worktree}${mainSuffix}`;
+      }
+
+      if (meta?.skinTheme) {
+        line += `\n   skin: ${meta.skinTheme}`;
+      }
+
+      if (meta?.personality) {
+        const personaPreview =
+          meta.personality.length > 96 ? `${meta.personality.slice(0, 93)}...` : meta.personality;
+        line += `\n   persona: ${personaPreview}`;
       }
 
       const heartbeat = a.heartbeatSummary ?? formatAge(a.heartbeatAgeMs);
@@ -1857,6 +1951,12 @@ function hashString(value: string): number {
 
 export type AgentIdentityRole = "broker" | "worker";
 
+export function buildPinetOwnerToken(stableId: string): string {
+  const primary = hashString(stableId).toString(16).padStart(8, "0");
+  const secondary = hashString(`${stableId}:owner`).toString(16).padStart(8, "0");
+  return `owner:${primary}${secondary}`;
+}
+
 export function generateAgentName(
   seed?: string,
   role: AgentIdentityRole = "worker",
@@ -1872,7 +1972,6 @@ export function generateAgentName(
       emoji,
     };
   }
-
   const adjectiveIndex = seed
     ? hashString(`${seed}:adjective`) % ADJECTIVES.length
     : Math.floor(Math.random() * ADJECTIVES.length);
@@ -1883,6 +1982,222 @@ export function generateAgentName(
   return {
     name: `${ADJECTIVES[adjectiveIndex]} ${COLORS[colorIndex]} ${ANIMALS[animalIndex]}`,
     emoji,
+  };
+}
+
+export type PinetSkinRole = "broker" | "worker";
+
+export interface PinetSkinAssignment {
+  theme: string;
+  role: PinetSkinRole;
+  name: string;
+  emoji: string;
+  personality: string;
+}
+
+export const DEFAULT_PINET_SKIN_THEME = "default";
+
+const PINET_SKIN_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "be",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "the",
+  "to",
+  "with",
+]);
+
+const PINET_SKIN_LEADER_TITLES = [
+  "Commander",
+  "Oracle",
+  "Navigator",
+  "Steward",
+  "Marshal",
+  "Warden",
+  "Architect",
+  "Signalmaster",
+  "Anchor",
+  "Captain",
+];
+
+const PINET_SKIN_WORKER_TITLES = [
+  "Scout",
+  "Ranger",
+  "Runner",
+  "Cipher",
+  "Pilot",
+  "Smith",
+  "Courier",
+  "Weaver",
+  "Seeker",
+  "Operator",
+  "Vanguard",
+  "Scribe",
+];
+
+const PINET_SKIN_MODIFIERS = [
+  "Ash",
+  "Chrome",
+  "Cinder",
+  "Circuit",
+  "Copper",
+  "Echo",
+  "Ember",
+  "Ghost",
+  "Gilded",
+  "Hollow",
+  "Ivory",
+  "Jade",
+  "Lumen",
+  "Night",
+  "Nova",
+  "Onyx",
+  "Quartz",
+  "Silver",
+  "Static",
+  "Storm",
+  "Velvet",
+  "Violet",
+];
+
+const PINET_SKIN_BROKER_EMOJIS = ["🧭", "🛡️", "🛰️", "🪄", "👑", "🧠", "🦉", "🌙"];
+const PINET_SKIN_WORKER_EMOJIS = ["⚡", "🗡️", "🛠️", "🕶️", "🧪", "🧰", "🧿", "📡", "🔧", "🛰️"];
+
+const PINET_SKIN_TRAITS = [
+  "calm under pressure",
+  "sharp-eyed about details",
+  "quietly theatrical",
+  "fast with a comeback",
+  "ritualistic about checklists",
+  "suspicious of sloppy work",
+  "protective of teammates",
+  "fond of dramatic mission language",
+  "precise about timing",
+  "improvisational when plans crack",
+  "obsessed with clean handoffs",
+  "confident without being loud",
+];
+
+const PINET_SKIN_SPEECH_STYLES = [
+  "Speak with crisp, vivid phrasing.",
+  "Keep a little lore and flair in the cadence.",
+  "Sound like a seasoned specialist with strong opinions.",
+  "Use concise status updates with a bit of character.",
+  "Lean into the vibe without becoming hard to understand.",
+];
+
+const PINET_SKIN_ROLE_FOCUS = {
+  broker: [
+    "Prioritize mesh coordination, delegation, and calm command presence.",
+    "Act like mission control: delegate clearly, monitor health, and keep the mesh moving.",
+    "Project steady leadership while staying operationally strict.",
+  ],
+  worker: [
+    "Prioritize hands-on execution, fast feedback, and visible progress.",
+    "Feel like a field specialist: practical, autonomous, and good at reporting blockers.",
+    "Bring a little swagger, but keep the work precise and accountable.",
+  ],
+} as const;
+
+function titleCaseSkinToken(token: string): string {
+  return token.length === 0 ? token : token[0].toUpperCase() + token.slice(1);
+}
+
+function singularizeSkinToken(token: string): string {
+  if (token.endsWith("ies") && token.length > 4) {
+    return `${token.slice(0, -3)}y`;
+  }
+  if (token.endsWith("s") && !token.endsWith("ss") && token.length > 4) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+
+function pickSkinValue<T>(values: readonly T[], seed: string, label: string): T {
+  return values[hashString(`${seed}:${label}`) % values.length];
+}
+
+function getPinetSkinTokens(theme: string): string[] {
+  const rawTokens = theme.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const meaningful = rawTokens
+    .map((token) => singularizeSkinToken(token))
+    .filter((token) => token.length > 1 && !PINET_SKIN_STOP_WORDS.has(token));
+  const tokens = (meaningful.length > 0 ? meaningful : rawTokens)
+    .map((token) => titleCaseSkinToken(token))
+    .filter((token, index, list) => list.indexOf(token) === index);
+  return tokens.length > 0 ? tokens : ["Signal"];
+}
+
+export function normalizePinetSkinTheme(theme: string | undefined): string | null {
+  const trimmed = theme?.trim();
+  if (!trimmed) return null;
+  return trimmed.toLowerCase() === DEFAULT_PINET_SKIN_THEME ? DEFAULT_PINET_SKIN_THEME : trimmed;
+}
+
+export function buildPinetSkinAssignment(options: {
+  theme: string;
+  role: PinetSkinRole;
+  seed: string;
+}): PinetSkinAssignment {
+  const normalizedTheme = normalizePinetSkinTheme(options.theme) ?? DEFAULT_PINET_SKIN_THEME;
+
+  if (normalizedTheme === DEFAULT_PINET_SKIN_THEME) {
+    const generated = generateAgentName(options.seed);
+    const personality =
+      options.role === "broker"
+        ? "Default whimsical broker skin. Be playful but disciplined, delegate clearly, and keep the mesh coordinated."
+        : "Default whimsical worker skin. Be playful but focused, do the work, and report blockers and outcomes clearly.";
+    return {
+      theme: normalizedTheme,
+      role: options.role,
+      name: generated.name,
+      emoji: generated.emoji,
+      personality,
+    };
+  }
+
+  const tokens = getPinetSkinTokens(normalizedTheme);
+  const primary = pickSkinValue(tokens, options.seed, "primary-token");
+  const alternateTokens = tokens.filter((token) => token !== primary);
+  const secondary =
+    alternateTokens.length > 0
+      ? pickSkinValue(alternateTokens, `${options.seed}:${normalizedTheme}`, "secondary-token")
+      : primary;
+  const modifier = pickSkinValue(PINET_SKIN_MODIFIERS, options.seed, "modifier");
+  const title =
+    options.role === "broker"
+      ? pickSkinValue(PINET_SKIN_LEADER_TITLES, options.seed, "leader-title")
+      : pickSkinValue(PINET_SKIN_WORKER_TITLES, options.seed, "worker-title");
+  const emoji =
+    options.role === "broker"
+      ? pickSkinValue(PINET_SKIN_BROKER_EMOJIS, options.seed, "leader-emoji")
+      : pickSkinValue(PINET_SKIN_WORKER_EMOJIS, options.seed, "worker-emoji");
+  const firstTrait = pickSkinValue(PINET_SKIN_TRAITS, options.seed, "trait-a");
+  const secondTrait = pickSkinValue(
+    PINET_SKIN_TRAITS,
+    `${options.seed}:${normalizedTheme}`,
+    "trait-b",
+  );
+  const speechStyle = pickSkinValue(PINET_SKIN_SPEECH_STYLES, options.seed, "speech-style");
+  const roleFocus = pickSkinValue(PINET_SKIN_ROLE_FOCUS[options.role], options.seed, "role-focus");
+  const workerCore = secondary === modifier ? primary : secondary;
+  const name =
+    options.role === "broker" ? `${primary} ${title}` : `${modifier} ${workerCore} ${title}`;
+
+  return {
+    theme: normalizedTheme,
+    role: options.role,
+    name,
+    emoji,
+    personality: `Lean into the vibe of "${normalizedTheme}". Be ${firstTrait}, ${secondTrait}. ${speechStyle} ${roleFocus}`,
   };
 }
 

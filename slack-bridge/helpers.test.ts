@@ -11,7 +11,12 @@ import {
   parsePinetControlCommand,
   getPinetControlCommandFromText,
   buildPinetControlMetadata,
+  buildPinetSkinAssignment,
+  buildPinetSkinPromptGuideline,
+  buildPinetSkinMetadata,
+  buildPinetOwnerToken,
   extractPinetControlCommand,
+  extractPinetSkinUpdate,
   queuePinetRemoteControl,
   finishPinetRemoteControl,
   reloadPinetRuntimeSafely,
@@ -59,6 +64,8 @@ import {
   resolveFollowerThreadChannel,
   isDirectMessageChannel,
   getFollowerReconnectUiUpdate,
+  agentOwnsThread,
+  normalizeOwnedThreads,
   getFollowerOwnedThreadClaims,
   normalizeThreadConfirmationState,
   isThreadConfirmationStateEmpty,
@@ -729,6 +736,70 @@ describe("shortenPath", () => {
   });
 });
 
+describe("Pinet skin helpers", () => {
+  it("builds the default whimsical skin deterministically", () => {
+    const assignment = buildPinetSkinAssignment({
+      theme: "default",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(assignment.theme).toBe("default");
+    expect(assignment.name.split(" ")).toHaveLength(3);
+    expect(assignment.emoji).toBeTruthy();
+    expect(assignment.personality).toContain("Default whimsical worker skin");
+  });
+
+  it("builds a custom free-form skin with role-aware identity", () => {
+    const broker = buildPinetSkinAssignment({
+      theme: "night's watch from ASOIAF",
+      role: "broker",
+      seed: "broker-a",
+    });
+    const worker = buildPinetSkinAssignment({
+      theme: "night's watch from ASOIAF",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(broker.theme).toBe("night's watch from ASOIAF");
+    expect(broker.name).not.toBe(worker.name);
+    expect(broker.personality).toContain("night's watch from ASOIAF");
+    expect(worker.personality).toContain("night's watch from ASOIAF");
+  });
+
+  it("builds and extracts structured skin update metadata for a2a messages", () => {
+    const metadata = buildPinetSkinMetadata({
+      theme: "cyberpunk hackers",
+      name: "Chrome Hacker Cipher",
+      emoji: "🕶️",
+      personality: "Lean into the vibe of cyberpunk hackers.",
+    });
+
+    expect(
+      extractPinetSkinUpdate({
+        threadId: "a2a:broker:worker",
+        metadata: { a2a: true, ...metadata },
+      }),
+    ).toEqual({
+      theme: "cyberpunk hackers",
+      name: "Chrome Hacker Cipher",
+      emoji: "🕶️",
+      personality: "Lean into the vibe of cyberpunk hackers.",
+    });
+  });
+
+  it("builds a prompt guideline for active skin personalities", () => {
+    expect(
+      buildPinetSkinPromptGuideline(
+        "the fellowship of the ring",
+        "Sound like a warm but capable questing specialist.",
+      ),
+    ).toContain("the fellowship of the ring");
+    expect(buildPinetSkinPromptGuideline(null, "persona")).toBeNull();
+  });
+});
+
 // ─── buildBrokerPromptGuidelines ──────────────────────────────
 
 describe("buildBrokerPromptGuidelines", () => {
@@ -994,6 +1065,25 @@ describe("formatAgentList", () => {
     ];
     const result = formatAgentList(agents, homedir);
     expect(result).toBe("\u{1F916} Bot (abc) \u2014 idle pid:12345");
+  });
+
+  it("includes skin and persona summaries when present", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "🕶️",
+        name: "Chrome Hacker Cipher",
+        id: "worker-1",
+        status: "idle",
+        metadata: {
+          skinTheme: "cyberpunk hackers",
+          personality: "Lean into the vibe of cyberpunk hackers with concise, stylish updates.",
+        },
+      },
+    ];
+
+    const result = formatAgentList(agents, homedir);
+    expect(result).toContain("skin: cyberpunk hackers");
+    expect(result).toContain("persona: Lean into the vibe of cyberpunk hackers");
   });
 
   it("omits pid when not present", () => {
@@ -2226,6 +2316,28 @@ describe("getFollowerReconnectUiUpdate", () => {
 
 // ─── getFollowerOwnedThreadClaims ────────────────────────
 
+describe("agentOwnsThread", () => {
+  it("matches the current name, stable owner token, or any remembered alias", () => {
+    const ownerToken = buildPinetOwnerToken("host:session:/tmp/agent");
+    expect(agentOwnsThread("Solar Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
+    expect(agentOwnsThread("Old Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
+    expect(agentOwnsThread(ownerToken, "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(true);
+    expect(agentOwnsThread("Other Falcon", "Solar Falcon", ["Old Falcon"], ownerToken)).toBe(false);
+  });
+
+  it("normalizes legacy owned threads onto the stable owner token", () => {
+    const ownerToken = buildPinetOwnerToken("host:session:/tmp/agent");
+    const threads = [{ owner: "Old Falcon" }, { owner: ownerToken }, { owner: "Other Falcon" }];
+
+    expect(normalizeOwnedThreads(threads, "Solar Falcon", ownerToken, ["Old Falcon"])).toBe(true);
+    expect(threads).toEqual([
+      { owner: ownerToken },
+      { owner: ownerToken },
+      { owner: "Other Falcon" },
+    ]);
+  });
+});
+
 describe("getFollowerOwnedThreadClaims", () => {
   it("returns only threads owned by the agent", () => {
     const threads = new Map<string, FollowerThreadState>([
@@ -2245,6 +2357,22 @@ describe("getFollowerOwnedThreadClaims", () => {
     ]);
 
     expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
+  });
+
+  it("treats remembered aliases as owned threads after a skin change", () => {
+    const ownerToken = buildPinetOwnerToken("host:session:/tmp/gecko");
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "C1", userId: "U1", owner: "Old Gecko" }],
+      ["t-2", { threadTs: "t-2", channelId: "C2", userId: "U2", owner: ownerToken }],
+      ["t-3", { threadTs: "t-3", channelId: "C3", userId: "U3", owner: "Other Agent" }],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Solar Gecko", ["Old Gecko"], ownerToken)).toEqual(
+      [
+        { threadTs: "t-1", channelId: "C1" },
+        { threadTs: "t-2", channelId: "C2" },
+      ],
+    );
   });
 });
 

@@ -109,6 +109,7 @@ interface RalphCycleRow {
 function rowToAgent(row: AgentRow): AgentInfo {
   return {
     id: row.id,
+    stableId: row.stable_id,
     name: row.name,
     emoji: row.emoji,
     pid: row.pid,
@@ -187,7 +188,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 9;
+export const CURRENT_BROKER_SCHEMA_VERSION = 10;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -289,6 +290,16 @@ function createBacklogTable(db: DatabaseSync): void {
       ON unrouted_backlog(thread_id, status);
     CREATE INDEX IF NOT EXISTS idx_backlog_preferred_agent_status
       ON unrouted_backlog(preferred_agent_id, status);
+  `);
+}
+
+function createSettingsTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -531,6 +542,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
         case 9:
           addScheduledWakeupStableIdColumn(db);
           break;
+        case 10:
+          createSettingsTable(db);
+          break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
       }
@@ -636,8 +650,12 @@ export class BrokerDB implements BrokerDBInterface {
     const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
     const existingById = this.getAgentRowById(existing?.id ?? id);
     const agentId = existing?.id ?? id;
-    const finalName = existing?.name ?? this.ensureUniqueAgentName(name, agentId);
-    const finalEmoji = existing?.emoji ?? emoji;
+    const hasSkinIdentity =
+      typeof metadata?.skinTheme === "string" && metadata.skinTheme.trim().length > 0;
+    const finalName = hasSkinIdentity
+      ? this.ensureUniqueAgentName(name, agentId)
+      : (existing?.name ?? this.ensureUniqueAgentName(name, agentId));
+    const finalEmoji = hasSkinIdentity ? emoji : (existing?.emoji ?? emoji);
     const persistedStableId = stableId ?? existing?.stable_id ?? existingById?.stable_id ?? null;
     const meta = metadata ? JSON.stringify(metadata) : null;
 
@@ -728,6 +746,30 @@ export class BrokerDB implements BrokerDBInterface {
       )
       .all() as unknown as AgentRow[];
     return rows.map(rowToAgent);
+  }
+
+  getSetting<T = unknown>(key: string): T | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    if (!row) return null;
+    return JSON.parse(row.value) as T;
+  }
+
+  setSetting(key: string, value: unknown): void {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    ).run(key, JSON.stringify(value), now);
+  }
+
+  deleteSetting(key: string): void {
+    const db = this.getDb();
+    db.prepare("DELETE FROM settings WHERE key = ?").run(key);
   }
 
   touchAgent(id: string): void {
@@ -839,6 +881,30 @@ export class BrokerDB implements BrokerDBInterface {
         "UPDATE agents SET status = ?, last_seen = ?, idle_since = NULL, last_activity = ? WHERE id = ?",
       ).run(status, now, now, id);
     }
+  }
+
+  updateAgentIdentity(
+    id: string,
+    identity: { name: string; emoji: string; metadata?: Record<string, unknown> | null },
+  ): AgentInfo | null {
+    const db = this.getDb();
+    const existing = this.getAgentRowById(id);
+    if (!existing) return null;
+
+    const finalName = this.ensureUniqueAgentName(identity.name, id);
+    const finalEmoji = identity.emoji.trim() || existing.emoji;
+    const metadata =
+      identity.metadata ?? (existing.metadata ? JSON.parse(existing.metadata) : null);
+    const metadataJson = metadata ? JSON.stringify(metadata) : null;
+
+    db.prepare(
+      `UPDATE agents
+       SET name = ?, emoji = ?, metadata = ?, last_seen = ?
+       WHERE id = ?`,
+    ).run(finalName, finalEmoji, metadataJson, new Date().toISOString(), id);
+
+    const updated = this.getAgentRowById(id);
+    return updated ? rowToAgent(updated) : null;
   }
 
   touchAgentActivity(id: string): void {

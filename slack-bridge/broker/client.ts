@@ -28,6 +28,7 @@ export interface ThreadInfo {
 
 export interface AgentInfo {
   id: string;
+  stableId?: string | null;
   name: string;
   emoji: string;
   pid: number;
@@ -101,6 +102,7 @@ interface RegistrationResult {
   agentId: string;
   name: string;
   emoji: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AgentBroadcastResult {
@@ -191,7 +193,12 @@ export class BrokerClient {
     emoji: string,
     metadata?: Record<string, unknown>,
     stableId?: string,
-  ): Promise<{ agentId: string; name: string; emoji: string }> {
+  ): Promise<{
+    agentId: string;
+    name: string;
+    emoji: string;
+    metadata?: Record<string, unknown> | null;
+  }> {
     this.registrationSnapshot = {
       name,
       emoji,
@@ -338,7 +345,12 @@ export class BrokerClient {
     return this.reconnectAttempt;
   }
 
-  getRegisteredIdentity(): { agentId: string; name: string; emoji: string } | null {
+  getRegisteredIdentity(): {
+    agentId: string;
+    name: string;
+    emoji: string;
+    metadata?: Record<string, unknown> | null;
+  } | null {
     return this.registeredIdentity ? { ...this.registeredIdentity } : null;
   }
 
@@ -458,7 +470,12 @@ export class BrokerClient {
 
   private async performRegister(
     snapshot: RegistrationSnapshot,
-  ): Promise<{ agentId: string; name: string; emoji: string }> {
+  ): Promise<{
+    agentId: string;
+    name: string;
+    emoji: string;
+    metadata?: Record<string, unknown> | null;
+  }> {
     const result = (await this.request("register", {
       name: snapshot.name,
       emoji: snapshot.emoji,
@@ -470,6 +487,7 @@ export class BrokerClient {
       ...snapshot,
       name: result.name,
       emoji: result.emoji,
+      ...(result.metadata ? { metadata: result.metadata } : {}),
     };
     this.registeredIdentity = result;
     this.startHeartbeat();

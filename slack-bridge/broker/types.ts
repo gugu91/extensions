@@ -2,6 +2,7 @@
 
 export interface AgentInfo {
   id: string;
+  stableId?: string | null;
   name: string;
   emoji: string;
   pid: number;

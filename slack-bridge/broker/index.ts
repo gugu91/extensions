@@ -10,7 +10,7 @@ export { BrokerDB } from "./schema.js";
 export { BrokerSocketServer } from "./socket-server.js";
 export { LeaderLock } from "./leader.js";
 export type { ListenTarget } from "./socket-server.js";
-export type { AgentMessageCallback } from "./socket-server.js";
+export type { AgentMessageCallback, AgentRegistrationResolver } from "./socket-server.js";
 export type {
   AgentInfo,
   ThreadInfo,
