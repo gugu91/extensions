@@ -122,5 +122,12 @@ export interface BrokerDBInterface {
   createThread(thread: ThreadInfo): void;
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void;
 
+  /**
+   * Atomically claim a thread for an agent (first-responder-wins).
+   * Creates the thread if it doesn't exist. Returns true if the claim
+   * succeeded, false if another agent already owns the thread.
+   */
+  claimThread(threadId: string, agentId: string, source?: string, channel?: string): boolean;
+
   queueMessage(agentId: string, message: InboundMessage): void;
 }

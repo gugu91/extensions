@@ -455,9 +455,7 @@ describe("BrokerDB", () => {
 
     const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
     sqlite
-      .prepare(
-        "UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?",
-      )
+      .prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?")
       .run(new Date(Date.now() - 2 * 60 * 60_000).toISOString(), "gone");
 
     runBrokerMaintenancePass(db, {
@@ -507,6 +505,46 @@ describe("BrokerDB", () => {
     expect(db.getOwnedThreadCount("agent-1")).toBe(2);
     expect(db.getOwnedThreadCount("agent-2")).toBe(1);
     expect(db.getOwnedThreadCount("missing")).toBe(0);
+  });
+
+  it("claimThread creates a new thread and claims it", () => {
+    const claimed = db.claimThread("t-new", "agent-1", "slack", "#general");
+    expect(claimed).toBe(true);
+    const thread = db.getThread("t-new");
+    expect(thread).not.toBeNull();
+    expect(thread!.ownerAgent).toBe("agent-1");
+  });
+
+  it("claimThread succeeds on unclaimed existing thread", () => {
+    db.createThread("t-unclaimed", "slack", "#general", null);
+    const claimed = db.claimThread("t-unclaimed", "agent-1");
+    expect(claimed).toBe(true);
+    expect(db.getThread("t-unclaimed")!.ownerAgent).toBe("agent-1");
+  });
+
+  it("claimThread allows re-claim by same agent", () => {
+    db.claimThread("t-mine", "agent-1");
+    const reclaimed = db.claimThread("t-mine", "agent-1");
+    expect(reclaimed).toBe(true);
+    expect(db.getThread("t-mine")!.ownerAgent).toBe("agent-1");
+  });
+
+  it("claimThread rejects claim when another agent owns the thread", () => {
+    db.claimThread("t-taken", "agent-1");
+    const claimed = db.claimThread("t-taken", "agent-2");
+    expect(claimed).toBe(false);
+    expect(db.getThread("t-taken")!.ownerAgent).toBe("agent-1");
+  });
+
+  it("claimThread is atomic — no TOCTOU window between read and write", () => {
+    // Simulate the race: agent-1 claims, then agent-2 tries to claim.
+    // With the old read-then-write pattern, a race could let both succeed.
+    // The atomic INSERT...ON CONFLICT...WHERE ensures only one wins.
+    const first = db.claimThread("t-race", "agent-1");
+    const second = db.claimThread("t-race", "agent-2");
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    expect(db.getThread("t-race")!.ownerAgent).toBe("agent-1");
   });
 
   it("insertMessage and getInbox", () => {

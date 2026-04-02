@@ -59,6 +59,27 @@ class StubBrokerDBInterface implements BrokerDBInterface {
     this.threads.set(threadId, { ...existing, ...updates });
   }
 
+  claimThread(threadId: string, agentId: string, source = "slack", channel = ""): boolean {
+    const existing = this.threads.get(threadId);
+    if (existing) {
+      if (existing.ownerAgent && existing.ownerAgent !== agentId) {
+        return false;
+      }
+      this.threads.set(threadId, { ...existing, ownerAgent: agentId });
+      return true;
+    }
+    const now = new Date().toISOString();
+    this.threads.set(threadId, {
+      threadId,
+      source,
+      channel,
+      ownerAgent: agentId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return true;
+  }
+
   queueMessage(agentId: string, message: InboundMessage): void {
     this.inbox.push({ agentId, message });
   }

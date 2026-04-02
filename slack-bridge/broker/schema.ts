@@ -663,6 +663,29 @@ export class BrokerDB implements BrokerDBInterface {
     db.prepare(`UPDATE threads SET ${sets.join(", ")} WHERE thread_id = ?`).run(...values);
   }
 
+  claimThread(threadId: string, agentId: string, source = "slack", channel = ""): boolean {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    // Atomic claim: insert the thread if new, or update the owner only
+    // if the thread is currently unclaimed or already owned by this agent.
+    // A single statement avoids the TOCTOU race of read-then-write. (#125)
+    db.prepare(
+      `INSERT INTO threads (thread_id, source, channel, owner_agent, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(thread_id) DO UPDATE SET
+         owner_agent = excluded.owner_agent,
+         updated_at = excluded.updated_at
+       WHERE threads.owner_agent IS NULL OR threads.owner_agent = excluded.owner_agent`,
+    ).run(threadId, source, channel, agentId, now, now);
+
+    // Verify: read back the owner.  If the WHERE clause above didn't
+    // match (another agent owns the thread), the row was not updated
+    // and the owner will differ from agentId.
+    const thread = this.getThread(threadId);
+    return thread?.ownerAgent === agentId;
+  }
+
   getAllowedUsers(): Set<string> | null {
     return null;
   }
