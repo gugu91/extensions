@@ -69,6 +69,47 @@ function rpcError(
   return { jsonrpc: "2.0", id, error };
 }
 
+function isJsonRpcRequestId(value: unknown): value is number | string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value !== 0;
+  }
+  return typeof value === "string" && value.length > 0;
+}
+
+function isJsonRpcRequestPayload(value: unknown): value is JsonRpcRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const request = value as Record<string, unknown>;
+  if (request.jsonrpc !== "2.0") {
+    return false;
+  }
+  if (typeof request.method !== "string" || request.method.length === 0) {
+    return false;
+  }
+  if (!isJsonRpcRequestId(request.id)) {
+    return false;
+  }
+  if (
+    request.params !== undefined &&
+    (typeof request.params !== "object" || request.params === null || Array.isArray(request.params))
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function extractJsonRpcRequestId(value: unknown): number | string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const id = (value as Record<string, unknown>).id;
+  return isJsonRpcRequestId(id) ? id : null;
+}
+
 // ─── Socket server ───────────────────────────────────────
 
 export class BrokerSocketServer {
@@ -258,24 +299,23 @@ export class BrokerSocketServer {
 
       if (!line) continue;
 
-      let request: JsonRpcRequest;
+      let parsed: unknown;
       try {
-        request = JSON.parse(line) as JsonRpcRequest;
+        parsed = JSON.parse(line) as unknown;
       } catch {
         this.send(socket, rpcError(null, RPC_PARSE_ERROR, "Parse error"));
         continue;
       }
 
-      if (
-        request.jsonrpc !== "2.0" ||
-        typeof request.method !== "string" ||
-        request.id === undefined
-      ) {
-        this.send(socket, rpcError(null, RPC_INVALID_REQUEST, "Invalid request"));
+      if (!isJsonRpcRequestPayload(parsed)) {
+        this.send(
+          socket,
+          rpcError(extractJsonRpcRequestId(parsed), RPC_INVALID_REQUEST, "Invalid request"),
+        );
         continue;
       }
 
-      void this.dispatchRequest(request, state, socket);
+      void this.dispatchRequest(parsed, state, socket);
     }
   }
 
