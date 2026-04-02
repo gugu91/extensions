@@ -18,6 +18,7 @@ import {
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
+  rewriteRalphLoopGhostAnomalies,
   buildRalphLoopNudgeMessage,
   buildRalphLoopAnomalySignature,
   buildRalphLoopFollowUpMessage,
@@ -850,9 +851,11 @@ export default function (pi: ExtensionAPI) {
   let brokerRalphLoopRunning = false;
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
-  let lastBrokerRalphLoopSignature = "";
+  let lastBrokerRalphLoopNonGhostSignature = "";
+  let lastBrokerRalphLoopHadOutstandingAnomalies = false;
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
+  const lastReportedGhostIds = new Set<string>();
   const lastBrokerNudges = new Map<string, number>();
 
   function getPinetRegistrationBlockReason(): string {
@@ -987,14 +990,28 @@ export default function (pi: ExtensionAPI) {
         lastBrokerNudges.set(workload.id, now);
       }
 
-      const signature = buildRalphLoopAnomalySignature(evaluation);
-      const followUpPrompt = buildRalphLoopFollowUpMessage(evaluation);
+      const ghostRewrite = rewriteRalphLoopGhostAnomalies(evaluation, lastReportedGhostIds);
+      lastReportedGhostIds.clear();
+      for (const ghostId of ghostRewrite.nextReportedGhostIds) {
+        lastReportedGhostIds.add(ghostId);
+      }
+
+      const visibleEvaluation = ghostRewrite.evaluation;
+      const visibleSignature = buildRalphLoopAnomalySignature(visibleEvaluation);
+      const nonGhostSignature = ghostRewrite.nonGhostAnomalies.join("|");
+      const hasOutstandingAnomalies = evaluation.anomalies.length > 0;
+      const followUpPrompt =
+        ghostRewrite.newGhostIds.length === 0 &&
+        ghostRewrite.clearedGhostIds.length > 0 &&
+        ghostRewrite.nonGhostAnomalies.length === 0
+          ? null
+          : buildRalphLoopFollowUpMessage(visibleEvaluation);
       // Keep cooldown state across transient clean cycles so flapping anomalies
       // do not immediately re-notify when they return.
       const shouldDeliverFollowUp =
         followUpPrompt != null &&
         shouldDeliverRalphLoopFollowUp({
-          signature,
+          signature: visibleSignature,
           lastDeliveredAt: lastBrokerRalphLoopFollowUpAt,
           now,
           cooldownMs: DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
@@ -1019,12 +1036,22 @@ export default function (pi: ExtensionAPI) {
           }
         }
       }
-      if (signature && signature !== lastBrokerRalphLoopSignature) {
-        ctx.ui.notify(`RALPH loop: ${evaluation.anomalies.join("; ")}`, "warning");
-      } else if (!signature && lastBrokerRalphLoopSignature) {
+
+      const shouldWarn =
+        ghostRewrite.newGhostIds.length > 0 ||
+        (nonGhostSignature.length > 0 &&
+          nonGhostSignature !== lastBrokerRalphLoopNonGhostSignature);
+      const shouldInform =
+        ghostRewrite.clearedGhostIds.length > 0 && visibleEvaluation.anomalies.length > 0;
+      if (shouldWarn) {
+        ctx.ui.notify(`RALPH loop: ${visibleEvaluation.anomalies.join("; ")}`, "warning");
+      } else if (shouldInform) {
+        ctx.ui.notify(`RALPH loop: ${visibleEvaluation.anomalies.join("; ")}`, "info");
+      } else if (!hasOutstandingAnomalies && lastBrokerRalphLoopHadOutstandingAnomalies) {
         ctx.ui.notify("RALPH loop health recovered", "info");
       }
-      lastBrokerRalphLoopSignature = signature;
+      lastBrokerRalphLoopNonGhostSignature = nonGhostSignature;
+      lastBrokerRalphLoopHadOutstandingAnomalies = hasOutstandingAnomalies;
 
       // #103: Record ralph cycle for observability
       try {
@@ -1033,12 +1060,12 @@ export default function (pi: ExtensionAPI) {
           startedAt: cycleStartedAt,
           completedAt: cycleCompletedAt,
           durationMs: Date.now() - cycleStartMs,
-          ghostAgentIds: evaluation.ghostAgentIds,
-          nudgeAgentIds: evaluation.nudgeAgentIds,
-          idleDrainAgentIds: evaluation.idleDrainAgentIds,
-          stuckAgentIds: evaluation.stuckAgentIds,
-          anomalies: evaluation.anomalies,
-          anomalySignature: signature,
+          ghostAgentIds: visibleEvaluation.ghostAgentIds,
+          nudgeAgentIds: visibleEvaluation.nudgeAgentIds,
+          idleDrainAgentIds: visibleEvaluation.idleDrainAgentIds,
+          stuckAgentIds: visibleEvaluation.stuckAgentIds,
+          anomalies: visibleEvaluation.anomalies,
+          anomalySignature: visibleSignature,
           followUpDelivered: shouldDeliverFollowUp,
           agentCount: workloads.filter((w) => !w.disconnectedAt).length,
           backlogCount: pendingBacklogCount,
@@ -1068,7 +1095,9 @@ export default function (pi: ExtensionAPI) {
       brokerRalphLoopTimer = null;
     }
     lastBrokerNudges.clear();
-    lastBrokerRalphLoopSignature = "";
+    lastReportedGhostIds.clear();
+    lastBrokerRalphLoopNonGhostSignature = "";
+    lastBrokerRalphLoopHadOutstandingAnomalies = false;
     lastBrokerRalphLoopFollowUpAt = 0;
     brokerRalphLoopFollowUpPending = false;
   }
@@ -1811,7 +1840,9 @@ export default function (pi: ExtensionAPI) {
     activeSelfId = null;
     lastBrokerMaintenance = null;
     lastBrokerMaintenanceSignature = "";
-    lastBrokerRalphLoopSignature = "";
+    lastBrokerRalphLoopNonGhostSignature = "";
+    lastBrokerRalphLoopHadOutstandingAnomalies = false;
+    lastReportedGhostIds.clear();
     if (brokerClient) {
       try {
         if (brokerClient.pollInterval) {

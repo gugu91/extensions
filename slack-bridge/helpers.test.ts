@@ -15,6 +15,7 @@ import {
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
+  rewriteRalphLoopGhostAnomalies,
   buildRalphLoopNudgeMessage,
   buildRalphLoopAnomalySignature,
   buildRalphLoopFollowUpMessage,
@@ -1029,6 +1030,48 @@ describe("evaluateRalphLoopCycle", () => {
       heartbeatIntervalMs: 5_000,
     });
     expect(result.stuckAgentIds).toEqual([]);
+  });
+});
+
+describe("rewriteRalphLoopGhostAnomalies", () => {
+  const buildEvaluation = (ghostAgentIds: string[], anomalies: string[]) => ({
+    ghostAgentIds,
+    nudgeAgentIds: [],
+    idleDrainAgentIds: [],
+    stuckAgentIds: [],
+    anomalies,
+  });
+
+  it("only surfaces ghost deltas while keeping non-ghost anomalies stable across cycles", () => {
+    const cycle1 = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation(["ghost-1"], ["ghost agents detected: ghost-1"]),
+    );
+    expect(cycle1.evaluation.anomalies).toEqual(["NEW ghost agents detected: ghost-1"]);
+    expect(cycle1.nextReportedGhostIds).toEqual(["ghost-1"]);
+
+    const cycle2 = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation(["ghost-1"], ["ghost agents detected: ghost-1"]),
+      cycle1.nextReportedGhostIds,
+    );
+    expect(cycle2.evaluation.anomalies).toEqual([]);
+    expect(buildRalphLoopAnomalySignature(cycle2.evaluation)).toBe("");
+
+    const cycle3 = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation(
+        ["ghost-1"],
+        ["ghost agents detected: ghost-1", "pending backlog (3) with 1 idle worker"],
+      ),
+      cycle2.nextReportedGhostIds,
+    );
+    expect(cycle3.evaluation.anomalies).toEqual(["pending backlog (3) with 1 idle worker"]);
+    expect(cycle3.nonGhostAnomalies).toEqual(["pending backlog (3) with 1 idle worker"]);
+
+    const cycle4 = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation([], []),
+      cycle3.nextReportedGhostIds,
+    );
+    expect(cycle4.evaluation.anomalies).toEqual(["ghost agents cleared from registry: ghost-1"]);
+    expect(cycle4.clearedGhostIds).toEqual(["ghost-1"]);
   });
 });
 

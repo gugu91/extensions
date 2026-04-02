@@ -551,6 +551,14 @@ export interface RalphLoopEvaluationResult {
   anomalies: string[];
 }
 
+export interface RalphLoopGhostAnomalyRewriteResult {
+  evaluation: RalphLoopEvaluationResult;
+  nonGhostAnomalies: string[];
+  newGhostIds: string[];
+  clearedGhostIds: string[];
+  nextReportedGhostIds: string[];
+}
+
 export function evaluateRalphLoopCycle(
   workloads: RalphLoopAgentWorkload[],
   options: RalphLoopEvaluationOptions = {},
@@ -650,6 +658,39 @@ export function evaluateRalphLoopCycle(
     idleDrainAgentIds,
     stuckAgentIds,
     anomalies,
+  };
+}
+
+export function rewriteRalphLoopGhostAnomalies(
+  evaluation: RalphLoopEvaluationResult,
+  previousGhostIds: Iterable<string> = [],
+): RalphLoopGhostAnomalyRewriteResult {
+  const priorGhostIds = new Set(previousGhostIds);
+  const nextReportedGhostIds = [...evaluation.ghostAgentIds];
+  const newGhostIds = evaluation.ghostAgentIds.filter((id) => !priorGhostIds.has(id));
+  const currentGhostIds = new Set(evaluation.ghostAgentIds);
+  const clearedGhostIds = [...priorGhostIds].filter((id) => !currentGhostIds.has(id));
+  const nonGhostAnomalies = evaluation.anomalies.filter(
+    (anomaly) => !anomaly.startsWith("ghost agents detected:"),
+  );
+  const anomalies = [...nonGhostAnomalies];
+
+  if (newGhostIds.length > 0) {
+    anomalies.push(`NEW ghost agents detected: ${newGhostIds.join(", ")}`);
+  }
+  if (clearedGhostIds.length > 0) {
+    anomalies.push(`ghost agents cleared from registry: ${clearedGhostIds.join(", ")}`);
+  }
+
+  return {
+    evaluation: {
+      ...evaluation,
+      anomalies,
+    },
+    nonGhostAnomalies,
+    newGhostIds,
+    clearedGhostIds,
+    nextReportedGhostIds,
   };
 }
 
