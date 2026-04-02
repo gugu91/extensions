@@ -146,7 +146,6 @@ export type MessageClassification =
 export function classifyMessage(
   evt: Record<string, unknown>,
   botUserId: string | null,
-  trackedThreadIds: Set<string>,
   isOwnedThread?: (threadTs: string) => boolean,
 ): MessageClassification {
   // Skip bot messages and messages with subtypes (joins, edits, etc.)
@@ -158,15 +157,14 @@ export function classifyMessage(
   const channel = evt.channel as string;
   const channelType = evt.channel_type as string | undefined;
 
-  const isTracked = !!threadTs && trackedThreadIds.has(threadTs);
-  const isOwned = !isTracked && !!threadTs && (isOwnedThread?.(threadTs) ?? false);
+  const isOwned = !!threadTs && (isOwnedThread?.(threadTs) ?? false);
   const isDM = channelType === "im";
   const isMention = botUserId != null && text.includes(`<@${botUserId}>`);
 
-  if (!isTracked && !isOwned && !isDM && !isMention) return { relevant: false };
+  if (!isOwned && !isDM && !isMention) return { relevant: false };
 
   const effectiveTs = threadTs ?? (evt.ts as string);
-  const isChannelMention = isMention && !isDM && !isTracked && !isOwned;
+  const isChannelMention = isMention && !isDM && !isOwned;
 
   const cleanText = isChannelMention && botUserId ? stripBotMention(text, botUserId) : text;
 
@@ -288,10 +286,6 @@ export class SlackAdapter implements MessageAdapter {
     return this.botUserId;
   }
 
-  getTrackedThreadIds(): Set<string> {
-    return new Set(this.threads.keys());
-  }
-
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }
@@ -396,7 +390,7 @@ export class SlackAdapter implements MessageAdapter {
     const classified = classifyMessage(
       evt,
       this.botUserId,
-      this.getTrackedThreadIds(),
+
       this.config.isOwnedThread,
     );
     if (!classified.relevant) return;
