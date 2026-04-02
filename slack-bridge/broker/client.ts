@@ -97,6 +97,12 @@ interface RegistrationResult {
   emoji: string;
 }
 
+export interface AgentBroadcastResult {
+  channel: string;
+  messageIds: number[];
+  recipients: Array<{ id: string; name: string }>;
+}
+
 // ─── Connection options ──────────────────────────────────
 
 export type BrokerConnectOpts = { path: string } | { host: string; port: number };
@@ -254,6 +260,23 @@ export class BrokerClient {
       ...(metadata ? { metadata } : {}),
     })) as { ok: boolean; messageId: number };
     return result.messageId;
+  }
+
+  async sendAgentBroadcast(channel: string, body: string): Promise<AgentBroadcastResult> {
+    const result = (await this.request("agent.broadcast", {
+      channel,
+      body,
+    })) as {
+      ok: boolean;
+      channel: string;
+      messageIds: number[];
+      recipients: AgentBroadcastResult["recipients"];
+    };
+    return {
+      channel: result.channel,
+      messageIds: result.messageIds,
+      recipients: result.recipients,
+    };
   }
 
   // ─── Queries ─────────────────────────────────────────

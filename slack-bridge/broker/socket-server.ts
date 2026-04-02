@@ -6,6 +6,7 @@ import * as crypto from "node:crypto";
 import type { BrokerDB } from "./schema.js";
 import { DEFAULT_SOCKET_PATH } from "./paths.js";
 import { MessageRouter } from "./router.js";
+import { dispatchDirectAgentMessage } from "./agent-messaging.js";
 import type { BrokerMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcError } from "./types.js";
 import {
   RPC_PARSE_ERROR,
@@ -367,6 +368,8 @@ export class BrokerSocketServer {
           return this.handleResolveThread(req, state);
         case "agent.message":
           return this.handleAgentMessage(req, state);
+        case "agent.broadcast":
+          return this.handleAgentBroadcast(req, state);
         case "status.update":
           return this.handleStatusUpdate(req, state);
         case "slack.proxy":
@@ -585,48 +588,51 @@ export class BrokerSocketServer {
         ? (params.metadata as Record<string, unknown>)
         : undefined;
 
-    // Resolve target: try by ID first, then by name
-    const allAgents = this.db.getAgents();
-    const target =
-      allAgents.find((a) => a.id === targetAgent) ?? allAgents.find((a) => a.name === targetAgent);
-
-    if (!target) {
-      return rpcError(req.id, RPC_INVALID_PARAMS, `Agent not found: ${targetAgent}`);
-    }
-
-    // Look up sender name for metadata
-    const sender = allAgents.find((a) => a.id === state.agentId);
+    const sender = this.db.getAgents().find((agent) => agent.id === state.agentId);
     const senderName = sender?.name ?? state.agentId;
 
-    // Use a synthetic thread ID for agent-to-agent messages
-    const threadId = `a2a:${state.agentId}:${target.id}`;
+    try {
+      const result = dispatchDirectAgentMessage(
+        this.db,
+        {
+          senderAgentId: state.agentId,
+          senderAgentName: senderName,
+          target: targetAgent,
+          body,
+          metadata,
+        },
+        (target, msg, enrichedMeta) => {
+          this.agentMessageCallback?.(target.id, msg, enrichedMeta);
+        },
+      );
 
-    // Ensure thread exists
-    if (!this.db.getThread(threadId)) {
-      this.db.createThread(threadId, "agent", "", state.agentId);
+      // Activity tracking: sending agent-to-agent messages proves the agent is working
+      this.db.touchAgentActivity(state.agentId);
+      return rpcOk(req.id, { ok: true, messageId: result.messageId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handleAgentBroadcast(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
     }
 
-    const enrichedMeta = { ...metadata, senderAgent: senderName, a2a: true };
+    const params = req.params ?? {};
+    const channel = typeof params.channel === "string" ? params.channel : null;
+    const body = typeof params.body === "string" ? params.body : null;
 
-    const msg = this.db.insertMessage(
-      threadId,
-      "agent",
-      "inbound",
-      state.agentId,
-      body,
-      [target.id],
-      enrichedMeta,
+    if (!channel || !body) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "channel and body are required");
+    }
+
+    return rpcError(
+      req.id,
+      RPC_INVALID_PARAMS,
+      "Broadcast channels are broker-only and cannot be sent by connected clients.",
     );
-
-    // Notify callback so the broker can push to its in-memory inbox
-    // when the target is the broker itself.
-    if (this.agentMessageCallback) {
-      this.agentMessageCallback(target.id, msg, enrichedMeta);
-    }
-
-    // Activity tracking: sending agent-to-agent messages proves the agent is working
-    this.db.touchAgentActivity(state.agentId);
-    return rpcOk(req.id, { ok: true, messageId: msg.id });
   }
 
   // ─── Status update handler ─────────────────────────────

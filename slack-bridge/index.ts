@@ -84,6 +84,11 @@ import {
   type BrokerMaintenanceResult,
 } from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import {
+  dispatchBroadcastAgentMessage,
+  dispatchDirectAgentMessage,
+  isBroadcastChannelTarget,
+} from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
 import {
   createFollowerDeliveryState,
@@ -1335,6 +1340,12 @@ export default function (pi: ExtensionAPI) {
       throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
     }
 
+    if (isBroadcastChannelTarget(targetRef)) {
+      throw new Error(
+        "Broadcast channels are broker-only. Send the request to the broker instead.",
+      );
+    }
+
     const effectiveMetadata = {
       ...(getOutgoingPinetMessageMetadata(body) ?? {}),
       ...(metadata ?? {}),
@@ -1343,42 +1354,30 @@ export default function (pi: ExtensionAPI) {
 
     if (brokerRole === "broker" && activeBroker) {
       const db = activeBroker.db;
-      const allAgents = db.getAgents();
-      const target =
-        allAgents.find((a: { id: string }) => a.id === targetRef) ??
-        allAgents.find((a: { name: string }) => a.name === targetRef);
-
-      if (!target) {
-        throw new Error(`Agent not found: ${targetRef}`);
-      }
-
       const selfId = activeSelfId;
       if (!selfId) {
         throw new Error("Broker agent identity is unavailable.");
       }
-      const threadId = `a2a:${selfId}:${target.id}`;
 
-      if (!db.getThread(threadId)) {
-        db.createThread(threadId, "agent", "", selfId);
-      }
-
-      const msg = db.insertMessage(threadId, "agent", "inbound", selfId, body, [target.id], {
-        senderAgent: agentName,
-        a2a: true,
-        ...(finalMetadata ?? {}),
+      const result = dispatchDirectAgentMessage(db, {
+        senderAgentId: selfId,
+        senderAgentName: agentName,
+        target: targetRef,
+        body,
+        metadata: finalMetadata,
       });
 
       for (const assignment of extractTaskAssignmentsFromMessage(body)) {
         db.recordTaskAssignment(
-          target.id,
+          result.target.id,
           assignment.issueNumber,
           assignment.branch,
-          threadId,
-          msg.id,
+          result.threadId,
+          result.messageId,
         );
       }
 
-      return { messageId: msg.id, target: target.name };
+      return { messageId: result.messageId, target: result.target.name };
     }
 
     if (brokerRole === "follower" && brokerClient) {
@@ -1549,15 +1548,50 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "pinet_message",
     label: "Pinet Message",
-    description: "Send a message to another connected Pinet agent.",
+    description:
+      "Send a message to another connected Pinet agent, or from the broker to a broadcast channel.",
     promptSnippet:
-      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from. To trigger remote agent control, send the exact message `/reload` or `/exit`.",
+      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from. To trigger remote agent control, send the exact message `/reload` or `/exit`. Broadcast channels like `#all` or `#extensions` are broker-only.",
     parameters: Type.Object({
-      to: Type.String({ description: "Target agent name or ID" }),
+      to: Type.String({
+        description:
+          "Target agent name/ID, or a broker-only broadcast channel like #all or #extensions",
+      }),
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_id, params) {
       requireToolPolicy("pinet_message", undefined, `to=${params.to} | message=${params.message}`);
+
+      if (brokerRole === "broker" && activeBroker && isBroadcastChannelTarget(params.to)) {
+        const selfId = activeSelfId;
+        if (!selfId) {
+          throw new Error("Broker agent identity is unavailable.");
+        }
+
+        const result = dispatchBroadcastAgentMessage(activeBroker.db, {
+          senderAgentId: selfId,
+          senderAgentName: agentName,
+          channel: params.to,
+          body: params.message,
+        });
+        const recipients = result.targets.map((target) => target.name);
+        const preview = recipients.slice(0, 5).join(", ");
+        const suffix = recipients.length > 5 ? ", …" : "";
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Broadcast sent to ${result.channel} (${result.targets.length} agents: ${preview}${suffix}).`,
+            },
+          ],
+          details: {
+            channel: result.channel,
+            messageIds: result.messageIds,
+            recipients,
+          },
+        };
+      }
 
       const result = await sendPinetAgentMessage(params.to, params.message);
       return {
