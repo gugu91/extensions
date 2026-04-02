@@ -54,7 +54,7 @@ importers:
         version: link:../types
 
   slack-api:
-    devDependencies:
+    dependencies:
       "@hey-api/openapi-ts":
         specifier: ^0.95.0
         version: 0.95.0(typescript@5.9.3)

@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec node --experimental-strip-types "$SCRIPT_DIR/../cli.ts" "$@"
+exec node "$SCRIPT_DIR/../dist/cli.js" "$@"

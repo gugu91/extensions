@@ -1,18 +1,41 @@
 {
   "name": "@gugu91/pi-neon-psql",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Neon Postgres tunnel + psql tool for pi",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu91/extensions.git",
+    "directory": "neon-psql"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "config.example.json",
+    "neon_socks_tunnel.py",
+    "python/",
+    "dist/"
+  ],
   "keywords": [
     "pi-package"
   ],
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "node ../scripts/build-package.mjs",
+    "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
