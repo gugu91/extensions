@@ -88,19 +88,35 @@ async function main(argv: string[]): Promise<void> {
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
     if (arg === "--token") {
-      token = rest[++index];
+      const value = rest[++index];
+      if (value === undefined) {
+        throw new Error("Missing value after --token");
+      }
+      token = value;
       continue;
     }
     if (arg === "--base-url") {
-      baseUrl = rest[++index] ?? baseUrl;
+      const value = rest[++index];
+      if (value === undefined) {
+        throw new Error("Missing value after --base-url");
+      }
+      baseUrl = value;
       continue;
     }
     if (arg === "--input") {
-      inputArg = rest[++index];
+      const value = rest[++index];
+      if (value === undefined) {
+        throw new Error("Missing value after --input");
+      }
+      inputArg = value;
       continue;
     }
     if (arg === "--input-file") {
-      inputFile = rest[++index];
+      const value = rest[++index];
+      if (value === undefined) {
+        throw new Error("Missing value after --input-file");
+      }
+      inputFile = value;
       continue;
     }
     if (arg === "--param") {

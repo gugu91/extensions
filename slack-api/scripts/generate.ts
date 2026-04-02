@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -199,6 +199,29 @@ async function rewriteGeneratedImportsToTypeScript(directory: string): Promise<v
   );
 }
 
+function assertRoutingSanity(operations: ReadonlyArray<SlackOperation>, source: SpecSource): void {
+  const byMethod = new Map(operations.map((operation) => [operation.slackMethod, operation]));
+  const expectations: ReadonlyArray<{
+    method: string;
+    parameter: string;
+    location: ParameterLocation;
+  }> = [
+    { method: "auth.test", parameter: "token", location: "headers" },
+    { method: "conversations.list", parameter: "limit", location: "query" },
+    { method: "chat.postMessage", parameter: "channel", location: "body" },
+  ];
+
+  for (const expectation of expectations) {
+    const operation = byMethod.get(expectation.method);
+    const actualLocation = operation?.parameterLocations[expectation.parameter];
+    if (actualLocation !== expectation.location) {
+      throw new Error(
+        `Spec routing sanity check failed for ${source.label}: expected ${expectation.method}.${expectation.parameter} to map to ${expectation.location}, received ${actualLocation ?? "missing"}`,
+      );
+    }
+  }
+}
+
 function buildMethodIndexFile(
   operations: ReadonlyArray<SlackOperation>,
   sdkMethodExports: ReadonlyMap<string, string>,
@@ -239,17 +262,22 @@ async function main(): Promise<void> {
   try {
     const downloadedSpec = await downloadSpec(tempDir);
     const specPath = join(tempDir, `slack-web-api${downloadedSpec.extension}`);
+    const nextGeneratedDir = join(tempDir, "generated");
     await writeFile(specPath, downloadedSpec.raw, "utf8");
 
-    await rm(GENERATED_DIR, { recursive: true, force: true });
-    await run("pnpm", ["exec", "openapi-ts", "-i", specPath, "-o", GENERATED_DIR], PACKAGE_ROOT);
-    await rewriteGeneratedImportsToTypeScript(GENERATED_DIR);
+    await run("pnpm", ["exec", "openapi-ts", "-i", specPath, "-o", nextGeneratedDir], PACKAGE_ROOT);
+    await rewriteGeneratedImportsToTypeScript(nextGeneratedDir);
 
-    const sdkSource = await readFile(join(GENERATED_DIR, "sdk.gen.ts"), "utf8");
-    const sdkMethodExports = collectSdkMethodExports(sdkSource);
     const operations = collectSlackOperations(downloadedSpec.spec);
+    assertRoutingSanity(operations, downloadedSpec.source);
+
+    const sdkSource = await readFile(join(nextGeneratedDir, "sdk.gen.ts"), "utf8");
+    const sdkMethodExports = collectSdkMethodExports(sdkSource);
     const methodIndexSource = buildMethodIndexFile(operations, sdkMethodExports);
-    await writeFile(join(GENERATED_DIR, "methods.gen.ts"), methodIndexSource, "utf8");
+    await writeFile(join(nextGeneratedDir, "methods.gen.ts"), methodIndexSource, "utf8");
+
+    await rm(GENERATED_DIR, { recursive: true, force: true });
+    await rename(nextGeneratedDir, GENERATED_DIR);
 
     console.log(
       `Generated ${operations.length} Slack Web API methods from ${downloadedSpec.source.label}: ${downloadedSpec.source.url}`,
