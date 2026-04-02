@@ -38,6 +38,18 @@ export type AgentMessageCallback = (
 
 export type AgentStatusChangeCallback = (agentId: string, status: "working" | "idle") => void;
 
+export type AgentRegistrationResolver = (input: {
+  agentId: string;
+  name: string;
+  emoji: string;
+  pid: number;
+  stableId?: string;
+  metadata?: Record<string, unknown>;
+}) => {
+  name: string;
+  emoji: string;
+  metadata?: Record<string, unknown>;
+} | null;
 export interface BrokerSocketServerOptions {
   heartbeatTimeoutMs?: number;
   pruneIntervalMs?: number;
@@ -123,6 +135,7 @@ export class BrokerSocketServer {
   private assignedPort: number | null = null;
   private agentMessageCallback: AgentMessageCallback | null = null;
   private agentStatusChangeCallback: AgentStatusChangeCallback | null = null;
+  private agentRegistrationResolver: AgentRegistrationResolver | null = null;
 
   constructor(
     db: BrokerDB,
@@ -248,6 +261,9 @@ export class BrokerSocketServer {
     this.agentStatusChangeCallback = cb;
   }
 
+  setAgentRegistrationResolver(resolver: AgentRegistrationResolver | null): void {
+    this.agentRegistrationResolver = resolver;
+  }
   private startPruning(): void {
     this.stopPruning();
     this.pruneTimer = setInterval(() => {
@@ -415,11 +431,35 @@ export class BrokerSocketServer {
         : undefined;
 
     const candidateId = state.agentId ?? crypto.randomUUID();
-    const agent = this.db.registerAgent(candidateId, name, emoji, pid, metadata, stableId);
+    const resolved = this.agentRegistrationResolver?.({
+      agentId: candidateId,
+      name,
+      emoji,
+      pid,
+      stableId,
+      metadata,
+    });
+    const finalName = resolved?.name ?? name;
+    const finalEmoji = resolved?.emoji ?? emoji;
+    const finalMetadata = resolved?.metadata ?? metadata;
+
+    const agent = this.db.registerAgent(
+      candidateId,
+      finalName,
+      finalEmoji,
+      pid,
+      finalMetadata,
+      stableId,
+    );
     this.disconnectDuplicateConnections(agent.id, socket);
     state.agentId = agent.id;
 
-    return rpcOk(req.id, { agentId: agent.id, name: agent.name, emoji: agent.emoji });
+    return rpcOk(req.id, {
+      agentId: agent.id,
+      name: agent.name,
+      emoji: agent.emoji,
+      metadata: agent.metadata,
+    });
   }
 
   private handleUnregister(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {

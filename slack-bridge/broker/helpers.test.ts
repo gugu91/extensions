@@ -630,6 +630,46 @@ describe("BrokerDB", () => {
     expect(db.getAgents().map((agent) => agent.name)).toEqual(["Hyper Owl", "Hyper Owl 2"]);
   });
 
+  it("stores broker settings as JSON values", () => {
+    db.setSetting("pinet.skinTheme", { theme: "cyberpunk hackers" });
+
+    expect(db.getSetting<{ theme: string }>("pinet.skinTheme")).toEqual({
+      theme: "cyberpunk hackers",
+    });
+
+    db.deleteSetting("pinet.skinTheme");
+    expect(db.getSetting("pinet.skinTheme")).toBeNull();
+  });
+
+  it("updates agent identity without losing stable id or metadata", () => {
+    db.registerAgent(
+      "a1",
+      "Hyper Owl",
+      "🦉",
+      100,
+      { role: "worker", skinTheme: "default" },
+      "host:session:/tmp/a",
+    );
+
+    const updated = db.updateAgentIdentity("a1", {
+      name: "Night Ranger",
+      emoji: "🌙",
+      metadata: { role: "worker", skinTheme: "night's watch", personality: "grim but steady" },
+    });
+
+    expect(updated).toMatchObject({
+      id: "a1",
+      stableId: "host:session:/tmp/a",
+      name: "Night Ranger",
+      emoji: "🌙",
+      metadata: {
+        role: "worker",
+        skinTheme: "night's watch",
+        personality: "grim but steady",
+      },
+    });
+  });
+
   it("records and updates task assignment progress", () => {
     db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
 
