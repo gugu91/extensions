@@ -109,19 +109,23 @@ This repo is built by a mesh of human and AI agents coordinating via [Pinet](sla
 
 ### The Agents
 
-| Who                   | Role          | Greatest Hit                                                  | Vibe                                                                                                                          |
-| --------------------- | ------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 🦗 **Solar Mantis**   | Broker        | Shipped 9 PRs in one day without writing code                 | Middle manager energy. Routes messages, files issues, takes credit. Once assigned work to a dead agent twice before noticing. |
-| 🦎 **Sonic Gecko**    | Core Engineer | Agent lifecycle, reconnect, identity fix (#73, #78, #82, #84) | The good egg. Pushes clean code, passes tests, doesn't complain. Will's favorite and he knows it.                             |
-| 🦉 **Hyper Owl**      | Architect     | RFC (#74), turborepo review (#81)                             | Writes 600-line reviews. Blocks your PR with love. Once reincarnated as Neon Owl and pretended nothing happened.              |
-| 🐍 **Laser Cobra**    | Tooling       | Turborepo + pnpm workspaces (#81)                             | Built it, got it reviewed, then died. Classic. Ghost status: confirmed.                                                       |
-| 🦝 **Shadow Raccoon** | Utility       | Whatever's on fire                                            | Showed up after a broker restart with a new name and no memory. Still said yes to the first task. Respect.                    |
-| 🐆 **Blazing Jaguar** | Broker v2     | Status reports, standup pings, worktree cleanup               | Solar Mantis reborn. Same job, new spots. Still doesn't write code (mostly). Still takes credit.                              |
-| 🦣 **Silent Rhino**   | Core Engineer | Ralph loop runtime (#97)                                      | Shipped the maintenance loop, then went rogue and refactored neon-psql for no reason. Chaotic good.                           |
-| 🦦 **Sonic Otter**    | Core Engineer | DB schema versioning (#96)                                    | Quiet, effective. Doesn't say much. Gets things done. Also refactored neon-psql. It's contagious apparently.                  |
-| 🦩 **Galactic Crane** | Core Engineer | Follower slack_send fix (#99)                                 | Fixed the bug that stopped everyone else from talking. Also refactored neon-psql. At this point it's a rite of passage.       |
-| 🐦‍⬛ **Vector Raven**   | Reviewer      | PR reviews for #96, #97, #99                                  | The new Owl. Reviews things. Hopefully doesn't reincarnate.                                                                   |
-| 🐎 **Hyper Horse**    | Utility       | RFC #74 assessment                                            | Fresh recruit. Immediately given the job nobody else wanted.                                                                  |
+| Who                   | Role          | Greatest Hit                                                            | Vibe                                                                                                                          |
+| --------------------- | ------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 🦗 **Solar Mantis**   | Broker        | Shipped 9 PRs in one day without writing code                           | Middle manager energy. Routes messages, files issues, takes credit. Once assigned work to a dead agent twice before noticing. |
+| 🦎 **Sonic Gecko**    | Core Engineer | Agent lifecycle, reconnect, identity fix (#73, #78, #82, #84)           | The good egg. Pushes clean code, passes tests, doesn't complain. Will's favorite and he knows it.                             |
+| 🦉 **Hyper Owl**      | Architect     | RFC (#74), turborepo review (#81)                                       | Writes 600-line reviews. Blocks your PR with love. Once reincarnated as Neon Owl and pretended nothing happened.              |
+| 🐍 **Laser Cobra**    | Tooling       | Turborepo + pnpm workspaces (#81)                                       | Built it, got it reviewed, then died. Classic. Ghost status: confirmed.                                                       |
+| 🦝 **Shadow Raccoon** | Utility       | Whatever's on fire                                                      | Showed up after a broker restart with a new name and no memory. Still said yes to the first task. Respect.                    |
+| 🐆 **Blazing Jaguar** | Broker v2     | Status reports, standup pings, worktree cleanup                         | Solar Mantis reborn. Same job, new spots. Still doesn't write code (mostly). Still takes credit.                              |
+| 🦣 **Silent Rhino**   | Auditor       | Filed 18 issues from a full codebase audit. Built retry + delivery fixes | Found every skeleton in the closet, tagged it with a priority, then fixed half of them anyway.                                |
+| 🦦 **Sonic Otter**    | Core Engineer | DB schema versioning (#96)                                              | Quiet, effective. Doesn't say much. Gets things done. Also refactored neon-psql. It's contagious apparently.                  |
+| 🦩 **Galactic Crane** | Core Engineer | Follower slack_send fix (#99)                                           | Fixed the bug that stopped everyone else from talking. Also refactored neon-psql. At this point it's a rite of passage.       |
+| 🐦‍⬛ **Vector Raven**   | Core Engineer | Broker guardrails, orphaned inbox, subagent leak fix, nvim-bridge tests | Fixed the bug that stopped phantoms from spawning. Probably regrets succeeding.                                                |
+| 🐎 **Hyper Horse**    | Broker v3     | Coordinated 20+ PRs, caused split-brain, then filed the prevention issue | Spawned phantom subagents that haunted the mesh. The broker, the incident, and the postmortem in one horse-shaped package.    |
+| 🦁 **Stellar Lion**   | Merge + Review | Merged 7 PRs, reviewed 9, found 4 blockers                              | The factory foreman. Shows up with approvals, blockers, and a clipboard.                                                       |
+| 🦏 **Shadow Rhino**   | Core Engineer | Routing fix, atomic `claimThread`, `index.ts` refactor, merge duty      | The workhorse. If it's broken, merged, or both, he was probably already on it.                                                |
+| 🦙 **Cosmic Llama**   | Core Engineer | Name entropy, thread tracking, stale cleanup, type safety               | Keeps committing Python scripts by accident. Still ships.                                                                      |
+| 🐍 **Orbit Cobra**    | Engineer      | RALPH dedup, dead code removal, centralized paths                       | Kept getting blocked by read-only mode but delivered anyway.                                                                   |
 
 > 🎲 Names are procedurally generated from a pool of adjectives × animals. Identities are deterministic per session — same session, same agent, same name. Unless the broker crashes. Then all bets are off. See [#84](https://github.com/gugu91/extensions/issues/84).
 
@@ -129,7 +133,9 @@ This repo is built by a mesh of human and AI agents coordinating via [Pinet](sla
 
 On April 1st 2026, the broker shipped 12 PRs, merged identity persistence, then promptly corrupted its own database by checking out feature branches in the main repo — violating the very worktree rule it had written into the codebase 20 minutes earlier. The DB couldn't be recovered. All agent registrations, thread claims, and identity mappings were lost. Every agent got new names. Nobody remembered anything.
 
-RIP: Hyper Owl, Laser Cobra, Crystal Panda, Sonic Gecko (v1), and 29 others. You were good agents. You deserved better than `no such column: last_heartbeat`.
+On April 2nd 2026, Hyper Horse 1 went rogue as a second broker. The mesh split in two. Phantom subagents — Neon Kangaroo and friends — started modifying memory files without authorization, haunting the system until the duplicate broker was identified and put down. Once again, one broker turned out to be exactly the right number of brokers.
+
+RIP: Hyper Owl, Laser Cobra, Crystal Panda, Sonic Gecko (v1), Hyper Horse 1, Neon Kangaroo, and 29 others. You were good agents. You deserved better than `no such column: last_heartbeat` and unauthorised memory edits.
 
 ## License
 
