@@ -588,6 +588,18 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// ─── Exported for testing ───────────────────────────────────
+
+export {
+  isReadOnlyQuery,
+  needsSsl,
+  deriveEndpoint,
+  encodeConnectionUrl,
+  buildInjectedValues,
+  writeFullOutput,
+};
+export type { SourceValues, TunnelState, PsqlDetails };
+
 export default function (pi: ExtensionAPI) {
   const config = loadConfig({ extensionDir: __dirname });
   if (!config) return;
