@@ -13,52 +13,27 @@
   "publishConfig": {
     "access": "public"
   },
-  "main": "./index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./index.ts",
+    ".": "./dist/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "README.md",
     "manifest.yaml",
-    "index.ts",
-    "helpers.ts",
-    "guardrails.ts",
-    "git-metadata.ts",
-    "ttl-cache.ts",
-    "scheduled-wakeups.ts",
-    "task-assignments.ts",
-    "slack-api.ts",
-    "slack-export.ts",
-    "slack-tools.ts",
-    "slack-upload.ts",
-    "canvases.ts",
-    "deploy-manifest.ts",
-    "broker-delivery.ts",
-    "follower-delivery.ts",
-    "worktree-policy.ts",
-    "broker/adapters/slack.ts",
-    "broker/adapters/types.ts",
-    "broker/agent-messaging.ts",
-    "broker/client.ts",
-    "broker/index.ts",
-    "broker/leader.ts",
-    "broker/maintenance.ts",
-    "broker/paths.ts",
-    "broker/router.ts",
-    "broker/schema.ts",
-    "broker/socket-server.ts",
-    "broker/types.ts"
+    "dist/"
   ],
   "keywords": [
     "pi-package"
   ],
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "node ../scripts/build-package.mjs",
+    "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

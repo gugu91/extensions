@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -28,8 +28,9 @@ import { resolvePsqlBin } from "./psql-bin.js";
 import { loadConfig, type ResolvedConfig } from "./settings.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TUNNEL_SCRIPT = join(__dirname, "neon_socks_tunnel.py");
-const PYTHON_SHIM_DIR = join(__dirname, "python");
+const EXTENSION_ROOT = basename(__dirname) === "dist" ? dirname(__dirname) : __dirname;
+const TUNNEL_SCRIPT = join(EXTENSION_ROOT, "neon_socks_tunnel.py");
+const PYTHON_SHIM_DIR = join(EXTENSION_ROOT, "python");
 
 const SANDBOX_RUNTIME_ENTRY = join(
   getAgentDir(),
@@ -378,7 +379,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  const config = loadConfig({ extensionDir: __dirname });
+  const config = loadConfig({ extensionDir: EXTENSION_ROOT });
   if (!config) return;
 
   if (config.injectIntoBash) {

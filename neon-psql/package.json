@@ -13,29 +13,29 @@
   "publishConfig": {
     "access": "public"
   },
-  "main": "./index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./index.ts",
+    ".": "./dist/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "README.md",
-    "index.ts",
-    "helpers.ts",
-    "psql-bin.ts",
-    "query-execution.ts",
-    "query-runner.ts",
-    "settings.ts"
+    "config.example.json",
+    "neon_socks_tunnel.py",
+    "python/",
+    "dist/"
   ],
   "keywords": [
     "pi-package"
   ],
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "node ../scripts/build-package.mjs",
+    "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

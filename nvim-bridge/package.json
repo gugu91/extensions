@@ -13,27 +13,27 @@
   "publishConfig": {
     "access": "public"
   },
-  "main": "./index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./index.ts",
+    ".": "./dist/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "README.md",
-    "index.ts",
-    "comments.ts",
-    "comments-sqlite.ts",
-    "nvim/"
+    "nvim/",
+    "dist/"
   ],
   "keywords": [
     "pi-package"
   ],
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "node ../scripts/build-package.mjs",
+    "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

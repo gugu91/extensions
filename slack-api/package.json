@@ -13,20 +13,18 @@
   "publishConfig": {
     "access": "public"
   },
-  "main": "./generated/index.ts",
+  "main": "./dist/generated/index.js",
   "exports": {
-    ".": "./generated/index.ts",
-    "./cli": "./cli.ts",
-    "./generated": "./generated/index.ts",
-    "./generated/*": "./generated/*",
+    ".": "./dist/generated/index.js",
+    "./cli": "./dist/cli.js",
+    "./generated": "./dist/generated/index.js",
+    "./generated/*": "./dist/generated/*",
     "./package.json": "./package.json"
   },
   "files": [
     "README.md",
     "bin/",
-    "cli.ts",
-    "cli-helpers.ts",
-    "generated/",
+    "dist/",
     "scripts/generate.ts"
   ],
   "keywords": [
@@ -37,12 +35,14 @@
     "slack-api": "./bin/slack-api"
   },
   "scripts": {
+    "build": "node ../scripts/build-package.mjs",
+    "prepack": "pnpm run build",
     "generate": "node --experimental-strip-types scripts/generate.ts",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "devDependencies": {
+  "dependencies": {
     "@hey-api/openapi-ts": "^0.95.0",
     "yaml": "^2.8.1"
   }
