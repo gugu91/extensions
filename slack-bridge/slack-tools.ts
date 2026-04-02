@@ -2,6 +2,14 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@gugu91/pi-ext-types/typebox";
 import type { InboxMessage } from "./helpers.js";
 import type { SlackResult } from "./slack-api.js";
+import {
+  buildSlackCanvasCreateRequest,
+  buildSlackCanvasEditRequest,
+  buildSlackCanvasSectionsLookupRequest,
+  extractSlackChannelCanvasId,
+  normalizeSlackCanvasUpdateMode,
+  pickSlackCanvasSectionId,
+} from "./canvases.js";
 
 export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
@@ -40,6 +48,13 @@ function buildSlackInboxPromptGuidelines(): string[] {
   ];
 }
 
+function getSlackCanvasSummary(markdown?: string): string {
+  if (markdown == null || markdown.length === 0) return "(empty canvas)";
+  const collapsed = markdown.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= 80) return collapsed;
+  return `${collapsed.slice(0, 77)}...`;
+}
+
 export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDeps): void {
   const {
     getBotToken,
@@ -61,6 +76,36 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     clearPendingEyes,
     registerConfirmationRequest,
   } = deps;
+
+  async function resolveCanvasTarget(
+    canvasId: string | undefined,
+    channel: string | undefined,
+  ): Promise<{ canvasId: string; channelId?: string; channelLabel?: string }> {
+    const trimmedCanvasId = canvasId?.trim();
+    if (trimmedCanvasId) {
+      return { canvasId: trimmedCanvasId };
+    }
+
+    const channelInput = channel?.trim();
+    if (!channelInput) {
+      throw new Error("Provide either canvas_id or channel.");
+    }
+
+    const channelId = await resolveChannel(channelInput);
+    const info = await slack("conversations.info", botToken, { channel: channelId });
+    const resolvedCanvasId = extractSlackChannelCanvasId(info);
+    if (!resolvedCanvasId) {
+      throw new Error(
+        `Slack did not expose a channel canvas ID in conversations.info for ${channelInput}. Provide canvas_id directly.`,
+      );
+    }
+
+    return {
+      canvasId: resolvedCanvasId,
+      channelId,
+      channelLabel: channelInput,
+    };
+  }
 
   pi.registerTool({
     name: "slack_inbox",
@@ -381,6 +426,168 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: messages.length, channel: channelId },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_canvas_create",
+    label: "Slack Canvas Create",
+    description:
+      "Create a Slack canvas with markdown content, either standalone or as a channel canvas.",
+    promptSnippet:
+      "Create a Slack canvas for long-lived documentation. Use standalone canvases for shared docs and kind='channel' for a channel's main canvas.",
+    parameters: Type.Object({
+      title: Type.Optional(Type.String({ description: "Canvas title" })),
+      markdown: Type.Optional(
+        Type.String({
+          description: "Initial canvas content in markdown. Omit for an empty canvas.",
+        }),
+      ),
+      channel: Type.Optional(
+        Type.String({ description: "Channel name or ID to attach the canvas to" }),
+      ),
+      kind: Type.Optional(
+        Type.String({ description: "Canvas kind: 'standalone' (default) or 'channel'" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy("slack_canvas_create", undefined);
+
+      const channelInput = params.channel?.trim();
+      const channelId = channelInput ? await resolveChannel(channelInput) : undefined;
+      const request = buildSlackCanvasCreateRequest({
+        kind: params.kind,
+        title: params.title,
+        markdown: params.markdown,
+        channelId,
+      });
+
+      if (channelInput && channelId) {
+        rememberChannel(channelInput.replace(/^#/, ""), channelId);
+      }
+
+      const response = await slack(request.method, botToken, request.body);
+      const canvasId = response.canvas_id as string;
+      const channelLabel = channelInput ?? channelId;
+      const targetSummary =
+        request.kind === "channel"
+          ? `Created channel canvas ${canvasId}${channelLabel ? ` for ${channelLabel}` : ""}.`
+          : `Created standalone canvas ${canvasId}${channelLabel ? ` attached to ${channelLabel}` : ""}.`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${targetSummary} Initial content: ${getSlackCanvasSummary(params.markdown)}`,
+          },
+        ],
+        details: {
+          canvas_id: canvasId,
+          kind: request.kind,
+          channel: channelId,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_canvas_update",
+    label: "Slack Canvas Update",
+    description:
+      "Append, prepend, or replace content in an existing Slack canvas by canvas ID or channel canvas lookup.",
+    promptSnippet:
+      "Update a Slack canvas. Use mode='append' or 'prepend' for additive updates, or mode='replace' to replace the whole canvas or a matched section.",
+    parameters: Type.Object({
+      canvas_id: Type.Optional(Type.String({ description: "Canvas ID to update" })),
+      channel: Type.Optional(
+        Type.String({ description: "Channel name or ID whose channel canvas should be updated" }),
+      ),
+      markdown: Type.String({ description: "Canvas content in markdown" }),
+      mode: Type.Optional(
+        Type.String({ description: "Update mode: 'append' (default), 'prepend', or 'replace'" }),
+      ),
+      section_contains_text: Type.Optional(
+        Type.String({
+          description: "When mode='replace', replace the first section matching this text",
+        }),
+      ),
+      section_type: Type.Optional(
+        Type.String({
+          description: "Optional section type for lookups: 'h1', 'h2', 'h3', or 'any_header'",
+        }),
+      ),
+      section_index: Type.Optional(
+        Type.Number({
+          description:
+            "Optional 1-based section index to choose when the lookup matches multiple sections",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy("slack_canvas_update", undefined);
+
+      const mode = normalizeSlackCanvasUpdateMode(params.mode);
+      if (params.section_contains_text && mode !== "replace") {
+        throw new Error("section_contains_text can only be used with mode='replace'.");
+      }
+      if (params.section_index != null && !params.section_contains_text) {
+        throw new Error("section_index can only be used together with section_contains_text.");
+      }
+
+      const target = await resolveCanvasTarget(params.canvas_id, params.channel);
+      let sectionId: string | undefined;
+
+      if (params.section_contains_text) {
+        const lookup = buildSlackCanvasSectionsLookupRequest({
+          canvasId: target.canvasId,
+          containsText: params.section_contains_text,
+          sectionType: params.section_type,
+        });
+        const response = await slack(
+          "canvases.sections.lookup",
+          botToken,
+          lookup as unknown as Record<string, unknown>,
+        );
+        const sections = response.sections as Array<{ id?: string }> | undefined;
+        try {
+          sectionId = pickSlackCanvasSectionId(sections, params.section_index);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Canvas section lookup for '${params.section_contains_text}' failed: ${message}`,
+          );
+        }
+      }
+
+      const request = buildSlackCanvasEditRequest({
+        canvasId: target.canvasId,
+        markdown: params.markdown,
+        mode,
+        sectionId,
+      });
+      await slack("canvases.edit", botToken, request as unknown as Record<string, unknown>);
+
+      const sectionSummary = params.section_contains_text
+        ? ` Replaced section matching '${params.section_contains_text}'.`
+        : "";
+      const targetSummary = target.channelLabel
+        ? `Updated channel canvas ${target.canvasId} for ${target.channelLabel}.`
+        : `Updated canvas ${target.canvasId}.`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${targetSummary} Mode: ${mode}.${sectionSummary} Content: ${getSlackCanvasSummary(params.markdown)}`,
+          },
+        ],
+        details: {
+          canvas_id: target.canvasId,
+          channel: target.channelId,
+          mode,
+          section_id: sectionId,
+        },
       };
     },
   });

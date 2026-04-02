@@ -21,14 +21,16 @@ If the agent is idle, incoming messages are processed immediately.
 
 ## Tools
 
-| Tool                                              | Description                     |
-| ------------------------------------------------- | ------------------------------- |
-| `slack_send(text, thread_ts?)`                    | Reply in a thread or start new  |
-| `slack_read(thread_ts, limit?)`                   | Read thread messages            |
-| `slack_inbox()`                                   | Check pending messages manually |
-| `slack_create_channel(name, topic?, purpose?)`    | Create a project channel        |
-| `slack_post_channel(channel?, text, thread_ts?)`  | Post to a channel               |
-| `slack_read_channel(channel, thread_ts?, limit?)` | Read channel history or thread  |
+| Tool                                                              | Description                                |
+| ----------------------------------------------------------------- | ------------------------------------------ |
+| `slack_send(text, thread_ts?)`                                    | Reply in a thread or start new             |
+| `slack_read(thread_ts, limit?)`                                   | Read thread messages                       |
+| `slack_inbox()`                                                   | Check pending messages manually            |
+| `slack_create_channel(name, topic?, purpose?)`                    | Create a project channel                   |
+| `slack_post_channel(channel?, text, thread_ts?)`                  | Post to a channel                          |
+| `slack_read_channel(channel, thread_ts?, limit?)`                 | Read channel history or thread             |
+| `slack_canvas_create(title?, markdown?, channel?, kind?)`         | Create standalone or channel canvases      |
+| `slack_canvas_update(canvas_id?, channel?, markdown, mode?, ...)` | Append, prepend, or replace canvas content |
 
 ## Features
 
@@ -39,7 +41,7 @@ If the agent is idle, incoming messages are processed immediately.
 - **Suggested prompts** — shown when a user opens a new conversation
 - **Multi-user** — handles concurrent conversations from different users
 - **@mentions** — tag Pinet in any channel and it responds in-thread
-- **Channel tools** — create, post to, and read from channels
+- **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
 - **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
