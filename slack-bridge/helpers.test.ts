@@ -184,6 +184,24 @@ describe("loadSettings", () => {
     const result = loadSettings(p);
     expect(result.suggestedPrompts).toEqual([{ title: "Hi", message: "Hello!" }]);
   });
+
+  it("returns control plane canvas settings", () => {
+    const p = path.join(tmpDir, "settings.json");
+    const settings = {
+      "slack-bridge": {
+        controlPlaneCanvasEnabled: true,
+        controlPlaneCanvasId: "F123",
+        controlPlaneCanvasChannel: "ops-control",
+        controlPlaneCanvasTitle: "Mesh Status",
+      },
+    };
+    fs.writeFileSync(p, JSON.stringify(settings));
+    const result = loadSettings(p);
+    expect(result.controlPlaneCanvasEnabled).toBe(true);
+    expect(result.controlPlaneCanvasId).toBe("F123");
+    expect(result.controlPlaneCanvasChannel).toBe("ops-control");
+    expect(result.controlPlaneCanvasTitle).toBe("Mesh Status");
+  });
 });
 
 // ─── buildAllowlist ───────────────────────────────────────
