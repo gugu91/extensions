@@ -8,6 +8,13 @@ import {
   isUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
+  parsePinetControlCommand,
+  getPinetControlCommandFromText,
+  buildPinetControlMetadata,
+  extractPinetControlCommand,
+  queuePinetRemoteControl,
+  finishPinetRemoteControl,
+  reloadPinetRuntimeSafely,
   getSqliteJournalMode,
   isSqliteWalEnabled,
   buildSqliteWalFallbackWarning,
@@ -315,6 +322,175 @@ describe("formatPinetInboxMessages", () => {
   });
 });
 
+// ─── Pinet control messages ──────────────────────────────
+
+describe("Pinet control helpers", () => {
+  it("parses supported control commands", () => {
+    expect(parsePinetControlCommand("reload")).toBe("reload");
+    expect(parsePinetControlCommand("exit")).toBe("exit");
+    expect(parsePinetControlCommand("noop")).toBeNull();
+  });
+
+  it("detects control commands from exact message text", () => {
+    expect(getPinetControlCommandFromText("/reload")).toBe("reload");
+    expect(getPinetControlCommandFromText(" /exit ")).toBe("exit");
+    expect(getPinetControlCommandFromText("/exit now please")).toBeNull();
+    expect(getPinetControlCommandFromText("please /reload")).toBeNull();
+  });
+
+  it("builds structured control metadata", () => {
+    expect(buildPinetControlMetadata("reload")).toEqual({
+      kind: "pinet_control",
+      command: "reload",
+    });
+  });
+
+  it("extracts structured control commands from a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "hello",
+        metadata: { a2a: true, kind: "pinet_control", command: "reload" },
+      }),
+    ).toBe("reload");
+  });
+
+  it("falls back to exact slash commands for a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "/exit",
+        metadata: { a2a: true },
+      }),
+    ).toBe("exit");
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "/exit now please",
+        metadata: { a2a: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores slash commands from non-a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "123.456",
+        body: "/reload",
+        metadata: { channel: "D123" },
+      }),
+    ).toBeNull();
+  });
+
+  it("queues a retry reload while reload is already running", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "reload", queuedCommand: null }, "reload"),
+    ).toMatchObject({
+      currentCommand: "reload",
+      queuedCommand: "reload",
+      accepted: true,
+      shouldStartNow: false,
+      status: "queued",
+    });
+  });
+
+  it("prefers a queued exit over a queued reload", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "reload", queuedCommand: "reload" }, "exit"),
+    ).toMatchObject({
+      currentCommand: "reload",
+      queuedCommand: "exit",
+      accepted: true,
+      shouldStartNow: false,
+      status: "queued",
+    });
+  });
+
+  it("treats later commands as covered once exit is already running", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "exit", queuedCommand: null }, "reload"),
+    ).toMatchObject({
+      currentCommand: "exit",
+      queuedCommand: null,
+      accepted: true,
+      shouldStartNow: false,
+      status: "covered",
+    });
+  });
+
+  it("promotes the queued command when the active control finishes", () => {
+    expect(finishPinetRemoteControl({ currentCommand: "reload", queuedCommand: "exit" })).toEqual({
+      currentCommand: "exit",
+      queuedCommand: null,
+      nextCommand: "exit",
+    });
+  });
+});
+
+// ─── Safe reload orchestration ───────────────────────────
+
+describe("reloadPinetRuntimeSafely", () => {
+  it("restores the snapshot when validation fails after refresh mutates live state", async () => {
+    let activeConfig = "previous";
+    const restoreState = vi.fn((snapshot: string) => {
+      activeConfig = snapshot;
+    });
+    const stopRuntime = vi.fn(async () => {
+      throw new Error("should not stop");
+    });
+
+    await expect(
+      reloadPinetRuntimeSafely({
+        getCurrentRole: () => "broker",
+        snapshotState: () => activeConfig,
+        restoreState,
+        refreshState: () => {
+          activeConfig = "refreshed";
+        },
+        validateRefreshedState: () => {
+          throw new Error("bad config");
+        },
+        stopRuntime,
+        startRuntime: async () => {
+          throw new Error("should not start");
+        },
+      }),
+    ).rejects.toThrow("bad config");
+
+    expect(activeConfig).toBe("previous");
+    expect(restoreState).toHaveBeenCalledWith("previous");
+    expect(stopRuntime).not.toHaveBeenCalled();
+  });
+
+  it("restores the previous runtime when the refreshed runtime fails to start", async () => {
+    let activeConfig = "previous";
+    const starts: string[] = [];
+
+    await expect(
+      reloadPinetRuntimeSafely({
+        getCurrentRole: () => "follower",
+        snapshotState: () => activeConfig,
+        restoreState: (snapshot) => {
+          activeConfig = snapshot;
+        },
+        refreshState: () => {
+          activeConfig = "refreshed";
+        },
+        validateRefreshedState: () => {},
+        stopRuntime: async () => {},
+        startRuntime: async (role) => {
+          starts.push(`${role}:${activeConfig}`);
+          if (activeConfig === "refreshed") {
+            throw new Error("refreshed start failed");
+          }
+        },
+      }),
+    ).rejects.toThrow("Reload failed: refreshed start failed. Restored the previous runtime.");
+
+    expect(starts).toEqual(["follower:refreshed", "follower:previous"]);
+    expect(activeConfig).toBe("previous");
+  });
+});
 // ─── SQLite journal mode helpers ─────────────────────────
 
 describe("SQLite journal mode helpers", () => {

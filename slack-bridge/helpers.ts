@@ -123,6 +123,155 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
   return `New Pinet messages:\n${lines.join("\n")}\n\nReply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.`;
 }
 
+// ─── Pinet control messages ─────────────────────────────
+
+export type PinetControlCommand = "reload" | "exit";
+
+export interface PinetRemoteControlState {
+  currentCommand: PinetControlCommand | null;
+  queuedCommand: PinetControlCommand | null;
+}
+
+export interface PinetRemoteControlRequestResult extends PinetRemoteControlState {
+  accepted: boolean;
+  shouldStartNow: boolean;
+  status: "start" | "queued" | "covered";
+}
+
+export function parsePinetControlCommand(value: unknown): PinetControlCommand | null {
+  return value === "reload" || value === "exit" ? value : null;
+}
+
+export function queuePinetRemoteControl(
+  state: PinetRemoteControlState,
+  command: PinetControlCommand,
+): PinetRemoteControlRequestResult {
+  if (!state.currentCommand) {
+    return {
+      currentCommand: command,
+      queuedCommand: state.queuedCommand,
+      accepted: true,
+      shouldStartNow: true,
+      status: "start",
+    };
+  }
+
+  if (state.currentCommand === "exit") {
+    return {
+      currentCommand: state.currentCommand,
+      queuedCommand: state.queuedCommand,
+      accepted: true,
+      shouldStartNow: false,
+      status: "covered",
+    };
+  }
+
+  const queuedCommand =
+    state.queuedCommand === "exit" || command === "exit"
+      ? "exit"
+      : (state.queuedCommand ?? command);
+
+  return {
+    currentCommand: state.currentCommand,
+    queuedCommand,
+    accepted: true,
+    shouldStartNow: false,
+    status: queuedCommand === state.queuedCommand ? "covered" : "queued",
+  };
+}
+
+export function finishPinetRemoteControl(
+  state: PinetRemoteControlState,
+): PinetRemoteControlState & { nextCommand: PinetControlCommand | null } {
+  return {
+    currentCommand: state.queuedCommand,
+    queuedCommand: null,
+    nextCommand: state.queuedCommand,
+  };
+}
+
+export interface PinetRuntimeReloader<State> {
+  getCurrentRole: () => "broker" | "follower" | null;
+  snapshotState: () => State;
+  restoreState: (snapshot: State) => void;
+  refreshState: () => void;
+  validateRefreshedState: () => void | Promise<void>;
+  stopRuntime: () => Promise<void>;
+  startRuntime: (role: "broker" | "follower") => Promise<void>;
+}
+
+export async function reloadPinetRuntimeSafely<State>(
+  reloader: PinetRuntimeReloader<State>,
+): Promise<void> {
+  const role = reloader.getCurrentRole();
+  if (!role) {
+    throw new Error("Pinet is not running.");
+  }
+
+  const snapshot = reloader.snapshotState();
+
+  try {
+    reloader.refreshState();
+    await reloader.validateRefreshedState();
+  } catch (validationErr) {
+    reloader.restoreState(snapshot);
+    throw validationErr;
+  }
+
+  await reloader.stopRuntime();
+
+  try {
+    await reloader.startRuntime(role);
+  } catch (reloadErr) {
+    reloader.restoreState(snapshot);
+
+    try {
+      await reloader.startRuntime(role);
+    } catch (rollbackErr) {
+      const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
+      const rollbackMessage =
+        rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+      throw new Error(
+        `Reload failed: ${reloadMessage}. Rollback to the previous runtime also failed: ${rollbackMessage}`,
+      );
+    }
+
+    const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
+    throw new Error(`Reload failed: ${reloadMessage}. Restored the previous runtime.`);
+  }
+}
+
+export function getPinetControlCommandFromText(
+  text: string | undefined,
+): PinetControlCommand | null {
+  const trimmed = text?.trim();
+  if (trimmed === "/reload") return "reload";
+  if (trimmed === "/exit") return "exit";
+  return null;
+}
+
+export function buildPinetControlMetadata(command: PinetControlCommand): Record<string, unknown> {
+  return { kind: "pinet_control", command };
+}
+
+export function extractPinetControlCommand(message: {
+  threadId?: string;
+  body?: string;
+  metadata?: Record<string, unknown> | null;
+}): PinetControlCommand | null {
+  const metadata = message.metadata ?? {};
+  const isAgentToAgent =
+    metadata.a2a === true ||
+    (typeof message.threadId === "string" && message.threadId.startsWith("a2a:"));
+  if (!isAgentToAgent) return null;
+
+  const metadataCommand =
+    metadata.kind === "pinet_control" ? parsePinetControlCommand(metadata.command) : null;
+  if (metadataCommand) return metadataCommand;
+
+  // Backward-compatible fallback for exact slash commands sent over existing a2a flows.
+  return getPinetControlCommandFromText(message.body);
+}
 // ─── Slack API encoding ──────────────────────────────────
 
 export const FORM_METHODS = new Set([

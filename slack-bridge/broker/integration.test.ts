@@ -324,6 +324,33 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("agent.message preserves control metadata for the target", async () => {
+    await client.register("sender-agent", "📤");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("receiver-agent", "📥");
+
+    await client.sendAgentMessage("receiver-agent", "/reload", {
+      kind: "pinet_control",
+      command: "reload",
+    });
+
+    const inbox = await client2.pollInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].message.body).toBe("/reload");
+    expect(inbox[0].message.metadata).toMatchObject({
+      kind: "pinet_control",
+      command: "reload",
+      a2a: true,
+      senderAgent: "sender-agent",
+    });
+
+    client2.disconnect();
+  });
+
   it("requeued a2a work stays bound to the intended recipient after unregister", async () => {
     const sender = await client.register(
       "sender-agent",
