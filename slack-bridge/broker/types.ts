@@ -12,6 +12,8 @@ export interface AgentInfo {
   status: "working" | "idle";
   disconnectedAt?: string | null;
   resumableUntil?: string | null;
+  idleSince?: string | null;
+  lastActivity?: string | null;
 }
 
 export interface ThreadInfo {

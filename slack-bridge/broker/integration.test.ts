@@ -779,3 +779,176 @@ describe("broker integration — router with real DB", () => {
     expect(thread!.channel).toBe("C1");
   });
 });
+
+// ─── Observability (#103) ────────────────────────────────────
+
+describe("idle_since and last_activity tracking", () => {
+  let dir: string;
+  let db: BrokerDB;
+
+  beforeEach(() => {
+    dir = tmpDir();
+    db = new BrokerDB(path.join(dir, "obs.db"));
+    db.initialize();
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanup(dir);
+  });
+
+  it("sets idle_since on registration", () => {
+    const agent = db.registerAgent("a-1", "Obs Agent", "🐺", 1);
+    expect(agent.status).toBe("idle");
+    expect(agent.idleSince).toBeTruthy();
+  });
+
+  it("clears idle_since and sets last_activity when transitioning to working", () => {
+    db.registerAgent("a-1", "Obs Agent", "🐺", 1);
+
+    db.updateAgentStatus("a-1", "working");
+    const working = db.getAgentById("a-1");
+    expect(working!.idleSince).toBeNull();
+    expect(working!.lastActivity).toBeTruthy();
+  });
+
+  it("sets idle_since when transitioning to idle", () => {
+    db.registerAgent("a-1", "Obs Agent", "🐺", 1);
+    db.updateAgentStatus("a-1", "working");
+
+    db.updateAgentStatus("a-1", "idle");
+    const idle = db.getAgentById("a-1");
+    expect(idle!.idleSince).toBeTruthy();
+    // last_activity should be preserved from when it was working
+    expect(idle!.lastActivity).toBeTruthy();
+  });
+
+  it("does not overwrite idle_since on repeated idle status updates", () => {
+    db.registerAgent("a-1", "Obs Agent", "🐺", 1);
+
+    const first = db.getAgentById("a-1");
+    const firstIdleSince = first!.idleSince;
+
+    // Small delay to ensure timestamps differ
+    db.updateAgentStatus("a-1", "idle");
+    const second = db.getAgentById("a-1");
+    expect(second!.idleSince).toBe(firstIdleSince);
+  });
+
+  it("touchAgentActivity updates last_activity", () => {
+    db.registerAgent("a-1", "Obs Agent", "🐺", 1);
+    db.updateAgentStatus("a-1", "working");
+    const before = db.getAgentById("a-1");
+
+    db.touchAgentActivity("a-1");
+    const after = db.getAgentById("a-1");
+    expect(Date.parse(after!.lastActivity!)).toBeGreaterThanOrEqual(
+      Date.parse(before!.lastActivity!),
+    );
+  });
+});
+
+describe("ralph_cycles recording", () => {
+  let dir: string;
+  let db: BrokerDB;
+
+  beforeEach(() => {
+    dir = tmpDir();
+    db = new BrokerDB(path.join(dir, "cycles.db"));
+    db.initialize();
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanup(dir);
+  });
+
+  it("records and retrieves ralph cycles", () => {
+    const id = db.recordRalphCycle({
+      startedAt: "2026-04-01T00:00:00.000Z",
+      completedAt: "2026-04-01T00:00:01.000Z",
+      durationMs: 1000,
+      ghostAgentIds: ["ghost-1"],
+      nudgeAgentIds: ["idle-1"],
+      idleDrainAgentIds: ["ready-1"],
+      stuckAgentIds: [],
+      anomalies: ["ghost agents detected: ghost-1"],
+      anomalySignature: "ghost agents detected: ghost-1",
+      followUpDelivered: true,
+      agentCount: 3,
+      backlogCount: 2,
+    });
+
+    expect(id).toBeGreaterThan(0);
+
+    const cycles = db.getRecentRalphCycles(10);
+    expect(cycles).toHaveLength(1);
+    expect(cycles[0].ghostAgentIds).toEqual(["ghost-1"]);
+    expect(cycles[0].nudgeAgentIds).toEqual(["idle-1"]);
+    expect(cycles[0].stuckAgentIds).toEqual([]);
+    expect(cycles[0].followUpDelivered).toBe(true);
+    expect(cycles[0].durationMs).toBe(1000);
+    expect(cycles[0].agentCount).toBe(3);
+    expect(cycles[0].backlogCount).toBe(2);
+  });
+
+  it("returns cycles in reverse chronological order", () => {
+    db.recordRalphCycle({
+      startedAt: "2026-04-01T00:00:00.000Z",
+      completedAt: "2026-04-01T00:00:01.000Z",
+      durationMs: 1000,
+      ghostAgentIds: [],
+      nudgeAgentIds: [],
+      idleDrainAgentIds: [],
+      stuckAgentIds: [],
+      anomalies: [],
+      anomalySignature: "",
+      followUpDelivered: false,
+      agentCount: 1,
+      backlogCount: 0,
+    });
+
+    db.recordRalphCycle({
+      startedAt: "2026-04-01T00:01:00.000Z",
+      completedAt: "2026-04-01T00:01:01.000Z",
+      durationMs: 1000,
+      ghostAgentIds: ["ghost-2"],
+      nudgeAgentIds: [],
+      idleDrainAgentIds: [],
+      stuckAgentIds: ["stuck-1"],
+      anomalies: ["anomaly"],
+      anomalySignature: "anomaly",
+      followUpDelivered: true,
+      agentCount: 2,
+      backlogCount: 1,
+    });
+
+    const cycles = db.getRecentRalphCycles(10);
+    expect(cycles).toHaveLength(2);
+    // Most recent first
+    expect(cycles[0].startedAt).toBe("2026-04-01T00:01:00.000Z");
+    expect(cycles[0].stuckAgentIds).toEqual(["stuck-1"]);
+    expect(cycles[1].startedAt).toBe("2026-04-01T00:00:00.000Z");
+  });
+
+  it("respects limit parameter", () => {
+    for (let i = 0; i < 5; i++) {
+      db.recordRalphCycle({
+        startedAt: `2026-04-01T00:0${i}:00.000Z`,
+        completedAt: `2026-04-01T00:0${i}:01.000Z`,
+        durationMs: 1000,
+        ghostAgentIds: [],
+        nudgeAgentIds: [],
+        idleDrainAgentIds: [],
+        stuckAgentIds: [],
+        anomalies: [],
+        anomalySignature: "",
+        followUpDelivered: false,
+        agentCount: 1,
+        backlogCount: 0,
+      });
+    }
+
+    expect(db.getRecentRalphCycles(3)).toHaveLength(3);
+  });
+});

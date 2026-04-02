@@ -17,6 +17,9 @@ import {
   buildRalphLoopFollowUpMessage,
   shouldDeliverRalphLoopFollowUp,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
+  DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+  isRalphNudgeEntry,
+  partitionFollowerInboxEntries,
   buildBrokerPromptGuidelines,
   buildIdentityReplyGuidelines,
   resolvePersistedAgentIdentity,
@@ -37,6 +40,16 @@ import {
   type AgentDisplayInfo,
   type FollowerThreadState,
 } from "./helpers.js";
+
+type NudgeTestEntry = {
+  inboxId: number;
+  message: {
+    threadId: string;
+    sender: string;
+    body: string;
+    metadata: Record<string, unknown> | null;
+  };
+};
 
 // ─── loadSettings ─────────────────────────────────────────
 
@@ -781,6 +794,110 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.anomalies).toContain("broker maintenance timer is not running");
     expect(result.anomalies.some((item) => item.includes("expected `main`"))).toBe(true);
   });
+
+  it("detects stuck agents: working with no activity for > threshold", () => {
+    const now = Date.parse("2026-04-01T00:10:00.000Z");
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🐺",
+          name: "Stuck Wolf",
+          id: "stuck-worker",
+          status: "working",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          lastActivity: "2026-04-01T00:03:00.000Z", // 7 min ago
+          pendingInboxCount: 0,
+          ownedThreadCount: 1,
+        },
+        {
+          emoji: "🦊",
+          name: "Active Fox",
+          id: "active-worker",
+          status: "working",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          lastActivity: "2026-04-01T00:09:30.000Z", // 30s ago
+          pendingInboxCount: 1,
+          ownedThreadCount: 0,
+        },
+      ],
+      {
+        now,
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(result.stuckAgentIds).toEqual(["stuck-worker"]);
+    expect(result.anomalies.some((a) => a.includes("Stuck Wolf appears stuck"))).toBe(true);
+    // Active Fox should NOT be flagged as stuck
+    expect(result.stuckAgentIds).not.toContain("active-worker");
+  });
+
+  it("does not flag idle agents as stuck", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🦉",
+          name: "Idle Owl",
+          id: "idle-1",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          lastActivity: "2026-04-01T00:01:00.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 0,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:10:00.000Z"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(result.stuckAgentIds).toEqual([]);
+  });
+
+  it("does not flag working agent without lastActivity as stuck", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🐼",
+          name: "New Panda",
+          id: "new-1",
+          status: "working",
+          metadata: { role: "worker" },
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          // no lastActivity — agent just started, hasn't reported activity yet
+          pendingInboxCount: 1,
+          ownedThreadCount: 0,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:10:00.000Z"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(result.stuckAgentIds).toEqual([]);
+  });
+
+  it("includes stuckAgentIds in result even when empty", () => {
+    const result = evaluateRalphLoopCycle([], {
+      now: Date.now(),
+      heartbeatTimeoutMs: 15_000,
+      heartbeatIntervalMs: 5_000,
+    });
+    expect(result.stuckAgentIds).toEqual([]);
+  });
 });
 
 describe("buildRalphLoopNudgeMessage", () => {
@@ -796,6 +913,7 @@ describe("buildRalphLoopAnomalySignature", () => {
         ghostAgentIds: ["ghost-1"],
         nudgeAgentIds: ["idle-1"],
         idleDrainAgentIds: ["ready-1"],
+        stuckAgentIds: [],
         anomalies: [
           "ghost agents detected: ghost-1",
           "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
@@ -882,6 +1000,7 @@ describe("buildRalphLoopFollowUpMessage", () => {
         ghostAgentIds: ["ghost-1"],
         nudgeAgentIds: ["idle-1"],
         idleDrainAgentIds: ["ready-1"],
+        stuckAgentIds: [],
         anomalies: [
           "ghost agents detected: ghost-1",
           "Idle Gecko idle with assigned work (2 inbox, 1 threads)",
@@ -906,6 +1025,7 @@ describe("buildRalphLoopFollowUpMessage", () => {
         ghostAgentIds: [],
         nudgeAgentIds: [],
         idleDrainAgentIds: [],
+        stuckAgentIds: [],
         anomalies: [],
       }),
     ).toBeNull();
@@ -1247,5 +1367,172 @@ describe("getFollowerOwnedThreadClaims", () => {
     ]);
 
     expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([]);
+  });
+});
+
+// ─── Follower nudge partition (#102) ──────────────────────
+
+describe("isRalphNudgeEntry", () => {
+  it("returns true for entries with ralph_loop_nudge kind", () => {
+    const entry: NudgeTestEntry = {
+      inboxId: 1,
+      message: {
+        threadId: "a2a:broker:worker",
+        sender: "broker-id",
+        body: "RALPH LOOP nudge: you appear idle",
+        metadata: { kind: "ralph_loop_nudge", targetAgentId: "worker-id" },
+      },
+    };
+    expect(isRalphNudgeEntry(entry)).toBe(true);
+  });
+
+  it("returns false for regular messages", () => {
+    const entry: NudgeTestEntry = {
+      inboxId: 2,
+      message: {
+        threadId: "t-1",
+        sender: "U123",
+        body: "hello",
+        metadata: { channel: "C456" },
+      },
+    };
+    expect(isRalphNudgeEntry(entry)).toBe(false);
+  });
+
+  it("returns false for entries with null metadata", () => {
+    const entry: NudgeTestEntry = {
+      inboxId: 3,
+      message: {
+        threadId: "t-2",
+        sender: "U456",
+        body: "test",
+        metadata: null,
+      },
+    };
+    expect(isRalphNudgeEntry(entry)).toBe(false);
+  });
+});
+
+describe("partitionFollowerInboxEntries", () => {
+  it("separates nudges from regular messages", () => {
+    const entries: NudgeTestEntry[] = [
+      {
+        inboxId: 1,
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker",
+          body: "RALPH LOOP nudge",
+          metadata: { kind: "ralph_loop_nudge" },
+        },
+      },
+      {
+        inboxId: 2,
+        message: {
+          threadId: "t-1",
+          sender: "U123",
+          body: "hello",
+          metadata: { channel: "C456" },
+        },
+      },
+      {
+        inboxId: 3,
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker",
+          body: "second nudge",
+          metadata: { kind: "ralph_loop_nudge" },
+        },
+      },
+    ];
+
+    const result = partitionFollowerInboxEntries(entries);
+    expect(result.nudges).toHaveLength(2);
+    expect(result.regular).toHaveLength(1);
+    expect(result.nudges[0].inboxId).toBe(1);
+    expect(result.nudges[1].inboxId).toBe(3);
+    expect(result.regular[0].inboxId).toBe(2);
+  });
+
+  it("returns empty arrays when no entries", () => {
+    const result = partitionFollowerInboxEntries([]);
+    expect(result.nudges).toEqual([]);
+    expect(result.regular).toEqual([]);
+  });
+
+  it("puts all entries in regular when no nudges", () => {
+    const entries: NudgeTestEntry[] = [
+      {
+        inboxId: 1,
+        message: {
+          threadId: "t-1",
+          sender: "U1",
+          body: "msg",
+          metadata: null,
+        },
+      },
+    ];
+    const result = partitionFollowerInboxEntries(entries);
+    expect(result.nudges).toEqual([]);
+    expect(result.regular).toHaveLength(1);
+  });
+});
+
+// ─── buildAgentDisplayInfo observability fields (#103) ────────
+
+describe("buildAgentDisplayInfo observability fields", () => {
+  const now = Date.parse("2026-04-01T00:10:00.000Z");
+
+  it("includes idleSince and formats idle duration", () => {
+    const info = buildAgentDisplayInfo(
+      {
+        emoji: "🦉",
+        name: "Idle Owl",
+        id: "owl-1",
+        status: "idle",
+        lastHeartbeat: "2026-04-01T00:09:55.000Z",
+        idleSince: "2026-04-01T00:05:00.000Z", // 5 min ago
+      },
+      { now },
+    );
+
+    expect(info.idleSince).toBe("2026-04-01T00:05:00.000Z");
+    expect(info.idleDuration).toBe("5m ago");
+    expect(info.stuck).toBe(false);
+  });
+
+  it("includes lastActivity and formats activity age", () => {
+    const info = buildAgentDisplayInfo(
+      {
+        emoji: "🐺",
+        name: "Working Wolf",
+        id: "wolf-1",
+        status: "working",
+        lastHeartbeat: "2026-04-01T00:09:55.000Z",
+        lastActivity: "2026-04-01T00:08:00.000Z", // 2 min ago
+      },
+      { now },
+    );
+
+    expect(info.lastActivity).toBe("2026-04-01T00:08:00.000Z");
+    expect(info.lastActivityAge).toBe("2m ago");
+    expect(info.stuck).toBe(false);
+  });
+
+  it("handles null idleSince and lastActivity", () => {
+    const info = buildAgentDisplayInfo(
+      {
+        emoji: "🐼",
+        name: "New Panda",
+        id: "panda-1",
+        status: "idle",
+        lastHeartbeat: "2026-04-01T00:09:55.000Z",
+      },
+      { now },
+    );
+
+    expect(info.idleSince).toBeNull();
+    expect(info.lastActivity).toBeNull();
+    expect(info.idleDuration).toBeNull();
+    expect(info.lastActivityAge).toBeNull();
   });
 });

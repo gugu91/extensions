@@ -170,6 +170,11 @@ export interface AgentDisplayInfo {
   leaseSummary?: string | null;
   health?: AgentHealth;
   ghost?: boolean;
+  stuck?: boolean;
+  idleSince?: string | null;
+  lastActivity?: string | null;
+  idleDuration?: string | null;
+  lastActivityAge?: string | null;
   capabilityTags?: string[];
   routingScore?: number;
   routingReasons?: string[];
@@ -184,6 +189,8 @@ export interface AgentVisibilityInput {
   lastHeartbeat?: string;
   disconnectedAt?: string | null;
   resumableUntil?: string | null;
+  idleSince?: string | null;
+  lastActivity?: string | null;
 }
 
 export interface AgentVisibilityOptions {
@@ -352,6 +359,11 @@ export function buildAgentDisplayInfo(
   const capabilities = extractAgentCapabilities(metadata);
   const capabilityTags = buildAgentCapabilityTags(capabilities);
 
+  const idleSinceMs = parseIsoMs(agent.idleSince);
+  const lastActivityMs = parseIsoMs(agent.lastActivity);
+  const idleDurationMs = idleSinceMs == null ? null : Math.max(0, nowMs - idleSinceMs);
+  const lastActivityAgeMs = lastActivityMs == null ? null : Math.max(0, nowMs - lastActivityMs);
+
   return {
     emoji: agent.emoji,
     name: agent.name,
@@ -374,6 +386,11 @@ export function buildAgentDisplayInfo(
     leaseSummary: formatLease(computedLeaseExpiresAt, nowMs),
     health,
     ghost: health === "ghost",
+    stuck: false,
+    idleSince: agent.idleSince ?? null,
+    lastActivity: agent.lastActivity ?? null,
+    idleDuration: formatAge(idleDurationMs),
+    lastActivityAge: formatAge(lastActivityAgeMs),
     capabilityTags,
   };
 }
@@ -485,6 +502,7 @@ export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 30_000;
 export const DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS = 60_000;
 export const DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS = 5 * 60_000;
 export const DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS = 60_000;
+export const DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS = 5 * 60_000;
 
 export interface RalphLoopAgentWorkload extends AgentVisibilityInput {
   lastSeen?: string;
@@ -494,6 +512,7 @@ export interface RalphLoopAgentWorkload extends AgentVisibilityInput {
 
 export interface RalphLoopEvaluationOptions extends AgentVisibilityOptions {
   idleWithWorkThresholdMs?: number;
+  stuckWorkingThresholdMs?: number;
   pendingBacklogCount?: number;
   currentBranch?: string | null;
   expectedMainBranch?: string;
@@ -505,6 +524,7 @@ export interface RalphLoopEvaluationResult {
   ghostAgentIds: string[];
   nudgeAgentIds: string[];
   idleDrainAgentIds: string[];
+  stuckAgentIds: string[];
   anomalies: string[];
 }
 
@@ -515,12 +535,15 @@ export function evaluateRalphLoopCycle(
   const nowMs = options.now ?? Date.now();
   const idleWithWorkThresholdMs =
     options.idleWithWorkThresholdMs ?? DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS;
+  const stuckWorkingThresholdMs =
+    options.stuckWorkingThresholdMs ?? DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS;
   const pendingBacklogCount = options.pendingBacklogCount ?? 0;
   const expectedMainBranch = options.expectedMainBranch ?? "main";
   const anomalies: string[] = [];
   const ghostAgentIds: string[] = [];
   const nudgeAgentIds: string[] = [];
   const idleDrainAgentIds: string[] = [];
+  const stuckAgentIds: string[] = [];
 
   for (const workload of workloads) {
     const metadata = asRecord(workload.metadata);
@@ -554,6 +577,20 @@ export function evaluateRalphLoopCycle(
       continue;
     }
 
+    // Stuck detection: agent reports "working" but no activity for > threshold
+    if (workload.status === "working" && display.health === "healthy") {
+      const lastActivityMs = parseIsoMs(workload.lastActivity);
+      const activityAgeMs = lastActivityMs == null ? null : Math.max(0, nowMs - lastActivityMs);
+      if (activityAgeMs != null && activityAgeMs >= stuckWorkingThresholdMs) {
+        stuckAgentIds.push(workload.id);
+        const ageMinutes = Math.round(activityAgeMs / 60_000);
+        anomalies.push(
+          `${workload.name} appears stuck (working with no activity for ${ageMinutes}m)`,
+        );
+        continue;
+      }
+    }
+
     if (!hasAssignedWork && workload.status === "idle" && display.health === "healthy") {
       idleDrainAgentIds.push(workload.id);
     }
@@ -579,10 +616,16 @@ export function evaluateRalphLoopCycle(
     anomalies.push("broker maintenance timer is not running");
   }
 
+  if (stuckAgentIds.length > 0 && ghostAgentIds.length === 0) {
+    // Only report stuck if not already mixed with ghost anomalies
+    // (ghosts are more urgent)
+  }
+
   return {
     ghostAgentIds,
     nudgeAgentIds,
     idleDrainAgentIds,
+    stuckAgentIds,
     anomalies,
   };
 }
@@ -939,7 +982,8 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
   return agents
     .map((a) => {
       const health = a.health ? ` [${a.health}]` : "";
-      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}`;
+      const stuckTag = a.stuck ? " [stuck]" : "";
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}${stuckTag}`;
 
       const meta = a.metadata;
       if (meta && (meta.cwd || meta.branch || meta.host)) {
@@ -951,10 +995,16 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
 
       const heartbeat = a.heartbeatSummary ?? formatAge(a.heartbeatAgeMs);
       const lease = a.leaseSummary ?? null;
-      if (heartbeat || lease) {
-        const summary = [heartbeat ? `heartbeat ${heartbeat}` : null, lease].filter(
-          (item): item is string => Boolean(item),
-        );
+      const idleInfo = a.status === "idle" && a.idleDuration ? `idle ${a.idleDuration}` : null;
+      const activityInfo =
+        a.status === "working" && a.lastActivityAge ? `activity ${a.lastActivityAge}` : null;
+      if (heartbeat || lease || idleInfo || activityInfo) {
+        const summary = [
+          heartbeat ? `heartbeat ${heartbeat}` : null,
+          lease,
+          idleInfo,
+          activityInfo,
+        ].filter((item): item is string => Boolean(item));
         line += `\n   ${summary.join(" · ")}`;
       }
 
@@ -1175,4 +1225,45 @@ export function resolveAgentIdentity(
 
   // 3. Fully generated
   return generateAgentName(seed);
+}
+
+// ─── Follower nudge detection (#102) ─────────────────────
+
+export function isRalphNudgeEntry(entry: {
+  message: { metadata?: Record<string, unknown> | null };
+}): boolean {
+  return entry.message.metadata?.kind === "ralph_loop_nudge";
+}
+
+export function partitionFollowerInboxEntries<
+  T extends { message: { metadata?: Record<string, unknown> | null } },
+>(entries: T[]): { nudges: T[]; regular: T[] } {
+  const nudges: T[] = [];
+  const regular: T[] = [];
+  for (const entry of entries) {
+    if (isRalphNudgeEntry(entry)) {
+      nudges.push(entry);
+    } else {
+      regular.push(entry);
+    }
+  }
+  return { nudges, regular };
+}
+
+// ─── Ralph cycle records (#103) ──────────────────────────
+
+export interface RalphCycleRecord {
+  id?: number;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  ghostAgentIds: string[];
+  nudgeAgentIds: string[];
+  idleDrainAgentIds: string[];
+  stuckAgentIds: string[];
+  anomalies: string[];
+  anomalySignature: string;
+  followUpDelivered: boolean;
+  agentCount: number;
+  backlogCount: number;
 }
