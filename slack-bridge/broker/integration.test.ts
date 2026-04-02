@@ -333,14 +333,14 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     await client2.connect();
     await client2.register("receiver-agent", "📥");
 
-    await client.sendAgentMessage("receiver-agent", "/reload stale config", {
+    await client.sendAgentMessage("receiver-agent", "/reload", {
       kind: "pinet_control",
       command: "reload",
     });
 
     const inbox = await client2.pollInbox();
     expect(inbox).toHaveLength(1);
-    expect(inbox[0].message.body).toBe("/reload stale config");
+    expect(inbox[0].message.body).toBe("/reload");
     expect(inbox[0].message.metadata).toMatchObject({
       kind: "pinet_control",
       command: "reload",
