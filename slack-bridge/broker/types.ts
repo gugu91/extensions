@@ -56,6 +56,7 @@ export interface BacklogEntry {
   messageId: number;
   reason: string;
   status: "pending" | "assigned" | "dropped";
+  preferredAgentId: string | null;
   assignedAgentId: string | null;
   attemptCount: number;
   lastAttemptAt: string | null;

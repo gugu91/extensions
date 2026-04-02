@@ -86,12 +86,15 @@ function makeAgent(overrides: Partial<AgentInfo> & { id: string; name: string })
   };
 }
 
-function makeBacklog(overrides: Partial<BacklogEntry> & { id: number; threadId: string }): BacklogEntry {
+function makeBacklog(
+  overrides: Partial<BacklogEntry> & { id: number; threadId: string },
+): BacklogEntry {
   return {
     channel: "C123",
     messageId: overrides.id,
     reason: "no_route",
     status: "pending",
+    preferredAgentId: null,
     assignedAgentId: null,
     attemptCount: 0,
     lastAttemptAt: null,
@@ -117,7 +120,10 @@ describe("selectBacklogAssignee", () => {
 
   it("only falls back to working workers after the backlog ages out", () => {
     const backlog = makeBacklog({ id: 1, threadId: "t-1", createdAt: "2026-04-01T00:00:00.000Z" });
-    const worker = { agent: makeAgent({ id: "working-1", name: "Worker", status: "working" }), pendingInboxCount: 1 };
+    const worker = {
+      agent: makeAgent({ id: "working-1", name: "Worker", status: "working" }),
+      pendingInboxCount: 1,
+    };
 
     expect(
       selectBacklogAssignee(
@@ -147,7 +153,10 @@ describe("runBrokerMaintenancePass", () => {
   });
 
   it("assigns unrouted backlog to an idle worker and records a nudge", () => {
-    db.agents = [makeAgent({ id: "broker-1", name: "Broker", metadata: { role: "broker" } }), makeAgent({ id: "worker-1", name: "Worker" })];
+    db.agents = [
+      makeAgent({ id: "broker-1", name: "Broker", metadata: { role: "broker" } }),
+      makeAgent({ id: "worker-1", name: "Worker" }),
+    ];
     db.backlog = [makeBacklog({ id: 1, threadId: "t-1" })];
 
     const result = runBrokerMaintenancePass(db, {
@@ -163,7 +172,10 @@ describe("runBrokerMaintenancePass", () => {
   });
 
   it("prefers the live thread owner before other idle workers", () => {
-    db.agents = [makeAgent({ id: "worker-1", name: "Owner" }), makeAgent({ id: "worker-2", name: "Other" })];
+    db.agents = [
+      makeAgent({ id: "worker-1", name: "Owner" }),
+      makeAgent({ id: "worker-2", name: "Other" }),
+    ];
     db.backlog = [makeBacklog({ id: 1, threadId: "t-owned" })];
     db.threads.set("t-owned", {
       threadId: "t-owned",
@@ -181,6 +193,57 @@ describe("runBrokerMaintenancePass", () => {
 
     expect(result.assignedBacklogCount).toBe(1);
     expect(db.backlog[0].assignedAgentId).toBe("worker-2");
+  });
+
+  it("holds targeted backlog until the intended agent is live", () => {
+    db.agents = [makeAgent({ id: "sender", name: "Sender" })];
+    db.backlog = [
+      makeBacklog({ id: 1, threadId: "a2a:sender:receiver", preferredAgentId: "receiver" }),
+    ];
+    db.threads.set("a2a:sender:receiver", {
+      threadId: "a2a:sender:receiver",
+      source: "agent",
+      channel: "",
+      ownerAgent: "sender",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    });
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(db.backlog[0].assignedAgentId).toBeNull();
+  });
+
+  it("delivers targeted backlog to the intended live agent before other heuristics", () => {
+    db.agents = [
+      makeAgent({ id: "sender", name: "Sender" }),
+      makeAgent({ id: "receiver", name: "Receiver", status: "working" }),
+      makeAgent({ id: "other", name: "Other" }),
+    ];
+    db.backlog = [
+      makeBacklog({ id: 1, threadId: "a2a:sender:receiver", preferredAgentId: "receiver" }),
+    ];
+    db.threads.set("a2a:sender:receiver", {
+      threadId: "a2a:sender:receiver",
+      source: "agent",
+      channel: "",
+      ownerAgent: "sender",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    });
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(1);
+    expect(db.backlog[0].assignedAgentId).toBe("receiver");
   });
 
   it("leaves backlog pending and reports an anomaly when no workers are available", () => {

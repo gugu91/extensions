@@ -150,6 +150,9 @@ describe("BrokerDB", () => {
     const inspectDb = new DatabaseSync(dbPath);
     const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
     const columns = inspectDb.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+    const backlogColumns = inspectDb.prepare("PRAGMA table_info(unrouted_backlog)").all() as Array<{
+      name: string;
+    }>;
     inspectDb.close();
 
     expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
@@ -162,6 +165,63 @@ describe("BrokerDB", () => {
         "disconnected_at",
         "resumable_until",
       ]),
+    );
+    expect(backlogColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["preferred_agent_id"]),
+    );
+  });
+
+  it("adds backlog recipient-affinity columns when migrating from schema v3", () => {
+    const dbPath = path.join(dir, "legacy-backlog.db");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        last_heartbeat TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT,
+        resumable_until TEXT
+      );
+
+      CREATE TABLE unrouted_backlog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        message_id INTEGER NOT NULL UNIQUE,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
+        assigned_agent_id TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      PRAGMA user_version = 3;
+    `);
+    legacyDb.close();
+
+    const migratedDb = new BrokerDB(dbPath);
+    expect(() => migratedDb.initialize()).not.toThrow();
+    migratedDb.close();
+
+    const inspectDb = new DatabaseSync(dbPath);
+    const versionRow = inspectDb.prepare("PRAGMA user_version").get() as { user_version: number };
+    const backlogColumns = inspectDb.prepare("PRAGMA table_info(unrouted_backlog)").all() as Array<{
+      name: string;
+    }>;
+    inspectDb.close();
+
+    expect(versionRow.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    expect(backlogColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["preferred_agent_id"]),
     );
   });
 
@@ -439,6 +499,7 @@ describe("BrokerDB", () => {
     expect(db.getInbox("worker-1")).toHaveLength(0);
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue");
+    expect(db.getPendingBacklog()[0].preferredAgentId).toBeNull();
   });
 
   it("requeueUndeliveredMessages also requeues pending agent-to-agent work", () => {
@@ -464,6 +525,7 @@ describe("BrokerDB", () => {
     expect(db.getPendingBacklog()).toHaveLength(1);
     expect(db.getPendingBacklog()[0].threadId).toBe("t-requeue-a2a");
     expect(db.getPendingBacklog()[0].channel).toBe("");
+    expect(db.getPendingBacklog()[0].preferredAgentId).toBe("worker-1");
   });
 
   it("maintenance requeues messages orphaned in a disconnected agent inbox", () => {

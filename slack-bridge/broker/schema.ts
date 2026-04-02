@@ -53,6 +53,7 @@ interface BacklogRow {
   message_id: number;
   reason: string;
   status: string;
+  preferred_agent_id: string | null;
   assigned_agent_id: string | null;
   attempt_count: number;
   last_attempt_at: string | null;
@@ -116,6 +117,7 @@ function rowToBacklog(row: BacklogRow): BacklogEntry {
     reason: row.reason,
     status:
       row.status === "assigned" ? "assigned" : row.status === "dropped" ? "dropped" : "pending",
+    preferredAgentId: row.preferred_agent_id,
     assignedAgentId: row.assigned_agent_id,
     attemptCount: row.attempt_count,
     lastAttemptAt: row.last_attempt_at,
@@ -132,7 +134,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 4;
+export const CURRENT_BROKER_SCHEMA_VERSION = 5;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -220,6 +222,7 @@ function createBacklogTable(db: DatabaseSync): void {
       message_id INTEGER NOT NULL UNIQUE,
       reason TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('pending', 'assigned', 'dropped')),
+      preferred_agent_id TEXT,
       assigned_agent_id TEXT,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       last_attempt_at TEXT,
@@ -231,6 +234,8 @@ function createBacklogTable(db: DatabaseSync): void {
       ON unrouted_backlog(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_backlog_thread_status
       ON unrouted_backlog(thread_id, status);
+    CREATE INDEX IF NOT EXISTS idx_backlog_preferred_agent_status
+      ON unrouted_backlog(preferred_agent_id, status);
   `);
 }
 
@@ -303,6 +308,20 @@ function addObservabilityColumns(db: DatabaseSync): void {
   `);
 }
 
+function addBacklogAffinityColumns(db: DatabaseSync): void {
+  ensureColumn(
+    db,
+    "unrouted_backlog",
+    "preferred_agent_id",
+    "ALTER TABLE unrouted_backlog ADD COLUMN preferred_agent_id TEXT",
+  );
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_backlog_preferred_agent_status
+      ON unrouted_backlog(preferred_agent_id, status);
+  `);
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -328,6 +347,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 4:
           addObservabilityColumns(db);
+          break;
+        case 5:
+          addBacklogAffinityColumns(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -875,6 +897,7 @@ export class BrokerDB implements BrokerDBInterface {
       reason,
       "pending",
       null,
+      null,
     );
   }
 
@@ -1213,8 +1236,10 @@ export class BrokerDB implements BrokerDBInterface {
       .prepare(
         `SELECT
            i.id AS inbox_id,
+           i.agent_id AS target_agent_id,
            m.id AS message_id,
            m.thread_id AS thread_id,
+           m.source AS source,
            m.metadata AS metadata
          FROM inbox i
          JOIN messages m ON m.id = i.message_id
@@ -1224,8 +1249,10 @@ export class BrokerDB implements BrokerDBInterface {
       )
       .all(agentId) as Array<{
       inbox_id: number;
+      target_agent_id: string;
       message_id: number;
       thread_id: string;
+      source: string;
       metadata: string | null;
     }>;
 
@@ -1237,7 +1264,16 @@ export class BrokerDB implements BrokerDBInterface {
     for (const row of rows) {
       const metadata = row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {};
       const channel = typeof metadata.channel === "string" ? metadata.channel : "";
-      this.upsertBacklogEntry(row.message_id, row.thread_id, channel, reason, "pending", null);
+      const preferredAgentId = row.source === "agent" ? row.target_agent_id : null;
+      this.upsertBacklogEntry(
+        row.message_id,
+        row.thread_id,
+        channel,
+        reason,
+        "pending",
+        preferredAgentId,
+        null,
+      );
       markDelivered.run(row.inbox_id);
     }
 
@@ -1258,6 +1294,7 @@ export class BrokerDB implements BrokerDBInterface {
     channel: string,
     reason: string,
     status: BacklogEntry["status"],
+    preferredAgentId: string | null,
     assignedAgentId: string | null,
   ): BacklogEntry {
     const db = this.getDb();
@@ -1269,21 +1306,33 @@ export class BrokerDB implements BrokerDBInterface {
          message_id,
          reason,
          status,
+         preferred_agent_id,
          assigned_agent_id,
          attempt_count,
          last_attempt_at,
          created_at,
          updated_at
        )
-       VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
        ON CONFLICT(message_id) DO UPDATE SET
          thread_id = excluded.thread_id,
          channel = excluded.channel,
          reason = excluded.reason,
          status = excluded.status,
+         preferred_agent_id = excluded.preferred_agent_id,
          assigned_agent_id = excluded.assigned_agent_id,
          updated_at = excluded.updated_at`,
-    ).run(threadId, channel, messageId, reason, status, assignedAgentId, now, now);
+    ).run(
+      threadId,
+      channel,
+      messageId,
+      reason,
+      status,
+      preferredAgentId,
+      assignedAgentId,
+      now,
+      now,
+    );
 
     const row = db.prepare("SELECT * FROM unrouted_backlog WHERE message_id = ?").get(messageId) as
       | BacklogRow
