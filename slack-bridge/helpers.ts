@@ -63,6 +63,7 @@ export interface InboxMessage {
   text: string;
   timestamp: string;
   isChannelMention?: boolean;
+  brokerInboxId?: number;
 }
 
 export interface SqliteJournalModeResult {
@@ -976,6 +977,7 @@ export interface FollowerThreadState {
 }
 
 export interface FollowerInboxEntry {
+  inboxId?: number;
   message: {
     threadId?: string;
     sender?: string;
@@ -1044,6 +1046,7 @@ export function syncFollowerInboxEntries(
       userId: sender,
       text: entry.message.body ?? "",
       timestamp: entry.message.createdAt ?? "",
+      brokerInboxId: entry.inboxId,
     };
   });
 

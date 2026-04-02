@@ -1443,6 +1443,7 @@ describe("syncFollowerInboxEntries", () => {
     const result = syncFollowerInboxEntries(
       [
         {
+          inboxId: 17,
           message: {
             threadId: "100.1",
             sender: "U_SENDER",
@@ -1458,6 +1459,7 @@ describe("syncFollowerInboxEntries", () => {
     );
     expect(result.inboxMessages).toHaveLength(1);
     expect(result.inboxMessages[0].channel).toBe("C_CHAN");
+    expect(result.inboxMessages[0].brokerInboxId).toBe(17);
     expect(result.threadUpdates).toHaveLength(1);
     expect(result.threadUpdates[0].channelId).toBe("C_CHAN");
     expect(result.changed).toBe(true);
