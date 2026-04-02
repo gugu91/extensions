@@ -27,6 +27,8 @@ describe("registerSlackTools", () => {
     let botToken = "xoxb-initial";
     let defaultChannel = "general";
     let securityPrompt = "INITIAL SECURITY PROMPT";
+    let resolveUser = async (userId: string) => userId;
+    let conversationsRepliesResponses: SlackResult[] = [];
 
     const slack = vi.fn<
       (method: string, token: string, body?: Record<string, unknown>) => Promise<SlackResult>
@@ -97,6 +99,10 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
+      if (method === "conversations.replies" && conversationsRepliesResponses.length > 0) {
+        return conversationsRepliesResponses.shift() as SlackResult;
+      }
+
       return {
         ok: true,
         token,
@@ -119,7 +125,7 @@ describe("registerSlackTools", () => {
       getAgentEmoji: () => "🐨",
       getLastDmChannel: () => null,
       updateBadge: () => {},
-      resolveUser: async (userId) => userId,
+      resolveUser: async (userId) => resolveUser(userId),
       resolveFollowerReplyChannel: (threadTs) => resolveFollowerReplyChannel(threadTs),
       resolveChannel: async (nameOrId) => `resolved:${nameOrId}`,
       rememberChannel: () => {},
@@ -142,6 +148,12 @@ describe("registerSlackTools", () => {
       },
       setSecurityPrompt: (value: string) => {
         securityPrompt = value;
+      },
+      setResolveUser: (fn: (userId: string) => Promise<string>) => {
+        resolveUser = fn;
+      },
+      setConversationsReplies: (responses: SlackResult[]) => {
+        conversationsRepliesResponses = [...responses];
       },
       setResolveFollowerReplyChannel: (
         fn: (threadTs: string | undefined) => Promise<string | null>,
@@ -356,5 +368,104 @@ describe("registerSlackTools", () => {
       bookmark_id: "Bk404",
     });
     expect(response.details?.status).toBe("not_found");
+  });
+
+  it("exports paginated thread content as markdown", async () => {
+    const {
+      slack,
+      tools,
+      setConversationsReplies,
+      setResolveFollowerReplyChannel,
+      setResolveUser,
+    } = setup();
+    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+    setResolveUser(async (userId: string) => ({ U123: "alice", U456: "bob" })[userId] ?? userId);
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [
+          {
+            ts: "123.456",
+            user: "U123",
+            text: "Hello <@U456>",
+          },
+        ],
+        response_metadata: { next_cursor: "cursor-1" },
+      } as SlackResult,
+      {
+        ok: true,
+        messages: [
+          {
+            ts: "123.789",
+            user: "U456",
+            text: "See <https://example.com|the doc>",
+            files: [
+              {
+                title: "incident.md",
+                filetype: "markdown",
+                permalink: "https://files.example/incident.md",
+              },
+            ],
+          },
+        ],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    const response = await tools.get("slack_export")!.execute("tool-11", {
+      thread_ts: "123.456",
+      format: "markdown",
+    });
+
+    expect(slack).toHaveBeenNthCalledWith(1, "conversations.replies", "xoxb-initial", {
+      channel: "C-DB",
+      ts: "123.456",
+      limit: 1000,
+    });
+    expect(slack).toHaveBeenNthCalledWith(2, "conversations.replies", "xoxb-initial", {
+      channel: "C-DB",
+      ts: "123.456",
+      limit: 1000,
+      cursor: "cursor-1",
+    });
+    expect(response.content?.[0]?.text).toContain("# Slack Thread Export");
+    expect(response.content?.[0]?.text).toContain("Hello @bob");
+    expect(response.content?.[0]?.text).toContain("[the doc](https://example.com)");
+    expect(response.content?.[0]?.text).toContain(
+      "incident.md (markdown) — https://files.example/incident.md",
+    );
+    expect(response.details?.count).toBe(2);
+  });
+
+  it("filters exported threads by oldest/latest boundaries", async () => {
+    const { tools, setConversationsReplies, setDefaultChannel } = setup();
+    setDefaultChannel("docs");
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [
+          { ts: "100.000001", user: "U100", text: "too early" },
+          { ts: "200.000002", user: "U200", text: "keep me" },
+          { ts: "300.000003", user: "U300", text: "too late" },
+        ],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    const response = await tools.get("slack_export")!.execute("tool-12", {
+      thread_ts: "100.000001",
+      format: "plain",
+      oldest: "150",
+      latest: "250",
+      channel: "docs",
+    });
+
+    expect(response.content?.[0]?.text).toContain("keep me");
+    expect(response.content?.[0]?.text).not.toContain("too early");
+    expect(response.content?.[0]?.text).not.toContain("too late");
+    expect(response.details?.count).toBe(1);
   });
 });

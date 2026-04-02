@@ -14,6 +14,7 @@ export const READ_ONLY_TOOLS = new Set([
   "slack_send",
   "slack_read",
   "slack_read_channel",
+  "slack_export",
   "pinet_agents",
   "pinet_message",
   "memory_read",
