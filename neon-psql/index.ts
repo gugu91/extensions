@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -18,6 +18,13 @@ import {
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@gugu91/pi-ext-types/typebox";
 
+import {
+  buildInjectedValues as computeInjectedValues,
+  deriveEndpoint,
+  isReadOnlyQuery,
+  needsSsl,
+  type SourceValues,
+} from "./helpers.js";
 import { resolvePsqlBin } from "./psql-bin.js";
 import { loadConfig, type ResolvedConfig } from "./settings.js";
 
@@ -35,14 +42,6 @@ const SANDBOX_RUNTIME_ENTRY = join(
   "dist",
   "index.js",
 );
-
-interface SourceValues {
-  host: string;
-  port: string;
-  user: string;
-  password: string;
-  database: string;
-}
 
 interface TunnelState {
   child: ChildProcess;
@@ -90,20 +89,6 @@ let injectedEnvBackup = new Map<string, string | undefined>();
 let warnedBashTunnelUnavailable = false;
 let sandboxManagerPromise: Promise<SandboxManagerLike | null> | null = null;
 
-function needsSsl(host: string): boolean {
-  return !["localhost", "127.0.0.1", "::1"].includes(host);
-}
-
-function deriveEndpoint(host: string): string {
-  if (!needsSsl(host) || !host.includes(".")) return "";
-  return host.split(".")[0] ?? "";
-}
-
-function mergePathValue(prependValue: string, existingValue: string | undefined): string {
-  if (!existingValue) return prependValue;
-  return `${prependValue}${delimiter}${existingValue}`;
-}
-
 function readRuntimeEnv(envName: string): string | undefined {
   if (injectedEnvBackup.has(envName)) return injectedEnvBackup.get(envName);
   return process.env[envName];
@@ -125,90 +110,12 @@ function requireSourceEnv(config: ResolvedConfig): SourceValues {
   };
 }
 
-function encodeConnectionUrl(
-  scheme: string,
-  source: SourceValues,
-  port: number,
-  sslValue: string | null,
-  endpoint: string,
-): string {
-  const user = encodeURIComponent(source.user);
-  const password = encodeURIComponent(source.password);
-  const database = encodeURIComponent(source.database);
-  const params = new URLSearchParams();
-  if (sslValue) {
-    if (sslValue === "require") params.set("sslmode", sslValue);
-    else params.set("ssl", sslValue);
-  }
-  if (endpoint) params.set("options", `endpoint=${endpoint}`);
-  const query = params.toString();
-  return `${scheme}://${user}:${password}@127.0.0.1:${port}/${database}${query ? `?${query}` : ""}`;
-}
-
 function buildInjectedValues(config: ResolvedConfig, state: TunnelState): Record<string, string> {
-  const source = state.source;
-  const postgresUrl = encodeConnectionUrl(
-    "postgresql",
-    source,
-    state.port,
-    state.requiresSsl ? "require" : null,
-    state.endpoint,
-  );
-  const sqlalchemyUrl = encodeConnectionUrl(
-    "postgresql+psycopg2",
-    source,
-    state.port,
-    state.requiresSsl ? "require" : null,
-    state.endpoint,
-  );
-  const asyncpgDsn = encodeConnectionUrl(
-    "postgresql",
-    source,
-    state.port,
-    state.requiresSsl ? "require" : null,
-    state.endpoint,
-  ).replace("sslmode=require", "ssl=require");
-  const sqlalchemyAsyncUrl = asyncpgDsn.replace("postgresql://", "postgresql+asyncpg://");
-
-  const tokens: Record<string, string> = {
-    postgres_url: postgresUrl,
-    psql_url: postgresUrl,
-    sqlalchemy_url: sqlalchemyUrl,
-    sqlalchemy_async_url: sqlalchemyAsyncUrl,
-    psycopg2_url: sqlalchemyUrl,
-    asyncpg_dsn: asyncpgDsn,
-    tunnel_host: "127.0.0.1",
-    tunnel_port: String(state.port),
-    endpoint: state.endpoint,
-    pgoptions: state.endpoint ? `endpoint=${state.endpoint}` : "",
-    sslmode: state.requiresSsl ? "require" : "disable",
-    source_host: source.host,
-    source_port: source.port,
-    source_user: source.user,
-    source_password: source.password,
-    source_database: source.database,
-    config_path: config.path,
-    log_path: state.logPath,
-    "1": "1",
-  };
-
-  const resolved: Record<string, string> = {};
-  for (const [envName, spec] of Object.entries(config.injectEnv)) {
-    if (spec.startsWith("source:")) {
-      resolved[envName] = readRuntimeEnv(spec.slice("source:".length)) ?? "";
-      continue;
-    }
-    resolved[envName] = tokens[spec] ?? spec;
-  }
-
-  if (config.injectPythonShim) {
-    resolved.PYTHONPATH = mergePathValue(
-      PYTHON_SHIM_DIR,
-      resolved.PYTHONPATH ?? process.env.PYTHONPATH,
-    );
-  }
-
-  return resolved;
+  return computeInjectedValues(config, state, {
+    env: process.env,
+    pythonShimDir: PYTHON_SHIM_DIR,
+    readEnv: readRuntimeEnv,
+  });
 }
 
 function applyInjectedEnvToProcess(config: ResolvedConfig, state: TunnelState): void {
@@ -421,21 +328,6 @@ async function prepareBashTunnel(config: ResolvedConfig, ctx: ExtensionContext):
       warnedBashTunnelUnavailable = true;
     }
   }
-}
-
-function isReadOnlyQuery(query: string): boolean {
-  const stripped = query
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--.*$/gm, " ")
-    .trim()
-    .toLowerCase();
-
-  if (!stripped) return false;
-  if (stripped.startsWith("\\")) return true;
-
-  return ["select", "with", "show", "explain", "values", "table"].some((prefix) =>
-    stripped.startsWith(prefix),
-  );
 }
 
 async function writeFullOutput(output: string): Promise<string> {
