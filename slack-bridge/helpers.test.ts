@@ -1525,6 +1525,12 @@ describe("buildRalphLoopNudgeMessage", () => {
   it("formats pending inbox and claimed thread counts", () => {
     expect(buildRalphLoopNudgeMessage(2, 1)).toContain("2 inbox items and 1 claimed thread");
   });
+
+  it("includes the cycle timestamp when provided", () => {
+    expect(buildRalphLoopNudgeMessage(2, 1, "2026-04-02T14:10:00.000Z")).toContain(
+      "RALPH LOOP nudge (2026-04-02T14:10:00.000Z):",
+    );
+  });
 });
 
 describe("buildRalphLoopAnomalySignature", () => {

@@ -995,6 +995,7 @@ export function rewriteRalphLoopGhostAnomalies(
 export function buildRalphLoopNudgeMessage(
   pendingInboxCount: number,
   ownedThreadCount: number,
+  cycleStartedAt?: string,
 ): string {
   const parts = [];
   if (pendingInboxCount > 0) {
@@ -1004,7 +1005,8 @@ export function buildRalphLoopNudgeMessage(
     parts.push(`${ownedThreadCount} claimed thread${ownedThreadCount === 1 ? "" : "s"}`);
   }
   const workload = parts.length > 0 ? parts.join(" and ") : "assigned work";
-  return `RALPH LOOP nudge: you appear idle but still have ${workload}. Please pick it up, post a status update, or release ownership so the broker can reassign it.`;
+  const prefix = cycleStartedAt ? `RALPH LOOP nudge (${cycleStartedAt})` : "RALPH LOOP nudge";
+  return `${prefix}: you appear idle but still have ${workload}. Please pick it up, post a status update, or release ownership so the broker can reassign it.`;
 }
 
 export function buildRalphLoopAnomalySignature(evaluation: RalphLoopEvaluationResult): string {
