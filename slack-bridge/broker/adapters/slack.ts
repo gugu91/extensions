@@ -4,6 +4,7 @@ import {
   isUserAllowed,
   stripBotMention,
 } from "../../helpers.js";
+import { TtlCache } from "../../ttl-cache.js";
 import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js";
 
 // ─── Config ──────────────────────────────────────────────
@@ -214,7 +215,10 @@ export class SlackAdapter implements MessageAdapter {
   private inboundHandler: ((msg: InboundMessage) => void) | null = null;
 
   private readonly threads = new Map<string, SlackThreadInfo>();
-  private readonly userNames = new Map<string, string>();
+  private readonly userNames = new TtlCache<string, string>({
+    maxSize: 2000,
+    ttlMs: 60 * 60 * 1000,
+  });
   private readonly pendingEyes = new Map<string, { channel: string; messageTs: string }[]>();
 
   constructor(config: SlackAdapterConfig) {

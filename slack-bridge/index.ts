@@ -47,6 +47,7 @@ import {
   toolNeedsConfirmation,
   type SecurityGuardrails,
 } from "./guardrails.js";
+import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { startBroker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
@@ -216,10 +217,10 @@ export default function (pi: ExtensionAPI) {
   const threads = new Map<string, ThreadInfo>();
   const thinking = new Set<string>();
   const pendingEyes = new Map<string, { channel: string; messageTs: string }[]>(); // thread_ts → message ts list // thread_ts values showing "is thinking…"
-  const userNames = new Map<string, string>();
+  const userNames = new TtlCache<string, string>({ maxSize: 2000, ttlMs: 60 * 60 * 1000 });
   let lastDmChannel: string | null = null;
-  const channelCache = new Map<string, string>();
-  const unclaimedThreads = new Set<string>(); // negative cache for resolveThreadOwner
+  const channelCache = new TtlCache<string, string>({ maxSize: 500, ttlMs: 30 * 60 * 1000 });
+  const unclaimedThreads = new TtlSet<string>({ maxSize: 5000, ttlMs: 5 * 60 * 1000 });
 
   interface ConfirmationRequest {
     toolPattern: string;

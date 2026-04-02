@@ -66,7 +66,7 @@ export interface InboxMessage {
 
 export function formatInboxMessages(
   messages: InboxMessage[],
-  userNames: Map<string, string>,
+  userNames: { get(key: string): string | undefined },
 ): string {
   const lines = messages.map((m) => {
     const n = userNames.get(m.userId) ?? m.userId;
