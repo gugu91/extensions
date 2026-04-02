@@ -101,8 +101,9 @@ import {
 } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
 import {
-  extractSlackBlockActionsPayloadFromEnvelope,
+  extractSlackInteractivePayloadFromEnvelope,
   normalizeSlackBlockActionPayload,
+  normalizeSlackViewSubmissionPayload,
 } from "./slack-block-kit.js";
 import {
   extractSlackSocketDedupKey,
@@ -768,9 +769,13 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const interactivePayload = extractSlackBlockActionsPayloadFromEnvelope(data);
+      const interactivePayload = extractSlackInteractivePayloadFromEnvelope(data);
       if (interactivePayload) {
-        await onBlockActions(interactivePayload, ctx);
+        if (interactivePayload.type === "block_actions") {
+          await onBlockActions(interactivePayload, ctx);
+        } else if (interactivePayload.type === "view_submission") {
+          await onViewSubmission(interactivePayload, ctx);
+        }
         return;
       }
 
@@ -1095,15 +1100,17 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  async function onBlockActions(
-    payload: Record<string, unknown>,
+  async function queueInteractiveInboxEvent(
+    normalized: {
+      channel: string;
+      threadTs: string;
+      userId: string;
+      text: string;
+      timestamp: string;
+      metadata: Record<string, unknown>;
+    },
     ctx: ExtensionContext,
   ): Promise<void> {
-    if (shuttingDown) return;
-
-    const normalized = normalizeSlackBlockActionPayload(payload);
-    if (!normalized) return;
-
     if (!threads.has(normalized.threadTs)) {
       threads.set(normalized.threadTs, {
         channelId: normalized.channel,
@@ -1163,6 +1170,28 @@ export default function (pi: ExtensionAPI) {
     if (ctx.isIdle?.()) {
       drainInbox();
     }
+  }
+
+  async function onBlockActions(
+    payload: Record<string, unknown>,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    if (shuttingDown) return;
+
+    const normalized = normalizeSlackBlockActionPayload(payload);
+    if (!normalized) return;
+    await queueInteractiveInboxEvent(normalized, ctx);
+  }
+
+  async function onViewSubmission(
+    payload: Record<string, unknown>,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    if (shuttingDown) return;
+
+    const normalized = normalizeSlackViewSubmissionPayload(payload);
+    if (!normalized) return;
+    await queueInteractiveInboxEvent(normalized, ctx);
   }
 
   // ─── Reconnect / status ─────────────────────────────

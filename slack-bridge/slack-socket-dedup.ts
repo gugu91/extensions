@@ -1,4 +1,4 @@
-import { extractSlackBlockActionsPayloadFromEnvelope } from "./slack-block-kit.js";
+import { extractSlackInteractivePayloadFromEnvelope } from "./slack-block-kit.js";
 
 export const SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS = 10 * 60 * 1000;
 export const SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE = 10_000;
@@ -98,6 +98,7 @@ export function extractSlackBlockActionDedupKey(payload: Record<string, unknown>
   const container = payload.container as
     | { channel_id?: string; message_ts?: string; thread_ts?: string }
     | undefined;
+  const view = payload.view as { id?: string; hash?: string } | undefined;
   const actions = Array.isArray(payload.actions)
     ? payload.actions.filter(
         (action): action is { action_id?: string; action_ts?: string } =>
@@ -113,14 +114,46 @@ export function extractSlackBlockActionDedupKey(payload: Record<string, unknown>
     return null;
   }
 
-  return [
+  const parts = [
     "block_actions",
     user?.id ?? "",
     channel?.id ?? container?.channel_id ?? "",
     container?.thread_ts ?? "",
     container?.message_ts ?? "",
-    actionSignature,
-  ].join(":");
+  ];
+  if (view?.id || view?.hash) {
+    parts.push(view?.id ?? "", view?.hash ?? "");
+  }
+  parts.push(actionSignature);
+  return parts.join(":");
+}
+
+export function extractSlackViewSubmissionDedupKey(
+  payload: Record<string, unknown>,
+): string | null {
+  if (payload.type !== "view_submission") {
+    return null;
+  }
+
+  const user = payload.user as { id?: string } | undefined;
+  const view = payload.view as { id?: string; hash?: string; callback_id?: string } | undefined;
+  if (!view?.id) {
+    return null;
+  }
+
+  return ["view_submission", user?.id ?? "", view.id, view.hash ?? "", view.callback_id ?? ""].join(
+    ":",
+  );
+}
+
+export function extractSlackInteractiveDedupKey(payload: Record<string, unknown>): string | null {
+  if (payload.type === "block_actions") {
+    return extractSlackBlockActionDedupKey(payload);
+  }
+  if (payload.type === "view_submission") {
+    return extractSlackViewSubmissionDedupKey(payload);
+  }
+  return null;
 }
 
 export function extractSlackSocketDedupKey(frame: Record<string, unknown>): string | null {
@@ -136,6 +169,6 @@ export function extractSlackSocketDedupKey(frame: Record<string, unknown>): stri
     return payload?.event ? extractSlackEventDedupKey(payload.event) : null;
   }
 
-  const interactivePayload = extractSlackBlockActionsPayloadFromEnvelope(frame);
-  return interactivePayload ? extractSlackBlockActionDedupKey(interactivePayload) : null;
+  const interactivePayload = extractSlackInteractivePayloadFromEnvelope(frame);
+  return interactivePayload ? extractSlackInteractiveDedupKey(interactivePayload) : null;
 }

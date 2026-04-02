@@ -100,6 +100,9 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("slack_pin")).toBe(true);
     expect(WRITE_TOOLS.has("slack_bookmark")).toBe(true);
     expect(WRITE_TOOLS.has("slack_react")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_modal_open")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_modal_push")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_modal_update")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_export")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_presence")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_create_channel")).toBe(false);
@@ -109,6 +112,9 @@ describe("isToolBlocked", () => {
     expect(READ_ONLY_TOOLS.has("slack_pin")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_bookmark")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_react")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_modal_open")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_modal_push")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_modal_update")).toBe(false);
     expect(WRITE_TOOLS.has("slack_presence")).toBe(false);
   });
 

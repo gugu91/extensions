@@ -669,6 +669,10 @@ describe("SlackAdapter", () => {
       timestamp: "123.789",
       metadata: {
         kind: "slack_block_action",
+        triggerId: "trigger-1",
+        viewId: null,
+        callbackId: null,
+        viewHash: null,
         actionId: "review.approve",
         blockId: "review-actions",
         value: '{"decision":"approve"}',
@@ -677,6 +681,7 @@ describe("SlackAdapter", () => {
         channel: "C123",
         threadTs: "123.000",
         messageTs: "123.456",
+        modalPrivateMetadata: null,
         actions: [
           {
             actionId: "review.approve",
@@ -689,6 +694,77 @@ describe("SlackAdapter", () => {
             actionTs: "123.789",
           },
         ],
+      },
+    });
+  });
+
+  it("emits view submission payloads with parsed modal state", async () => {
+    const rememberKnownThread = vi.fn();
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      rememberKnownThread,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+    vi.spyOn(
+      adapter as unknown as { resolveUser: (userId: string) => Promise<string> },
+      "resolveUser",
+    ).mockResolvedValue("Will");
+
+    await (
+      adapter as unknown as {
+        onViewSubmission: (payload: Record<string, unknown>) => Promise<void>;
+      }
+    ).onViewSubmission({
+      type: "view_submission",
+      trigger_id: "trigger-1",
+      user: { id: "U123" },
+      view: {
+        id: "V123",
+        callback_id: "deploy.confirm",
+        title: { type: "plain_text", text: "Deploy approval" },
+        private_metadata:
+          '{"workflow":"deploy","__piSlackModalContext":{"threadTs":"123.000","channel":"C123"}}',
+        state: {
+          values: {
+            confirm_phrase: {
+              confirm_phrase: {
+                type: "plain_text_input",
+                value: "CONFIRM",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123");
+    expect(handler).toHaveBeenCalledWith({
+      source: "slack",
+      threadId: "123.000",
+      channel: "C123",
+      userId: "U123",
+      userName: "Will",
+      text: 'Submitted Slack modal (deploy.confirm) "Deploy approval".',
+      timestamp: "V123",
+      metadata: {
+        kind: "slack_view_submission",
+        triggerId: "trigger-1",
+        callbackId: "deploy.confirm",
+        viewId: "V123",
+        externalId: null,
+        viewHash: null,
+        channel: "C123",
+        threadTs: "123.000",
+        privateMetadata: { workflow: "deploy" },
+        stateValues: {
+          confirm_phrase: {
+            confirm_phrase: {
+              type: "plain_text_input",
+              value: "CONFIRM",
+            },
+          },
+        },
       },
     });
   });

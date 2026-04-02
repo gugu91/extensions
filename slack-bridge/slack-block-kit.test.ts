@@ -4,8 +4,10 @@ import {
   buildSlackBlocksTemplate,
   encodeSlackBlockActionValue,
   extractSlackBlockActionsPayloadFromEnvelope,
+  extractSlackInteractivePayloadFromEnvelope,
   normalizeSlackBlockActionPayload,
   normalizeSlackBlocksInput,
+  normalizeSlackViewSubmissionPayload,
 } from "./slack-block-kit.js";
 
 describe("normalizeSlackBlocksInput", () => {
@@ -116,6 +118,15 @@ describe("extractSlackBlockActionsPayloadFromEnvelope", () => {
     ).toEqual({ type: "block_actions", actions: [] });
   });
 
+  it("extracts generic interactive payloads such as view submissions", () => {
+    expect(
+      extractSlackInteractivePayloadFromEnvelope({
+        type: "interactive",
+        payload: JSON.stringify({ type: "view_submission", view: { id: "V1" } }),
+      }),
+    ).toEqual({ type: "view_submission", view: { id: "V1" } });
+  });
+
   it("ignores non-interactive envelopes", () => {
     expect(
       extractSlackBlockActionsPayloadFromEnvelope({
@@ -159,6 +170,10 @@ describe("normalizeSlackBlockActionPayload", () => {
       timestamp: "123.789",
       metadata: {
         kind: "slack_block_action",
+        triggerId: "trigger-1",
+        viewId: null,
+        callbackId: null,
+        viewHash: null,
         actionId: "review.approve",
         blockId: "review-actions",
         value: '{"decision":"approve","pr":212}',
@@ -167,6 +182,7 @@ describe("normalizeSlackBlockActionPayload", () => {
         channel: "C123",
         threadTs: "123.000",
         messageTs: "123.456",
+        modalPrivateMetadata: null,
         actions: [
           {
             actionId: "review.approve",
@@ -203,5 +219,93 @@ describe("normalizeSlackBlockActionPayload", () => {
 
     expect(event?.threadTs).toBe("222.333");
     expect(event?.timestamp).toBe("222.333");
+  });
+
+  it("routes modal block actions using private_metadata thread context", () => {
+    const event = normalizeSlackBlockActionPayload({
+      type: "block_actions",
+      trigger_id: "trigger-2",
+      user: { id: "U123" },
+      view: {
+        id: "V123",
+        callback_id: "deploy.confirm",
+        hash: "hash-1",
+        private_metadata:
+          '{"workflow":"deploy","__piSlackModalContext":{"threadTs":"123.456","channel":"C123"}}',
+      },
+      actions: [
+        {
+          action_id: "deploy.confirm.toggle",
+          type: "radio_buttons",
+          action_ts: "333.444",
+        },
+      ],
+    });
+
+    expect(event).toMatchObject({
+      channel: "C123",
+      threadTs: "123.456",
+      metadata: {
+        kind: "slack_block_action",
+        triggerId: "trigger-2",
+        viewId: "V123",
+        callbackId: "deploy.confirm",
+        modalPrivateMetadata: { workflow: "deploy" },
+      },
+    });
+  });
+});
+
+describe("normalizeSlackViewSubmissionPayload", () => {
+  it("normalizes modal submissions into inbox events with parsed state", () => {
+    const event = normalizeSlackViewSubmissionPayload({
+      type: "view_submission",
+      trigger_id: "trigger-1",
+      user: { id: "U123" },
+      view: {
+        id: "V123",
+        callback_id: "deploy.confirm",
+        title: { type: "plain_text", text: "Deploy approval" },
+        private_metadata:
+          '{"workflow":"deploy","__piSlackModalContext":{"threadTs":"123.456","channel":"C123"}}',
+        state: {
+          values: {
+            confirm_phrase: {
+              confirm_phrase: {
+                type: "plain_text_input",
+                value: "CONFIRM",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(event).toEqual({
+      channel: "C123",
+      threadTs: "123.456",
+      userId: "U123",
+      text: 'Submitted Slack modal (deploy.confirm) "Deploy approval".',
+      timestamp: "V123",
+      metadata: {
+        kind: "slack_view_submission",
+        triggerId: "trigger-1",
+        callbackId: "deploy.confirm",
+        viewId: "V123",
+        externalId: null,
+        viewHash: null,
+        channel: "C123",
+        threadTs: "123.456",
+        privateMetadata: { workflow: "deploy" },
+        stateValues: {
+          confirm_phrase: {
+            confirm_phrase: {
+              type: "plain_text_input",
+              value: "CONFIRM",
+            },
+          },
+        },
+      },
+    });
   });
 });
