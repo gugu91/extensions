@@ -13,6 +13,7 @@ import {
   buildAllowlist,
   isUserAllowed as checkUserAllowed,
   formatInboxMessages,
+  formatPinetInboxMessages,
   formatAgentList,
   stripBotMention,
   isChannelId,
@@ -1622,8 +1623,8 @@ export default function (pi: ExtensionAPI) {
           const entries = await client.pollInbox();
           if (entries.length === 0) return;
 
-          // #102: Partition nudges from regular messages for direct delivery
-          const { nudges, regular } = partitionFollowerInboxEntries(entries);
+          // Partition nudges and a2a traffic out of the human Slack inbox flow.
+          const { nudges, agentMessages, regular } = partitionFollowerInboxEntries(entries);
 
           // Deliver nudges immediately via pi.sendUserMessage (followUp)
           if (nudges.length > 0) {
@@ -1644,7 +1645,20 @@ export default function (pi: ExtensionAPI) {
             }
           }
 
-          // Process regular messages through normal inbox flow
+          if (agentMessages.length > 0) {
+            const pinetPrompt = formatPinetInboxMessages(agentMessages);
+            try {
+              pi.sendUserMessage(pinetPrompt, { deliverAs: "followUp" });
+            } catch {
+              try {
+                pi.sendUserMessage(pinetPrompt);
+              } catch {
+                /* best effort */
+              }
+            }
+          }
+
+          // Process human Slack messages through the normal inbox flow.
           const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
           for (const nextThread of synced.threadUpdates) {
             const existing = threads.get(nextThread.threadTs);
