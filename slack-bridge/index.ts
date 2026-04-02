@@ -77,6 +77,15 @@ import {
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import { registerSlackTools } from "./slack-tools.js";
 import {
+  createFollowerDeliveryState,
+  drainFollowerAckBatches,
+  hasDeliveredFollowerInboxIds,
+  isFollowerInboxIdTracked,
+  markFollowerInboxIdsDelivered,
+  queueFollowerInboxIds,
+  resetFollowerDeliveryState,
+} from "./follower-delivery.js";
+import {
   buildTaskAssignmentReport,
   extractTaskAssignmentsFromMessage,
   hasTaskAssignmentStatusChange,
@@ -918,6 +927,8 @@ export default function (pi: ExtensionAPI) {
   let pinetRegistrationBlocked = false;
   let activeBroker: Broker | null = null;
   let brokerClient: BrokerClientRef | null = null;
+  const followerDeliveryState = createFollowerDeliveryState();
+  let followerAckPromise: Promise<void> | null = null;
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -1603,7 +1614,10 @@ export default function (pi: ExtensionAPI) {
       client,
       pollInterval: null,
     };
+    resetFollowerDeliveryState(followerDeliveryState);
+    followerAckPromise = null;
     let wasDisconnected = false;
+    let followerPollRunning = false;
 
     async function resumeThreadClaims(): Promise<void> {
       for (const thread of getFollowerOwnedThreadClaims(threads, agentName)) {
@@ -1618,70 +1632,83 @@ export default function (pi: ExtensionAPI) {
     function startPolling(): void {
       if (brokerClientRef.pollInterval) return;
       brokerClientRef.pollInterval = setInterval(async () => {
-        if (!pinetEnabled) return;
+        if (!pinetEnabled || followerPollRunning) return;
+
+        followerPollRunning = true;
         try {
           const entries = await client.pollInbox();
-          if (entries.length === 0) return;
+          const newEntries = entries.filter(
+            (entry) => !isFollowerInboxIdTracked(followerDeliveryState, entry.inboxId),
+          );
+          if (newEntries.length === 0) {
+            if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
+              void flushDeliveredFollowerAcks();
+            }
+            return;
+          }
 
           // Partition nudges and a2a traffic out of the human Slack inbox flow.
-          const { nudges, agentMessages, regular } = partitionFollowerInboxEntries(entries);
+          const { nudges, agentMessages, regular } = partitionFollowerInboxEntries(newEntries);
 
-          // Deliver nudges immediately via pi.sendUserMessage (followUp)
           if (nudges.length > 0) {
             const nudgeText = nudges
               .map((n) => n.message.body ?? "")
               .filter(Boolean)
               .join("\n");
-            if (nudgeText) {
-              try {
-                pi.sendUserMessage(nudgeText, { deliverAs: "followUp" });
-              } catch {
-                try {
-                  pi.sendUserMessage(nudgeText);
-                } catch {
-                  /* best effort */
-                }
-              }
+            if (nudgeText && deliverFollowUpMessage(nudgeText)) {
+              markFollowerInboxIdsDelivered(
+                followerDeliveryState,
+                nudges.flatMap((entry) =>
+                  typeof entry.inboxId === "number" ? [entry.inboxId] : [],
+                ),
+              );
+              void flushDeliveredFollowerAcks();
             }
           }
 
           if (agentMessages.length > 0) {
             const pinetPrompt = formatPinetInboxMessages(agentMessages);
-            try {
-              pi.sendUserMessage(pinetPrompt, { deliverAs: "followUp" });
-            } catch {
-              try {
-                pi.sendUserMessage(pinetPrompt);
-              } catch {
-                /* best effort */
-              }
+            if (deliverFollowUpMessage(pinetPrompt)) {
+              markFollowerInboxIdsDelivered(
+                followerDeliveryState,
+                agentMessages.flatMap((entry) =>
+                  typeof entry.inboxId === "number" ? [entry.inboxId] : [],
+                ),
+              );
+              void flushDeliveredFollowerAcks();
             }
           }
 
           // Process human Slack messages through the normal inbox flow.
-          const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
-          for (const nextThread of synced.threadUpdates) {
-            const existing = threads.get(nextThread.threadTs);
-            if (!existing) {
-              threads.set(nextThread.threadTs, { ...nextThread });
-              continue;
+          if (regular.length > 0) {
+            const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
+            for (const nextThread of synced.threadUpdates) {
+              const existing = threads.get(nextThread.threadTs);
+              if (!existing) {
+                threads.set(nextThread.threadTs, { ...nextThread });
+                continue;
+              }
+              existing.channelId = nextThread.channelId;
+              existing.threadTs = nextThread.threadTs;
+              existing.userId = nextThread.userId;
+              existing.owner = nextThread.owner;
             }
-            existing.channelId = nextThread.channelId;
-            existing.threadTs = nextThread.threadTs;
-            existing.userId = nextThread.userId;
-            existing.owner = nextThread.owner;
+            lastDmChannel = synced.lastDmChannel;
+            inbox.push(...synced.inboxMessages);
+            queueFollowerInboxIds(
+              followerDeliveryState,
+              regular.flatMap((entry) =>
+                typeof entry.inboxId === "number" ? [entry.inboxId] : [],
+              ),
+            );
+            if (synced.changed) persistState();
+            updateBadge();
+            if (ctx.isIdle?.()) drainInbox();
           }
-          lastDmChannel = synced.lastDmChannel;
-          inbox.push(...synced.inboxMessages);
-
-          // ACK all entries (nudges + regular)
-          const ids = entries.map((entry) => entry.inboxId);
-          if (synced.changed) persistState();
-          if (ids.length > 0) await client.ackMessages(ids);
-          updateBadge();
-          if (ctx.isIdle?.()) drainInbox();
         } catch {
           /* broker may be restarting */
+        } finally {
+          followerPollRunning = false;
         }
       }, 2000);
     }
@@ -1691,6 +1718,7 @@ export default function (pi: ExtensionAPI) {
         clearInterval(brokerClientRef.pollInterval);
         brokerClientRef.pollInterval = null;
       }
+      followerPollRunning = false;
     }
 
     client.onDisconnect(() => {
@@ -1716,6 +1744,9 @@ export default function (pi: ExtensionAPI) {
           /* best effort */
         });
         startPolling();
+        if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
+          void flushDeliveredFollowerAcks();
+        }
         setExtStatus(ctx, "ok");
         const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
         wasDisconnected = uiUpdate.nextWasDisconnected;
@@ -1737,12 +1768,15 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ): Promise<{ unregisterError: string | null }> {
     const current = brokerClient;
-    brokerClient = null;
 
     if (current?.pollInterval) {
       clearInterval(current.pollInterval);
       current.pollInterval = null;
     }
+
+    await flushDeliveredFollowerAcks().catch(() => {
+      /* best effort */
+    });
 
     let unregisterError: string | null = null;
     if (current) {
@@ -1753,6 +1787,9 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    brokerClient = null;
+    resetFollowerDeliveryState(followerDeliveryState);
+    followerAckPromise = null;
     brokerRole = null;
     pinetEnabled = false;
     setExtStatus(ctx, "off");
@@ -1979,11 +2016,54 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  function deliverFollowUpMessage(text: string): boolean {
+    try {
+      pi.sendUserMessage(text, { deliverAs: "followUp" });
+      return true;
+    } catch {
+      try {
+        pi.sendUserMessage(text);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  function getFollowerBrokerInboxIds(messages: InboxMessage[]): number[] {
+    return [
+      ...new Set(
+        messages.flatMap((message) => (message.brokerInboxId ? [message.brokerInboxId] : [])),
+      ),
+    ];
+  }
+
+  async function flushDeliveredFollowerAcks(): Promise<void> {
+    if (followerAckPromise) {
+      await followerAckPromise;
+      return;
+    }
+    if (brokerRole !== "follower" || !brokerClient?.client) return;
+
+    const client = brokerClient.client;
+    const promise = drainFollowerAckBatches(followerDeliveryState, async (ids) => {
+      await client.ackMessages(ids);
+    }).finally(() => {
+      if (followerAckPromise === promise) {
+        followerAckPromise = null;
+      }
+    });
+
+    followerAckPromise = promise;
+    await promise;
+  }
+
   // Drain inbox: set thinking status, send to agent
   function drainInbox(): void {
     if (inbox.length === 0) return;
 
     const pending = inbox.splice(0, inbox.length);
+    const deliveredFollowerIds = getFollowerBrokerInboxIds(pending);
     updateBadge();
     reportStatus("working");
 
@@ -1994,16 +2074,16 @@ export default function (pi: ExtensionAPI) {
       prompt = securityPrompt + "\n\n" + prompt;
     }
 
-    try {
-      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-    } catch {
-      try {
-        pi.sendUserMessage(prompt);
-      } catch {
-        inbox.push(...pending);
-        updateBadge();
+    if (deliverFollowUpMessage(prompt)) {
+      if (deliveredFollowerIds.length > 0) {
+        markFollowerInboxIdsDelivered(followerDeliveryState, deliveredFollowerIds);
+        void flushDeliveredFollowerAcks();
       }
+      return;
     }
+
+    inbox.push(...pending);
+    updateBadge();
   }
 
   // Hard-block forbidden tools when broker role is active.
@@ -2073,6 +2153,9 @@ export default function (pi: ExtensionAPI) {
         /* best effort */
       });
     }
+    resetFollowerDeliveryState(followerDeliveryState);
+    followerAckPromise = null;
+    disconnect();
     brokerRole = null;
     pinetEnabled = false;
     pinetRegistrationBlocked = false;
