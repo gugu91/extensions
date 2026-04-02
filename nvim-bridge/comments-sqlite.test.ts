@@ -108,6 +108,29 @@ describe("SqliteCommentStore", () => {
     expect(fs.existsSync(path.join(repoRoot, ".pi", "picomms.db"))).toBe(true);
   });
 
+  it("persists comments across reopen and applies listAll pagination", async () => {
+    store = new SqliteCommentStore(repoRoot);
+    store.initialize();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+    await store.addComment({ body: "First", actorId: "reviewer", threadId: "thread-a" });
+
+    vi.setSystemTime(new Date("2024-01-01T00:00:01.000Z"));
+    await store.addComment({ body: "Second", actorId: "reviewer", threadId: "thread-b" });
+
+    vi.setSystemTime(new Date("2024-01-01T00:00:02.000Z"));
+    await store.addComment({ body: "Third", actorId: "reviewer", threadId: "thread-a" });
+
+    store.close();
+    store = new SqliteCommentStore(repoRoot);
+    store.initialize();
+
+    const listed = store.listAllComments({ limit: 2 });
+    expect(listed.total).toBe(3);
+    expect(listed.comments.map((comment) => comment.body)).toEqual(["Second", "Third"]);
+  });
+
   it("wipes all comments from sqlite", async () => {
     store = new SqliteCommentStore(repoRoot);
     store.initialize();
