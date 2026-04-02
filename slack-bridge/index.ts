@@ -100,6 +100,7 @@ import {
   hasTaskAssignmentStatusChange,
   resolveTaskAssignments,
 } from "./task-assignments.js";
+import { getMainCheckoutToolBlockReason } from "./worktree-policy.js";
 
 // Settings and helpers imported from ./helpers.js
 
@@ -223,13 +224,14 @@ export default function (pi: ExtensionAPI) {
     role: "broker" | "worker" = "worker",
   ): Promise<Record<string, unknown>> {
     const gitContext = await gitContextCache.get();
-    const { cwd, repo, repoRoot, branch } = gitContext;
-    const resolvedRepoRoot = repoRoot ?? cwd;
-    const tools = detectProjectTools(resolvedRepoRoot, cwd);
+    const { cwd, repo, repoRoot, worktreePath, worktreeKind, branch } = gitContext;
+    const resolvedProjectRoot = worktreePath ?? repoRoot ?? cwd;
+    const tools = detectProjectTools(resolvedProjectRoot, cwd);
     const tags = [
       `role:${role}`,
       `repo:${repo}`,
       ...(branch ? [`branch:${branch}`] : []),
+      ...(worktreeKind ? [`checkout:${worktreeKind}`] : []),
       ...tools.map((tool) => `tool:${tool}`),
     ];
 
@@ -240,6 +242,8 @@ export default function (pi: ExtensionAPI) {
       role,
       repo,
       repoRoot,
+      worktreePath,
+      worktreeKind,
       capabilities: {
         repo,
         repoRoot,
@@ -247,6 +251,8 @@ export default function (pi: ExtensionAPI) {
         role,
         tools,
         tags,
+        worktreePath,
+        worktreeKind,
       },
     };
   }
@@ -2329,6 +2335,18 @@ export default function (pi: ExtensionAPI) {
       console.error(`[slack-bridge] restore failed: ${msg(err)}`);
     }
 
+    try {
+      const gitContext = await gitContextCache.get();
+      if (gitContext.worktreeKind === "main" && gitContext.branch && gitContext.branch !== "main") {
+        ctx.ui.notify(
+          `Main checkout drift detected: on ${gitContext.branch}, expected main. Use a worktree for feature work.`,
+          "warning",
+        );
+      }
+    } catch {
+      /* best effort */
+    }
+
     if (pinetRegistrationBlocked) {
       console.log("[slack-bridge] detected local subagent context; skipping Pinet registration");
       setExtStatus(ctx, "off");
@@ -2437,13 +2455,29 @@ export default function (pi: ExtensionAPI) {
     updateBadge();
   }
 
-  // Hard-block forbidden tools when broker role is active.
-  pi.on("tool_call", async (event) => {
+  // Hard-block forbidden tools when broker role is active, and enforce worktree-only coding.
+  pi.on("tool_call", async (event, ctx) => {
     if (brokerRole === "broker" && isBrokerForbiddenTool(event.toolName)) {
       return {
         block: true,
         reason: `Tool "${event.toolName}" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet_message to delegate to a connected worker instead.`,
       };
+    }
+
+    if (event.toolName === "edit" || event.toolName === "write" || event.toolName === "bash") {
+      const gitContext = await probeGitContext(ctx.cwd);
+      const worktreeBlockReason = getMainCheckoutToolBlockReason(event.toolName, event.input, {
+        worktreeKind: gitContext.worktreeKind,
+        branch: gitContext.branch,
+        cwd: ctx.cwd,
+        repoRoot: gitContext.repoRoot,
+      });
+      if (worktreeBlockReason) {
+        return {
+          block: true,
+          reason: worktreeBlockReason,
+        };
+      }
     }
   });
 

@@ -14,7 +14,12 @@ export type ExecFileAsyncLike = (
 export interface GitContext {
   cwd: string;
   repo: string;
+  /** Canonical repository root (main checkout root when inside a linked worktree) */
   repoRoot?: string;
+  /** Current checkout root (`git rev-parse --show-toplevel`) */
+  worktreePath?: string;
+  /** `main` for the primary checkout, `linked` for a linked worktree */
+  worktreeKind?: "main" | "linked";
   branch?: string;
 }
 
@@ -44,14 +49,28 @@ export async function probeGitContext(
   cwd = process.cwd(),
   runner: ExecFileAsyncLike = execFileAsync as ExecFileAsyncLike,
 ): Promise<GitContext> {
-  const repoRoot = await runGitCommand(["rev-parse", "--show-toplevel"], cwd, runner);
+  const worktreePath = await runGitCommand(["rev-parse", "--show-toplevel"], cwd, runner);
   const branch = await probeGitBranch(cwd, runner);
-  const resolvedRepoRoot = repoRoot ?? cwd;
+  const gitDir = await runGitCommand(["rev-parse", "--absolute-git-dir"], cwd, runner);
+  const commonDirRaw = await runGitCommand(["rev-parse", "--git-common-dir"], cwd, runner);
+  const resolvedBase = worktreePath ?? cwd;
+  const commonDir = commonDirRaw ? path.resolve(resolvedBase, commonDirRaw) : undefined;
+  const repoRoot =
+    commonDir && path.basename(commonDir) === ".git" ? path.dirname(commonDir) : worktreePath;
+  const worktreeKind =
+    worktreePath && gitDir && commonDir
+      ? path.resolve(gitDir) === path.resolve(commonDir)
+        ? "main"
+        : "linked"
+      : undefined;
+  const resolvedRepoRoot = repoRoot ?? worktreePath ?? cwd;
 
   return {
     cwd,
     repo: path.basename(resolvedRepoRoot),
     repoRoot,
+    worktreePath,
+    worktreeKind,
     branch,
   };
 }
