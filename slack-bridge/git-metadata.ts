@@ -33,12 +33,19 @@ async function runGitCommand(
   }
 }
 
+export async function probeGitBranch(
+  cwd = process.cwd(),
+  runner: ExecFileAsyncLike = execFileAsync as ExecFileAsyncLike,
+): Promise<string | undefined> {
+  return runGitCommand(["branch", "--show-current"], cwd, runner);
+}
+
 export async function probeGitContext(
   cwd = process.cwd(),
   runner: ExecFileAsyncLike = execFileAsync as ExecFileAsyncLike,
 ): Promise<GitContext> {
   const repoRoot = await runGitCommand(["rev-parse", "--show-toplevel"], cwd, runner);
-  const branch = await runGitCommand(["branch", "--show-current"], cwd, runner);
+  const branch = await probeGitBranch(cwd, runner);
   const resolvedRepoRoot = repoRoot ?? cwd;
 
   return {

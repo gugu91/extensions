@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { createGitContextCache, probeGitContext } from "./git-metadata.js";
+import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
   type AgentDisplayInfo,
@@ -1309,7 +1309,7 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  function runBrokerRalphLoop(ctx: ExtensionContext): void {
+  async function runBrokerRalphLoop(ctx: ExtensionContext): Promise<void> {
     if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
 
     brokerRalphLoopRunning = true;
@@ -1317,7 +1317,7 @@ export default function (pi: ExtensionAPI) {
       runBrokerMaintenance(ctx);
 
       const db = activeBroker.db as BrokerDB;
-      const currentBranch = gitContextCache.peek()?.branch ?? null;
+      const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
 
       const workloads = db.getAllAgents().map((agent) => ({
         ...agent,
@@ -1402,10 +1402,10 @@ export default function (pi: ExtensionAPI) {
   function startBrokerRalphLoop(ctx: ExtensionContext): void {
     stopBrokerRalphLoop();
     brokerRalphLoopTimer = setInterval(() => {
-      runBrokerRalphLoop(ctx);
+      void runBrokerRalphLoop(ctx);
     }, DEFAULT_RALPH_LOOP_INTERVAL_MS);
     brokerRalphLoopTimer.unref?.();
-    runBrokerRalphLoop(ctx);
+    void runBrokerRalphLoop(ctx);
   }
 
   function stopBrokerRalphLoop(): void {

@@ -1,5 +1,26 @@
 import { describe, it, expect, vi } from "vitest";
-import { createGitContextCache, probeGitContext, type ExecFileAsyncLike } from "./git-metadata.js";
+import {
+  createGitContextCache,
+  probeGitBranch,
+  probeGitContext,
+  type ExecFileAsyncLike,
+} from "./git-metadata.js";
+
+describe("probeGitBranch", () => {
+  it("returns the live branch when git succeeds", async () => {
+    const runner: ExecFileAsyncLike = vi.fn(async () => ({ stdout: "main\n" }));
+
+    await expect(probeGitBranch("/Users/alice/src/extensions", runner)).resolves.toBe("main");
+  });
+
+  it("returns undefined when branch lookup fails", async () => {
+    const runner: ExecFileAsyncLike = vi.fn(async () => {
+      throw new Error("not a git repo");
+    });
+
+    await expect(probeGitBranch("/tmp/scratch", runner)).resolves.toBeUndefined();
+  });
+});
 
 describe("probeGitContext", () => {
   it("returns repo, repoRoot, and branch when git commands succeed", async () => {
