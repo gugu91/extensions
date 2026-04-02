@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -13,7 +12,6 @@ import {
   formatSize,
   getAgentDir,
   truncateHead,
-  type TruncationResult,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@gugu91/pi-ext-types/typebox";
@@ -21,10 +19,11 @@ import { Type } from "@gugu91/pi-ext-types/typebox";
 import {
   buildInjectedValues as computeInjectedValues,
   deriveEndpoint,
-  isReadOnlyQuery,
   needsSsl,
   type SourceValues,
 } from "./helpers.js";
+import { executePsqlQuery, type OutputFormat, type PsqlDetails } from "./query-execution.js";
+import { runPsqlQueryWithTunnel } from "./query-runner.js";
 import { resolvePsqlBin } from "./psql-bin.js";
 import { loadConfig, type ResolvedConfig } from "./settings.js";
 
@@ -52,21 +51,6 @@ interface TunnelState {
   source: SourceValues;
   requiresSsl: boolean;
 }
-
-interface PsqlDetails {
-  query: string;
-  format: OutputFormat;
-  tunnelPort: number;
-  endpoint: string;
-  logPath: string;
-  configPath: string;
-  streaming?: boolean;
-  truncation?: TruncationResult;
-  fullOutputPath?: string;
-  outputPreview?: string;
-}
-
-type OutputFormat = "table" | "csv" | "tsv";
 
 const PsqlParams = Type.Object({
   query: Type.String({
@@ -330,12 +314,6 @@ async function prepareBashTunnel(config: ResolvedConfig, ctx: ExtensionContext):
   }
 }
 
-async function writeFullOutput(output: string): Promise<string> {
-  const path = join(tmpdir(), `pi-psql-${Date.now()}.txt`);
-  await writeFile(path, output, "utf8");
-  return path;
-}
-
 function renderPreview(
   text: string,
   expanded: boolean,
@@ -361,97 +339,16 @@ async function runPsqlQuery(
     details?: PsqlDetails;
   }) => void,
 ): Promise<{ text: string; details: PsqlDetails }> {
-  if (!isReadOnlyQuery(query)) {
-    throw new Error(
-      "The psql extension only allows read-only queries and psql inspection meta-commands (e.g. SELECT, WITH, SHOW, EXPLAIN, VALUES, TABLE, \\d, \\dt).",
-    );
-  }
-
-  const state = await ensureTunnel(config, ctx);
-  const injected = buildInjectedValues(config, state);
-  const connection = injected.NEON_TUNNEL_DATABASE_URL;
-  const args = [connection, "-v", "ON_ERROR_STOP=1", "-P", "pager=off"];
-  if (format === "csv") args.push("--csv");
-  if (format === "tsv") args.push("-A", "-F", "\t");
-  args.push("-c", query);
-
-  const details: PsqlDetails = {
-    query,
-    format,
-    tunnelPort: state.port,
-    endpoint: state.endpoint,
-    logPath: state.logPath,
-    configPath: config.path,
-    streaming: true,
-  };
-
-  let stdout = "";
-  let stderr = "";
-
-  const pushPartial = (stage: string) => {
-    if (!onUpdate) return;
-    const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
-    const preview = combined
-      ? truncateHead(combined, { maxLines: 60, maxBytes: 6 * 1024 }).content
-      : `${stage}...`;
-    onUpdate({
-      content: [{ type: "text", text: preview }],
-      details: { ...details, outputPreview: preview, streaming: true },
-    });
-  };
-
-  const child = spawn(resolvePsqlBin({ configuredPath: config.psqlBin }), args, {
-    env: {
-      ...process.env,
-      ...injected,
-      PGPASSWORD: state.source.password,
-      PGAPPNAME: "pi-extension-psql",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  return runPsqlQueryWithTunnel(config, query, format, ctx, signal, onUpdate, {
+    ensureTunnel,
+    buildInjectedValues,
+    resolvePsqlBin,
+    executePsqlQuery,
+    truncateOutput: truncateHead,
+    formatBytes: formatSize,
+    maxOutputLines: DEFAULT_MAX_LINES,
+    maxOutputBytes: DEFAULT_MAX_BYTES,
   });
-
-  const abort = () => child.kill("SIGTERM");
-  signal?.addEventListener("abort", abort, { once: true });
-
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString("utf8");
-    pushPartial("Running query");
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-    pushPartial("Running query");
-  });
-
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
-  });
-
-  signal?.removeEventListener("abort", abort);
-
-  if (signal?.aborted) throw new Error("psql query aborted");
-
-  const combined = [stdout, stderr].filter(Boolean).join("\n").trim() || "(no output)";
-  if (exitCode !== 0) {
-    throw new Error(combined);
-  }
-
-  const truncation = truncateHead(combined, {
-    maxLines: DEFAULT_MAX_LINES,
-    maxBytes: DEFAULT_MAX_BYTES,
-  });
-
-  let text = truncation.content;
-  if (truncation.truncated) {
-    const fullOutputPath = await writeFullOutput(combined);
-    details.truncation = truncation;
-    details.fullOutputPath = fullOutputPath;
-    text += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${fullOutputPath}]`;
-  }
-
-  details.streaming = false;
-  details.outputPreview = text;
-  return { text, details };
 }
 
 function redactValue(key: string, value: string): string {
