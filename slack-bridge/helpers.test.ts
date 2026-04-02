@@ -7,6 +7,10 @@ import {
   buildAllowlist,
   isUserAllowed,
   formatInboxMessages,
+  parsePinetControlCommand,
+  getPinetControlCommandFromText,
+  buildPinetControlMetadata,
+  extractPinetControlCommand,
   getSqliteJournalMode,
   isSqliteWalEnabled,
   buildSqliteWalFallbackWarning,
@@ -261,6 +265,59 @@ describe("formatInboxMessages", () => {
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("will: first");
     expect(result).toContain("will: second");
+  });
+});
+
+// ─── Pinet control messages ──────────────────────────────
+
+describe("Pinet control helpers", () => {
+  it("parses supported control commands", () => {
+    expect(parsePinetControlCommand("reload")).toBe("reload");
+    expect(parsePinetControlCommand("exit")).toBe("exit");
+    expect(parsePinetControlCommand("noop")).toBeNull();
+  });
+
+  it("detects control commands from message text", () => {
+    expect(getPinetControlCommandFromText("/reload")).toBe("reload");
+    expect(getPinetControlCommandFromText(" /exit now please ")).toBe("exit");
+    expect(getPinetControlCommandFromText("please /reload")).toBeNull();
+  });
+
+  it("builds structured control metadata", () => {
+    expect(buildPinetControlMetadata("reload")).toEqual({
+      kind: "pinet_control",
+      command: "reload",
+    });
+  });
+
+  it("extracts structured control commands from a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "hello",
+        metadata: { a2a: true, kind: "pinet_control", command: "reload" },
+      }),
+    ).toBe("reload");
+  });
+
+  it("falls back to slash commands for a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "/exit stale config",
+        metadata: { a2a: true },
+      }),
+    ).toBe("exit");
+  });
+
+  it("ignores slash commands from non-a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "123.456",
+        body: "/reload",
+        metadata: { channel: "D123" },
+      }),
+    ).toBeNull();
   });
 });
 

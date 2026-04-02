@@ -229,10 +229,15 @@ export class BrokerClient {
 
   // ─── Agent-to-agent messaging ─────────────────────────
 
-  async sendAgentMessage(target: string, body: string): Promise<number> {
+  async sendAgentMessage(
+    target: string,
+    body: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<number> {
     const result = (await this.request("agent.message", {
       targetAgent: target,
       body,
+      ...(metadata ? { metadata } : {}),
     })) as { ok: boolean; messageId: number };
     return result.messageId;
   }

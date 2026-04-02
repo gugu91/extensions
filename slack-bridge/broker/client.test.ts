@@ -650,17 +650,21 @@ describe("BrokerClient — sendAgentMessage", () => {
     const client = new BrokerClient(mock.connectOpts);
     await client.connect();
 
-    const msgPromise = client.sendAgentMessage("target-agent", "Hello agent");
+    const msgPromise = client.sendAgentMessage("target-agent", "Hello agent", {
+      kind: "pinet_control",
+      command: "reload",
+    });
 
     await waitFor(() => mock.received.length > 0);
     const req = JSON.parse(mock.received[0]) as {
       id: number;
       method: string;
-      params: { targetAgent: string; body: string };
+      params: { targetAgent: string; body: string; metadata?: Record<string, unknown> };
     };
     expect(req.method).toBe("agent.message");
     expect(req.params.targetAgent).toBe("target-agent");
     expect(req.params.body).toBe("Hello agent");
+    expect(req.params.metadata).toEqual({ kind: "pinet_control", command: "reload" });
 
     mock.respondTo(mock.connections[0], req.id, { ok: true, messageId: 42 });
 
