@@ -188,6 +188,18 @@ describe("MessageRouter — route", () => {
     const decision = router.route(makeMessage({ text: "hey CodeBot, review this" }));
 
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBe("a1");
+  });
+
+  it("routes by agent name mention in an existing unclaimed thread", () => {
+    const agent = makeAgent({ id: "a1", name: "CodeBot" });
+    db.agents = [agent];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: null }));
+
+    const decision = router.route(makeMessage({ text: "hey CodeBot, review this" }));
+
+    expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBe("a1");
   });
 
   it("returns unrouted when no match", () => {
@@ -457,10 +469,14 @@ describe("MessageRouter — multi-agent scenarios", () => {
   });
 
   it("mentions route to the correct agent among many", () => {
-    const d1 = router.route(makeMessage({ text: "hey ReviewBot, check this" }));
+    const d1 = router.route(
+      makeMessage({ threadId: "t-review", text: "hey ReviewBot, check this" }),
+    );
     expect(d1).toEqual({ action: "deliver", agentId: "a2" });
 
-    const d2 = router.route(makeMessage({ text: "DeployBot deploy to staging" }));
+    const d2 = router.route(
+      makeMessage({ threadId: "t-deploy", text: "DeployBot deploy to staging" }),
+    );
     expect(d2).toEqual({ action: "deliver", agentId: "a3" });
   });
 

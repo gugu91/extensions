@@ -59,7 +59,7 @@ export class MessageRouter {
     // 1. Thread ownership — if thread already has an owner, route there.
     //    Disconnected owners are only routable during an explicit resumable
     //    window; graceful unregister should release ownership immediately.
-    const thread = this.db.getThread(msg.threadId);
+    let thread = this.db.getThread(msg.threadId);
     if (thread?.ownerAgent) {
       const owner = this.db.getAgentById(thread.ownerAgent);
       if (owner && isRoutableOwner(owner)) {
@@ -67,6 +67,7 @@ export class MessageRouter {
       }
       // Owner is gone or no longer routable — clear ownership and fall through.
       this.db.updateThread(msg.threadId, { ownerAgent: null });
+      thread = this.db.getThread(msg.threadId);
     }
 
     // 2. Channel assignment — if channel is mapped to a connected agent
@@ -78,13 +79,24 @@ export class MessageRouter {
       }
     }
 
-    // 3. Direct address — message mentions an agent by name
-    //    Only for NEW threads (no existing record), so we don't
-    //    steal threads that already have history with another agent.
-    if (!thread) {
+    // 3. Direct address — message mentions an agent by name.
+    //    If the thread is new or currently unclaimed, bind it to the
+    //    mentioned agent so follow-up replies keep routing there.
+    if (!thread?.ownerAgent) {
       const mentioned = findAgentMention(msg.text, agents);
       if (mentioned) {
-        return { action: "deliver", agentId: mentioned.id };
+        const claimed = this.db.claimThread(msg.threadId, mentioned.id, msg.source, msg.channel);
+        if (claimed) {
+          return { action: "deliver", agentId: mentioned.id };
+        }
+
+        const claimedThread = this.db.getThread(msg.threadId);
+        const claimedOwner = claimedThread?.ownerAgent
+          ? this.db.getAgentById(claimedThread.ownerAgent)
+          : null;
+        if (claimedOwner && isRoutableOwner(claimedOwner)) {
+          return { action: "deliver", agentId: claimedOwner.id };
+        }
       }
     }
 

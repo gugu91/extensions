@@ -782,6 +782,44 @@ describe("broker integration — router with real DB", () => {
     });
 
     expect(decision).toEqual({ action: "deliver", agentId: "code-bot" });
+    expect(db.getThread("t-new")?.ownerAgent).toBe("code-bot");
+  });
+
+  it("binds an existing unclaimed thread when a human directly addresses an agent", () => {
+    const router = new MessageRouter(db);
+
+    db.registerAgent("code-bot", "CodeBot", "🤖", process.pid);
+    db.createThread({
+      threadId: "t-known",
+      source: "slack",
+      channel: "C123",
+      ownerAgent: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const firstDecision = router.route({
+      source: "slack",
+      threadId: "t-known",
+      channel: "C123",
+      userId: "U1",
+      text: "CodeBot can you pick this up?",
+      timestamp: "456",
+    });
+
+    expect(firstDecision).toEqual({ action: "deliver", agentId: "code-bot" });
+    expect(db.getThread("t-known")?.ownerAgent).toBe("code-bot");
+
+    const followUpDecision = router.route({
+      source: "slack",
+      threadId: "t-known",
+      channel: "C123",
+      userId: "U1",
+      text: "following up without another mention",
+      timestamp: "457",
+    });
+
+    expect(followUpDecision).toEqual({ action: "deliver", agentId: "code-bot" });
   });
 
   it("returns unrouted for unknown thread with no matching agent", () => {
