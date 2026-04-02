@@ -116,7 +116,9 @@ describe("slack-bridge top-level shutdown", () => {
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(createChannel).toBeDefined();
+    expect(tools.has("pinet_free")).toBe(true);
     expect(commands.has("pinet-start")).toBe(true);
+    expect(commands.has("pinet-free")).toBe(true);
 
     await sessionStart?.({}, ctx);
 

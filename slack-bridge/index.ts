@@ -1681,6 +1681,44 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "pinet_free",
+    label: "Pinet Free",
+    description: "Signal that this Pinet agent is idle/free and available for new work.",
+    promptSnippet:
+      "When you have finished all assigned work and already reported the outcome, call this to mark yourself idle/free for new assignments.",
+    parameters: Type.Object({
+      note: Type.Optional(
+        Type.String({ description: "Optional short note about what you just finished" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy("pinet_free", undefined, `note=${params.note ?? ""}`);
+
+      const note = typeof params.note === "string" ? params.note.trim() : "";
+      const result = signalAgentFree(undefined, { requirePinet: true });
+      const inboxSuffix =
+        result.queuedInboxCount > 0
+          ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`
+          : "";
+      const noteSuffix = note ? ` Note: ${note}.` : "";
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Marked this Pinet agent idle/free for new work.${noteSuffix}${inboxSuffix}`,
+          },
+        ],
+        details: {
+          status: "idle",
+          note: note || null,
+          queuedInboxCount: result.queuedInboxCount,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "pinet_schedule",
     label: "Pinet Schedule",
     description: "Schedule a future wake-up message for the current Pinet agent.",
@@ -1985,6 +2023,11 @@ export default function (pi: ExtensionAPI) {
         }
 
         syncBrokerDbInbox(selfId, broker.db);
+      });
+      broker.server.onAgentStatusChange((_agentId, status) => {
+        if (status === "idle") {
+          runBrokerMaintenance(ctx);
+        }
       });
 
       startBrokerHeartbeat();
@@ -2362,6 +2405,27 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
+  pi.registerCommand("pinet-free", {
+    description: "Mark this Pinet agent idle/free for new work",
+    handler: async (_args, ctx) => {
+      if (!pinetEnabled) {
+        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
+        return;
+      }
+
+      try {
+        const result = signalAgentFree(ctx, { requirePinet: true });
+        const suffix = result.drainedQueuedInbox
+          ? ` Processing ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? "" : "s"} now.`
+          : result.queuedInboxCount > 0
+            ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`
+            : "";
+        ctx.ui.notify(`Marked ${agentEmoji} ${agentName} idle/free for new work.${suffix}`, "info");
+      } catch (err) {
+        ctx.ui.notify(`Pinet free failed: ${msg(err)}`, "error");
+      }
+    },
+  });
   pi.registerCommand("pinet-status", {
     description: "Show Pinet status",
     handler: async (_args, ctx) => {
@@ -2539,6 +2603,31 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  function signalAgentFree(
+    ctx?: ExtensionContext,
+    options: { requirePinet?: boolean } = {},
+  ): { queuedInboxCount: number; drainedQueuedInbox: boolean } {
+    if (!pinetEnabled) {
+      if (options.requirePinet) {
+        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      }
+      return { queuedInboxCount: inbox.length, drainedQueuedInbox: false };
+    }
+
+    reportStatus("idle");
+    if (brokerRole === "broker" && ctx) {
+      runBrokerMaintenance(ctx);
+    }
+
+    const queuedInboxCount = inbox.length;
+    const drainedQueuedInbox = queuedInboxCount > 0 && (ctx ? (ctx.isIdle?.() ?? true) : false);
+    if (drainedQueuedInbox) {
+      drainInbox();
+    }
+
+    return { queuedInboxCount, drainedQueuedInbox };
+  }
+
   function deliverFollowUpMessage(text: string): boolean {
     try {
       pi.sendUserMessage(text, { deliverAs: "followUp" });
@@ -2650,8 +2739,8 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // When agent finishes: clear thinking status + auto-drain inbox
-  pi.on("agent_end", async () => {
+  // When agent finishes: clear thinking status, mark free, and auto-drain inbox
+  pi.on("agent_end", async (_event, ctx) => {
     for (const ts of thinking) {
       const thread = threads.get(ts);
       if (thread) await clearThreadStatus(thread.channelId, ts);
@@ -2659,8 +2748,7 @@ export default function (pi: ExtensionAPI) {
     thinking.clear();
     brokerRalphLoopFollowUpPending = false;
 
-    reportStatus("idle");
-    drainInbox();
+    signalAgentFree(ctx);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
