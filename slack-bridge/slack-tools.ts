@@ -23,7 +23,6 @@ export interface RegisterSlackToolsDeps {
   trackOutboundThread: (threadTs: string, channelId: string) => void;
   claimThreadOwnership: (threadTs: string, channelId: string) => void;
   clearPendingEyes: (threadTs: string) => void;
-  getThreadChannel: (threadTs: string) => string | null;
   registerConfirmationRequest: (
     threadTs: string,
     tool: string,
@@ -79,7 +78,6 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     trackOutboundThread,
     claimThreadOwnership,
     clearPendingEyes,
-    getThreadChannel,
     registerConfirmationRequest,
   } = deps;
 
@@ -211,7 +209,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `thread_ts=${params.thread_ts} | limit=${params.limit ?? 20}`,
       );
 
-      const channel = getThreadChannel(params.thread_ts) ?? getLastDmChannel();
+      const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? getLastDmChannel();
       if (!channel) {
         throw new Error("Unknown thread.");
       }
@@ -417,7 +415,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       tool: Type.String({ description: "Name of the tool that requires confirmation" }),
     }),
     async execute(_id, params) {
-      const channelId = getThreadChannel(params.thread_ts);
+      const channelId = await resolveFollowerReplyChannel(params.thread_ts);
       if (!channelId) {
         throw new Error(`No active Slack thread for thread_ts: ${params.thread_ts}`);
       }

@@ -376,13 +376,14 @@ export default function (pi: ExtensionAPI) {
     if (!threadTs) return null;
 
     const existingThread = threads.get(threadTs);
-    const followerClient = brokerRole === "follower" ? brokerClient?.client : undefined;
-    const resolved = await resolveFollowerThreadChannel(
-      threadTs,
-      existingThread,
-      brokerRole,
-      followerClient ? (nextThreadTs) => followerClient.resolveThread(nextThreadTs) : undefined,
-    );
+    const brokerRef = brokerRole === "broker" ? activeBroker : null;
+    const followerClient = brokerRole === "follower" ? brokerClient?.client : null;
+    const resolveThread = brokerRef
+      ? async (nextThreadTs: string) => brokerRef.db.getThread(nextThreadTs)?.channel ?? null
+      : followerClient
+        ? (nextThreadTs: string) => followerClient.resolveThread(nextThreadTs)
+        : undefined;
+    const resolved = await resolveFollowerThreadChannel(threadTs, existingThread, resolveThread);
 
     if (resolved.threadUpdate && resolved.changed) {
       threads.set(threadTs, {
@@ -901,7 +902,6 @@ export default function (pi: ExtensionAPI) {
       }
       pendingEyes.delete(threadTs);
     },
-    getThreadChannel: (threadTs) => threads.get(threadTs)?.channelId ?? null,
     registerConfirmationRequest,
   });
 
@@ -1474,9 +1474,9 @@ export default function (pi: ExtensionAPI) {
           appToken: appToken!,
           allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
           suggestedPrompts: settings.suggestedPrompts,
-          isOwnedThread: (threadTs: string) => {
-            const thread = broker.db.getThread(threadTs);
-            return thread?.ownerAgent != null;
+          isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
+          rememberKnownThread: (threadTs: string, channelId: string) => {
+            broker.db.updateThread(threadTs, { source: "slack", channel: channelId });
           },
         });
 
@@ -1505,10 +1505,18 @@ export default function (pi: ExtensionAPI) {
         }
 
         adapter.onInbound((inMsg) => {
-          // Track thread metadata without claiming broker ownership.
+          // Track thread metadata locally as a cache without claiming broker ownership.
           trackBrokerInboundThread(threads, inMsg);
 
           const decision = router.route(inMsg);
+
+          if (inMsg.threadId && inMsg.channel) {
+            broker.db.updateThread(inMsg.threadId, {
+              source: inMsg.source,
+              channel: inMsg.channel,
+            });
+          }
+
           if (decision.action === "deliver" && decision.agentId !== selfId) {
             broker.db.queueMessage(decision.agentId, inMsg);
             return;

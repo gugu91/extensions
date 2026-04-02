@@ -16,8 +16,10 @@ export interface SlackAdapterConfig {
   appToken: string;
   allowedUsers?: string[];
   suggestedPrompts?: { title: string; message: string }[];
-  /** Check whether a thread_ts belongs to a thread the bot owns in the broker DB. */
-  isOwnedThread?: (threadTs: string) => boolean;
+  /** Check whether a thread_ts belongs to a known thread in the broker DB. */
+  isKnownThread?: (threadTs: string) => boolean;
+  /** Persist thread metadata in the broker DB without claiming ownership. */
+  rememberKnownThread?: (threadTs: string, channelId: string) => void;
 }
 
 interface SlackThreadInfo {
@@ -108,14 +110,14 @@ export type MessageClassification =
 
 /**
  * Classify an incoming Slack message event. Determines whether the
- * message is relevant (DM, tracked thread, or bot mention) and
+ * message is relevant (DM, known thread, or bot mention) and
  * extracts the cleaned fields.
  */
 export function classifyMessage(
   evt: Record<string, unknown>,
   botUserId: string | null,
   trackedThreadIds: Set<string>,
-  isOwnedThread?: (threadTs: string) => boolean,
+  isKnownThread?: (threadTs: string) => boolean,
 ): MessageClassification {
   // Skip bot messages and messages with subtypes (joins, edits, etc.)
   if (evt.subtype || evt.bot_id) return { relevant: false };
@@ -126,15 +128,14 @@ export function classifyMessage(
   const channel = evt.channel as string;
   const channelType = evt.channel_type as string | undefined;
 
-  const isTracked = !!threadTs && trackedThreadIds.has(threadTs);
-  const isOwned = !isTracked && !!threadTs && (isOwnedThread?.(threadTs) ?? false);
+  const isKnown = !!threadTs && (isKnownThread?.(threadTs) ?? trackedThreadIds.has(threadTs));
   const isDM = channelType === "im";
   const isMention = botUserId != null && text.includes(`<@${botUserId}>`);
 
-  if (!isTracked && !isOwned && !isDM && !isMention) return { relevant: false };
+  if (!isKnown && !isDM && !isMention) return { relevant: false };
 
   const effectiveTs = threadTs ?? (evt.ts as string);
-  const isChannelMention = isMention && !isDM && !isTracked && !isOwned;
+  const isChannelMention = isMention && !isDM && !isKnown;
 
   const cleanText = isChannelMention && botUserId ? stripBotMention(text, botUserId) : text;
 
@@ -358,6 +359,11 @@ export class SlackAdapter implements MessageAdapter {
     }
 
     this.threads.set(info.threadTs, info);
+    try {
+      this.config.rememberKnownThread?.(info.threadTs, info.channelId);
+    } catch {
+      /* best effort — DB cache sync must not break Slack event handling */
+    }
     await this.setSuggestedPrompts(info.channelId, info.threadTs);
   }
 
@@ -386,7 +392,7 @@ export class SlackAdapter implements MessageAdapter {
       evt,
       this.botUserId,
       this.getTrackedThreadIds(),
-      this.config.isOwnedThread,
+      this.config.isKnownThread,
     );
     if (!classified.relevant) return;
 

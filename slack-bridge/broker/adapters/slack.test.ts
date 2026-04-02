@@ -305,31 +305,31 @@ describe("classifyMessage", () => {
     }
   });
 
-  // ─── isOwnedThread callback ─────────────────────────────
+  // ─── isKnownThread callback ─────────────────────────────
 
-  it("accepts thread replies in broker-owned threads without @mention", () => {
-    const isOwnedThread = (ts: string) => ts === "500.600";
+  it("accepts thread replies in broker-known threads without @mention", () => {
+    const isKnownThread = (ts: string) => ts === "500.600";
     const evt = {
       type: "message",
       user: "U1",
-      text: "follow up in owned thread",
+      text: "follow up in known thread",
       channel: "C1",
       channel_type: "channel",
       thread_ts: "500.600",
       ts: "500.700",
     };
-    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    const result = classifyMessage(evt, botId, emptyTracked, isKnownThread);
     expect(result.relevant).toBe(true);
     if (result.relevant) {
       expect(result.threadTs).toBe("500.600");
       expect(result.isChannelMention).toBe(false);
-      expect(result.text).toBe("follow up in owned thread");
+      expect(result.text).toBe("follow up in known thread");
       expect(result.isDM).toBe(false);
     }
   });
 
-  it("rejects thread replies in non-owned threads without @mention", () => {
-    const isOwnedThread = () => false;
+  it("rejects thread replies in unknown threads without @mention", () => {
+    const isKnownThread = () => false;
     const evt = {
       type: "message",
       user: "U1",
@@ -339,12 +339,12 @@ describe("classifyMessage", () => {
       thread_ts: "600.700",
       ts: "600.800",
     };
-    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    const result = classifyMessage(evt, botId, emptyTracked, isKnownThread);
     expect(result).toEqual({ relevant: false });
   });
 
-  it("does not set isChannelMention for @mention in broker-owned thread", () => {
-    const isOwnedThread = (ts: string) => ts === "700.800";
+  it("does not set isChannelMention for @mention in broker-known thread", () => {
+    const isKnownThread = (ts: string) => ts === "700.800";
     const evt = {
       type: "message",
       user: "U1",
@@ -354,7 +354,7 @@ describe("classifyMessage", () => {
       thread_ts: "700.800",
       ts: "700.900",
     };
-    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    const result = classifyMessage(evt, botId, emptyTracked, isKnownThread);
     expect(result.relevant).toBe(true);
     if (result.relevant) {
       expect(result.isChannelMention).toBe(false);
@@ -363,26 +363,25 @@ describe("classifyMessage", () => {
     }
   });
 
-  it("prefers local tracked set over isOwnedThread callback", () => {
-    const isOwnedThread = vi.fn(() => true);
+  it("uses the broker-known callback as the source of truth when provided", () => {
+    const isKnownThread = vi.fn(() => false);
     const tracked = new Set(["800.900"]);
     const evt = {
       type: "message",
       user: "U1",
-      text: "reply in tracked thread",
+      text: "reply in stale locally tracked thread",
       channel: "C1",
       channel_type: "channel",
       thread_ts: "800.900",
       ts: "800.950",
     };
-    const result = classifyMessage(evt, botId, tracked, isOwnedThread);
-    expect(result.relevant).toBe(true);
-    // isOwnedThread should NOT be called because isTracked was true first
-    expect(isOwnedThread).not.toHaveBeenCalled();
+    const result = classifyMessage(evt, botId, tracked, isKnownThread);
+    expect(result).toEqual({ relevant: false });
+    expect(isKnownThread).toHaveBeenCalledWith("800.900");
   });
 
-  it("does not call isOwnedThread for messages without thread_ts", () => {
-    const isOwnedThread = vi.fn(() => true);
+  it("does not call isKnownThread for messages without thread_ts", () => {
+    const isKnownThread = vi.fn(() => true);
     const evt = {
       type: "message",
       user: "U1",
@@ -391,12 +390,12 @@ describe("classifyMessage", () => {
       channel_type: "channel",
       ts: "900.100",
     };
-    const result = classifyMessage(evt, botId, emptyTracked, isOwnedThread);
+    const result = classifyMessage(evt, botId, emptyTracked, isKnownThread);
     expect(result).toEqual({ relevant: false });
-    expect(isOwnedThread).not.toHaveBeenCalled();
+    expect(isKnownThread).not.toHaveBeenCalled();
   });
 
-  it("works without isOwnedThread callback (backward compatible)", () => {
+  it("works without isKnownThread callback (backward compatible)", () => {
     const evt = {
       type: "message",
       user: "U1",
@@ -485,12 +484,39 @@ describe("SlackAdapter", () => {
     expect(adapter.name).toBe("slack");
   });
 
-  it("can be constructed with isOwnedThread callback", () => {
+  it("can be constructed with isKnownThread callback", () => {
     const adapter = new SlackAdapter({
       ...baseConfig,
-      isOwnedThread: () => false,
+      isKnownThread: () => false,
     });
     expect(adapter.name).toBe("slack");
+  });
+
+  it("records known threads on assistant_thread_started without claiming ownership", async () => {
+    const rememberKnownThread = vi.fn();
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      rememberKnownThread,
+    });
+    vi.spyOn(
+      adapter as unknown as { setSuggestedPrompts: () => Promise<void> },
+      "setSuggestedPrompts",
+    ).mockResolvedValue(undefined);
+
+    await (
+      adapter as unknown as {
+        onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "C123",
+        thread_ts: "123.456",
+        user_id: "U123",
+      },
+    });
+
+    expect(rememberKnownThread).toHaveBeenCalledWith("123.456", "C123");
   });
 
   it("registers an inbound handler", () => {
