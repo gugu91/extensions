@@ -52,7 +52,7 @@ import {
   type SecurityGuardrails,
 } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
-import { startBroker, type BrokerDB } from "./broker/index.js";
+import { startBroker, type Broker, type BrokerDB } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
@@ -99,7 +99,13 @@ async function slack(
 
 // Settings and helpers imported from ./helpers.js
 
-// ─── Extension ───────────────────────────────────────────
+/**
+ * Reference to the broker client with polling interval management.
+ */
+type BrokerClientRef = {
+  client: BrokerClient;
+  pollInterval: ReturnType<typeof setInterval> | null;
+};
 
 export default function (pi: ExtensionAPI) {
   const settings = loadSettingsFromFile();
@@ -378,7 +384,7 @@ export default function (pi: ExtensionAPI) {
       existingThread,
       brokerRole,
       brokerRole === "follower" && brokerClient?.client
-        ? (nextThreadTs) => (brokerClient.client as BrokerClient).resolveThread(nextThreadTs)
+        ? (nextThreadTs) => brokerClient!.client.resolveThread(nextThreadTs)
         : undefined,
     );
 
@@ -932,7 +938,7 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(actualTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void (brokerClient.client as BrokerClient).claimThread(actualTs, channel).catch(() => {
+        void brokerClient.client.claimThread(actualTs, channel).catch(() => {
           /* broker gone, best effort */
         });
       }
@@ -1106,7 +1112,7 @@ export default function (pi: ExtensionAPI) {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(actualTs, activeSelfId);
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void (brokerClient.client as BrokerClient).claimThread(actualTs, channelId).catch(() => {
+        void brokerClient.client.claimThread(actualTs, channelId).catch(() => {
           /* broker gone, best effort */
         });
       }
@@ -1234,10 +1240,8 @@ export default function (pi: ExtensionAPI) {
   // Forward-declared — assigned in the Commands section below.
   let pinetEnabled = false;
   let brokerRole: "broker" | "follower" | null = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let activeBroker: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let brokerClient: any = null;
+  let activeBroker: Broker | null = null;
+  let brokerClient: BrokerClientRef | null = null;
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -1255,9 +1259,11 @@ export default function (pi: ExtensionAPI) {
   function startBrokerHeartbeat(): void {
     stopBrokerHeartbeat();
     if (!activeBroker || !activeSelfId) return;
+    const broker = activeBroker;
+    const selfId = activeSelfId;
     brokerHeartbeatTimer = setInterval(() => {
       try {
-        (activeBroker.db as BrokerDB).heartbeatAgent(activeSelfId!);
+        broker.db.heartbeatAgent(selfId);
       } catch {
         /* best effort */
       }
@@ -1604,7 +1610,7 @@ export default function (pi: ExtensionAPI) {
         resumableUntil?: string | null;
       }>;
       if (brokerRole === "broker" && activeBroker) {
-        rawAgents = (activeBroker.db as BrokerDB)
+        rawAgents = activeBroker.db
           .getAllAgents()
           .filter((agent) => includeGhosts || !agent.disconnectedAt)
           .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
@@ -1620,7 +1626,7 @@ export default function (pi: ExtensionAPI) {
             resumableUntil: agent.resumableUntil,
           }));
       } else if (brokerRole === "follower" && brokerClient) {
-        rawAgents = (await (brokerClient.client as BrokerClient).listAgents(includeGhosts))
+        rawAgents = (await brokerClient.client.listAgents(includeGhosts))
           .filter((agent) => includeGhosts || !agent.disconnectedAt)
           .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
           .map((agent) => ({
@@ -2087,9 +2093,9 @@ export default function (pi: ExtensionAPI) {
     if (!pinetEnabled) return;
     try {
       if (brokerRole === "broker" && activeBroker && activeSelfId) {
-        (activeBroker.db as BrokerDB).updateAgentStatus(activeSelfId, status);
+        activeBroker.db.updateAgentStatus(activeSelfId, status);
       } else if (brokerRole === "follower" && brokerClient) {
-        (brokerClient.client as BrokerClient).updateStatus(status).catch(() => {
+        brokerClient.client.updateStatus(status).catch(() => {
           /* best effort */
         });
       }
@@ -2170,7 +2176,7 @@ export default function (pi: ExtensionAPI) {
     if (activeBroker) {
       try {
         if (activeSelfId) {
-          (activeBroker.db as BrokerDB).unregisterAgent(activeSelfId);
+          activeBroker.db.unregisterAgent(activeSelfId);
         }
         await activeBroker.stop();
       } catch {
@@ -2185,8 +2191,10 @@ export default function (pi: ExtensionAPI) {
     lastBrokerRalphLoopSignature = "";
     if (brokerClient) {
       try {
-        clearInterval(brokerClient.pollInterval);
-        await (brokerClient.client as BrokerClient).unregister().catch(() => {
+        if (brokerClient.pollInterval) {
+          clearInterval(brokerClient.pollInterval);
+        }
+        await brokerClient.client.unregister().catch(() => {
           /* best effort */
         });
         brokerClient.client.disconnect();
