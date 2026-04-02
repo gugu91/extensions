@@ -675,6 +675,11 @@ export function buildWorkerPromptGuidelines(): string[] {
     "3. If you hit a blocker, report it immediately and ask for what you need — blocked work must be visible so it can be unblocked or reassigned.",
     "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
     "Always reply where the task came from.",
+    "",
+    "REPLY TOOL RULES:",
+    "- If you received a task via `pinet_message`, reply via `pinet_message` to the sender.",
+    "- If you received a task in a Slack thread, reply via `slack_send` in that thread.",
+    "- Never use `slack_post_channel` with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
   ];
 }
 
