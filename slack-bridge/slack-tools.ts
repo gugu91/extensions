@@ -11,6 +11,7 @@ import {
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
 } from "./canvases.js";
+import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
 
 export interface RegisterSlackToolsDeps {
@@ -48,6 +49,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "Security guardrails may be active for Slack-triggered actions. Check the current security prompt in each message for restrictions.",
     "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
     "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
+    "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
@@ -111,7 +113,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     };
   }
 
-  async function resolveUploadChannel(
+  async function resolveSlackTargetChannel(
     threadTs: string | undefined,
     channel: string | undefined,
   ): Promise<string> {
@@ -309,7 +311,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       );
 
       const upload = await prepareSlackUpload(params, process.cwd(), os.tmpdir());
-      const channelId = await resolveUploadChannel(params.thread_ts, params.channel);
+      const channelId = await resolveSlackTargetChannel(params.thread_ts, params.channel);
       const { fileId, response } = await performSlackUpload({
         upload,
         channelId,
@@ -508,6 +510,82 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           },
         ],
         details: { ts, channel: channelId },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_schedule",
+    label: "Slack Schedule",
+    description:
+      "Schedule a Slack message for later using chat.scheduleMessage. Supports relative delays and absolute times.",
+    promptSnippet:
+      "Schedule a Slack message for later instead of waiting around. Use it for reminders, timed announcements, and delayed follow-ups.",
+    parameters: Type.Object({
+      text: Type.String({ description: "Message text (Slack markdown)" }),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Channel name or ID. Omit to use the current thread channel, active DM, or defaultChannel.",
+        }),
+      ),
+      thread_ts: Type.Optional(
+        Type.String({ description: "Optional thread timestamp to reply in later" }),
+      ),
+      delay: Type.Optional(
+        Type.String({ description: "Relative delay like 5m, 30s, 1h30m, or 1d" }),
+      ),
+      at: Type.Optional(
+        Type.String({ description: "Absolute ISO-8601 UTC time, e.g. 2026-04-02T14:30:00Z" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_schedule",
+        params.thread_ts,
+        `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | delay=${params.delay ?? ""} | at=${params.at ?? ""} | text=${params.text}`,
+      );
+
+      const text = params.text.trim();
+      if (!text) {
+        throw new Error("text is required");
+      }
+
+      const channelId = await resolveSlackTargetChannel(params.thread_ts, params.channel);
+      const fireAt = resolveScheduledWakeupFireAt({ delay: params.delay, at: params.at });
+      const postAt = Math.floor(Date.parse(fireAt) / 1000);
+
+      const body: Record<string, unknown> = {
+        channel: channelId,
+        text,
+        post_at: postAt,
+      };
+      if (params.thread_ts) {
+        body.thread_ts = params.thread_ts;
+      }
+
+      const response = await slack("chat.scheduleMessage", getBotToken(), body);
+      const scheduledMessageId =
+        typeof response.scheduled_message_id === "string"
+          ? response.scheduled_message_id
+          : undefined;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: params.thread_ts
+              ? `Scheduled message for ${fireAt} in thread ${params.thread_ts}.`
+              : `Scheduled message for ${fireAt} in channel ${params.channel ?? channelId}.`,
+          },
+        ],
+        details: {
+          channel: channelId,
+          post_at: postAt,
+          fire_at: fireAt,
+          ...(scheduledMessageId ? { scheduled_message_id: scheduledMessageId } : {}),
+          ...(params.thread_ts ? { thread_ts: params.thread_ts } : {}),
+        },
       };
     },
   });

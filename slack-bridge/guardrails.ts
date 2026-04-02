@@ -35,6 +35,7 @@ export const WRITE_TOOLS = new Set([
   "slack_create_channel",
   "slack_post_channel",
   "slack_upload",
+  "slack_schedule",
   "pinet_schedule",
 ]);
 
