@@ -14,6 +14,7 @@ uploads are also in active flight.
 | Package                         | Description                                                                |
 | ------------------------------- | -------------------------------------------------------------------------- |
 | [`slack-bridge`](slack-bridge/) | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling |
+| [`slack-api`](slack-api/)       | Typed Slack Web API client + CLI generated from OpenAPI                    |
 | [`nvim-bridge`](nvim-bridge/)   | Neovim editor context sync + PiComms persistent comments                   |
 | [`neon-psql`](neon-psql/)       | Config-driven Neon tunnel + `psql` tool                                    |
 | [`types`](types/)               | Shared ambient type declarations                                           |
@@ -83,6 +84,10 @@ extensions/
 ├── slack-bridge/       # @gugu91/pi-slack-bridge
 │   ├── broker/         #   message routing, socket server, adapters
 │   ├── index.ts        #   extension entry point
+│   └── package.json    #   workspace package + pi manifest
+├── slack-api/          # @gugu91/pi-slack-api
+│   ├── generated/      #   generated typed Slack Web API client
+│   ├── cli.ts          #   CLI wrapper around generated methods
 │   └── package.json    #   workspace package + pi manifest
 ├── nvim-bridge/        # @gugu91/pi-nvim-bridge
 │   ├── nvim/           #   Neovim Lua plugin

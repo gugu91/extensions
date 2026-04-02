@@ -13,6 +13,7 @@
   "include": [
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",
+    "slack-api/**/*.ts",
     "slack-bridge/**/*.ts",
     "types/**/*.d.ts",
     "vitest.config.ts"
