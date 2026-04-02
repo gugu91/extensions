@@ -56,7 +56,7 @@ import {
   type SecurityGuardrails,
 } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
-import { startBroker, type Broker, type BrokerDB } from "./broker/index.js";
+import { startBroker, type Broker } from "./broker/index.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
@@ -349,13 +349,12 @@ export default function (pi: ExtensionAPI) {
     if (!threadTs) return null;
 
     const existingThread = threads.get(threadTs);
+    const followerClient = brokerRole === "follower" ? brokerClient?.client : undefined;
     const resolved = await resolveFollowerThreadChannel(
       threadTs,
       existingThread,
       brokerRole,
-      brokerRole === "follower" && brokerClient?.client
-        ? (nextThreadTs) => brokerClient!.client.resolveThread(nextThreadTs)
-        : undefined,
+      followerClient ? (nextThreadTs) => followerClient.resolveThread(nextThreadTs) : undefined,
     );
 
     if (resolved.threadUpdate && resolved.changed) {
@@ -910,7 +909,7 @@ export default function (pi: ExtensionAPI) {
 
     brokerMaintenanceRunning = true;
     try {
-      const result = runBrokerMaintenancePass(activeBroker.db as BrokerDB, {
+      const result = runBrokerMaintenancePass(activeBroker.db, {
         brokerAgentId: activeSelfId,
         staleAfterMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
         busyAssignmentAgeMs: DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
@@ -948,7 +947,7 @@ export default function (pi: ExtensionAPI) {
 
   function sendBrokerMaintenanceMessage(targetAgentId: string, body: string): void {
     if (!activeBroker || !activeSelfId) return;
-    const db = activeBroker.db as BrokerDB;
+    const db = activeBroker.db;
     const target = db.getAgentById(targetAgentId);
     if (!target) return;
 
@@ -972,7 +971,7 @@ export default function (pi: ExtensionAPI) {
     try {
       runBrokerMaintenance(ctx);
 
-      const db = activeBroker.db as BrokerDB;
+      const db = activeBroker.db;
       const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
 
       const workloads = db.getAllAgents().map((agent) => ({
@@ -1143,7 +1142,7 @@ export default function (pi: ExtensionAPI) {
 
       if (brokerRole === "broker" && activeBroker) {
         // Direct DB access for broker mode
-        const db = activeBroker.db as BrokerDB;
+        const db = activeBroker.db;
         const allAgents = db.getAgents();
         const target =
           allAgents.find((a: { id: string }) => a.id === params.to) ??
@@ -1183,7 +1182,7 @@ export default function (pi: ExtensionAPI) {
           details: { messageId: msg.id, target: target.name },
         };
       } else if (brokerRole === "follower" && brokerClient) {
-        const client = brokerClient.client as BrokerClient;
+        const client = brokerClient.client;
         const messageId = await client.sendAgentMessage(params.to, params.message);
 
         return {
@@ -1468,10 +1467,7 @@ export default function (pi: ExtensionAPI) {
     );
     applyBrokerIdentity(registration.name, registration.emoji);
 
-    const brokerClientRef: {
-      client: BrokerClient;
-      pollInterval: ReturnType<typeof setInterval> | null;
-    } = {
+    const brokerClientRef: BrokerClientRef = {
       client,
       pollInterval: null,
     };
