@@ -709,6 +709,19 @@ describe("SlackAdapter — connect", () => {
 // ─── SlackAdapter — disconnect ───────────────────────────
 
 describe("SlackAdapter — disconnect", () => {
+  let originalFetch: typeof globalThis.fetch;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchMock = vi.fn<typeof fetch>();
+    globalThis.fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
   it("can disconnect without prior connect", async () => {
     const adapter = new SlackAdapter({
       botToken: "xoxb-test",
@@ -717,6 +730,41 @@ describe("SlackAdapter — disconnect", () => {
     // Should not throw
     await adapter.disconnect();
     expect(adapter.isConnected()).toBe(false);
+  });
+
+  it("aborts in-flight Slack API calls during shutdown", async () => {
+    fetchMock.mockImplementation((_input, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        const rejectAbort = () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        };
+
+        if (signal?.aborted) {
+          rejectAbort();
+          return;
+        }
+
+        signal?.addEventListener("abort", rejectAbort, { once: true });
+      });
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+
+    const sendPromise = adapter.send({
+      channel: "C123",
+      threadId: "123.456",
+      text: "hello",
+    });
+
+    await adapter.disconnect();
+
+    await expect(sendPromise).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 

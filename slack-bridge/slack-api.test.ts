@@ -32,9 +32,10 @@ describe("callSlackApi", () => {
     const fetchSpy = vi.fn(async () => makeResponse(200, { ok: true, channel: "C1" }));
     vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
 
-    await expect(callSlackApi("chat.postMessage", "xoxb-token", { text: "hi" })).resolves.toEqual(
-      { ok: true, channel: "C1" },
-    );
+    await expect(callSlackApi("chat.postMessage", "xoxb-token", { text: "hi" })).resolves.toEqual({
+      ok: true,
+      channel: "C1",
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -51,10 +52,28 @@ describe("callSlackApi", () => {
       .mockResolvedValueOnce(makeResponse(200, { ok: true, channel: "C2" }));
     vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
 
-    await expect(callSlackApi("chat.postMessage", "xoxb-token", { text: "hi" })).resolves.toEqual(
-      { ok: true, channel: "C2" },
-    );
+    await expect(callSlackApi("chat.postMessage", "xoxb-token", { text: "hi" })).resolves.toEqual({
+      ok: true,
+      channel: "C2",
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts during 429 retry backoff when the signal is aborted", async () => {
+    const controller = new AbortController();
+    const fetchSpy = vi.fn(async () => makeResponse(429, { ok: false }, "10"));
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+
+    const pending = callSlackApi(
+      "chat.postMessage",
+      "xoxb-token",
+      { text: "hi" },
+      { signal: controller.signal },
+    );
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("throws on Slack API errors", async () => {

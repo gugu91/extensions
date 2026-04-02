@@ -145,6 +145,84 @@ export function buildSlackRequest(
   };
 }
 
+// ─── Abort / shutdown helpers ────────────────────────────
+
+export interface AbortableOperationTracker {
+  run<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  abortAndWait(): Promise<void>;
+  isAborting(): boolean;
+}
+
+export function createAbortError(message = "Operation aborted"): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(createAbortError());
+  }
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    function onAbort(): void {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(createAbortError());
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export function createAbortableOperationTracker(): AbortableOperationTracker {
+  let aborting = false;
+  const controllers = new Set<AbortController>();
+  const operations = new Set<Promise<unknown>>();
+
+  return {
+    async run<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+      if (aborting) {
+        throw createAbortError("Operation rejected: shutdown in progress");
+      }
+
+      const controller = new AbortController();
+      const tracked = Promise.resolve().then(() => operation(controller.signal));
+      controllers.add(controller);
+      operations.add(tracked);
+
+      try {
+        return await tracked;
+      } finally {
+        controllers.delete(controller);
+        operations.delete(tracked);
+      }
+    },
+
+    async abortAndWait(): Promise<void> {
+      aborting = true;
+      for (const controller of controllers) {
+        controller.abort();
+      }
+      if (operations.size === 0) return;
+      await Promise.allSettled(Array.from(operations));
+    },
+
+    isAborting(): boolean {
+      return aborting;
+    },
+  };
+}
+
 // ─── Mention stripping ───────────────────────────────────
 
 export function stripBotMention(text: string, botUserId: string): string {
@@ -1361,6 +1439,11 @@ export interface SlackResult {
   [key: string]: unknown;
 }
 
+export interface CallSlackAPIOptions {
+  signal?: AbortSignal;
+  retryCount?: number;
+}
+
 /**
  * Call Slack API with bounded retry logic (max 3 retries on rate limit).
  * Handles 429 rate-limit responses by waiting retry-after duration and retrying.
@@ -1370,19 +1453,24 @@ export async function callSlackAPI(
   method: string,
   token: string,
   body?: Record<string, unknown>,
-  _retryCount = 0,
+  options: CallSlackAPIOptions = {},
 ): Promise<SlackResult> {
+  const { signal, retryCount = 0 } = options;
   const { url, init } = buildSlackRequest(method, token, body);
-  const res = await fetch(url, init);
+  const res = await fetch(url, signal ? { ...init, signal } : init);
 
   if (res.status === 429) {
     const maxRetries = 3;
-    if (_retryCount >= maxRetries) {
+    if (retryCount >= maxRetries) {
       throw new Error(`Slack ${method}: rate limited after ${maxRetries} retries`);
     }
     const wait = Number(res.headers.get("retry-after") ?? "3");
-    await new Promise((r) => setTimeout(r, wait * 1000));
-    return callSlackAPI(method, token, body, _retryCount + 1);
+    if (signal) {
+      await abortableDelay(wait * 1000, signal);
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+    }
+    return callSlackAPI(method, token, body, { signal, retryCount: retryCount + 1 });
   }
 
   const data = (await res.json()) as SlackResult;
