@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import { BrokerDB } from "./schema.js";
-import { BrokerSocketServer, defaultSocketPath } from "./socket-server.js";
+import { BrokerSocketServer } from "./socket-server.js";
 import type { ListenTarget } from "./socket-server.js";
 import { LeaderLock } from "./leader.js";
+import { getDefaultSocketPath } from "./paths.js";
 import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
@@ -68,7 +69,7 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
   // Resolve listen target: explicit target > socketPath > default
   const target: ListenTarget = options.listenTarget ?? {
     type: "unix" as const,
-    path: options.socketPath ?? defaultSocketPath(),
+    path: options.socketPath ?? getDefaultSocketPath(),
   };
 
   // Clean up stale socket file (Unix only)

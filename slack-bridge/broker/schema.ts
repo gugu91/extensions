@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import { getDefaultDbPath } from "./paths.js";
 import type {
   AgentInfo,
   ThreadInfo,
@@ -122,7 +122,7 @@ function rowToBacklog(row: BacklogRow): BacklogEntry {
 // ─── Default DB path ─────────────────────────────────────
 
 export function defaultDbPath(): string {
-  return path.join(os.homedir(), ".pi", "pinet-broker.db");
+  return getDefaultDbPath();
 }
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;

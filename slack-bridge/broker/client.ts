@@ -1,6 +1,5 @@
 import * as net from "node:net";
-import * as os from "node:os";
-import * as path from "node:path";
+import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -61,7 +60,7 @@ interface JsonRpcResponse {
 
 // ─── Constants (exported for testing) ────────────────────
 
-export const DEFAULT_SOCKET_PATH = path.join(os.homedir(), ".pi", "pinet.sock");
+export const DEFAULT_SOCKET_PATH = PINET_DEFAULT_SOCKET_PATH;
 export const REQUEST_TIMEOUT_MS = 5000;
 export const RECONNECT_DELAY_MS = 3000;
 export const INITIAL_RECONNECT_DELAY_MS = 1000;

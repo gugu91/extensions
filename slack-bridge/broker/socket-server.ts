@@ -1,9 +1,10 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+
 import * as crypto from "node:crypto";
 import type { BrokerDB } from "./schema.js";
+import { DEFAULT_SOCKET_PATH } from "./paths.js";
 import { MessageRouter } from "./router.js";
 import type { BrokerMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcError } from "./types.js";
 import {
@@ -19,12 +20,6 @@ export type SlackProxyFn = (
   params: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
 
-export function defaultSocketPath(): string {
-  return path.join(os.homedir(), ".pi", "pinet.sock");
-}
-
-// Re-export as static for easier access
-export const DEFAULT_SOCKET_PATH = defaultSocketPath();
 export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 15_000;
 export const DEFAULT_PRUNE_INTERVAL_MS = 5_000;
 
@@ -141,7 +136,7 @@ export class BrokerSocketServer {
     } else if (target) {
       this.target = target;
     } else {
-      this.target = { type: "unix", path: defaultSocketPath() };
+      this.target = { type: "unix", path: DEFAULT_SOCKET_PATH };
     }
   }
 
