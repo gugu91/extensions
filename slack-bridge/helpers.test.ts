@@ -12,6 +12,9 @@ import {
   getPinetControlCommandFromText,
   buildPinetControlMetadata,
   extractPinetControlCommand,
+  queuePinetRemoteControl,
+  finishPinetRemoteControl,
+  reloadPinetRuntimeSafely,
   getSqliteJournalMode,
   isSqliteWalEnabled,
   buildSqliteWalFallbackWarning,
@@ -377,6 +380,107 @@ describe("Pinet control helpers", () => {
         metadata: { channel: "D123" },
       }),
     ).toBeNull();
+  });
+
+  it("queues a retry reload while reload is already running", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "reload", queuedCommand: null }, "reload"),
+    ).toMatchObject({
+      currentCommand: "reload",
+      queuedCommand: "reload",
+      accepted: true,
+      shouldStartNow: false,
+      status: "queued",
+    });
+  });
+
+  it("prefers a queued exit over a queued reload", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "reload", queuedCommand: "reload" }, "exit"),
+    ).toMatchObject({
+      currentCommand: "reload",
+      queuedCommand: "exit",
+      accepted: true,
+      shouldStartNow: false,
+      status: "queued",
+    });
+  });
+
+  it("treats later commands as covered once exit is already running", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "exit", queuedCommand: null }, "reload"),
+    ).toMatchObject({
+      currentCommand: "exit",
+      queuedCommand: null,
+      accepted: true,
+      shouldStartNow: false,
+      status: "covered",
+    });
+  });
+
+  it("promotes the queued command when the active control finishes", () => {
+    expect(finishPinetRemoteControl({ currentCommand: "reload", queuedCommand: "exit" })).toEqual({
+      currentCommand: "exit",
+      queuedCommand: null,
+      nextCommand: "exit",
+    });
+  });
+});
+
+// ─── Safe reload orchestration ───────────────────────────
+
+describe("reloadPinetRuntimeSafely", () => {
+  it("validates refreshed settings before stopping the current runtime", async () => {
+    const stopRuntime = async () => {
+      throw new Error("should not stop");
+    };
+
+    await expect(
+      reloadPinetRuntimeSafely({
+        getCurrentRole: () => "broker",
+        snapshotState: () => "previous",
+        restoreState: () => {
+          throw new Error("should not restore");
+        },
+        refreshState: () => {},
+        validateRefreshedState: () => {
+          throw new Error("bad config");
+        },
+        stopRuntime,
+        startRuntime: async () => {
+          throw new Error("should not start");
+        },
+      }),
+    ).rejects.toThrow("bad config");
+  });
+
+  it("restores the previous runtime when the refreshed runtime fails to start", async () => {
+    let activeConfig = "previous";
+    const starts: string[] = [];
+
+    await expect(
+      reloadPinetRuntimeSafely({
+        getCurrentRole: () => "follower",
+        snapshotState: () => activeConfig,
+        restoreState: (snapshot) => {
+          activeConfig = snapshot;
+        },
+        refreshState: () => {
+          activeConfig = "refreshed";
+        },
+        validateRefreshedState: () => {},
+        stopRuntime: async () => {},
+        startRuntime: async (role) => {
+          starts.push(`${role}:${activeConfig}`);
+          if (activeConfig === "refreshed") {
+            throw new Error("refreshed start failed");
+          }
+        },
+      }),
+    ).rejects.toThrow("Reload failed: refreshed start failed. Restored the previous runtime.");
+
+    expect(starts).toEqual(["follower:refreshed", "follower:previous"]);
+    expect(activeConfig).toBe("previous");
   });
 });
 // ─── SQLite journal mode helpers ─────────────────────────

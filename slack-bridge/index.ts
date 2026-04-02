@@ -17,7 +17,11 @@ import {
   buildPinetControlMetadata,
   extractPinetControlCommand,
   getPinetControlCommandFromText,
+  queuePinetRemoteControl,
+  finishPinetRemoteControl,
+  reloadPinetRuntimeSafely,
   type PinetControlCommand,
+  type PinetRemoteControlState,
   formatAgentList,
   stripBotMention,
   isChannelId,
@@ -142,6 +146,17 @@ export default function (pi: ExtensionAPI) {
   let guardrails: SecurityGuardrails = settings.security ?? {};
   let securityPrompt = buildSecurityPrompt(guardrails);
 
+  interface ReloadableRuntimeSnapshot {
+    settings: typeof settings;
+    botToken: string | undefined;
+    appToken: string | undefined;
+    allowedUsers: Set<string> | null;
+    guardrails: SecurityGuardrails;
+    securityPrompt: string;
+    agentName: string;
+    agentEmoji: string;
+  }
+
   function refreshSettings(): void {
     settings = loadSettingsFromFile();
     botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
@@ -149,6 +164,34 @@ export default function (pi: ExtensionAPI) {
     allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
     guardrails = settings.security ?? {};
     securityPrompt = buildSecurityPrompt(guardrails);
+    const identitySeed = extCtx?.sessionManager.getSessionFile() ?? agentStableId;
+    const refreshedIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, identitySeed);
+    agentName = refreshedIdentity.name;
+    agentEmoji = refreshedIdentity.emoji;
+  }
+
+  function snapshotReloadableRuntime(): ReloadableRuntimeSnapshot {
+    return {
+      settings: structuredClone(settings),
+      botToken,
+      appToken,
+      allowedUsers: allowedUsers ? new Set(allowedUsers) : null,
+      guardrails: structuredClone(guardrails),
+      securityPrompt,
+      agentName,
+      agentEmoji,
+    };
+  }
+
+  function restoreReloadableRuntime(snapshot: ReloadableRuntimeSnapshot): void {
+    settings = structuredClone(snapshot.settings);
+    botToken = snapshot.botToken;
+    appToken = snapshot.appToken;
+    allowedUsers = snapshot.allowedUsers ? new Set(snapshot.allowedUsers) : null;
+    guardrails = structuredClone(snapshot.guardrails);
+    securityPrompt = snapshot.securityPrompt;
+    agentName = snapshot.agentName;
+    agentEmoji = snapshot.agentEmoji;
   }
 
   function detectProjectTools(repoRoot: string, cwd: string): string[] {
@@ -1341,7 +1384,10 @@ export default function (pi: ExtensionAPI) {
     throw new Error("Pinet is in an unexpected state.");
   }
 
-  let remoteControlInFlight = false;
+  let remoteControlState: PinetRemoteControlState = {
+    currentCommand: null,
+    queuedCommand: null,
+  };
 
   async function stopPinetRuntime(
     ctx: ExtensionContext,
@@ -1403,35 +1449,36 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function reloadPinetRuntime(ctx: ExtensionContext): Promise<void> {
-    const previousRole = brokerRole;
-    if (!previousRole) {
-      throw new Error("Pinet is not running.");
-    }
-
-    refreshSettings();
-    await stopPinetRuntime(ctx, { releaseIdentity: false });
-    shuttingDown = false;
-    setExtStatus(ctx, "reconnecting");
-
-    if (!botToken || !appToken) {
-      throw new Error("Slack tokens are not configured after reload.");
-    }
-
-    if (previousRole === "broker") {
-      await connectAsBroker(ctx);
-      return;
-    }
-
-    await connectAsFollower(ctx);
+    await reloadPinetRuntimeSafely({
+      getCurrentRole: () => brokerRole,
+      snapshotState: () => snapshotReloadableRuntime(),
+      restoreState: (snapshot) => {
+        restoreReloadableRuntime(snapshot);
+      },
+      refreshState: () => {
+        refreshSettings();
+      },
+      validateRefreshedState: () => {
+        if (!botToken || !appToken) {
+          throw new Error("Slack tokens are not configured after reload.");
+        }
+      },
+      stopRuntime: async () => {
+        await stopPinetRuntime(ctx, { releaseIdentity: false });
+        shuttingDown = false;
+        setExtStatus(ctx, "reconnecting");
+      },
+      startRuntime: async (role) => {
+        if (role === "broker") {
+          await connectAsBroker(ctx);
+          return;
+        }
+        await connectAsFollower(ctx);
+      },
+    });
   }
 
-  function requestRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): void {
-    if (remoteControlInFlight) {
-      ctx.ui.notify(`Pinet remote control already in flight — ignoring /${command}`, "warning");
-      return;
-    }
-
-    remoteControlInFlight = true;
+  function runRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): void {
     const controlCtx = ctx as PinetRuntimeControlContext;
     if (!(ctx.isIdle?.() ?? true)) {
       try {
@@ -1456,9 +1503,41 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
       } finally {
-        remoteControlInFlight = false;
+        const next = finishPinetRemoteControl(remoteControlState);
+        remoteControlState = {
+          currentCommand: next.currentCommand,
+          queuedCommand: next.queuedCommand,
+        };
+        if (next.nextCommand) {
+          ctx.ui.notify(
+            `Pinet remote control continuing with queued /${next.nextCommand}`,
+            "warning",
+          );
+          runRemoteControl(next.nextCommand, ctx);
+        }
       }
     })();
+  }
+
+  function requestRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): boolean {
+    const queued = queuePinetRemoteControl(remoteControlState, command);
+    remoteControlState = {
+      currentCommand: queued.currentCommand,
+      queuedCommand: queued.queuedCommand,
+    };
+
+    if (queued.shouldStartNow) {
+      runRemoteControl(command, ctx);
+      return true;
+    }
+
+    if (queued.status === "queued") {
+      ctx.ui.notify(`Pinet remote control queued: /${queued.queuedCommand ?? command}`, "warning");
+    } else {
+      const scheduled = queued.queuedCommand ?? queued.currentCommand ?? command;
+      ctx.ui.notify(`Pinet remote control already scheduled — keeping /${scheduled}`, "warning");
+    }
+    return queued.accepted;
   }
 
   pi.registerTool({
@@ -1640,116 +1719,142 @@ export default function (pi: ExtensionAPI) {
         broker.db.updateThread(threadTs, { source: "slack", channel: channelId });
       },
     });
+    let selfId: string | null = null;
 
-    const router = new MessageRouter(broker.db);
-    const selfAgent = broker.db.registerAgent(
-      ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
-      agentName,
-      agentEmoji,
-      process.pid,
-      await getAgentMetadata("broker"),
-      agentStableId,
-    );
-    const selfId = selfAgent.id;
-    applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
-
-    const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(selfId, "broker_delegate");
-    const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
-    if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
-      ctx.ui.notify(
-        `Pinet broker reclaimed ${recoveredBrokerMessages} message${recoveredBrokerMessages === 1 ? "" : "s"} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
-        "info",
+    try {
+      const router = new MessageRouter(broker.db);
+      const selfAgent = broker.db.registerAgent(
+        ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
+        agentName,
+        agentEmoji,
+        process.pid,
+        await getAgentMetadata("broker"),
+        agentStableId,
       );
-    }
+      selfId = selfAgent.id;
+      applyBrokerIdentity(selfAgent.name, selfAgent.emoji);
 
-    adapter.onInbound((inMsg) => {
-      // Track thread metadata locally as a cache without claiming broker ownership.
-      trackBrokerInboundThread(threads, inMsg);
+      const recoveredBrokerMessages = broker.db.requeueUndeliveredMessages(
+        selfId,
+        "broker_delegate",
+      );
+      const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
+      if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
+        ctx.ui.notify(
+          `Pinet broker reclaimed ${recoveredBrokerMessages} message${recoveredBrokerMessages === 1 ? "" : "s"} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
+          "info",
+        );
+      }
 
-      const decision = router.route(inMsg);
+      adapter.onInbound((inMsg) => {
+        // Track thread metadata locally as a cache without claiming broker ownership.
+        trackBrokerInboundThread(threads, inMsg);
 
-      if (inMsg.threadId && inMsg.channel) {
-        broker.db.updateThread(inMsg.threadId, {
-          source: inMsg.source,
-          channel: inMsg.channel,
+        const decision = router.route(inMsg);
+
+        if (inMsg.threadId && inMsg.channel) {
+          broker.db.updateThread(inMsg.threadId, {
+            source: inMsg.source,
+            channel: inMsg.channel,
+          });
+        }
+
+        if (decision.action === "deliver" && decision.agentId !== selfId) {
+          broker.db.queueMessage(decision.agentId, inMsg);
+          return;
+        }
+
+        if (decision.action === "deliver" || decision.action === "unrouted") {
+          // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
+          // Previously, broker-routed messages were queued to `unrouted_backlog` with
+          // reason "broker_delegate" and then assigned to random workers by maintenance.
+          // Since maintenance explicitly excludes the broker from assignment candidates,
+          // the messages ended up on the wrong agent. Fix: always deliver to the broker
+          // in-memory inbox so it can handle them directly. (#121)
+          inbox.push({
+            channel: inMsg.channel,
+            threadTs: inMsg.threadId,
+            userId: inMsg.userId,
+            text: inMsg.text,
+            timestamp: inMsg.timestamp,
+          });
+          updateBadge();
+          if (extCtx?.isIdle?.()) drainInbox();
+        }
+      });
+
+      broker.addAdapter(adapter);
+      await adapter.connect();
+      botUserId = adapter.getBotUserId();
+
+      activeBroker = broker;
+      activeRouter = router;
+      activeSelfId = selfId;
+
+      // When a worker sends a pinet_message targeting the broker, the
+      // socket server writes to the DB inbox but the broker only reads
+      // its in-memory inbox. Bridge the gap here: push a2a messages
+      // targeting ourselves into the in-memory inbox and trigger drain.
+      broker.server.onAgentMessage((targetAgentId, brokerMsg, meta) => {
+        if (targetAgentId !== selfId) return;
+
+        const control = extractPinetControlCommand({
+          threadId: brokerMsg.threadId,
+          body: brokerMsg.body,
+          metadata: meta,
         });
-      }
+        if (control) {
+          try {
+            const accepted = requestRemoteControl(control, ctx);
+            if (accepted) {
+              broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
+            }
+          } catch (err) {
+            ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
+          }
+          return;
+        }
 
-      if (decision.action === "deliver" && decision.agentId !== selfId) {
-        broker.db.queueMessage(decision.agentId, inMsg);
-        return;
-      }
-
-      if (decision.action === "deliver" || decision.action === "unrouted") {
-        // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
-        // Previously, broker-routed messages were queued to `unrouted_backlog` with
-        // reason "broker_delegate" and then assigned to random workers by maintenance.
-        // Since maintenance explicitly excludes the broker from assignment candidates,
-        // the messages ended up on the wrong agent. Fix: always deliver to the broker
-        // in-memory inbox so it can handle them directly. (#121)
+        const senderName = (meta.senderAgent as string) ?? brokerMsg.sender;
         inbox.push({
-          channel: inMsg.channel,
-          threadTs: inMsg.threadId,
-          userId: inMsg.userId,
-          text: inMsg.text,
-          timestamp: inMsg.timestamp,
+          channel: "",
+          threadTs: brokerMsg.threadId,
+          userId: senderName,
+          text: brokerMsg.body,
+          timestamp: brokerMsg.createdAt,
         });
+        broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
         updateBadge();
         if (extCtx?.isIdle?.()) drainInbox();
-      }
-    });
-
-    broker.addAdapter(adapter);
-    await adapter.connect();
-    botUserId = adapter.getBotUserId();
-
-    activeBroker = broker;
-    activeRouter = router;
-    activeSelfId = selfId;
-
-    // When a worker sends a pinet_message targeting the broker, the
-    // socket server writes to the DB inbox but the broker only reads
-    // its in-memory inbox.  Bridge the gap here: push a2a messages
-    // targeting ourselves into the in-memory inbox and trigger drain.
-    broker.server.onAgentMessage((targetAgentId, brokerMsg, meta) => {
-      if (targetAgentId !== selfId) return;
-
-      const control = extractPinetControlCommand({
-        threadId: brokerMsg.threadId,
-        body: brokerMsg.body,
-        metadata: meta,
       });
-      if (control) {
-        try {
-          requestRemoteControl(control, ctx);
-          broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
-        } catch (err) {
-          ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
+
+      startBrokerHeartbeat();
+      startBrokerMaintenance(ctx);
+      startBrokerRalphLoop(ctx);
+      brokerRole = "broker";
+      pinetEnabled = true;
+      setExtStatus(ctx, "ok");
+      ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
+    } catch (err) {
+      try {
+        await adapter.disconnect();
+      } catch {
+        /* best effort */
+      }
+      try {
+        if (selfId) {
+          broker.db.unregisterAgent(selfId);
         }
-        return;
+      } catch {
+        /* best effort */
       }
-
-      const senderName = (meta.senderAgent as string) ?? brokerMsg.sender;
-      inbox.push({
-        channel: "",
-        threadTs: brokerMsg.threadId,
-        userId: senderName,
-        text: brokerMsg.body,
-        timestamp: brokerMsg.createdAt,
-      });
-      // Mark delivered so the DB row doesn't linger.
-      broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
-      updateBadge();
-      if (extCtx?.isIdle?.()) drainInbox();
-    });
-
-    startBrokerHeartbeat();
-    startBrokerMaintenance(ctx);
-    startBrokerRalphLoop(ctx);
-    brokerRole = "broker";
-    pinetEnabled = true;
-    setExtStatus(ctx, "ok");
-    ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
+      try {
+        await broker.stop();
+      } catch {
+        /* best effort */
+      }
+      throw err;
+    }
   }
 
   pi.registerCommand("pinet-start", {
@@ -1780,218 +1885,199 @@ export default function (pi: ExtensionAPI) {
     }
 
     const client = new BrokerClient();
-    await client.connect();
-    const registration = await client.register(
-      agentName,
-      agentEmoji,
-      await getAgentMetadata("worker"),
-      agentStableId,
-    );
-    applyBrokerIdentity(registration.name, registration.emoji);
 
-    const brokerClientRef: BrokerClientRef = {
-      client,
-      pollInterval: null,
-    };
-    resetFollowerDeliveryState(followerDeliveryState);
-    followerAckPromise = null;
-    let wasDisconnected = false;
-    let followerPollRunning = false;
+    try {
+      await client.connect();
+      const registration = await client.register(
+        agentName,
+        agentEmoji,
+        await getAgentMetadata("worker"),
+        agentStableId,
+      );
+      applyBrokerIdentity(registration.name, registration.emoji);
 
-    async function resumeThreadClaims(): Promise<void> {
-      for (const thread of getFollowerOwnedThreadClaims(threads, agentName)) {
-        try {
-          await client.claimThread(thread.threadTs, thread.channelId);
-        } catch {
-          break;
+      const brokerClientRef: BrokerClientRef = {
+        client,
+        pollInterval: null,
+      };
+      resetFollowerDeliveryState(followerDeliveryState);
+      followerAckPromise = null;
+      let wasDisconnected = false;
+      let followerPollRunning = false;
+
+      async function resumeThreadClaims(): Promise<void> {
+        for (const thread of getFollowerOwnedThreadClaims(threads, agentName)) {
+          try {
+            await client.claimThread(thread.threadTs, thread.channelId);
+          } catch {
+            break;
+          }
         }
       }
-    }
 
-    function startPolling(): void {
-      if (brokerClientRef.pollInterval) return;
-      brokerClientRef.pollInterval = setInterval(async () => {
-        if (!pinetEnabled || followerPollRunning) return;
+      function startPolling(): void {
+        if (brokerClientRef.pollInterval) return;
+        brokerClientRef.pollInterval = setInterval(async () => {
+          if (!pinetEnabled || followerPollRunning) return;
 
-        followerPollRunning = true;
-        try {
-          const entries = await client.pollInbox();
-          const newEntries = entries.filter(
-            (entry) => !isFollowerInboxIdTracked(followerDeliveryState, entry.inboxId),
-          );
-          if (newEntries.length === 0) {
-            if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
-              void flushDeliveredFollowerAcks();
-            }
-            return;
-          }
-
-          const controlEntries: Array<{ inboxId: number; command: PinetControlCommand }> = [];
-          for (const entry of newEntries) {
-            const command = extractPinetControlCommand({
-              threadId: entry.message.threadId,
-              body: entry.message.body,
-              metadata: entry.message.metadata,
-            });
-            if (command) {
-              controlEntries.push({ inboxId: entry.inboxId, command });
-            }
-          }
-
-          if (controlEntries.length > 0) {
-            requestRemoteControl(controlEntries[controlEntries.length - 1]!.command, ctx);
-            await client.ackMessages(controlEntries.map((entry) => entry.inboxId));
-            return;
-          }
-
-          // Partition nudges and a2a traffic out of the human Slack inbox flow.
-          const { nudges, agentMessages, regular } = partitionFollowerInboxEntries(newEntries);
-
-          if (nudges.length > 0) {
-            const nudgeText = nudges
-              .map((n) => n.message.body ?? "")
-              .filter(Boolean)
-              .join("\n");
-            if (nudgeText && deliverFollowUpMessage(nudgeText)) {
-              markFollowerInboxIdsDelivered(
-                followerDeliveryState,
-                nudges.flatMap((entry) =>
-                  typeof entry.inboxId === "number" ? [entry.inboxId] : [],
-                ),
-              );
-              void flushDeliveredFollowerAcks();
-            }
-          }
-
-          if (agentMessages.length > 0) {
-            const pinetPrompt = formatPinetInboxMessages(agentMessages);
-            if (deliverFollowUpMessage(pinetPrompt)) {
-              markFollowerInboxIdsDelivered(
-                followerDeliveryState,
-                agentMessages.flatMap((entry) =>
-                  typeof entry.inboxId === "number" ? [entry.inboxId] : [],
-                ),
-              );
-              void flushDeliveredFollowerAcks();
-            }
-          }
-
-          // Process human Slack messages through the normal inbox flow.
-          if (regular.length > 0) {
-            const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
-            for (const nextThread of synced.threadUpdates) {
-              const existing = threads.get(nextThread.threadTs);
-              if (!existing) {
-                threads.set(nextThread.threadTs, { ...nextThread });
-                continue;
-              }
-              existing.channelId = nextThread.channelId;
-              existing.threadTs = nextThread.threadTs;
-              existing.userId = nextThread.userId;
-              existing.owner = nextThread.owner;
-            }
-            lastDmChannel = synced.lastDmChannel;
-            inbox.push(...synced.inboxMessages);
-            queueFollowerInboxIds(
-              followerDeliveryState,
-              regular.flatMap((entry) =>
-                typeof entry.inboxId === "number" ? [entry.inboxId] : [],
-              ),
+          followerPollRunning = true;
+          try {
+            const entries = await client.pollInbox();
+            const newEntries = entries.filter(
+              (entry) => !isFollowerInboxIdTracked(followerDeliveryState, entry.inboxId),
             );
-            if (synced.changed) persistState();
-            updateBadge();
-            if (ctx.isIdle?.()) drainInbox();
+            if (newEntries.length === 0) {
+              if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
+                void flushDeliveredFollowerAcks();
+              }
+              return;
+            }
+
+            const controlEntries: Array<{ inboxId: number; command: PinetControlCommand }> = [];
+            for (const entry of newEntries) {
+              const command = extractPinetControlCommand({
+                threadId: entry.message.threadId,
+                body: entry.message.body,
+                metadata: entry.message.metadata,
+              });
+              if (command) {
+                controlEntries.push({ inboxId: entry.inboxId, command });
+              }
+            }
+
+            if (controlEntries.length > 0) {
+              const acceptedIds: number[] = [];
+              for (const entry of controlEntries) {
+                if (requestRemoteControl(entry.command, ctx)) {
+                  acceptedIds.push(entry.inboxId);
+                }
+              }
+              if (acceptedIds.length > 0) {
+                await client.ackMessages(acceptedIds);
+              }
+              return;
+            }
+
+            // Partition nudges and a2a traffic out of the human Slack inbox flow.
+            const { nudges, agentMessages, regular } = partitionFollowerInboxEntries(newEntries);
+
+            if (nudges.length > 0) {
+              const nudgeText = nudges
+                .map((n) => n.message.body ?? "")
+                .filter(Boolean)
+                .join("\\n");
+              if (nudgeText && deliverFollowUpMessage(nudgeText)) {
+                markFollowerInboxIdsDelivered(
+                  followerDeliveryState,
+                  nudges.flatMap((entry) =>
+                    typeof entry.inboxId === "number" ? [entry.inboxId] : [],
+                  ),
+                );
+                void flushDeliveredFollowerAcks();
+              }
+            }
+
+            if (agentMessages.length > 0) {
+              const pinetPrompt = formatPinetInboxMessages(agentMessages);
+              if (deliverFollowUpMessage(pinetPrompt)) {
+                markFollowerInboxIdsDelivered(
+                  followerDeliveryState,
+                  agentMessages.flatMap((entry) =>
+                    typeof entry.inboxId === "number" ? [entry.inboxId] : [],
+                  ),
+                );
+                void flushDeliveredFollowerAcks();
+              }
+            }
+
+            if (regular.length > 0) {
+              const synced = syncFollowerInboxEntries(regular, threads, agentName, lastDmChannel);
+              for (const nextThread of synced.threadUpdates) {
+                const existing = threads.get(nextThread.threadTs);
+                if (!existing) {
+                  threads.set(nextThread.threadTs, { ...nextThread });
+                  continue;
+                }
+                existing.channelId = nextThread.channelId;
+                existing.threadTs = nextThread.threadTs;
+                existing.userId = nextThread.userId;
+                existing.owner = nextThread.owner;
+              }
+              lastDmChannel = synced.lastDmChannel;
+              inbox.push(...synced.inboxMessages);
+              queueFollowerInboxIds(
+                followerDeliveryState,
+                regular.flatMap((entry) =>
+                  typeof entry.inboxId === "number" ? [entry.inboxId] : [],
+                ),
+              );
+              if (synced.changed) persistState();
+              updateBadge();
+              if (ctx.isIdle?.()) drainInbox();
+            }
+          } catch {
+            /* broker may be restarting */
+          } finally {
+            followerPollRunning = false;
           }
-        } catch {
-          /* broker may be restarting */
-        } finally {
-          followerPollRunning = false;
-        }
-      }, 2000);
-    }
-
-    function stopPolling(): void {
-      if (brokerClientRef.pollInterval) {
-        clearInterval(brokerClientRef.pollInterval);
-        brokerClientRef.pollInterval = null;
+        }, 2000);
       }
-      followerPollRunning = false;
-    }
 
-    client.onDisconnect(() => {
-      stopPolling();
-      setExtStatus(ctx, "reconnecting");
-      const uiUpdate = getFollowerReconnectUiUpdate("disconnect", wasDisconnected);
-      wasDisconnected = uiUpdate.nextWasDisconnected;
-      if (uiUpdate.notify) {
-        ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
+      function stopPolling(): void {
+        if (brokerClientRef.pollInterval) {
+          clearInterval(brokerClientRef.pollInterval);
+          brokerClientRef.pollInterval = null;
+        }
+        followerPollRunning = false;
       }
-    });
 
-    client.onReconnect(() => {
-      void (async () => {
-        const registration = client.getRegisteredIdentity();
-        if (registration) {
-          applyBrokerIdentity(registration.name, registration.emoji);
-        }
-        await resumeThreadClaims();
-        // #103: Re-report idle/working status on reconnect for resilience
-        const currentlyIdle = ctx.isIdle?.() ?? true;
-        void client.updateStatus(currentlyIdle ? "idle" : "working").catch(() => {
-          /* best effort */
-        });
-        startPolling();
-        if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
-          void flushDeliveredFollowerAcks();
-        }
-        setExtStatus(ctx, "ok");
-        const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
+      client.onDisconnect(() => {
+        stopPolling();
+        setExtStatus(ctx, "reconnecting");
+        const uiUpdate = getFollowerReconnectUiUpdate("disconnect", wasDisconnected);
         wasDisconnected = uiUpdate.nextWasDisconnected;
         if (uiUpdate.notify) {
           ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
         }
-      })();
-    });
+      });
 
-    await resumeThreadClaims();
-    startPolling();
-    brokerClient = brokerClientRef;
-    brokerRole = "follower";
-    pinetEnabled = true;
-    setExtStatus(ctx, "ok");
-  }
+      client.onReconnect(() => {
+        void (async () => {
+          const registration = client.getRegisteredIdentity();
+          if (registration) {
+            applyBrokerIdentity(registration.name, registration.emoji);
+          }
+          await resumeThreadClaims();
+          const currentlyIdle = ctx.isIdle?.() ?? true;
+          void client.updateStatus(currentlyIdle ? "idle" : "working").catch(() => {
+            /* best effort */
+          });
+          startPolling();
+          if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
+            void flushDeliveredFollowerAcks();
+          }
+          setExtStatus(ctx, "ok");
+          const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
+          wasDisconnected = uiUpdate.nextWasDisconnected;
+          if (uiUpdate.notify) {
+            ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
+          }
+        })();
+      });
 
-  async function disconnectFollower(
-    ctx: ExtensionContext,
-  ): Promise<{ unregisterError: string | null }> {
-    const current = brokerClient;
-
-    if (current?.pollInterval) {
-      clearInterval(current.pollInterval);
-      current.pollInterval = null;
+      await resumeThreadClaims();
+      startPolling();
+      brokerClient = brokerClientRef;
+      brokerRole = "follower";
+      pinetEnabled = true;
+      setExtStatus(ctx, "ok");
+    } catch (err) {
+      await client.unregister().catch(() => {
+        /* best effort */
+      });
+      client.disconnect();
+      throw err;
     }
-
-    await flushDeliveredFollowerAcks().catch(() => {
-      /* best effort */
-    });
-
-    let unregisterError: string | null = null;
-    if (current) {
-      try {
-        await current.client.disconnectGracefully();
-      } catch (err) {
-        unregisterError = msg(err);
-      }
-    }
-
-    brokerClient = null;
-    resetFollowerDeliveryState(followerDeliveryState);
-    followerAckPromise = null;
-    brokerRole = null;
-    pinetEnabled = false;
-    setExtStatus(ctx, "off");
-
-    return { unregisterError };
   }
 
   pi.registerCommand("pinet-follow", {
@@ -2147,7 +2233,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     slackRequests = createAbortableOperationTracker();
-    remoteControlInFlight = false;
+    remoteControlState = { currentCommand: null, queuedCommand: null };
     extCtx = ctx;
     const sessionHeader = (
       ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
@@ -2356,7 +2442,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    remoteControlInFlight = false;
+    remoteControlState = { currentCommand: null, queuedCommand: null };
     await stopPinetRuntime(ctx, { releaseIdentity: true });
     pinetRegistrationBlocked = false;
     setExtStatus(ctx, "off");

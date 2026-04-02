@@ -127,8 +127,111 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
 
 export type PinetControlCommand = "reload" | "exit";
 
+export interface PinetRemoteControlState {
+  currentCommand: PinetControlCommand | null;
+  queuedCommand: PinetControlCommand | null;
+}
+
+export interface PinetRemoteControlRequestResult extends PinetRemoteControlState {
+  accepted: boolean;
+  shouldStartNow: boolean;
+  status: "start" | "queued" | "covered";
+}
+
 export function parsePinetControlCommand(value: unknown): PinetControlCommand | null {
   return value === "reload" || value === "exit" ? value : null;
+}
+
+export function queuePinetRemoteControl(
+  state: PinetRemoteControlState,
+  command: PinetControlCommand,
+): PinetRemoteControlRequestResult {
+  if (!state.currentCommand) {
+    return {
+      currentCommand: command,
+      queuedCommand: state.queuedCommand,
+      accepted: true,
+      shouldStartNow: true,
+      status: "start",
+    };
+  }
+
+  if (state.currentCommand === "exit") {
+    return {
+      currentCommand: state.currentCommand,
+      queuedCommand: state.queuedCommand,
+      accepted: true,
+      shouldStartNow: false,
+      status: "covered",
+    };
+  }
+
+  const queuedCommand =
+    state.queuedCommand === "exit" || command === "exit"
+      ? "exit"
+      : (state.queuedCommand ?? command);
+
+  return {
+    currentCommand: state.currentCommand,
+    queuedCommand,
+    accepted: true,
+    shouldStartNow: false,
+    status: queuedCommand === state.queuedCommand ? "covered" : "queued",
+  };
+}
+
+export function finishPinetRemoteControl(
+  state: PinetRemoteControlState,
+): PinetRemoteControlState & { nextCommand: PinetControlCommand | null } {
+  return {
+    currentCommand: state.queuedCommand,
+    queuedCommand: null,
+    nextCommand: state.queuedCommand,
+  };
+}
+
+export interface PinetRuntimeReloader<State> {
+  getCurrentRole: () => "broker" | "follower" | null;
+  snapshotState: () => State;
+  restoreState: (snapshot: State) => void;
+  refreshState: () => void;
+  validateRefreshedState: () => void | Promise<void>;
+  stopRuntime: () => Promise<void>;
+  startRuntime: (role: "broker" | "follower") => Promise<void>;
+}
+
+export async function reloadPinetRuntimeSafely<State>(
+  reloader: PinetRuntimeReloader<State>,
+): Promise<void> {
+  const role = reloader.getCurrentRole();
+  if (!role) {
+    throw new Error("Pinet is not running.");
+  }
+
+  const snapshot = reloader.snapshotState();
+  reloader.refreshState();
+  await reloader.validateRefreshedState();
+  await reloader.stopRuntime();
+
+  try {
+    await reloader.startRuntime(role);
+  } catch (reloadErr) {
+    reloader.restoreState(snapshot);
+
+    try {
+      await reloader.startRuntime(role);
+    } catch (rollbackErr) {
+      const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
+      const rollbackMessage =
+        rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+      throw new Error(
+        `Reload failed: ${reloadMessage}. Rollback to the previous runtime also failed: ${rollbackMessage}`,
+      );
+    }
+
+    const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
+    throw new Error(`Reload failed: ${reloadMessage}. Restored the previous runtime.`);
+  }
 }
 
 export function getPinetControlCommandFromText(
