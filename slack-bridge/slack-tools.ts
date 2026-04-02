@@ -50,6 +50,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
     "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
     "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
+    "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
@@ -59,6 +60,50 @@ function getSlackCanvasSummary(markdown?: string): string {
   const collapsed = markdown.replace(/\s+/g, " ").trim();
   if (collapsed.length <= 80) return collapsed;
   return `${collapsed.slice(0, 77)}...`;
+}
+
+function isSlackMethodError(err: unknown, method: string, ...codes: string[]): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  return codes.some((code) => err.message.includes(`Slack ${method}: ${code}`));
+}
+
+function normalizeSlackPinAction(action: string): "pin" | "unpin" {
+  const normalized = action.trim().toLowerCase();
+  if (normalized === "pin" || normalized === "unpin") {
+    return normalized;
+  }
+  throw new Error("action must be 'pin' or 'unpin'.");
+}
+
+function normalizeSlackBookmarkAction(action: string): "add" | "remove" | "list" {
+  const normalized = action.trim().toLowerCase();
+  if (normalized === "add" || normalized === "remove" || normalized === "list") {
+    return normalized;
+  }
+  throw new Error("action must be 'add', 'remove', or 'list'.");
+}
+
+function normalizeSlackBookmarkUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    throw new Error("url is required when action='add'.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("url must be an absolute http(s) URL.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("url must use http or https.");
+  }
+
+  return parsed.toString();
 }
 
 export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDeps): void {
@@ -510,6 +555,248 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           },
         ],
         details: { ts, channel: channelId },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_pin",
+    label: "Slack Pin",
+    description: "Pin or unpin a Slack message by timestamp.",
+    promptSnippet:
+      "Pin important Slack messages like decisions, confirmations, or follow-up items. Unpin stale ones when they are no longer relevant.",
+    parameters: Type.Object({
+      action: Type.String({ description: "'pin' to pin a message or 'unpin' to remove the pin" }),
+      message_ts: Type.String({ description: "Timestamp (ts) of the message to pin or unpin" }),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Channel name or ID. Omit to use the current thread channel, active DM, or defaultChannel.",
+        }),
+      ),
+      thread_ts: Type.Optional(
+        Type.String({
+          description: "Optional thread timestamp used to resolve the current channel",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_pin",
+        params.thread_ts,
+        `action=${params.action} | channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | message_ts=${params.message_ts}`,
+      );
+
+      const action = normalizeSlackPinAction(params.action);
+      const messageTs = params.message_ts.trim();
+      if (!messageTs) {
+        throw new Error("message_ts is required.");
+      }
+
+      const channelId = await resolveSlackTargetChannel(params.thread_ts, params.channel);
+      const method = action === "pin" ? "pins.add" : "pins.remove";
+      const body = { channel: channelId, timestamp: messageTs };
+
+      try {
+        await slack(method, getBotToken(), body);
+      } catch (err) {
+        if (action === "pin" && isSlackMethodError(err, "pins.add", "already_pinned")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Message ${messageTs} is already pinned in channel ${params.channel ?? channelId}.`,
+              },
+            ],
+            details: {
+              channel: channelId,
+              message_ts: messageTs,
+              action,
+              status: "already_pinned",
+            },
+          };
+        }
+
+        if (action === "unpin" && isSlackMethodError(err, "pins.remove", "no_pin", "not_pinned")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Message ${messageTs} is not currently pinned in channel ${params.channel ?? channelId}.`,
+              },
+            ],
+            details: { channel: channelId, message_ts: messageTs, action, status: "not_pinned" },
+          };
+        }
+
+        throw err;
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              action === "pin"
+                ? `Pinned message ${messageTs} in channel ${params.channel ?? channelId}.`
+                : `Unpinned message ${messageTs} in channel ${params.channel ?? channelId}.`,
+          },
+        ],
+        details: {
+          channel: channelId,
+          message_ts: messageTs,
+          action,
+          status: action === "pin" ? "pinned" : "unpinned",
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_bookmark",
+    label: "Slack Bookmark",
+    description:
+      "Add, list, or remove channel bookmarks for durable links like repos, dashboards, docs, and runbooks.",
+    promptSnippet:
+      "Use bookmarks for persistent channel-header links. Add repos, dashboards, docs, and runbooks; list existing bookmarks; remove stale ones by ID.",
+    parameters: Type.Object({
+      action: Type.String({ description: "'add', 'list', or 'remove'" }),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Channel name or ID. Omit to use the current thread channel, active DM, or defaultChannel.",
+        }),
+      ),
+      thread_ts: Type.Optional(
+        Type.String({
+          description: "Optional thread timestamp used to resolve the current channel",
+        }),
+      ),
+      title: Type.Optional(
+        Type.String({ description: "Bookmark title (required when action='add')" }),
+      ),
+      url: Type.Optional(Type.String({ description: "Bookmark URL (required when action='add')" })),
+      emoji: Type.Optional(
+        Type.String({ description: "Optional emoji label for the bookmark, e.g. :rocket:" }),
+      ),
+      bookmark_id: Type.Optional(
+        Type.String({ description: "Bookmark ID (required when action='remove')" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_bookmark",
+        params.thread_ts,
+        `action=${params.action} | channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | title=${params.title ?? ""} | url=${params.url ?? ""} | bookmark_id=${params.bookmark_id ?? ""}`,
+      );
+
+      const action = normalizeSlackBookmarkAction(params.action);
+      const channelId = await resolveSlackTargetChannel(params.thread_ts, params.channel);
+      const channelLabel = params.channel ?? channelId;
+
+      if (action === "list") {
+        const response = await slack("bookmarks.list", getBotToken(), { channel_id: channelId });
+        const bookmarks = Array.isArray(response.bookmarks)
+          ? (response.bookmarks as Array<Record<string, unknown>>)
+          : [];
+        const lines = bookmarks.map((bookmark) => {
+          const id = typeof bookmark.id === "string" ? bookmark.id : "(unknown-id)";
+          const title = typeof bookmark.title === "string" ? bookmark.title : "(untitled)";
+          const link = typeof bookmark.link === "string" ? bookmark.link : "(no link)";
+          const emoji =
+            typeof bookmark.emoji === "string" && bookmark.emoji.length > 0
+              ? `${bookmark.emoji} `
+              : "";
+          return `- ${id}: ${emoji}${title} -> ${link}`;
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                lines.length > 0
+                  ? `Bookmarks in ${channelLabel}:\n${lines.join("\n")}`
+                  : `No bookmarks found in ${channelLabel}.`,
+            },
+          ],
+          details: { channel: channelId, count: bookmarks.length, bookmarks },
+        };
+      }
+
+      if (action === "add") {
+        const title = params.title?.trim();
+        if (!title) {
+          throw new Error("title is required when action='add'.");
+        }
+
+        const link = normalizeSlackBookmarkUrl(params.url ?? "");
+        const emoji = params.emoji?.trim();
+        const response = await slack("bookmarks.add", getBotToken(), {
+          channel_id: channelId,
+          title,
+          type: "link",
+          link,
+          ...(emoji ? { emoji } : {}),
+        });
+        const bookmark =
+          response.bookmark && typeof response.bookmark === "object"
+            ? (response.bookmark as Record<string, unknown>)
+            : undefined;
+        const bookmarkId = bookmark && typeof bookmark.id === "string" ? bookmark.id : undefined;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Added bookmark '${title}' to ${channelLabel}.`,
+            },
+          ],
+          details: {
+            channel: channelId,
+            action,
+            title,
+            url: link,
+            ...(emoji ? { emoji } : {}),
+            ...(bookmarkId ? { bookmark_id: bookmarkId } : {}),
+          },
+        };
+      }
+
+      const bookmarkId = params.bookmark_id?.trim();
+      if (!bookmarkId) {
+        throw new Error("bookmark_id is required when action='remove'.");
+      }
+
+      try {
+        await slack("bookmarks.remove", getBotToken(), {
+          channel_id: channelId,
+          bookmark_id: bookmarkId,
+        });
+      } catch (err) {
+        if (isSlackMethodError(err, "bookmarks.remove", "not_found")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Bookmark ${bookmarkId} was not found in ${channelLabel}.`,
+              },
+            ],
+            details: { channel: channelId, action, bookmark_id: bookmarkId, status: "not_found" },
+          };
+        }
+
+        throw err;
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Removed bookmark ${bookmarkId} from ${channelLabel}.`,
+          },
+        ],
+        details: { channel: channelId, action, bookmark_id: bookmarkId, status: "removed" },
       };
     },
   });

@@ -51,6 +51,52 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
+      if (method === "pins.add" || method === "pins.remove") {
+        return {
+          ok: true,
+          token,
+          body,
+        } as SlackResult;
+      }
+
+      if (method === "bookmarks.add") {
+        return {
+          ok: true,
+          token,
+          body,
+          bookmark: {
+            id: "Bk123",
+            title: body?.title,
+            link: body?.link,
+            emoji: body?.emoji,
+          },
+        } as SlackResult;
+      }
+
+      if (method === "bookmarks.list") {
+        return {
+          ok: true,
+          token,
+          body,
+          bookmarks: [
+            {
+              id: "Bk123",
+              title: "Repo",
+              link: "https://github.com/gugu91/extensions",
+              emoji: ":rabbit:",
+            },
+          ],
+        } as SlackResult;
+      }
+
+      if (method === "bookmarks.remove") {
+        return {
+          ok: true,
+          token,
+          body,
+        } as SlackResult;
+      }
+
       return {
         ok: true,
         token,
@@ -206,5 +252,109 @@ describe("registerSlackTools", () => {
         post_at: Math.floor(Date.parse("2026-04-02T14:30:00.000Z") / 1000),
       }),
     );
+  });
+
+  it("handles already_pinned gracefully", async () => {
+    const { slack, tools, setResolveFollowerReplyChannel } = setup();
+    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+    slack.mockImplementationOnce(async () => {
+      throw new Error("Slack pins.add: already_pinned");
+    });
+
+    const response = await tools.get("slack_pin")!.execute("tool-6", {
+      action: "pin",
+      message_ts: "123.789",
+      thread_ts: "123.456",
+    });
+
+    expect(slack).toHaveBeenCalledWith("pins.add", "xoxb-initial", {
+      channel: "C-DB",
+      timestamp: "123.789",
+    });
+    expect(response.details?.status).toBe("already_pinned");
+  });
+
+  it("handles no_pin gracefully when unpinning", async () => {
+    const { slack, tools, setDefaultChannel } = setup();
+    setDefaultChannel("ops-alerts");
+    slack.mockImplementationOnce(async () => {
+      throw new Error("Slack pins.remove: no_pin");
+    });
+
+    const response = await tools.get("slack_pin")!.execute("tool-7", {
+      action: "unpin",
+      message_ts: "123.789",
+    });
+
+    expect(slack).toHaveBeenCalledWith("pins.remove", "xoxb-initial", {
+      channel: "resolved:ops-alerts",
+      timestamp: "123.789",
+    });
+    expect(response.details?.status).toBe("not_pinned");
+  });
+
+  it("adds channel bookmarks", async () => {
+    const { slack, tools, setDefaultChannel } = setup();
+    setDefaultChannel("docs");
+
+    const response = await tools.get("slack_bookmark")!.execute("tool-8", {
+      action: "add",
+      title: "Repo",
+      url: "https://github.com/gugu91/extensions",
+      emoji: ":rocket:",
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "bookmarks.add",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel_id: "resolved:docs",
+        title: "Repo",
+        type: "link",
+        link: "https://github.com/gugu91/extensions",
+        emoji: ":rocket:",
+      }),
+    );
+    expect(response.details?.bookmark_id).toBe("Bk123");
+  });
+
+  it("lists bookmarks from the resolved thread channel", async () => {
+    const { slack, tools, setResolveFollowerReplyChannel } = setup();
+    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+
+    const response = await tools.get("slack_bookmark")!.execute("tool-9", {
+      action: "list",
+      thread_ts: "123.456",
+    });
+
+    expect(slack).toHaveBeenCalledWith("bookmarks.list", "xoxb-initial", {
+      channel_id: "C-DB",
+    });
+    expect(response.content?.[0]?.text).toContain("Bk123");
+  });
+
+  it("handles missing bookmarks gracefully when removing", async () => {
+    const { slack, tools, setDefaultChannel } = setup();
+    setDefaultChannel("docs");
+    slack.mockImplementationOnce(async () => {
+      throw new Error("Slack bookmarks.remove: not_found");
+    });
+
+    const response = await tools.get("slack_bookmark")!.execute("tool-10", {
+      action: "remove",
+      bookmark_id: "Bk404",
+    });
+
+    expect(slack).toHaveBeenCalledWith("bookmarks.remove", "xoxb-initial", {
+      channel_id: "resolved:docs",
+      bookmark_id: "Bk404",
+    });
+    expect(response.details?.status).toBe("not_found");
   });
 });

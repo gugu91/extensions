@@ -24,6 +24,8 @@ oauth_config:
       - channels:read
       - chat:write
       - files:write
+      - bookmarks:read
+      - bookmarks:write
       - groups:history
       - groups:read
       - im:history
@@ -33,6 +35,8 @@ oauth_config:
       - reactions:read
       - canvases:read
       - canvases:write
+      - pins:read
+      - pins:write
   pkce_enabled: false
 settings:
   event_subscriptions:
