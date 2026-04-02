@@ -19,12 +19,19 @@ export interface RegisterSlackToolsDeps {
   resolveFollowerReplyChannel: (threadTs: string | undefined) => Promise<string | null>;
   resolveChannel: (nameOrId: string) => Promise<string>;
   rememberChannel: (name: string, channelId: string) => void;
-  requireToolPolicy: (toolName: string, threadTs: string | undefined) => void;
+  requireToolPolicy: (toolName: string, threadTs: string | undefined, action: string) => void;
   trackOutboundThread: (threadTs: string, channelId: string) => void;
   claimThreadOwnership: (threadTs: string, channelId: string) => void;
   clearPendingEyes: (threadTs: string) => void;
   getThreadChannel: (threadTs: string) => string | null;
-  registerConfirmationRequest: (threadTs: string, tool: string, action: string) => void;
+  registerConfirmationRequest: (
+    threadTs: string,
+    tool: string,
+    action: string,
+  ) => {
+    status: "created" | "refreshed" | "conflict";
+    conflict?: { toolPattern: string; action: string };
+  };
 }
 
 function buildSlackInboxPromptGuidelines(
@@ -140,7 +147,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       ),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_send", params.thread_ts);
+      requireToolPolicy(
+        "slack_send",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts ?? ""} | text=${params.text}`,
+      );
 
       const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? getLastDmChannel();
       if (!channel) {
@@ -194,7 +205,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       limit: Type.Optional(Type.Number({ description: "Max messages (default 20)" })),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_read", params.thread_ts);
+      requireToolPolicy(
+        "slack_read",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts} | limit=${params.limit ?? 20}`,
+      );
 
       const channel = getThreadChannel(params.thread_ts) ?? getLastDmChannel();
       if (!channel) {
@@ -237,7 +252,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       purpose: Type.Optional(Type.String({ description: "Channel purpose" })),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_create_channel", undefined);
+      requireToolPolicy(
+        "slack_create_channel",
+        undefined,
+        `name=${params.name} | topic=${params.topic ?? ""} | purpose=${params.purpose ?? ""}`,
+      );
 
       const response = await slack("conversations.create", botToken, {
         name: params.name,
@@ -283,7 +302,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       thread_ts: Type.Optional(Type.String({ description: "Thread timestamp to reply in" })),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_post_channel", params.thread_ts);
+      requireToolPolicy(
+        "slack_post_channel",
+        params.thread_ts,
+        `channel=${params.channel ?? defaultChannel ?? ""} | thread_ts=${params.thread_ts ?? ""} | text=${params.text}`,
+      );
 
       const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);
       const channelInput = params.channel ?? defaultChannel;
@@ -341,7 +364,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       limit: Type.Optional(Type.Number({ description: "Max messages to return (default 20)" })),
     }),
     async execute(_id, params) {
-      requireToolPolicy("slack_read_channel", params.thread_ts);
+      requireToolPolicy(
+        "slack_read_channel",
+        params.thread_ts,
+        `channel=${params.channel} | thread_ts=${params.thread_ts ?? ""} | limit=${params.limit ?? 20}`,
+      );
 
       const channelId = await resolveChannel(params.channel);
       const limit = params.limit ?? 20;
@@ -401,7 +428,28 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `Action: ${params.action}\n\n` +
         `Reply *yes* to approve or *no* to reject.`;
 
-      registerConfirmationRequest(params.thread_ts, params.tool, params.action);
+      const registration = registerConfirmationRequest(
+        params.thread_ts,
+        params.tool,
+        params.action,
+      );
+      if (registration.status === "conflict") {
+        throw new Error(
+          `Thread ${params.thread_ts} already has a pending confirmation for tool "${registration.conflict?.toolPattern}" and action ${JSON.stringify(registration.conflict?.action ?? "")}. Wait for a reply or expiry before requesting another action in the same thread.`,
+        );
+      }
+
+      if (registration.status === "refreshed") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `A matching confirmation request is already pending in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding.`,
+            },
+          ],
+          details: { thread_ts: params.thread_ts, tool: params.tool, status: registration.status },
+        };
+      }
 
       await slack("chat.postMessage", botToken, {
         channel: channelId,
@@ -420,7 +468,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
           },
         ],
-        details: { thread_ts: params.thread_ts, tool: params.tool },
+        details: { thread_ts: params.thread_ts, tool: params.tool, status: registration.status },
       };
     },
   });
