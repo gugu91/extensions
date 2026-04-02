@@ -14,6 +14,10 @@ import {
   isUserAllowed as checkUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
+  buildPinetControlMetadata,
+  extractPinetControlCommand,
+  getPinetControlCommandFromText,
+  type PinetControlCommand,
   formatAgentList,
   stripBotMention,
   isChannelId,
@@ -101,6 +105,12 @@ import {
 type BrokerClientRef = {
   client: BrokerClient;
   pollInterval: ReturnType<typeof setInterval> | null;
+};
+
+type PinetRuntimeControlContext = ExtensionContext & {
+  abort?: () => void;
+  shutdown?: () => void;
+  reload?: () => Promise<void>;
 };
 
 export default function (pi: ExtensionAPI) {
@@ -1249,12 +1259,120 @@ export default function (pi: ExtensionAPI) {
     pendingBrokerTaskAssignmentReport = null;
   }
 
+  function getOutgoingPinetMessageMetadata(body: string): Record<string, unknown> | undefined {
+    const control = getPinetControlCommandFromText(body);
+    if (!control) return undefined;
+    return buildPinetControlMetadata(control);
+  }
+
+  async function sendPinetAgentMessage(
+    targetRef: string,
+    body: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<{ messageId: number; target: string }> {
+    if (!pinetEnabled) {
+      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+    }
+
+    const effectiveMetadata = {
+      ...(getOutgoingPinetMessageMetadata(body) ?? {}),
+      ...(metadata ?? {}),
+    };
+    const finalMetadata = Object.keys(effectiveMetadata).length > 0 ? effectiveMetadata : undefined;
+
+    if (brokerRole === "broker" && activeBroker) {
+      const db = activeBroker.db as BrokerDB;
+      const allAgents = db.getAgents();
+      const target =
+        allAgents.find((a: { id: string }) => a.id === targetRef) ??
+        allAgents.find((a: { name: string }) => a.name === targetRef);
+
+      if (!target) {
+        throw new Error(`Agent not found: ${targetRef}`);
+      }
+
+      const selfId = activeSelfId;
+      if (!selfId) {
+        throw new Error("Broker agent identity is unavailable.");
+      }
+      const threadId = `a2a:${selfId}:${target.id}`;
+
+      if (!db.getThread(threadId)) {
+        db.createThread(threadId, "agent", "", selfId);
+      }
+
+      const msg = db.insertMessage(threadId, "agent", "inbound", selfId, body, [target.id], {
+        senderAgent: agentName,
+        a2a: true,
+        ...(finalMetadata ?? {}),
+      });
+
+      for (const assignment of extractTaskAssignmentsFromMessage(body)) {
+        db.recordTaskAssignment(
+          target.id,
+          assignment.issueNumber,
+          assignment.branch,
+          threadId,
+          msg.id,
+        );
+      }
+
+      return { messageId: msg.id, target: target.name };
+    }
+
+    if (brokerRole === "follower" && brokerClient) {
+      const client = brokerClient.client as BrokerClient;
+      const messageId = await client.sendAgentMessage(targetRef, body, finalMetadata);
+      return { messageId, target: targetRef };
+    }
+
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  let pendingRemoteControl: PinetControlCommand | null = null;
+  let remoteControlQueued = false;
+
+  function queuePendingRemoteControl(ctx: ExtensionContext): void {
+    if (!pendingRemoteControl || remoteControlQueued) return;
+
+    remoteControlQueued = true;
+    const commandText = "/pinet-apply-remote-control";
+    const deliverAs = (ctx.isIdle?.() ?? true) ? "followUp" : "steer";
+
+    try {
+      pi.sendUserMessage(commandText, { deliverAs });
+    } catch {
+      try {
+        pi.sendUserMessage(commandText);
+      } catch (err) {
+        remoteControlQueued = false;
+        throw err;
+      }
+    }
+  }
+
+  function requestRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): void {
+    pendingRemoteControl = pendingRemoteControl === "exit" || command === "exit" ? "exit" : command;
+
+    const controlCtx = ctx as PinetRuntimeControlContext;
+    if (!(ctx.isIdle?.() ?? true)) {
+      try {
+        controlCtx.abort?.();
+      } catch {
+        /* best effort */
+      }
+    }
+
+    queuePendingRemoteControl(ctx);
+    ctx.ui.notify(`Pinet remote control requested: /${pendingRemoteControl}`, "warning");
+  }
+
   pi.registerTool({
     name: "pinet_message",
     label: "Pinet Message",
     description: "Send a message to another connected Pinet agent.",
     promptSnippet:
-      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from.",
+      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from. To trigger remote agent control, send the exact message `/reload` or `/exit`.",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent name or ID" }),
       message: Type.String({ description: "Message body" }),
@@ -1262,72 +1380,13 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params) {
       requireToolPolicy("pinet_message", undefined, `to=${params.to} | message=${params.message}`);
 
-      if (!pinetEnabled) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-      }
-
-      if (brokerRole === "broker" && activeBroker) {
-        // Direct DB access for broker mode
-        const db = activeBroker.db;
-        const allAgents = db.getAgents();
-        const target =
-          allAgents.find((a: { id: string }) => a.id === params.to) ??
-          allAgents.find((a: { name: string }) => a.name === params.to);
-
-        if (!target) {
-          throw new Error(`Agent not found: ${params.to}`);
-        }
-
-        const selfId = activeSelfId;
-        if (!selfId) {
-          throw new Error("Broker agent identity is unavailable.");
-        }
-        const threadId = `a2a:${selfId}:${target.id}`;
-
-        if (!db.getThread(threadId)) {
-          db.createThread(threadId, "agent", "", selfId);
-        }
-
-        const msg = db.insertMessage(
-          threadId,
-          "agent",
-          "inbound",
-          selfId,
-          params.message,
-          [target.id],
-          { senderAgent: agentName, a2a: true },
-        );
-
-        for (const assignment of extractTaskAssignmentsFromMessage(params.message)) {
-          db.recordTaskAssignment(
-            target.id,
-            assignment.issueNumber,
-            assignment.branch,
-            threadId,
-            msg.id,
-          );
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Message sent to ${target.name} (id: ${msg.id}).`,
-            },
-          ],
-          details: { messageId: msg.id, target: target.name },
-        };
-      } else if (brokerRole === "follower" && brokerClient) {
-        const client = brokerClient.client;
-        const messageId = await client.sendAgentMessage(params.to, params.message);
-
-        return {
-          content: [{ type: "text", text: `Message sent to ${params.to} (id: ${messageId}).` }],
-          details: { messageId, target: params.to },
-        };
-      }
-
-      throw new Error("Pinet is in an unexpected state.");
+      const result = await sendPinetAgentMessage(params.to, params.message);
+      return {
+        content: [
+          { type: "text", text: `Message sent to ${result.target} (id: ${result.messageId}).` },
+        ],
+        details: { messageId: result.messageId, target: result.target },
+      };
     },
   });
 
@@ -1572,6 +1631,22 @@ export default function (pi: ExtensionAPI) {
         // targeting ourselves into the in-memory inbox and trigger drain.
         broker.server.onAgentMessage((targetAgentId, brokerMsg, meta) => {
           if (targetAgentId !== selfId) return;
+
+          const control = extractPinetControlCommand({
+            threadId: brokerMsg.threadId,
+            body: brokerMsg.body,
+            metadata: meta,
+          });
+          if (control) {
+            try {
+              requestRemoteControl(control, ctx);
+              broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
+            } catch (err) {
+              ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
+            }
+            return;
+          }
+
           const senderName = (meta.senderAgent as string) ?? brokerMsg.sender;
           inbox.push({
             channel: "",
@@ -1649,6 +1724,24 @@ export default function (pi: ExtensionAPI) {
             if (hasDeliveredFollowerInboxIds(followerDeliveryState)) {
               void flushDeliveredFollowerAcks();
             }
+            return;
+          }
+
+          const controlEntries: Array<{ inboxId: number; command: PinetControlCommand }> = [];
+          for (const entry of newEntries) {
+            const command = extractPinetControlCommand({
+              threadId: entry.message.threadId,
+              body: entry.message.body,
+              metadata: entry.message.metadata,
+            });
+            if (command) {
+              controlEntries.push({ inboxId: entry.inboxId, command });
+            }
+          }
+
+          if (controlEntries.length > 0) {
+            requestRemoteControl(controlEntries[controlEntries.length - 1]!.command, ctx);
+            await client.ackMessages(controlEntries.map((entry) => entry.inboxId));
             return;
           }
 
@@ -1857,6 +1950,72 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("pinet-apply-remote-control", {
+    description: "Apply the latest queued remote Pinet control action",
+    handler: async (_args, ctx) => {
+      extCtx = ctx;
+      remoteControlQueued = false;
+      const control = pendingRemoteControl;
+      pendingRemoteControl = null;
+      const controlCtx = ctx as PinetRuntimeControlContext;
+
+      if (!control) {
+        ctx.ui.notify("No pending Pinet remote control action.", "info");
+        return;
+      }
+
+      if (control === "reload") {
+        if (typeof controlCtx.reload !== "function") {
+          throw new Error("Reload is not available in this command context.");
+        }
+        ctx.ui.notify("Applying remote Pinet reload.", "warning");
+        await controlCtx.reload();
+        return;
+      }
+
+      if (typeof controlCtx.shutdown !== "function") {
+        throw new Error("Shutdown is not available in this command context.");
+      }
+      ctx.ui.notify("Applying remote Pinet exit.", "warning");
+      controlCtx.shutdown();
+    },
+  });
+
+  pi.registerCommand("pinet-reload", {
+    description: "Tell a connected Pinet agent to reload itself",
+    handler: async (args, ctx) => {
+      const target = args.trim();
+      if (!target) {
+        ctx.ui.notify("Usage: /pinet-reload <agent-name-or-id>", "warning");
+        return;
+      }
+
+      try {
+        const result = await sendPinetAgentMessage(target, "/reload");
+        ctx.ui.notify(`Sent /reload to ${result.target}`, "info");
+      } catch (err) {
+        ctx.ui.notify(`Pinet reload failed: ${msg(err)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("pinet-exit", {
+    description: "Tell a connected Pinet agent to exit gracefully",
+    handler: async (args, ctx) => {
+      const target = args.trim();
+      if (!target) {
+        ctx.ui.notify("Usage: /pinet-exit <agent-name-or-id>", "warning");
+        return;
+      }
+
+      try {
+        const result = await sendPinetAgentMessage(target, "/exit");
+        ctx.ui.notify(`Sent /exit to ${result.target}`, "info");
+      } catch (err) {
+        ctx.ui.notify(`Pinet exit failed: ${msg(err)}`, "error");
+      }
+    },
+  });
   pi.registerCommand("pinet-status", {
     description: "Show Pinet status",
     handler: async (_args, ctx) => {
@@ -1921,6 +2080,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
     slackRequests = createAbortableOperationTracker();
+    pendingRemoteControl = null;
+    remoteControlQueued = false;
     extCtx = ctx;
     const sessionHeader = (
       ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
@@ -2130,6 +2291,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     shuttingDown = true;
+    pendingRemoteControl = null;
+    remoteControlQueued = false;
+    flushPersist();
     stopBrokerHeartbeat();
     stopBrokerMaintenance();
     stopBrokerRalphLoop();

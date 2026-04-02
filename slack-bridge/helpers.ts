@@ -123,6 +123,46 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
   return `New Pinet messages:\n${lines.join("\n")}\n\nReply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.`;
 }
 
+// ─── Pinet control messages ─────────────────────────────
+
+export type PinetControlCommand = "reload" | "exit";
+
+export function parsePinetControlCommand(value: unknown): PinetControlCommand | null {
+  return value === "reload" || value === "exit" ? value : null;
+}
+
+export function getPinetControlCommandFromText(
+  text: string | undefined,
+): PinetControlCommand | null {
+  const trimmed = text?.trim();
+  if (!trimmed) return null;
+  const [head] = trimmed.split(/\s+/, 1);
+  if (head === "/reload") return "reload";
+  if (head === "/exit") return "exit";
+  return null;
+}
+
+export function buildPinetControlMetadata(command: PinetControlCommand): Record<string, unknown> {
+  return { kind: "pinet_control", command };
+}
+
+export function extractPinetControlCommand(message: {
+  threadId?: string;
+  body?: string;
+  metadata?: Record<string, unknown> | null;
+}): PinetControlCommand | null {
+  const metadata = message.metadata ?? {};
+  const isAgentToAgent =
+    metadata.a2a === true ||
+    (typeof message.threadId === "string" && message.threadId.startsWith("a2a:"));
+  if (!isAgentToAgent) return null;
+
+  const metadataCommand =
+    metadata.kind === "pinet_control" ? parsePinetControlCommand(metadata.command) : null;
+  if (metadataCommand) return metadataCommand;
+
+  return getPinetControlCommandFromText(message.body);
+}
 // ─── Slack API encoding ──────────────────────────────────
 
 export const FORM_METHODS = new Set([

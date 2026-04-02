@@ -42,6 +42,7 @@ If the agent is idle, incoming messages are processed immediately.
 - **Channel tools** — create, post to, and read from channels
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
+- **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
 - **User allowlist** — restrict who can interact with the agent
 
 ## Setup
@@ -117,6 +118,16 @@ Find user IDs in Slack: click a user's profile → **More** → **Copy member ID
 - **Hybrid inbox** — queue when busy, auto-process when idle
 - **Reactions** — 👀 as lightweight "thinking" indicator (no chat lock)
 - **Agent naming** — LLM picks a fun name + emoji per task
+
+## Pinet control commands
+
+Use these local commands to control another connected Pinet agent by name or ID:
+
+- `/pinet-reload <agent>` — ask the target agent to reload cleanly
+- `/pinet-exit <agent>` — ask the target agent to disconnect cleanly and exit
+
+Agents can also send the exact A2A message `/reload` or `/exit` via `pinet_message`; the
+receiver handles it automatically instead of surfacing it to the LLM as normal work.
 
 ## Status
 
