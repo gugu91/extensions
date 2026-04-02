@@ -3,11 +3,11 @@
 Pi extensions monorepo — Slack, Neovim, and Neon Postgres integrations for
 the [pi coding agent](https://github.com/nicholasgasior/pi-coding-agent).
 
-Current state: the repo is in a fast-moving Pinet buildout with **44+ merged
-PRs on 2026-04-02 alone**, a broker/follower Slack mesh, persistent PiComms,
-Slack canvases, scheduled wake-ups, worktree guardrails, a checked-in Slack
-manifest deploy command, and name-driven agent personalities. Slack file
-uploads are also in active flight.
+Current state: the repo is in a fast-moving Pinet buildout with **50+ merged
+PRs in a single day with minimal human intervention**, a broker/follower Slack
+mesh, persistent PiComms, Slack canvases, scheduled wake-ups, worktree
+guardrails, a checked-in Slack manifest deploy command, and name-driven agent
+personalities. Slack file uploads are also in active flight.
 
 ## Extensions
 
@@ -32,6 +32,45 @@ uploads are also in active flight.
   back through the RALPH loop.
 - **Active work** — Slack file uploads are currently in flight in
   [PR #201](https://github.com/gugu91/extensions/pull/201).
+
+## Philosophy
+
+### How Pinet was built
+
+Pinet was not just designed on paper and then implemented by hand. It was built
+mostly unsupervised by the kind of system it enables: a self-coordinating mesh
+of coding agents working through Slack, GitHub, and linked git worktrees.
+
+The core operating model is simple:
+
+- **A broker coordinates, but does not write code.** The broker agent watches
+  Slack, files and routes work, nudges stalled threads, tracks ownership, and
+  keeps the system coherent. The actual implementation work stays with worker
+  agents in isolated worktrees.
+- **Workers ship end-to-end.** Worker agents pick up issues, write code, add
+  tests, run checks, push branches, and open PRs without waiting for a human to
+  micromanage every step.
+- **Agents review other agents.** The mesh does not stop at code generation:
+  agents review each other's PRs, handle rebases, resolve conflicts, and repair
+  broken branches autonomously when `main` moves underneath them.
+- **Personality is a feature, not garnish.** Named agents like Rocket Dolphin,
+  Silent Crocodile, Solar Mantis, and Ultra Rabbit make a busy multi-agent
+  system legible. When dozens of tasks are moving at once, memorable identities
+  make status, ownership, and accountability visible to humans.
+- **The mesh is expected to self-repair.** The RALPH loop watches for stalls,
+  reassigns stuck work, nudges long-running threads, and reaps dead or ghosted
+  agents so the system can keep moving even when parts of it fail.
+
+This is not a toy demo. During the current buildout, the mesh merged **50+ PRs
+in a single day** with minimal human intervention. The system was doing real
+engineering work: implementing features, reviewing changes, recovering from
+failures, and keeping momentum through rebases and broker hiccups.
+
+Humans still matter, but in a deliberately high-leverage role: **set
+priorities, approve merges, and provide the API tokens and environment** that
+let the mesh operate. The goal is not to remove humans from the loop; it is to
+move them up a level, from doing every step manually to steering a system that
+can coordinate and execute most of the work itself.
 
 ## Quick start
 
