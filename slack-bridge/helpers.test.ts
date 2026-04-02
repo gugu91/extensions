@@ -25,6 +25,7 @@ import {
   resolvePersistedAgentIdentity,
   buildAgentStableId,
   resolveAgentStableId,
+  isLikelyLocalSubagentContext,
   buildSlackRequest,
   stripBotMention,
   isChannelId,
@@ -496,6 +497,35 @@ describe("resolveAgentStableId", () => {
     expect(resolveAgentStableId(undefined, "/tmp/pi/session.json", "macbook", "/repo")).toBe(
       `macbook:session:${path.resolve("/tmp/pi/session.json")}`,
     );
+  });
+});
+
+describe("isLikelyLocalSubagentContext", () => {
+  it("detects branched or child sessions via parentSession header", () => {
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionHeader: { parentSession: "/tmp/pi/parent-session.jsonl" },
+        argv: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("detects headless no-session subagents from argv fallback", () => {
+    expect(isLikelyLocalSubagentContext({ argv: ["--mode", "json", "-p", "--no-session"] })).toBe(
+      true,
+    );
+    expect(isLikelyLocalSubagentContext({ argv: ["--mode", "rpc", "--no-session"] })).toBe(true);
+  });
+
+  it("does not classify regular interactive sessions as subagents", () => {
+    expect(isLikelyLocalSubagentContext({ argv: [] })).toBe(false);
+    expect(
+      isLikelyLocalSubagentContext({ argv: ["--continue"], sessionHeader: { parentSession: "" } }),
+    ).toBe(false);
+  });
+
+  it("does not classify plain no-session interactive use as a subagent", () => {
+    expect(isLikelyLocalSubagentContext({ argv: ["--no-session"] })).toBe(false);
   });
 });
 

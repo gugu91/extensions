@@ -783,6 +783,29 @@ export function resolveAgentStableId(
   return persistedStableId || buildAgentStableId(sessionFile, host, cwd, leafId);
 }
 
+export interface PinetRegistrationContext {
+  sessionHeader?: {
+    parentSession?: string;
+  } | null;
+  argv?: string[];
+}
+
+export function isLikelyLocalSubagentContext(context: PinetRegistrationContext = {}): boolean {
+  const parentSession = context.sessionHeader?.parentSession;
+  if (typeof parentSession === "string" && parentSession.trim().length > 0) {
+    return true;
+  }
+
+  const argv = context.argv ?? process.argv.slice(2);
+  const hasNoSession = argv.includes("--no-session");
+  const hasPrint = argv.includes("--print") || argv.includes("-p");
+  const modeIndex = argv.indexOf("--mode");
+  const mode = modeIndex >= 0 ? argv[modeIndex + 1] : undefined;
+  const hasHeadlessMode = mode === "json" || mode === "rpc";
+
+  return hasNoSession && (hasPrint || hasHeadlessMode);
+}
+
 export interface FollowerThreadState {
   channelId: string;
   threadTs: string;
