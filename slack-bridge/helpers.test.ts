@@ -490,6 +490,29 @@ describe("formatAgentList", () => {
     );
   });
 
+  it("includes pid when present", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "\u{1F916}",
+        name: "Bot",
+        id: "abc",
+        pid: 12345,
+        status: "idle",
+        metadata: null,
+      },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toBe("\u{1F916} Bot (abc) \u2014 idle pid:12345");
+  });
+
+  it("omits pid when not present", () => {
+    const agents: AgentDisplayInfo[] = [
+      { emoji: "\u{1F916}", name: "Bot", id: "abc", status: "idle", metadata: null },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).not.toContain("pid:");
+  });
+
   it("formats multiple agents", () => {
     const agents: AgentDisplayInfo[] = [
       {
@@ -601,6 +624,22 @@ describe("formatAgentList", () => {
 });
 
 describe("buildAgentDisplayInfo", () => {
+  it("passes pid through to display info", () => {
+    const agent = buildAgentDisplayInfo(
+      { emoji: "\u{1F916}", name: "Bot", id: "a1", pid: 42, status: "idle" },
+      { now: Date.now() },
+    );
+    expect(agent.pid).toBe(42);
+  });
+
+  it("omits pid when not provided", () => {
+    const agent = buildAgentDisplayInfo(
+      { emoji: "\u{1F916}", name: "Bot", id: "a1", status: "idle" },
+      { now: Date.now() },
+    );
+    expect(agent.pid).toBeUndefined();
+  });
+
   it("marks a disconnected agent with resumable lease as resumable", () => {
     const agent = buildAgentDisplayInfo(
       {

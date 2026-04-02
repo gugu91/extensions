@@ -1576,6 +1576,7 @@ export default function (pi: ExtensionAPI) {
         emoji: string;
         name: string;
         id: string;
+        pid?: number;
         status: "working" | "idle";
         metadata: Record<string, unknown> | null;
         lastHeartbeat: string;
@@ -1592,6 +1593,7 @@ export default function (pi: ExtensionAPI) {
         emoji: string;
         name: string;
         id: string;
+        pid?: number;
         status: "working" | "idle";
         metadata: Record<string, unknown> | null;
         lastHeartbeat: string;
@@ -1607,6 +1609,7 @@ export default function (pi: ExtensionAPI) {
             emoji: agent.emoji,
             name: agent.name,
             id: agent.id,
+            pid: agent.pid,
             status: agent.status,
             metadata: agent.metadata,
             lastHeartbeat: agent.lastHeartbeat,
@@ -1621,6 +1624,7 @@ export default function (pi: ExtensionAPI) {
             emoji: agent.emoji,
             name: agent.name,
             id: agent.id,
+            pid: agent.pid,
             status: agent.status ?? "idle",
             metadata: agent.metadata,
             lastHeartbeat: agent.lastHeartbeat,
