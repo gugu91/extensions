@@ -882,10 +882,14 @@ export default function (pi: ExtensionAPI) {
   // ─── Tools ──────────────────────────────────────────
 
   registerSlackTools(pi, {
-    botToken: botToken!,
-    defaultChannel: settings.defaultChannel,
-    securityPrompt,
-    guardrails,
+    getBotToken: () => {
+      if (!botToken) {
+        throw new Error("Slack bot token is not configured.");
+      }
+      return botToken;
+    },
+    getDefaultChannel: () => settings.defaultChannel,
+    getSecurityPrompt: () => securityPrompt,
     inbox,
     slack,
     getAgentName: () => agentName,

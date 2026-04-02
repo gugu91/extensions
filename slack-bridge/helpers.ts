@@ -159,6 +159,7 @@ export function extractPinetControlCommand(message: {
     metadata.kind === "pinet_control" ? parsePinetControlCommand(metadata.command) : null;
   if (metadataCommand) return metadataCommand;
 
+  // Backward-compatible fallback for exact slash commands sent over existing a2a flows.
   return getPinetControlCommandFromText(message.body);
 }
 // ─── Slack API encoding ──────────────────────────────────

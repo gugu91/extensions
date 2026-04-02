@@ -1,14 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@gugu91/pi-ext-types/typebox";
 import type { InboxMessage } from "./helpers.js";
-import type { SecurityGuardrails } from "./guardrails.js";
 import type { SlackResult } from "./slack-api.js";
 
 export interface RegisterSlackToolsDeps {
-  botToken: string;
-  defaultChannel?: string;
-  securityPrompt: string;
-  guardrails: SecurityGuardrails;
+  getBotToken: () => string;
+  getDefaultChannel: () => string | undefined;
+  getSecurityPrompt: () => string;
   inbox: InboxMessage[];
   slack: (method: string, token: string, body?: Record<string, unknown>) => Promise<SlackResult>;
   getAgentName: () => string;
@@ -33,37 +31,20 @@ export interface RegisterSlackToolsDeps {
   };
 }
 
-function buildSlackInboxPromptGuidelines(
-  securityPrompt: string,
-  guardrails: SecurityGuardrails,
-): string[] {
+function buildSlackInboxPromptGuidelines(): string[] {
   return [
     "You are connected to Slack via the slack-bridge extension.",
     "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
-    ...(securityPrompt
-      ? [
-          "Security guardrails are active for Slack-triggered actions. Check the security prompt in each message for restrictions.",
-          ...(guardrails.requireConfirmation?.length
-            ? [
-                `Before using tools matching these patterns: [${guardrails.requireConfirmation.join(", ")}], you MUST call slack_confirm_action first and wait for approval.`,
-              ]
-            : []),
-          ...(guardrails.readOnly
-            ? [
-                "READ-ONLY MODE is active. Do NOT use write, edit, bash, or any tool that modifies files or state.",
-              ]
-            : []),
-        ]
-      : []),
+    "Security guardrails may be active for Slack-triggered actions. Check the current security prompt in each message for restrictions.",
+    "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
   ];
 }
 
 export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDeps): void {
   const {
-    botToken,
-    defaultChannel,
-    securityPrompt,
-    guardrails,
+    getBotToken,
+    getDefaultChannel,
+    getSecurityPrompt,
     inbox,
     slack,
     getAgentName,
@@ -87,9 +68,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     description:
       "Return pending Slack messages that arrived since the last check, then clear the queue.",
     promptSnippet: "Check for new incoming Slack messages.",
-    promptGuidelines: buildSlackInboxPromptGuidelines(securityPrompt, guardrails),
+    promptGuidelines: buildSlackInboxPromptGuidelines(),
     parameters: Type.Object({}),
     async execute() {
+      const securityPrompt = getSecurityPrompt();
       const securityHeader = securityPrompt ? `${securityPrompt}\n\n` : "";
       const agentName = getAgentName();
       const agentEmoji = getAgentEmoji();
@@ -168,7 +150,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
-      const response = await slack("chat.postMessage", botToken, body);
+      const response = await slack("chat.postMessage", getBotToken(), body);
       const ts = (response.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
@@ -214,7 +196,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         throw new Error("Unknown thread.");
       }
 
-      const response = await slack("conversations.replies", botToken, {
+      const response = await slack("conversations.replies", getBotToken(), {
         channel,
         ts: params.thread_ts,
         limit: params.limit ?? 20,
@@ -256,19 +238,19 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `name=${params.name} | topic=${params.topic ?? ""} | purpose=${params.purpose ?? ""}`,
       );
 
-      const response = await slack("conversations.create", botToken, {
+      const response = await slack("conversations.create", getBotToken(), {
         name: params.name,
       });
       const channel = response.channel as { id: string; name: string };
 
       if (params.topic) {
-        await slack("conversations.setTopic", botToken, {
+        await slack("conversations.setTopic", getBotToken(), {
           channel: channel.id,
           topic: params.topic,
         });
       }
       if (params.purpose) {
-        await slack("conversations.setPurpose", botToken, {
+        await slack("conversations.setPurpose", getBotToken(), {
           channel: channel.id,
           purpose: params.purpose,
         });
@@ -307,7 +289,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       );
 
       const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);
-      const channelInput = params.channel ?? defaultChannel;
+      const channelInput = params.channel ?? getDefaultChannel();
       let channelId = params.channel ? await resolveChannel(params.channel) : resolvedThreadChannel;
 
       if (!channelId && channelInput) {
@@ -327,7 +309,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
-      const response = await slack("chat.postMessage", botToken, body);
+      const response = await slack("chat.postMessage", getBotToken(), body);
       const ts = (response.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
@@ -373,14 +355,14 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
       let messages: Record<string, unknown>[];
       if (params.thread_ts) {
-        const response = await slack("conversations.replies", botToken, {
+        const response = await slack("conversations.replies", getBotToken(), {
           channel: channelId,
           ts: params.thread_ts,
           limit,
         });
         messages = response.messages as Record<string, unknown>[];
       } else {
-        const response = await slack("conversations.history", botToken, {
+        const response = await slack("conversations.history", getBotToken(), {
           channel: channelId,
           limit,
         });
@@ -449,7 +431,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         };
       }
 
-      await slack("chat.postMessage", botToken, {
+      await slack("chat.postMessage", getBotToken(), {
         channel: channelId,
         thread_ts: params.thread_ts,
         text: confirmMessage,
