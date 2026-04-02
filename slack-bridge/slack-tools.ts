@@ -11,6 +11,11 @@ import {
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
 } from "./canvases.js";
+import {
+  buildSlackThreadExport,
+  filterSlackExportMessagesByRange,
+  parseSlackExportBoundaryTs,
+} from "./slack-export.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
 
@@ -51,6 +56,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
     "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
     "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
+    "Use slack_export to archive or document a Slack thread as markdown, plain text, or JSON before writing it into docs, canvases, or files.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
@@ -189,6 +195,119 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         ? "Unknown Slack thread. If you know the destination channel, pass channel explicitly."
         : "No active Slack thread. Provide channel or configure defaultChannel in settings.json.",
     );
+  }
+
+  async function fetchSlackThreadMessages(
+    channelId: string,
+    threadTs: string,
+    oldest?: string,
+    latest?: string,
+  ): Promise<Record<string, unknown>[]> {
+    const messages: Record<string, unknown>[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await slack("conversations.replies", getBotToken(), {
+        channel: channelId,
+        ts: threadTs,
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+        ...(oldest ? { oldest } : {}),
+        ...(latest ? { latest } : {}),
+      });
+
+      const batch = Array.isArray(response.messages)
+        ? (response.messages as Record<string, unknown>[])
+        : [];
+      messages.push(...batch);
+
+      const nextCursor = (response.response_metadata as { next_cursor?: string } | undefined)
+        ?.next_cursor;
+      cursor = typeof nextCursor === "string" && nextCursor.length > 0 ? nextCursor : undefined;
+    } while (cursor);
+
+    return messages;
+  }
+
+  async function buildSlackExportPayload(messages: Record<string, unknown>[]): Promise<{
+    mentionNames: Record<string, string>;
+    authors: string[];
+    messages: Array<{
+      ts?: string;
+      authorName?: string;
+      text?: string;
+      files?: Array<{
+        name?: string;
+        title?: string;
+        mimetype?: string;
+        filetype?: string;
+        permalink?: string;
+        urlPrivate?: string;
+        preview?: string;
+      }>;
+    }>;
+  }> {
+    const userIds = new Set<string>();
+
+    for (const message of messages) {
+      const userId = typeof message.user === "string" ? message.user : undefined;
+      if (userId) {
+        userIds.add(userId);
+      }
+
+      const text = typeof message.text === "string" ? message.text : "";
+      for (const match of text.matchAll(/<@([A-Z0-9]+)>/g)) {
+        if (match[1]) {
+          userIds.add(match[1]);
+        }
+      }
+    }
+
+    const mentionNames = Object.fromEntries(
+      await Promise.all(
+        [...userIds].map(async (userId) => [userId, await resolveUser(userId)] as const),
+      ),
+    );
+
+    const exportedMessages = messages.map((message) => {
+      const userId = typeof message.user === "string" ? message.user : undefined;
+      const authorName = userId
+        ? mentionNames[userId]
+        : typeof message.username === "string"
+          ? message.username
+          : typeof message.bot_id === "string"
+            ? `bot:${message.bot_id}`
+            : "bot";
+      const rawFiles = Array.isArray(message.files)
+        ? (message.files as Array<Record<string, unknown>>)
+        : [];
+
+      return {
+        ts: typeof message.ts === "string" ? message.ts : undefined,
+        authorName,
+        text: typeof message.text === "string" ? message.text : "",
+        files: rawFiles.map((file) => ({
+          name: typeof file.name === "string" ? file.name : undefined,
+          title: typeof file.title === "string" ? file.title : undefined,
+          mimetype: typeof file.mimetype === "string" ? file.mimetype : undefined,
+          filetype: typeof file.filetype === "string" ? file.filetype : undefined,
+          permalink: typeof file.permalink === "string" ? file.permalink : undefined,
+          urlPrivate:
+            typeof file.url_private_download === "string"
+              ? file.url_private_download
+              : typeof file.url_private === "string"
+                ? file.url_private
+                : undefined,
+          preview: typeof file.preview === "string" ? file.preview : undefined,
+        })),
+      };
+    });
+
+    return {
+      mentionNames,
+      authors: [...new Set(exportedMessages.map((message) => message.authorName).filter(Boolean))],
+      messages: exportedMessages,
+    };
   }
 
   pi.registerTool({
@@ -443,6 +562,103 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: messages.length },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_export",
+    label: "Slack Export",
+    description:
+      "Export a Slack thread as markdown, plain text, or JSON for documentation and archival.",
+    promptSnippet:
+      "Export a Slack thread before turning it into docs, ADRs, canvases, archives, or follow-up summaries.",
+    parameters: Type.Object({
+      thread_ts: Type.String({ description: "Thread timestamp to export" }),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Channel name or ID. Omit to use the current thread channel, active DM, or defaultChannel.",
+        }),
+      ),
+      format: Type.Optional(
+        Type.String({ description: "Export format: 'markdown' (default), 'plain', or 'json'" }),
+      ),
+      include_metadata: Type.Optional(
+        Type.Boolean({ description: "Include timestamps and author names (default true)" }),
+      ),
+      oldest: Type.Optional(
+        Type.String({
+          description: "Optional oldest boundary as a Slack ts or ISO-8601 UTC timestamp",
+        }),
+      ),
+      latest: Type.Optional(
+        Type.String({
+          description: "Optional latest boundary as a Slack ts or ISO-8601 UTC timestamp",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_export",
+        params.thread_ts,
+        `thread_ts=${params.thread_ts} | channel=${params.channel ?? ""} | format=${params.format ?? "markdown"} | include_metadata=${params.include_metadata ?? true} | oldest=${params.oldest ?? ""} | latest=${params.latest ?? ""}`,
+      );
+
+      const channelId = await resolveSlackTargetChannel(params.thread_ts, params.channel);
+      const oldestTs = params.oldest?.trim()
+        ? parseSlackExportBoundaryTs(params.oldest)
+        : undefined;
+      const latestTs = params.latest?.trim()
+        ? parseSlackExportBoundaryTs(params.latest)
+        : undefined;
+
+      if (oldestTs != null && latestTs != null && oldestTs > latestTs) {
+        throw new Error("oldest must be earlier than or equal to latest.");
+      }
+
+      const rawMessages = await fetchSlackThreadMessages(
+        channelId,
+        params.thread_ts,
+        oldestTs != null ? String(oldestTs) : undefined,
+        latestTs != null ? String(latestTs) : undefined,
+      );
+      const exportPayload = await buildSlackExportPayload(rawMessages);
+      const filteredMessages = filterSlackExportMessagesByRange(
+        exportPayload.messages,
+        oldestTs,
+        latestTs,
+      );
+      const participants = [
+        ...new Set(filteredMessages.map((message) => message.authorName).filter(Boolean)),
+      ];
+      const exportText = buildSlackThreadExport({
+        format: params.format,
+        includeMetadata: params.include_metadata,
+        threadTs: params.thread_ts,
+        channelId,
+        channelLabel: params.channel,
+        messages: filteredMessages,
+        mentionNames: exportPayload.mentionNames,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: exportText || "(no messages)",
+          },
+        ],
+        details: {
+          thread_ts: params.thread_ts,
+          channel: channelId,
+          format: params.format?.trim().toLowerCase() ?? "markdown",
+          include_metadata: params.include_metadata ?? true,
+          count: filteredMessages.length,
+          participants,
+          ...(oldestTs != null ? { oldest: oldestTs } : {}),
+          ...(latestTs != null ? { latest: latestTs } : {}),
+        },
       };
     },
   });

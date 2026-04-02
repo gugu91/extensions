@@ -28,6 +28,7 @@ If the agent is idle, incoming messages are processed immediately.
 | `slack_schedule(text, channel?, thread_ts?, delay?, at?)`                           | Schedule a Slack message for later           |
 | `slack_pin(action, message_ts, channel?, thread_ts?)`                               | Pin or unpin a Slack message                 |
 | `slack_bookmark(action, channel?, thread_ts?, title?, url?, emoji?, bookmark_id?)`  | Add, list, or remove channel bookmarks       |
+| `slack_export(thread_ts, channel?, format?, include_metadata?, oldest?, latest?)`   | Export a Slack thread for docs or archival   |
 | `slack_read(thread_ts, limit?)`                                                     | Read thread messages                         |
 | `slack_inbox()`                                                                     | Check pending messages manually              |
 | `slack_create_channel(name, topic?, purpose?)`                                      | Create a project channel                     |
@@ -47,6 +48,10 @@ or the system temp directory.
 manages durable channel-header links such as repos, dashboards, docs, and
 runbooks.
 
+`slack_export` turns a thread into markdown, plain text, or JSON with resolved
+authors, timestamps, and attachment links so it can be archived into docs,
+files, canvases, or follow-up summaries.
+
 ## Features
 
 - **Slack Assistant** — appears in Slack's sidebar, native conversation UI
@@ -60,6 +65,7 @@ runbooks.
 - **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
 - **Scheduled & delayed messages** — queue reminders, timed announcements, and follow-ups without waiting around
 - **Pins & bookmarks** — highlight key messages and manage durable channel-header links
+- **Thread export & archival** — convert Slack threads into reusable markdown, plain text, or JSON
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
 - **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
