@@ -99,6 +99,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("slack_schedule")).toBe(true);
     expect(WRITE_TOOLS.has("slack_pin")).toBe(true);
     expect(WRITE_TOOLS.has("slack_bookmark")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_react")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_export")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_create_channel")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_post_channel")).toBe(false);
@@ -106,6 +107,7 @@ describe("isToolBlocked", () => {
     expect(READ_ONLY_TOOLS.has("slack_schedule")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_pin")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_bookmark")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_react")).toBe(false);
   });
 
   it("combines readOnly and blockedTools", () => {

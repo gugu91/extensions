@@ -76,6 +76,12 @@ import {
   type SecurityGuardrails,
 } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
+import {
+  buildReactionPromptGuidelines,
+  buildReactionTriggerMessage,
+  normalizeReactionName,
+  resolveReactionCommands,
+} from "./reaction-triggers.js";
 import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
@@ -151,6 +157,7 @@ export default function (pi: ExtensionAPI) {
 
   // allowedUsers: settings.json takes priority, env var as fallback
   let allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
+  let reactionCommands = resolveReactionCommands(settings.reactionCommands);
 
   function isUserAllowed(userId: string): boolean {
     return checkUserAllowed(allowedUsers, userId);
@@ -171,6 +178,7 @@ export default function (pi: ExtensionAPI) {
     appToken: string | undefined;
     allowedUsers: Set<string> | null;
     guardrails: SecurityGuardrails;
+    reactionCommands: Map<string, { action: string; prompt: string }>;
     securityPrompt: string;
     agentName: string;
     agentEmoji: string;
@@ -182,6 +190,7 @@ export default function (pi: ExtensionAPI) {
     appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
     allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
     guardrails = settings.security ?? {};
+    reactionCommands = resolveReactionCommands(settings.reactionCommands);
     securityPrompt = buildSecurityPrompt(guardrails);
     const identitySeed = extCtx?.sessionManager.getSessionFile() ?? agentStableId;
     const refreshedIdentity = resolveRuntimeAgentIdentity(
@@ -202,6 +211,7 @@ export default function (pi: ExtensionAPI) {
       appToken,
       allowedUsers: allowedUsers ? new Set(allowedUsers) : null,
       guardrails: structuredClone(guardrails),
+      reactionCommands: new Map(reactionCommands),
       securityPrompt,
       agentName,
       agentEmoji,
@@ -214,6 +224,7 @@ export default function (pi: ExtensionAPI) {
     appToken = snapshot.appToken;
     allowedUsers = snapshot.allowedUsers ? new Set(snapshot.allowedUsers) : null;
     guardrails = structuredClone(snapshot.guardrails);
+    reactionCommands = new Map(snapshot.reactionCommands);
     securityPrompt = snapshot.securityPrompt;
     agentName = snapshot.agentName;
     agentEmoji = snapshot.agentEmoji;
@@ -748,6 +759,9 @@ export default function (pi: ExtensionAPI) {
         case "message":
           if (!evt.subtype && !evt.bot_id) await onMessage(evt, ctx);
           break;
+        case "reaction_added":
+          await onReactionAdded(evt, ctx);
+          break;
         case "member_joined_channel":
           if ((evt.user as string) === botUserId) {
             const ch = evt.channel as string;
@@ -808,6 +822,147 @@ export default function (pi: ExtensionAPI) {
     if (ctx?.channel_id) {
       existing.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
       persistState();
+    }
+  }
+
+  async function fetchSlackMessageByTs(
+    channel: string,
+    messageTs: string,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const response = await slack("conversations.history", botToken!, {
+        channel,
+        oldest: messageTs,
+        latest: messageTs,
+        inclusive: true,
+        limit: 1,
+      });
+      const messages = (response.messages as Record<string, unknown>[]) ?? [];
+      return messages.find((message) => message.ts === messageTs) ?? messages[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function onReactionAdded(
+    evt: Record<string, unknown>,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    if (shuttingDown) return;
+
+    const item = evt.item as { type?: string; channel?: string; ts?: string } | undefined;
+    const user = evt.user as string | undefined;
+    const rawReactionName = evt.reaction as string | undefined;
+    if (
+      !item ||
+      item.type !== "message" ||
+      !item.channel ||
+      !item.ts ||
+      !user ||
+      !rawReactionName
+    ) {
+      return;
+    }
+
+    if (user === botUserId) {
+      return;
+    }
+
+    let reactionName: string;
+    try {
+      reactionName = normalizeReactionName(rawReactionName);
+    } catch {
+      return;
+    }
+
+    const command = reactionCommands.get(reactionName);
+    if (!command || !isUserAllowed(user)) {
+      return;
+    }
+
+    try {
+      const reactedMessage = await fetchSlackMessageByTs(item.channel, item.ts);
+      if (!reactedMessage) {
+        throw new Error(`Unable to fetch reacted message ${item.ts} in channel ${item.channel}`);
+      }
+
+      const threadTs =
+        (reactedMessage.thread_ts as string | undefined) ??
+        (reactedMessage.ts as string | undefined) ??
+        item.ts;
+
+      if (!threads.has(threadTs)) {
+        threads.set(threadTs, {
+          channelId: item.channel,
+          threadTs,
+          userId: (reactedMessage.user as string | undefined) ?? user,
+        });
+      }
+
+      const localOwner = threads.get(threadTs)?.owner;
+      if (localOwner && localOwner !== agentName) return;
+
+      if (!localOwner && !unclaimedThreads.has(threadTs)) {
+        const remoteOwner = await resolveThreadOwner(item.channel, threadTs);
+        if (shuttingDown) return;
+        if (remoteOwner && remoteOwner !== agentName) {
+          const thread = threads.get(threadTs);
+          if (thread) thread.owner = remoteOwner;
+          return;
+        }
+        if (remoteOwner === agentName) {
+          const thread = threads.get(threadTs);
+          if (thread) thread.owner = agentName;
+        }
+        if (!remoteOwner) {
+          unclaimedThreads.add(threadTs);
+        }
+      }
+
+      const reactorName = await resolveUser(user);
+      if (shuttingDown) return;
+      const reactedMessageAuthorId =
+        (reactedMessage.user as string | undefined) ?? (evt.item_user as string | undefined);
+      const reactedMessageAuthor = reactedMessageAuthorId
+        ? await resolveUser(reactedMessageAuthorId)
+        : (reactedMessage.bot_id as string | undefined)
+          ? "bot"
+          : "unknown";
+      if (shuttingDown) return;
+
+      const reactedMessageText =
+        typeof reactedMessage.text === "string" && reactedMessage.text.trim().length > 0
+          ? reactedMessage.text
+          : "(no text)";
+      const reactionMessage = buildReactionTriggerMessage({
+        reactionName,
+        command,
+        reactorName,
+        channel: item.channel,
+        threadTs,
+        messageTs: item.ts,
+        reactedMessageText,
+        reactedMessageAuthor,
+      });
+
+      ctx.ui.notify(`${reactorName} reacted with :${reactionName}:`, "info");
+      inbox.push({
+        channel: item.channel,
+        threadTs,
+        userId: user,
+        text: reactionMessage,
+        timestamp: (evt.event_ts as string) ?? item.ts,
+      });
+      persistState();
+      updateBadge();
+      await addReaction(item.channel, item.ts, "white_check_mark");
+
+      if (ctx.isIdle?.()) {
+        drainInbox();
+      }
+    } catch (err) {
+      console.error(`[slack-bridge] reaction trigger failed: ${msg(err)}`);
+      await addReaction(item.channel, item.ts, "x");
     }
   }
 
@@ -1936,6 +2091,7 @@ export default function (pi: ExtensionAPI) {
       appToken: appToken!,
       allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
       suggestedPrompts: settings.suggestedPrompts,
+      reactionCommands: settings.reactionCommands,
       isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
       rememberKnownThread: (threadTs: string, channelId: string) => {
         broker.db.updateThread(threadTs, { source: "slack", channel: channelId });
@@ -2755,7 +2911,11 @@ export default function (pi: ExtensionAPI) {
 
   // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
   pi.on("before_agent_start", async (event) => {
-    const guidelines = [...getIdentityGuidelines(), ...buildAgentPersonalityGuidelines(agentName)];
+    const guidelines = [
+      ...getIdentityGuidelines(),
+      ...buildAgentPersonalityGuidelines(agentName),
+      ...buildReactionPromptGuidelines(),
+    ];
     if (brokerRole === "broker") {
       guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
       guidelines.push(buildBrokerToolGuardrailsPrompt());

@@ -44,6 +44,7 @@ settings:
       - app_mention
       - assistant_thread_started
       - assistant_thread_context_changed
+      - reaction_added
       - message.channels
       - message.groups
       - message.im

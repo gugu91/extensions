@@ -16,6 +16,7 @@ import {
   filterSlackExportMessagesByRange,
   parseSlackExportBoundaryTs,
 } from "./slack-export.js";
+import { normalizeReactionName } from "./reaction-triggers.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
 
@@ -53,6 +54,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
     "Security guardrails may be active for Slack-triggered actions. Check the current security prompt in each message for restrictions.",
     "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
+    "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages — treat them as explicit user instructions attached to the referenced Slack message or thread.",
     "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
     "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
     "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
@@ -310,6 +312,26 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     };
   }
 
+  async function resolveReactionChannel(
+    threadTs: string | undefined,
+    channel: string | undefined,
+  ): Promise<string> {
+    const trackedThreadChannel = threadTs ? await resolveFollowerReplyChannel(threadTs) : null;
+    if (trackedThreadChannel) {
+      return trackedThreadChannel;
+    }
+
+    const channelInput = channel?.trim();
+    if (channelInput) {
+      return resolveChannel(channelInput);
+    }
+
+    throw new Error(
+      threadTs
+        ? "Unknown Slack thread. If you know the destination channel, pass channel explicitly."
+        : "Provide channel when reacting to a message outside the current tracked thread.",
+    );
+  }
   pi.registerTool({
     name: "slack_inbox",
     label: "Slack Inbox",
@@ -419,6 +441,73 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           },
         ],
         details: { ts, channel },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_react",
+    label: "Slack React",
+    description: "Add an emoji reaction to a Slack message or thread root.",
+    promptSnippet:
+      "Add a reaction to a Slack thread root or message. Use this for lightweight acknowledgements like 👀, ✅, or 🔄.",
+    parameters: Type.Object({
+      emoji: Type.String({
+        description:
+          "Reaction emoji or Slack reaction name, e.g. 👀, ✅, :eyes:, or white_check_mark",
+      }),
+      thread_ts: Type.Optional(
+        Type.String({
+          description: "Tracked Slack thread. If timestamp is omitted, reacts to the thread root.",
+        }),
+      ),
+      timestamp: Type.Optional(
+        Type.String({
+          description:
+            "Specific message timestamp to react to. Defaults to thread_ts when omitted.",
+        }),
+      ),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Optional channel name or ID. Required when reacting to a standalone message outside the current tracked thread.",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      const targetTimestamp = params.timestamp ?? params.thread_ts;
+      if (!targetTimestamp) {
+        throw new Error("Provide thread_ts or timestamp so Slack knows which message to react to.");
+      }
+
+      requireToolPolicy(
+        "slack_react",
+        params.thread_ts,
+        `emoji=${params.emoji} | thread_ts=${params.thread_ts ?? ""} | timestamp=${targetTimestamp} | channel=${params.channel ?? ""}`,
+      );
+
+      const reactionName = normalizeReactionName(params.emoji);
+      const channelId = await resolveReactionChannel(params.thread_ts, params.channel);
+
+      await slack("reactions.add", getBotToken(), {
+        channel: channelId,
+        timestamp: targetTimestamp,
+        name: reactionName,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Added :${reactionName}: to message ${targetTimestamp}.`,
+          },
+        ],
+        details: {
+          channel: channelId,
+          timestamp: targetTimestamp,
+          emoji: reactionName,
+          ...(params.thread_ts ? { thread_ts: params.thread_ts } : {}),
+        },
       };
     },
   });

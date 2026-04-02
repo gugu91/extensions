@@ -215,12 +215,32 @@ describe("registerSlackTools", () => {
     });
   });
 
+  it("adds reactions with normalized emoji names via slack_react", async () => {
+    const { slack, tools, setResolveFollowerReplyChannel } = setup();
+    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+
+    const response = await tools.get("slack_react")!.execute("tool-4", {
+      emoji: "✅",
+      thread_ts: "123.456",
+    });
+
+    expect(slack).toHaveBeenCalledWith("reactions.add", "xoxb-initial", {
+      channel: "C-DB",
+      timestamp: "123.456",
+      name: "white_check_mark",
+    });
+    expect(response.content?.[0]?.text).toContain("Added :white_check_mark:");
+  });
+
   it("reads the latest bot token and default channel when slack_schedule executes", async () => {
     const { slack, tools, setBotToken, setDefaultChannel } = setup();
     setBotToken("xoxb-reloaded");
     setDefaultChannel("ops-alerts");
 
-    await tools.get("slack_schedule")!.execute("tool-4", {
+    await tools.get("slack_schedule")!.execute("tool-5", {
       text: "hello from the future",
       at: "2030-01-02T03:04:05Z",
     });
@@ -245,7 +265,7 @@ describe("registerSlackTools", () => {
 
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-04-02T14:00:00Z"));
     try {
-      await tools.get("slack_schedule")!.execute("tool-5", {
+      await tools.get("slack_schedule")!.execute("tool-6", {
         text: "follow up later",
         thread_ts: "123.456",
         delay: "30m",
@@ -276,7 +296,7 @@ describe("registerSlackTools", () => {
       throw new Error("Slack pins.add: already_pinned");
     });
 
-    const response = await tools.get("slack_pin")!.execute("tool-6", {
+    const response = await tools.get("slack_pin")!.execute("tool-7", {
       action: "pin",
       message_ts: "123.789",
       thread_ts: "123.456",
@@ -296,7 +316,7 @@ describe("registerSlackTools", () => {
       throw new Error("Slack pins.remove: no_pin");
     });
 
-    const response = await tools.get("slack_pin")!.execute("tool-7", {
+    const response = await tools.get("slack_pin")!.execute("tool-8", {
       action: "unpin",
       message_ts: "123.789",
     });
@@ -312,7 +332,7 @@ describe("registerSlackTools", () => {
     const { slack, tools, setDefaultChannel } = setup();
     setDefaultChannel("docs");
 
-    const response = await tools.get("slack_bookmark")!.execute("tool-8", {
+    const response = await tools.get("slack_bookmark")!.execute("tool-9", {
       action: "add",
       title: "Repo",
       url: "https://github.com/gugu91/extensions",
@@ -340,7 +360,7 @@ describe("registerSlackTools", () => {
       return "C-DB";
     });
 
-    const response = await tools.get("slack_bookmark")!.execute("tool-9", {
+    const response = await tools.get("slack_bookmark")!.execute("tool-10", {
       action: "list",
       thread_ts: "123.456",
     });
@@ -358,7 +378,7 @@ describe("registerSlackTools", () => {
       throw new Error("Slack bookmarks.remove: not_found");
     });
 
-    const response = await tools.get("slack_bookmark")!.execute("tool-10", {
+    const response = await tools.get("slack_bookmark")!.execute("tool-11", {
       action: "remove",
       bookmark_id: "Bk404",
     });
@@ -415,7 +435,7 @@ describe("registerSlackTools", () => {
       } as SlackResult,
     ]);
 
-    const response = await tools.get("slack_export")!.execute("tool-11", {
+    const response = await tools.get("slack_export")!.execute("tool-12", {
       thread_ts: "123.456",
       format: "markdown",
     });
@@ -455,7 +475,7 @@ describe("registerSlackTools", () => {
       } as SlackResult,
     ]);
 
-    const response = await tools.get("slack_export")!.execute("tool-12", {
+    const response = await tools.get("slack_export")!.execute("tool-13", {
       thread_ts: "100.000001",
       format: "plain",
       oldest: "150",

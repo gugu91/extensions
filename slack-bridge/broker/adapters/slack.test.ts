@@ -484,6 +484,14 @@ describe("SlackAdapter", () => {
     expect(adapter.name).toBe("slack");
   });
 
+  it("can be constructed with reactionCommands", () => {
+    const adapter = new SlackAdapter({
+      ...baseConfig,
+      reactionCommands: { "👀": "review" },
+    });
+    expect(adapter.name).toBe("slack");
+  });
+
   it("can be constructed with isKnownThread callback", () => {
     const adapter = new SlackAdapter({
       ...baseConfig,
@@ -563,6 +571,119 @@ describe("SlackAdapter — allowlist filtering", () => {
 });
 
 // ─── SlackAdapter — send (mocked fetch) ─────────────────
+
+describe("SlackAdapter — reaction triggers", () => {
+  let originalFetch: typeof globalThis.fetch;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchMock = vi.fn<typeof fetch>();
+    globalThis.fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function mockSlackResponse(data: Record<string, unknown> = {}) {
+    return new Response(JSON.stringify({ ok: true, ...data }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("queues mapped reaction_added events with structured context and acknowledges with ✅", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/conversations.history")) {
+        return mockSlackResponse({
+          messages: [
+            {
+              ts: "111.333",
+              thread_ts: "111.222",
+              text: "Please review PR #210",
+              user: "U_TARGET",
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/users.info")) {
+        if (parsedBody.user === "U_REACTOR") {
+          return mockSlackResponse({ user: { real_name: "Alice" } });
+        }
+        if (parsedBody.user === "U_TARGET") {
+          return mockSlackResponse({ user: { real_name: "Bob" } });
+        }
+      }
+
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const rememberKnownThread = vi.fn();
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      reactionCommands: { "👀": "review" },
+      rememberKnownThread,
+    });
+    (adapter as unknown as { botUserId: string | null }).botUserId = "U_BOT";
+
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as { onReactionAdded: (evt: Record<string, unknown>) => Promise<void> }
+    ).onReactionAdded({
+      type: "reaction_added",
+      user: "U_REACTOR",
+      reaction: "eyes",
+      item_user: "U_TARGET",
+      item: {
+        type: "message",
+        channel: "C123",
+        ts: "111.333",
+      },
+      event_ts: "999.000",
+    });
+
+    expect(rememberKnownThread).toHaveBeenCalledWith("111.222", "C123");
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "slack",
+        threadId: "111.222",
+        channel: "C123",
+        userId: "U_REACTOR",
+        userName: "Alice",
+        timestamp: "999.000",
+      }),
+    );
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("Reaction trigger from Slack:");
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("- action: review");
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("Please review PR #210");
+
+    const reactionCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/reactions.add"),
+    );
+    expect(reactionCall).toBeDefined();
+    const reactionBody = JSON.parse(reactionCall?.[1]?.body as string) as Record<string, unknown>;
+    expect(reactionBody).toEqual({
+      channel: "C123",
+      timestamp: "111.333",
+      name: "white_check_mark",
+    });
+  });
+});
 
 describe("SlackAdapter — send", () => {
   let originalFetch: typeof globalThis.fetch;
