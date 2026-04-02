@@ -27,6 +27,7 @@ import {
   isAgentToAgentEntry,
   partitionFollowerInboxEntries,
   buildBrokerPromptGuidelines,
+  buildWorkerPromptGuidelines,
   buildIdentityReplyGuidelines,
   resolvePersistedAgentIdentity,
   buildAgentStableId,
@@ -548,6 +549,32 @@ describe("buildBrokerPromptGuidelines", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
     expect(joined).toContain("NEVER do the work yourself");
+  });
+});
+
+// ─── buildIdentityReplyGuidelines ─────────────────────────────
+
+describe("buildWorkerPromptGuidelines", () => {
+  it("includes Pinet delegation guidance for connected workers", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("PINET DELEGATION RULES");
+    expect(joined).toContain("pinet_agents");
+    expect(joined).toContain("pinet_message");
+  });
+
+  it("tells workers not to use the Agent tool for mesh delegation", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("do NOT use the Agent tool");
+    expect(joined).toContain("local subagent");
+  });
+
+  it("requires delegated work to report status back through the thread", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("ACKs, blockers, status updates, and final results");
+    expect(joined).toContain("ack/work/ask/report");
   });
 });
 

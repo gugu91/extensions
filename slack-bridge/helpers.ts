@@ -893,6 +893,12 @@ export function buildWorkerPromptGuidelines(): string[] {
     "- If you received a task via `pinet_message`, reply via `pinet_message` to the sender.",
     "- If you received a task in a Slack thread, reply via `slack_send` in that thread.",
     "- Never use `slack_post_channel` with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
+    "",
+    "PINET DELEGATION RULES:",
+    "- When you need another connected agent to take work or parallelize, do NOT use the Agent tool to spawn a local subagent for delegation.",
+    "- Prefer Pinet delegation: first use `pinet_agents` to find a suitable connected worker, then delegate via `pinet_message`.",
+    "- Keep delegation inside the Pinet or Slack thread so ACKs, blockers, status updates, and final results flow back to the original sender.",
+    "- When delegating, include the workflow (`ack/work/ask/report`), the task, relevant issue/PR numbers, repo/branch/worktree setup, important files, acceptance criteria, and where to reply.",
   ];
 }
 
