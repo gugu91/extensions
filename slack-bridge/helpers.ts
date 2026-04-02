@@ -1309,6 +1309,46 @@ export function resolveAgentIdentity(
   return generateAgentName(seed);
 }
 
+// ─── Slack API client (unified) ──────────────────────────
+
+/**
+ * Standard Slack API response shape.
+ */
+export interface SlackResult {
+  ok: boolean;
+  error?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Call Slack API with bounded retry logic (max 3 retries on rate limit).
+ * Handles 429 rate-limit responses by waiting retry-after duration and retrying.
+ * Throws error if retries are exhausted or API returns error.
+ */
+export async function callSlackAPI(
+  method: string,
+  token: string,
+  body?: Record<string, unknown>,
+  _retryCount = 0,
+): Promise<SlackResult> {
+  const { url, init } = buildSlackRequest(method, token, body);
+  const res = await fetch(url, init);
+
+  if (res.status === 429) {
+    const maxRetries = 3;
+    if (_retryCount >= maxRetries) {
+      throw new Error(`Slack ${method}: rate limited after ${maxRetries} retries`);
+    }
+    const wait = Number(res.headers.get("retry-after") ?? "3");
+    await new Promise((r) => setTimeout(r, wait * 1000));
+    return callSlackAPI(method, token, body, _retryCount + 1);
+  }
+
+  const data = (await res.json()) as SlackResult;
+  if (!data.ok) throw new Error(`Slack ${method}: ${data.error ?? "unknown error"}`);
+  return data;
+}
+
 // ─── Follower nudge detection (#102) ─────────────────────
 
 export function isRalphNudgeEntry(entry: {

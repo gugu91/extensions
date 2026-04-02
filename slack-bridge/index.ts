@@ -14,7 +14,7 @@ import {
   formatAgentList,
   stripBotMention,
   isChannelId,
-  buildSlackRequest,
+  callSlackAPI,
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
@@ -64,39 +64,6 @@ import {
   type BrokerMaintenanceResult,
 } from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
-
-// ─── Slack API (raw fetch, zero deps) ────────────────────
-
-interface SlackResult {
-  ok: boolean;
-  error?: string;
-  [k: string]: unknown;
-}
-
-const SLACK_MAX_RETRIES = 3;
-
-async function slack(
-  method: string,
-  token: string,
-  body?: Record<string, unknown>,
-  _retryCount = 0,
-): Promise<SlackResult> {
-  const { url, init } = buildSlackRequest(method, token, body);
-  const res = await fetch(url, init);
-
-  if (res.status === 429) {
-    if (_retryCount >= SLACK_MAX_RETRIES) {
-      throw new Error(`Slack ${method}: rate limited after ${SLACK_MAX_RETRIES} retries`);
-    }
-    const wait = Number(res.headers.get("retry-after") ?? "3");
-    await new Promise((r) => setTimeout(r, wait * 1000));
-    return slack(method, token, body, _retryCount + 1);
-  }
-
-  const data = (await res.json()) as SlackResult;
-  if (!data.ok) throw new Error(`Slack ${method}: ${data.error ?? "unknown error"}`);
-  return data;
-}
 
 // Settings and helpers imported from ./helpers.js
 
@@ -313,7 +280,7 @@ export default function (pi: ExtensionAPI) {
 
   async function addReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await slack("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
+      await callSlackAPI("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
     } catch {
       /* already_reacted or non-critical */
     }
@@ -321,7 +288,7 @@ export default function (pi: ExtensionAPI) {
 
   async function removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
     try {
-      await slack("reactions.remove", botToken!, { channel, timestamp: ts, name: emoji });
+      await callSlackAPI("reactions.remove", botToken!, { channel, timestamp: ts, name: emoji });
     } catch {
       /* not_reacted or non-critical */
     }
@@ -331,7 +298,7 @@ export default function (pi: ExtensionAPI) {
     const cached = userNames.get(userId);
     if (cached) return cached;
     try {
-      const res = await slack("users.info", botToken!, { user: userId });
+      const res = await callSlackAPI("users.info", botToken!, { user: userId });
       const u = res.user as { real_name?: string; name?: string };
       const name = u.real_name ?? u.name ?? userId;
       userNames.set(userId, name);
@@ -355,7 +322,7 @@ export default function (pi: ExtensionAPI) {
         limit: 200,
       };
       if (cursor) body.cursor = cursor;
-      const res = await slack("conversations.list", botToken!, body);
+      const res = await callSlackAPI("conversations.list", botToken!, body);
       const channels = res.channels as { id: string; name: string }[];
       for (const ch of channels) {
         channelCache.set(ch.name, ch.id);
@@ -393,7 +360,7 @@ export default function (pi: ExtensionAPI) {
 
   async function clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
     try {
-      await slack("assistant.threads.setStatus", botToken!, {
+      await callSlackAPI("assistant.threads.setStatus", botToken!, {
         channel_id: channelId,
         thread_ts: threadTs,
         status: "",
@@ -410,7 +377,7 @@ export default function (pi: ExtensionAPI) {
       { title: "Review", message: `${agentName}, summarise the recent changes` },
     ];
     try {
-      await slack("assistant.threads.setSuggestedPrompts", botToken!, {
+      await callSlackAPI("assistant.threads.setSuggestedPrompts", botToken!, {
         channel_id: channelId,
         thread_ts: threadTs,
         prompts,
@@ -531,7 +498,7 @@ export default function (pi: ExtensionAPI) {
 
   async function resolveThreadOwner(channel: string, threadTs: string): Promise<string | null> {
     try {
-      const res = await slack("conversations.replies", botToken!, {
+      const res = await callSlackAPI("conversations.replies", botToken!, {
         channel,
         ts: threadTs,
         limit: 50,
@@ -559,7 +526,7 @@ export default function (pi: ExtensionAPI) {
     if (shuttingDown) return;
 
     try {
-      const res = await slack("apps.connections.open", appToken!);
+      const res = await callSlackAPI("apps.connections.open", appToken!);
       ws = new WebSocket(res.url as string);
 
       ws.addEventListener("open", () => setExtStatus(ctx, "ok"));
@@ -710,7 +677,7 @@ export default function (pi: ExtensionAPI) {
 
     // ── User allowlist check ──
     if (!isUserAllowed(user)) {
-      await slack("chat.postMessage", botToken!, {
+      await callSlackAPI("chat.postMessage", botToken!, {
         channel,
         thread_ts: effectiveTs,
         text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
@@ -907,7 +874,7 @@ export default function (pi: ExtensionAPI) {
       };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
-      const res = await slack("chat.postMessage", botToken!, body);
+      const res = await callSlackAPI("chat.postMessage", botToken!, body);
       const ts = (res.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
@@ -976,7 +943,7 @@ export default function (pi: ExtensionAPI) {
       const channel = thread?.channelId ?? lastDmChannel;
       if (!channel) throw new Error("Unknown thread.");
 
-      const res = await slack("conversations.replies", botToken!, {
+      const res = await callSlackAPI("conversations.replies", botToken!, {
         channel,
         ts: params.thread_ts,
         limit: params.limit ?? 20,
@@ -1015,19 +982,19 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params) {
       requireToolPolicy("slack_create_channel", undefined);
 
-      const res = await slack("conversations.create", botToken!, {
+      const res = await callSlackAPI("conversations.create", botToken!, {
         name: params.name,
       });
       const ch = res.channel as { id: string; name: string };
 
       if (params.topic) {
-        await slack("conversations.setTopic", botToken!, {
+        await callSlackAPI("conversations.setTopic", botToken!, {
           channel: ch.id,
           topic: params.topic,
         });
       }
       if (params.purpose) {
-        await slack("conversations.setPurpose", botToken!, {
+        await callSlackAPI("conversations.setPurpose", botToken!, {
           channel: ch.id,
           purpose: params.purpose,
         });
@@ -1082,7 +1049,7 @@ export default function (pi: ExtensionAPI) {
       };
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
-      const res = await slack("chat.postMessage", botToken!, body);
+      const res = await callSlackAPI("chat.postMessage", botToken!, body);
       const ts = (res.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
@@ -1144,14 +1111,14 @@ export default function (pi: ExtensionAPI) {
 
       let msgs: Record<string, unknown>[];
       if (params.thread_ts) {
-        const res = await slack("conversations.replies", botToken!, {
+        const res = await callSlackAPI("conversations.replies", botToken!, {
           channel: channelId,
           ts: params.thread_ts,
           limit,
         });
         msgs = res.messages as Record<string, unknown>[];
       } else {
-        const res = await slack("conversations.history", botToken!, {
+        const res = await callSlackAPI("conversations.history", botToken!, {
           channel: channelId,
           limit,
         });
@@ -1201,7 +1168,7 @@ export default function (pi: ExtensionAPI) {
 
       registerConfirmationRequest(params.thread_ts, params.tool, params.action);
 
-      await slack("chat.postMessage", botToken!, {
+      await callSlackAPI("chat.postMessage", botToken!, {
         channel: thread.channelId,
         thread_ts: params.thread_ts,
         text: confirmMsg,
