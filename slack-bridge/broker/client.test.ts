@@ -749,6 +749,56 @@ describe("BrokerClient — sendAgentMessage", () => {
   });
 });
 
+describe("BrokerClient — sendAgentBroadcast", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends agent.broadcast RPC and returns recipient details", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const broadcastPromise = client.sendAgentBroadcast("#extensions", "Hello everyone");
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { channel: string; body: string };
+    };
+    expect(req.method).toBe("agent.broadcast");
+    expect(req.params.channel).toBe("#extensions");
+    expect(req.params.body).toBe("Hello everyone");
+
+    mock.respondTo(mock.connections[0], req.id, {
+      ok: true,
+      channel: "#extensions",
+      messageIds: [11, 12],
+      recipients: [
+        { id: "agent-a", name: "Alpha" },
+        { id: "agent-b", name: "Beta" },
+      ],
+    });
+
+    await expect(broadcastPromise).resolves.toEqual({
+      channel: "#extensions",
+      messageIds: [11, 12],
+      recipients: [
+        { id: "agent-a", name: "Alpha" },
+        { id: "agent-b", name: "Beta" },
+      ],
+    });
+
+    client.disconnect();
+  });
+});
+
 describe("BrokerClient — slackProxy", () => {
   let mock: MockServer;
 

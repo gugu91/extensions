@@ -351,6 +351,29 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("agent.broadcast rejects connected clients, even with spoofed broker metadata", async () => {
+    await client.register("spoofed-broker", "🎭", {
+      capabilities: { repo: "extensions", role: "broker", tags: ["repo:extensions"] },
+    });
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("worker-target", "🎯", {
+      capabilities: { repo: "extensions", role: "worker", tags: ["repo:extensions"] },
+    });
+
+    await expect(client.sendAgentBroadcast("#extensions", "No fan-out")).rejects.toThrow(
+      "Broadcast channels are broker-only and cannot be sent by connected clients.",
+    );
+    expect(await client2.pollInbox()).toHaveLength(0);
+    expect(await client.pollInbox()).toHaveLength(0);
+
+    client2.disconnect();
+  });
+
   it("requeued a2a work stays bound to the intended recipient after unregister", async () => {
     const sender = await client.register(
       "sender-agent",
