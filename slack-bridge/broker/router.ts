@@ -96,31 +96,12 @@ export class MessageRouter {
    * Claim a thread for an agent (first-responder-wins).
    * Optionally provide a channel to set when creating a new thread.
    * Returns true if the claim succeeded, false if another agent already owns it.
+   *
+   * Delegates to the DB layer which performs the claim atomically
+   * (single SQL statement) to avoid TOCTOU races. (#125)
    */
   claimThread(threadId: string, agentId: string, channel?: string): boolean {
-    const existing = this.db.getThread(threadId);
-
-    if (existing) {
-      // Already owned by someone else
-      if (existing.ownerAgent && existing.ownerAgent !== agentId) {
-        return false;
-      }
-      // Unclaimed or already owned by this agent — claim it
-      this.db.updateThread(threadId, { ownerAgent: agentId });
-      return true;
-    }
-
-    // Thread doesn't exist yet — create and claim
-    const now = new Date().toISOString();
-    this.db.createThread({
-      threadId,
-      source: "slack",
-      channel: channel ?? "",
-      ownerAgent: agentId,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return true;
+    return this.db.claimThread(threadId, agentId, "slack", channel ?? "");
   }
 
   /**
