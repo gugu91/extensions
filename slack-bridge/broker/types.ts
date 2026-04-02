@@ -64,6 +64,26 @@ export interface BacklogEntry {
   updatedAt: string;
 }
 
+export type TaskAssignmentStatus =
+  | "assigned"
+  | "branch_pushed"
+  | "pr_open"
+  | "pr_merged"
+  | "pr_closed";
+
+export interface TaskAssignmentInfo {
+  id: number;
+  agentId: string;
+  issueNumber: number;
+  branch: string | null;
+  prNumber: number | null;
+  status: TaskAssignmentStatus;
+  threadId: string;
+  sourceMessageId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Routing ──────────────────────────────────────────────
 
 export type RoutingDecision =

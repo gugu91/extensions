@@ -75,6 +75,12 @@ import {
 } from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import { registerSlackTools } from "./slack-tools.js";
+import {
+  buildTaskAssignmentReport,
+  extractTaskAssignmentsFromMessage,
+  hasTaskAssignmentStatusChange,
+  resolveTaskAssignments,
+} from "./task-assignments.js";
 
 // Settings and helpers imported from ./helpers.js
 
@@ -925,6 +931,8 @@ export default function (pi: ExtensionAPI) {
   let lastBrokerRalphLoopFollowUpAt = 0;
   let brokerRalphLoopFollowUpPending = false;
   const lastReportedGhostIds = new Set<string>();
+  let lastBrokerTaskAssignmentReport = "";
+  let pendingBrokerTaskAssignmentReport: string | null = null;
   const lastBrokerNudges = new Map<string, number>();
 
   function getPinetRegistrationBlockReason(): string {
@@ -1010,6 +1018,21 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
+  function trySendBrokerFollowUp(body: string, onDelivered: () => void): void {
+    try {
+      pi.sendUserMessage(body, { deliverAs: "followUp" });
+      onDelivered();
+      return;
+    } catch {
+      try {
+        pi.sendUserMessage(body);
+        onDelivered();
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
   async function runBrokerRalphLoop(ctx: ExtensionContext): Promise<void> {
     if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
 
@@ -1075,6 +1098,41 @@ export default function (pi: ExtensionAPI) {
         ghostRewrite.nonGhostAnomalies.length === 0
           ? null
           : buildRalphLoopFollowUpMessage(visibleEvaluation);
+
+      const agentsById = new Map(
+        workloads.map((workload) => [workload.id, { emoji: workload.emoji, name: workload.name }]),
+      );
+      const trackedAssignments = db.listTaskAssignments();
+      if (trackedAssignments.length === 0) {
+        pendingBrokerTaskAssignmentReport = null;
+        lastBrokerTaskAssignmentReport = "";
+      } else {
+        const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
+        let taskAssignmentChanged = false;
+        const projectedAssignments = resolvedAssignments.map((assignment) => {
+          if (hasTaskAssignmentStatusChange(assignment)) {
+            taskAssignmentChanged = true;
+            db.updateTaskAssignmentProgress(
+              assignment.id,
+              assignment.nextStatus,
+              assignment.nextPrNumber,
+            );
+          }
+
+          return {
+            ...assignment,
+            status: assignment.nextStatus,
+            prNumber: assignment.nextPrNumber,
+          };
+        });
+
+        if (taskAssignmentChanged) {
+          pendingBrokerTaskAssignmentReport = buildTaskAssignmentReport(
+            projectedAssignments,
+            agentsById,
+          );
+        }
+      }
       // Keep cooldown state across transient clean cycles so flapping anomalies
       // do not immediately re-notify when they return.
       const shouldDeliverFollowUp =
@@ -1088,22 +1146,23 @@ export default function (pi: ExtensionAPI) {
           idle: ctx.isIdle?.() ?? true,
         });
       if (shouldDeliverFollowUp && followUpPrompt) {
-        const markFollowUpDelivered = () => {
+        trySendBrokerFollowUp(followUpPrompt, () => {
           brokerRalphLoopFollowUpPending = true;
           lastBrokerRalphLoopFollowUpAt = now;
-        };
-
-        try {
-          pi.sendUserMessage(followUpPrompt, { deliverAs: "followUp" });
-          markFollowUpDelivered();
-        } catch {
-          try {
-            pi.sendUserMessage(followUpPrompt);
-            markFollowUpDelivered();
-          } catch {
-            /* best effort */
-          }
-        }
+        });
+      }
+      if (
+        pendingBrokerTaskAssignmentReport &&
+        (ctx.isIdle?.() ?? true) &&
+        pendingBrokerTaskAssignmentReport !== lastBrokerTaskAssignmentReport
+      ) {
+        const reportToDeliver = pendingBrokerTaskAssignmentReport;
+        trySendBrokerFollowUp(reportToDeliver, () => {
+          lastBrokerTaskAssignmentReport = reportToDeliver;
+          pendingBrokerTaskAssignmentReport = null;
+        });
+      } else if (pendingBrokerTaskAssignmentReport === lastBrokerTaskAssignmentReport) {
+        pendingBrokerTaskAssignmentReport = null;
       }
 
       const shouldWarn =
@@ -1169,6 +1228,8 @@ export default function (pi: ExtensionAPI) {
     lastBrokerRalphLoopHadOutstandingAnomalies = false;
     lastBrokerRalphLoopFollowUpAt = 0;
     brokerRalphLoopFollowUpPending = false;
+    lastBrokerTaskAssignmentReport = "";
+    pendingBrokerTaskAssignmentReport = null;
   }
 
   pi.registerTool({
@@ -1219,6 +1280,16 @@ export default function (pi: ExtensionAPI) {
           [target.id],
           { senderAgent: agentName, a2a: true },
         );
+
+        for (const assignment of extractTaskAssignmentsFromMessage(params.message)) {
+          db.recordTaskAssignment(
+            target.id,
+            assignment.issueNumber,
+            assignment.branch,
+            threadId,
+            msg.id,
+          );
+        }
 
         return {
           content: [
