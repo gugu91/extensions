@@ -101,8 +101,8 @@ import {
   resetFollowerDeliveryState,
 } from "./follower-delivery.js";
 import {
-  buildTaskAssignmentReport,
   extractTaskAssignmentsFromMessage,
+  getPendingTaskAssignmentReport,
   hasTaskAssignmentStatusChange,
   resolveTaskAssignments,
 } from "./task-assignments.js";
@@ -1279,10 +1279,8 @@ export default function (pi: ExtensionAPI) {
         lastBrokerTaskAssignmentReport = "";
       } else {
         const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
-        let taskAssignmentChanged = false;
         const projectedAssignments = resolvedAssignments.map((assignment) => {
           if (hasTaskAssignmentStatusChange(assignment)) {
-            taskAssignmentChanged = true;
             db.updateTaskAssignmentProgress(
               assignment.id,
               assignment.nextStatus,
@@ -1297,12 +1295,11 @@ export default function (pi: ExtensionAPI) {
           };
         });
 
-        if (taskAssignmentChanged) {
-          pendingBrokerTaskAssignmentReport = buildTaskAssignmentReport(
-            projectedAssignments,
-            agentsById,
-          );
-        }
+        pendingBrokerTaskAssignmentReport = getPendingTaskAssignmentReport(
+          projectedAssignments,
+          agentsById,
+          lastBrokerTaskAssignmentReport,
+        );
       }
       // Keep cooldown state across transient clean cycles so flapping anomalies
       // do not immediately re-notify when they return.

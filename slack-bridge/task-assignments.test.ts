@@ -3,6 +3,7 @@ import type { AgentInfo, TaskAssignmentInfo } from "./broker/types.js";
 import {
   buildTaskAssignmentReport,
   extractTaskAssignmentsFromMessage,
+  getPendingTaskAssignmentReport,
   hasTaskAssignmentStatusChange,
   resolveTaskAssignments,
   type CommandRunner,
@@ -244,5 +245,54 @@ describe("buildTaskAssignmentReport", () => {
         "- 🐎 Hyper Horse: #106 → PR #109 MERGED ✅",
       ].join("\n"),
     );
+  });
+});
+
+describe("getPendingTaskAssignmentReport", () => {
+  const agentsById = new Map([
+    ["worker-1", makeAgent("worker-1", "Hyper Horse", "🐎")],
+    ["worker-2", makeAgent("worker-2", "Frozen Raven", "🐦‍⬛")],
+  ]);
+
+  it("queues an initial report for newly assigned tasks with no progress", () => {
+    const report = getPendingTaskAssignmentReport(
+      [
+        makeAssignment({
+          id: 1,
+          agentId: "worker-2",
+          issueNumber: 103,
+          status: "assigned",
+        }),
+      ],
+      agentsById,
+      "",
+    );
+
+    expect(report).toBe(
+      ["RALPH LOOP — WORKER STATUS:", "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️"].join("\n"),
+    );
+  });
+
+  it("does not queue a report when it matches the last delivered summary", () => {
+    const lastDeliveredReport = [
+      "RALPH LOOP — WORKER STATUS:",
+      "- 🐎 Hyper Horse: #106 → PR #109 MERGED ✅",
+    ].join("\n");
+
+    const report = getPendingTaskAssignmentReport(
+      [
+        makeAssignment({
+          id: 1,
+          agentId: "worker-1",
+          issueNumber: 106,
+          status: "pr_merged",
+          prNumber: 109,
+        }),
+      ],
+      agentsById,
+      lastDeliveredReport,
+    );
+
+    expect(report).toBeNull();
   });
 });
