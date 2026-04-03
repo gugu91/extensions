@@ -89,8 +89,6 @@ a short cache to avoid hammering Slack.
 - **Agent identity** — agents pick a fun name + emoji per task
 - **Thread persistence** — thread state survives `/reload`
 - **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
-- **Worktree-aware routing** — linked worktree agents keep the canonical repo identity, report their worktree path, and ghost worktrees are flagged for cleanup
-- **Main checkout protection** — source edits are blocked from the main checkout; feature work must happen in linked worktrees
 - **User allowlist** — restrict who can interact with the agent
 
 ## Setup
