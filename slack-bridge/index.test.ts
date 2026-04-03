@@ -410,4 +410,93 @@ describe("slack-bridge Pinet reconnect", () => {
     await sessionShutdown?.({}, ctx);
     expect(setStatus).toHaveBeenCalled();
   });
+
+  it("sends structured control envelopes for follower pinet_message commands", async () => {
+    const tools = new Map<string, ToolDefinition>();
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn((definition: ToolDefinition) => {
+        tools.set(definition.name, definition);
+      }),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => false,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const sendCalls: Array<{
+      target: string;
+      body: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
+
+    vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "register").mockResolvedValue({
+      agentId: "worker-1",
+      name: "Test Worker",
+      emoji: "🐘",
+      metadata: { role: "worker" },
+    });
+    vi.spyOn(BrokerClient.prototype, "sendAgentMessage").mockImplementation(
+      async (target: string, body: string, metadata?: Record<string, unknown>) => {
+        sendCalls.push({ target, body, metadata });
+        return 17;
+      },
+    );
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const follow = commands.get("pinet-follow");
+    const pinetMessage = tools.get("pinet_message");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(follow).toBeDefined();
+    expect(pinetMessage).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await follow?.handler("", ctx);
+    await pinetMessage?.execute("tool-call-1", {
+      to: "receiver-agent",
+      message: "/reload",
+    });
+
+    expect(sendCalls).toEqual([
+      {
+        target: "receiver-agent",
+        body: '{"type":"pinet:control","action":"reload"}',
+        metadata: { type: "pinet:control", action: "reload" },
+      },
+    ]);
+
+    await sessionShutdown?.({}, ctx);
+  });
 });
