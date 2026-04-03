@@ -410,4 +410,147 @@ describe("slack-bridge Pinet reconnect", () => {
     await sessionShutdown?.({}, ctx);
     expect(setStatus).toHaveBeenCalled();
   });
+
+  it("suppresses automatic inbox drain immediately after Escape so interrupts return control", async () => {
+    vi.useFakeTimers();
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+    const sendUserMessage = vi.fn();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage,
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    let idle = false;
+    let terminalInputHandler:
+      | ((data: string) => { consume?: boolean; data?: string } | undefined)
+      | null = null;
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => idle,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+        onTerminalInput: vi.fn(
+          (handler: (data: string) => { consume?: boolean; data?: string } | undefined) => {
+            terminalInputHandler = handler;
+            return () => {
+              if (terminalInputHandler === handler) {
+                terminalInputHandler = null;
+              }
+            };
+          },
+        ),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let pollCount = 0;
+    vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "register").mockResolvedValue({
+      agentId: "worker-1",
+      name: "Agent",
+      emoji: "🦙",
+      metadata: { role: "worker", capabilities: { role: "worker" } },
+    });
+    vi.spyOn(BrokerClient.prototype, "claimThread").mockResolvedValue({ claimed: true });
+    vi.spyOn(BrokerClient.prototype, "pollInbox").mockImplementation(async () => {
+      if (pollCount > 0) {
+        pollCount += 1;
+        return [];
+      }
+      pollCount += 1;
+      return [
+        {
+          inboxId: 17,
+          message: {
+            id: 17,
+            threadId: "100.1",
+            source: "slack",
+            direction: "inbound",
+            sender: "U_SENDER",
+            body: "hello from broker",
+            createdAt: "100.1",
+            metadata: { channel: "D123" },
+          },
+        },
+      ];
+    });
+    vi.spyOn(BrokerClient.prototype, "updateStatus").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "ackMessages").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "unregister").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onDisconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onReconnect").mockImplementation(() => {
+      /* mocked */
+    });
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const agentEnd = events.get("agent_end");
+    const follow = commands.get("pinet-follow");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(agentEnd).toBeDefined();
+    expect(follow).toBeDefined();
+
+    try {
+      await sessionStart?.({}, ctx);
+      await follow?.handler("", ctx);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sendUserMessage).not.toHaveBeenCalled();
+      const inputHandler = terminalInputHandler as unknown as
+        | ((data: string) => { consume?: boolean; data?: string } | undefined)
+        | undefined;
+      expect(inputHandler).toBeTypeOf("function");
+      expect(inputHandler?.("\u001b")).toBeUndefined();
+
+      idle = true;
+      await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
+      expect(sendUserMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_501);
+      await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
+
+      expect(sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"), {
+        deliverAs: "followUp",
+      });
+
+      await sessionShutdown?.({}, ctx);
+      expect(setStatus).toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("following broker"), "info");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

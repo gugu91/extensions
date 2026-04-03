@@ -602,6 +602,9 @@ export default function (pi: ExtensionAPI) {
 
   const inbox: InboxMessage[] = [];
   const brokerDeliveryState = createBrokerDeliveryState();
+  const AUTO_DRAIN_INTERRUPT_SUPPRESSION_MS = 1_500;
+  let suppressAutoDrainUntil = 0;
+  let terminalInputUnsubscribe: (() => void) | null = null;
   let extCtx: ExtensionContext | null = null; // cached for badge updates
   let lastActivityLogFailureAt = 0;
 
@@ -614,6 +617,39 @@ export default function (pi: ExtensionAPI) {
         ? t.fg("accent", `${agentEmoji} ${agentName} ✦ ${n}`)
         : t.fg("accent", `${agentEmoji} ${agentName} ✦`);
     extCtx.ui.setStatus("slack-bridge", label);
+  }
+
+  function notePotentialInterruptInput(data: string): void {
+    if (data !== "\u001b") {
+      return;
+    }
+
+    suppressAutoDrainUntil = Math.max(
+      suppressAutoDrainUntil,
+      Date.now() + AUTO_DRAIN_INTERRUPT_SUPPRESSION_MS,
+    );
+  }
+
+  function shouldSuppressAutomaticInboxDrain(now = Date.now()): boolean {
+    if (suppressAutoDrainUntil === 0) {
+      return false;
+    }
+    if (now >= suppressAutoDrainUntil) {
+      suppressAutoDrainUntil = 0;
+      return false;
+    }
+    return true;
+  }
+
+  function maybeDrainInboxIfIdle(ctx?: ExtensionContext): boolean {
+    if (!(ctx?.isIdle?.() ?? false)) {
+      return false;
+    }
+    if (shouldSuppressAutomaticInboxDrain()) {
+      return false;
+    }
+    drainInbox();
+    return true;
   }
 
   // ─── Helpers ─────────────────────────────────────────
@@ -1065,7 +1101,7 @@ export default function (pi: ExtensionAPI) {
               timestamp: String(Date.now() / 1000),
             });
             updateBadge();
-            if (ctx.isIdle?.()) drainInbox();
+            maybeDrainInboxIfIdle(ctx);
           }
           break;
       }
@@ -1266,9 +1302,7 @@ export default function (pi: ExtensionAPI) {
       updateBadge();
       await addReaction(item.channel, item.ts, "white_check_mark");
 
-      if (ctx.isIdle?.()) {
-        drainInbox();
-      }
+      maybeDrainInboxIfIdle(ctx);
     } catch (err) {
       console.error(`[slack-bridge] reaction trigger failed: ${msg(err)}`);
       await addReaction(item.channel, item.ts, "x");
@@ -1375,9 +1409,7 @@ export default function (pi: ExtensionAPI) {
     updateBadge();
 
     // If agent is idle, trigger immediately — otherwise agent_end drains it
-    if (ctx.isIdle?.()) {
-      drainInbox();
-    }
+    maybeDrainInboxIfIdle(ctx);
   }
 
   async function queueInteractiveInboxEvent(
@@ -1447,9 +1479,7 @@ export default function (pi: ExtensionAPI) {
     });
     updateBadge();
 
-    if (ctx.isIdle?.()) {
-      drainInbox();
-    }
+    maybeDrainInboxIfIdle(ctx);
   }
 
   async function onBlockActions(
@@ -1646,9 +1676,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     updateBadge();
-    if (extCtx?.isIdle?.()) {
-      drainInbox();
-    }
+    maybeDrainInboxIfIdle(extCtx ?? undefined);
   }
 
   function startBrokerHeartbeat(): void {
@@ -3199,7 +3227,7 @@ export default function (pi: ExtensionAPI) {
             metadata: inMsg.metadata ?? null,
           });
           updateBadge();
-          if (extCtx?.isIdle?.()) drainInbox();
+          maybeDrainInboxIfIdle(extCtx ?? undefined);
         }
       });
 
@@ -3512,7 +3540,7 @@ export default function (pi: ExtensionAPI) {
               );
               if (synced.changed) persistState();
               updateBadge();
-              if (ctx.isIdle?.()) drainInbox();
+              maybeDrainInboxIfIdle(ctx);
             }
           } catch {
             /* broker may be restarting */
@@ -3873,6 +3901,9 @@ export default function (pi: ExtensionAPI) {
     shuttingDown = false;
     slackRequests = createAbortableOperationTracker();
     remoteControlState = { currentCommand: null, queuedCommand: null };
+    suppressAutoDrainUntil = 0;
+    terminalInputUnsubscribe?.();
+    terminalInputUnsubscribe = null;
     extCtx = ctx;
     const sessionHeader = (
       ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
@@ -3886,6 +3917,17 @@ export default function (pi: ExtensionAPI) {
       stdinIsTTY: process.stdin.isTTY,
       stdoutIsTTY: process.stdout.isTTY,
     });
+    const uiWithTerminalInput = ctx.ui as ExtensionContext["ui"] & {
+      onTerminalInput?: (
+        handler: (data: string) => { consume?: boolean; data?: string } | undefined,
+      ) => () => void;
+    };
+    if (ctx.hasUI && typeof uiWithTerminalInput.onTerminalInput === "function") {
+      terminalInputUnsubscribe = uiWithTerminalInput.onTerminalInput((data: string) => {
+        notePotentialInterruptInput(data);
+        return undefined;
+      });
+    }
 
     // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
@@ -4019,10 +4061,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     const queuedInboxCount = inbox.length;
-    const drainedQueuedInbox = queuedInboxCount > 0 && (ctx ? (ctx.isIdle?.() ?? true) : false);
-    if (drainedQueuedInbox) {
-      drainInbox();
-    }
+    const drainedQueuedInbox = queuedInboxCount > 0 && (ctx ? maybeDrainInboxIfIdle(ctx) : false);
 
     return { queuedInboxCount, drainedQueuedInbox };
   }
@@ -4144,6 +4183,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     remoteControlState = { currentCommand: null, queuedCommand: null };
+    terminalInputUnsubscribe?.();
+    terminalInputUnsubscribe = null;
+    suppressAutoDrainUntil = 0;
     await stopPinetRuntime(ctx, { releaseIdentity: true });
     pinetRegistrationBlocked = false;
   });
