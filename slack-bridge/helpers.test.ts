@@ -862,14 +862,6 @@ describe("buildBrokerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("NEVER do the work yourself");
   });
-
-  it("includes explicit main-checkout and worktree lifecycle rules", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("NEVER checkout a branch in the main repo");
-    expect(joined).toContain("git worktree add .worktrees/<name> -b <branch>");
-    expect(joined).toContain("git worktree remove .worktrees/<name>");
-  });
 });
 
 // ─── buildIdentityReplyGuidelines ─────────────────────────────
@@ -1184,7 +1176,6 @@ describe("formatAgentList", () => {
             repo: "extensions",
             branch: "main",
             role: "worker",
-            worktreeKind: "main",
             tools: ["test", "lint"],
           },
         },
@@ -1200,49 +1191,8 @@ describe("formatAgentList", () => {
     expect(result).toContain("Visible Bot (agent-1) — idle [stale]");
     expect(result).toContain("heartbeat 12s ago · lease in 3s");
     expect(result).toContain(
-      "caps: role:worker, repo:extensions, branch:main, checkout:main, tool:test, tool:lint",
+      "caps: role:worker, repo:extensions, branch:main, tool:test, tool:lint",
     );
-  });
-
-  it("shows linked worktree metadata and cleanup guidance for ghost agents", () => {
-    const agent = buildAgentDisplayInfo(
-      {
-        emoji: "👻",
-        name: "Ghost Worker",
-        id: "ghost-2",
-        status: "idle",
-        lastHeartbeat: "2026-01-01T00:00:00.000Z",
-        metadata: {
-          cwd: "/Users/alice/src/extensions/.worktrees/feat-87/slack-bridge",
-          branch: "feat/enforce-worktree-rule",
-          host: "macbook",
-          repo: "extensions",
-          repoRoot: "/Users/alice/src/extensions",
-          worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
-          worktreeKind: "linked",
-          capabilities: {
-            repo: "extensions",
-            repoRoot: "/Users/alice/src/extensions",
-            branch: "feat/enforce-worktree-rule",
-            role: "worker",
-            worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
-            worktreeKind: "linked",
-            tools: ["test"],
-          },
-        },
-      },
-      {
-        now: Date.parse("2026-01-01T00:00:20.000Z"),
-        heartbeatTimeoutMs: 15_000,
-        heartbeatIntervalMs: 5_000,
-      },
-    );
-
-    const result = formatAgentList([agent], homedir);
-    expect(result).toContain(
-      "worktree: ~/src/extensions/.worktrees/feat-87 (main: ~/src/extensions)",
-    );
-    expect(result).toContain("cleanup: git worktree remove ~/src/extensions/.worktrees/feat-87");
   });
 });
 
@@ -1303,38 +1253,6 @@ describe("buildAgentDisplayInfo", () => {
     expect(agent.health).toBe("ghost");
     expect(agent.ghost).toBe(true);
     expect(agent.leaseSummary).toBe("lease expired 5s ago");
-  });
-
-  it("flags ghost linked worktrees for cleanup", () => {
-    const agent = buildAgentDisplayInfo(
-      {
-        emoji: "👻",
-        name: "Ghost Bot",
-        id: "ghost-worktree",
-        status: "idle",
-        lastHeartbeat: "2026-01-01T00:00:00.000Z",
-        metadata: {
-          role: "worker",
-          repoRoot: "/Users/alice/src/extensions",
-          worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
-          worktreeKind: "linked",
-          capabilities: {
-            role: "worker",
-            repo: "extensions",
-            repoRoot: "/Users/alice/src/extensions",
-            worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
-            worktreeKind: "linked",
-          },
-        },
-      },
-      {
-        now: Date.parse("2026-01-01T00:00:20.000Z"),
-        heartbeatTimeoutMs: 15_000,
-        heartbeatIntervalMs: 5_000,
-      },
-    );
-
-    expect(agent.cleanupWorktreePath).toBe("/Users/alice/src/extensions/.worktrees/feat-87");
   });
 });
 
@@ -1487,47 +1405,6 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.anomalies).toContain("broker heartbeat timer is not running");
     expect(result.anomalies).toContain("broker maintenance timer is not running");
     expect(result.anomalies.some((item) => item.includes("expected `main`"))).toBe(true);
-  });
-
-  it("flags orphaned linked worktrees for cleanup", () => {
-    const result = evaluateRalphLoopCycle(
-      [
-        {
-          emoji: "👻",
-          name: "Ghost Fox",
-          id: "ghost-worker",
-          status: "idle",
-          metadata: {
-            role: "worker",
-            repo: "extensions",
-            repoRoot: "/Users/alice/src/extensions",
-            worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
-            worktreeKind: "linked",
-            capabilities: {
-              role: "worker",
-              repo: "extensions",
-              repoRoot: "/Users/alice/src/extensions",
-              worktreePath: "/Users/alice/src/extensions/.worktrees/feat-87",
-              worktreeKind: "linked",
-            },
-          },
-          lastSeen: "2026-04-01T00:00:00.000Z",
-          lastHeartbeat: "2026-04-01T00:00:00.000Z",
-          disconnectedAt: "2026-04-01T00:00:10.000Z",
-          pendingInboxCount: 0,
-          ownedThreadCount: 1,
-        },
-      ],
-      {
-        now: Date.parse("2026-04-01T00:02:00.000Z"),
-        heartbeatTimeoutMs: 15_000,
-        heartbeatIntervalMs: 5_000,
-      },
-    );
-
-    expect(result.anomalies).toContain(
-      "orphaned worktree cleanup: Ghost Fox at `/Users/alice/src/extensions/.worktrees/feat-87`",
-    );
   });
 
   it("detects stuck agents: working with no activity for > threshold", () => {
