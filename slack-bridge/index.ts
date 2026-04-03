@@ -17,13 +17,12 @@ import {
   isUserAllowed as checkUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
-  buildPinetControlMetadata,
   buildPinetSkinAssignment,
   buildPinetSkinMetadata,
   buildPinetSkinPromptGuideline,
   extractPinetControlCommand,
   extractPinetSkinUpdate,
-  getPinetControlCommandFromText,
+  normalizeOutgoingPinetControlMessage,
   queuePinetRemoteControl,
   finishPinetRemoteControl,
   reloadPinetRuntimeSafely,
@@ -2523,10 +2522,19 @@ export default function (pi: ExtensionAPI) {
     lastBrokerControlPlaneHomeTabSnapshot = null;
   }
 
-  function getOutgoingPinetMessageMetadata(body: string): Record<string, unknown> | undefined {
-    const control = getPinetControlCommandFromText(body);
-    if (!control) return undefined;
-    return buildPinetControlMetadata(control);
+  function prepareOutgoingPinetAgentMessage(
+    body: string,
+    metadata?: Record<string, unknown>,
+  ): { body: string; metadata?: Record<string, unknown> } {
+    const control = normalizeOutgoingPinetControlMessage(body, metadata);
+    if (control) {
+      return {
+        body: control.body,
+        metadata: control.metadata,
+      };
+    }
+
+    return { body, metadata };
   }
 
   async function sendPinetAgentMessage(
@@ -2544,11 +2552,9 @@ export default function (pi: ExtensionAPI) {
       );
     }
 
-    const effectiveMetadata = {
-      ...(getOutgoingPinetMessageMetadata(body) ?? {}),
-      ...(metadata ?? {}),
-    };
-    const finalMetadata = Object.keys(effectiveMetadata).length > 0 ? effectiveMetadata : undefined;
+    const outgoing = prepareOutgoingPinetAgentMessage(body, metadata);
+    const finalBody = outgoing.body;
+    const finalMetadata = outgoing.metadata;
 
     if (brokerRole === "broker" && activeBroker) {
       const db = activeBroker.db;
@@ -2561,7 +2567,7 @@ export default function (pi: ExtensionAPI) {
         senderAgentId: selfId,
         senderAgentName: agentName,
         target: targetRef,
-        body,
+        body: finalBody,
         metadata: finalMetadata,
       });
 
@@ -2602,7 +2608,7 @@ export default function (pi: ExtensionAPI) {
 
     if (brokerRole === "follower" && brokerClient) {
       const client = brokerClient.client as BrokerClient;
-      const messageId = await client.sendAgentMessage(targetRef, body, finalMetadata);
+      const messageId = await client.sendAgentMessage(targetRef, finalBody, finalMetadata);
       return { messageId, target: targetRef };
     }
 
@@ -2857,11 +2863,13 @@ export default function (pi: ExtensionAPI) {
           throw new Error("Broker agent identity is unavailable.");
         }
 
+        const outgoing = prepareOutgoingPinetAgentMessage(params.message);
         const result = dispatchBroadcastAgentMessage(activeBroker.db, {
           senderAgentId: selfId,
           senderAgentName: agentName,
           channel: params.to,
-          body: params.message,
+          body: outgoing.body,
+          ...(outgoing.metadata ? { metadata: outgoing.metadata } : {}),
         });
         const recipients = result.targets.map((target) => target.name);
         const preview = recipients.slice(0, 5).join(", ");
