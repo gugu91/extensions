@@ -1383,7 +1383,12 @@ export interface PinetRegistrationContext {
   sessionHeader?: {
     parentSession?: string;
   } | null;
+  sessionFile?: string;
+  leafId?: string;
   argv?: string[];
+  hasUI?: boolean;
+  stdinIsTTY?: boolean;
+  stdoutIsTTY?: boolean;
 }
 
 export function isLikelyLocalSubagentContext(context: PinetRegistrationContext = {}): boolean {
@@ -1399,7 +1404,27 @@ export function isLikelyLocalSubagentContext(context: PinetRegistrationContext =
   const mode = modeIndex >= 0 ? argv[modeIndex + 1] : undefined;
   const hasHeadlessMode = mode === "json" || mode === "rpc";
 
-  return hasNoSession && (hasPrint || hasHeadlessMode);
+  if (hasNoSession && (hasPrint || hasHeadlessMode)) {
+    return true;
+  }
+
+  const sessionFile =
+    typeof context.sessionFile === "string" && context.sessionFile.trim().length > 0
+      ? context.sessionFile.trim()
+      : undefined;
+  const leafId =
+    typeof context.leafId === "string" && context.leafId.trim().length > 0
+      ? context.leafId.trim()
+      : undefined;
+  // Agent-tool subagents commonly show up as ephemeral leaf sessions: no persisted
+  // session file, a generated leaf id, and no attached TTY. Those should never join
+  // the mesh even when auto-follow is enabled.
+  const hasEphemeralLeafSession = !sessionFile && Boolean(leafId);
+  const hasTTY = Boolean(
+    (context.stdinIsTTY ?? process.stdin.isTTY) || (context.stdoutIsTTY ?? process.stdout.isTTY),
+  );
+
+  return hasEphemeralLeafSession && (hasHeadlessMode || context.hasUI === false || !hasTTY);
 }
 
 export interface FollowerThreadState {

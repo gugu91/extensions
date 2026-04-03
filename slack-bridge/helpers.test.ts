@@ -1014,6 +1014,43 @@ describe("isLikelyLocalSubagentContext", () => {
     ).toBe(false);
   });
 
+  it("detects ephemeral leaf sessions that run headless without a session file", () => {
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionFile: undefined,
+        leafId: "leaf-123",
+        argv: ["--mode", "rpc"],
+        hasUI: true,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionFile: undefined,
+        leafId: "leaf-123",
+        argv: [],
+        hasUI: true,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not classify interactive no-session leaf sessions as subagents", () => {
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionFile: undefined,
+        leafId: "leaf-123",
+        argv: ["--no-session"],
+        hasUI: true,
+        stdinIsTTY: true,
+        stdoutIsTTY: true,
+      }),
+    ).toBe(false);
+  });
+
   it("does not classify plain no-session interactive use as a subagent", () => {
     expect(isLikelyLocalSubagentContext({ argv: ["--no-session"] })).toBe(false);
   });
