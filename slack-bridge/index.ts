@@ -3863,7 +3863,12 @@ export default function (pi: ExtensionAPI) {
     ).getHeader?.();
     pinetRegistrationBlocked = isLikelyLocalSubagentContext({
       sessionHeader,
+      sessionFile: ctx.sessionManager.getSessionFile(),
+      leafId: ctx.sessionManager.getLeafId(),
       argv: process.argv.slice(2),
+      hasUI: ctx.hasUI,
+      stdinIsTTY: process.stdin.isTTY,
+      stdoutIsTTY: process.stdout.isTTY,
     });
 
     // Restore persisted thread state (always restore, even before /pinet)
