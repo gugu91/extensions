@@ -863,6 +863,7 @@ export interface RalphLoopEvaluationOptions extends AgentVisibilityOptions {
   expectedMainBranch?: string;
   brokerHeartbeatActive?: boolean;
   brokerMaintenanceActive?: boolean;
+  brokerAgentId?: string;
 }
 
 export interface RalphLoopEvaluationResult {
@@ -892,6 +893,7 @@ export function evaluateRalphLoopCycle(
     options.stuckWorkingThresholdMs ?? DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS;
   const pendingBacklogCount = options.pendingBacklogCount ?? 0;
   const expectedMainBranch = options.expectedMainBranch ?? "main";
+  const brokerAgentId = options.brokerAgentId;
   const anomalies: string[] = [];
   const ghostAgentIds: string[] = [];
   const nudgeAgentIds: string[] = [];
@@ -899,6 +901,10 @@ export function evaluateRalphLoopCycle(
   const stuckAgentIds: string[] = [];
 
   for (const workload of workloads) {
+    if (brokerAgentId && workload.id === brokerAgentId) {
+      continue;
+    }
+
     const metadata = asRecord(workload.metadata);
     const capabilities = extractAgentCapabilities(metadata);
     const role = (capabilities.role ?? asString(metadata?.role) ?? "worker").toLowerCase();

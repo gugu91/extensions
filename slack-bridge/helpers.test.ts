@@ -1444,6 +1444,48 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.anomalies.some((item) => item.includes("expected `main`"))).toBe(true);
   });
 
+  it("skips the broker agent id when flagging idle agents with assigned work", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🦙",
+          name: "Broker Llama",
+          id: "broker-self",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:00:00.000Z",
+          lastHeartbeat: "2026-04-01T00:01:55.000Z",
+          pendingInboxCount: 4,
+          ownedThreadCount: 2,
+        },
+        {
+          emoji: "🦊",
+          name: "Busy Fox",
+          id: "worker-1",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:00:00.000Z",
+          lastHeartbeat: "2026-04-01T00:01:55.000Z",
+          pendingInboxCount: 1,
+          ownedThreadCount: 1,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:02:00.000Z"),
+        idleWithWorkThresholdMs: 60_000,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+        brokerAgentId: "broker-self",
+      },
+    );
+
+    expect(result.nudgeAgentIds).toEqual(["worker-1"]);
+    expect(
+      result.anomalies.some((item) => item.includes("Broker Llama idle with assigned work")),
+    ).toBe(false);
+    expect(result.anomalies).toContain("Busy Fox idle with assigned work (1 inbox, 1 threads)");
+  });
+
   it("detects stuck agents: working with no activity for > threshold", () => {
     const now = Date.parse("2026-04-01T00:10:00.000Z");
     const result = evaluateRalphLoopCycle(
