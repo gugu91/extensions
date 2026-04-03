@@ -269,7 +269,32 @@ export async function reloadPinetRuntimeSafely<State>(
   }
 }
 
-export function getPinetControlCommandFromText(
+export interface PinetControlEnvelope {
+  type: "pinet:control";
+  action: PinetControlCommand;
+}
+
+function parsePinetControlEnvelope(value: unknown): PinetControlCommand | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (record.type !== "pinet:control") return null;
+  return parsePinetControlCommand(record.action);
+}
+
+function parseStructuredPinetControlCommandFromText(
+  text: string | undefined,
+): PinetControlCommand | null {
+  const trimmed = text?.trim();
+  if (!trimmed) return null;
+
+  try {
+    return parsePinetControlEnvelope(JSON.parse(trimmed));
+  } catch {
+    return null;
+  }
+}
+
+function parseLegacyPinetControlCommandFromText(
   text: string | undefined,
 ): PinetControlCommand | null {
   const trimmed = text?.trim();
@@ -278,8 +303,36 @@ export function getPinetControlCommandFromText(
   return null;
 }
 
-export function buildPinetControlMetadata(command: PinetControlCommand): Record<string, unknown> {
-  return { kind: "pinet_control", command };
+export function getPinetControlCommandFromText(
+  text: string | undefined,
+): PinetControlCommand | null {
+  return (
+    parseStructuredPinetControlCommandFromText(text) ?? parseLegacyPinetControlCommandFromText(text)
+  );
+}
+
+export function buildPinetControlMetadata(command: PinetControlCommand): PinetControlEnvelope {
+  return { type: "pinet:control", action: command };
+}
+
+export function buildPinetControlMessage(command: PinetControlCommand): string {
+  return JSON.stringify(buildPinetControlMetadata(command));
+}
+
+export function normalizeOutgoingPinetControlMessage(
+  body: string,
+  metadata?: Record<string, unknown>,
+): { body: string; metadata: Record<string, unknown> } | null {
+  const command = getPinetControlCommandFromText(body);
+  if (!command) return null;
+
+  return {
+    body: buildPinetControlMessage(command),
+    metadata: {
+      ...(metadata ?? {}),
+      ...buildPinetControlMetadata(command),
+    },
+  };
 }
 
 export interface PinetSkinUpdate {
@@ -331,10 +384,11 @@ export function extractPinetControlCommand(message: {
   if (!isAgentToAgent) return null;
 
   const metadataCommand =
-    metadata.kind === "pinet_control" ? parsePinetControlCommand(metadata.command) : null;
+    parsePinetControlEnvelope(metadata) ??
+    (metadata.kind === "pinet_control" ? parsePinetControlCommand(metadata.command) : null);
   if (metadataCommand) return metadataCommand;
 
-  // Backward-compatible fallback for exact slash commands sent over existing a2a flows.
+  // Backward-compatible fallback for structured JSON or exact slash commands sent over a2a flows.
   return getPinetControlCommandFromText(message.body);
 }
 // ─── Slack API encoding ──────────────────────────────────

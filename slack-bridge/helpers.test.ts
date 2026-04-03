@@ -11,6 +11,8 @@ import {
   parsePinetControlCommand,
   getPinetControlCommandFromText,
   buildPinetControlMetadata,
+  buildPinetControlMessage,
+  normalizeOutgoingPinetControlMessage,
   buildPinetSkinAssignment,
   buildPinetSkinPromptGuideline,
   buildPinetSkinMetadata,
@@ -401,21 +403,52 @@ describe("Pinet control helpers", () => {
     expect(parsePinetControlCommand("noop")).toBeNull();
   });
 
-  it("detects control commands from exact message text", () => {
+  it("detects control commands from structured JSON and legacy slash text", () => {
+    expect(getPinetControlCommandFromText('{"type":"pinet:control","action":"reload"}')).toBe(
+      "reload",
+    );
     expect(getPinetControlCommandFromText("/reload")).toBe("reload");
     expect(getPinetControlCommandFromText(" /exit ")).toBe("exit");
+    expect(getPinetControlCommandFromText('{"type":"pinet:control","action":"noop"}')).toBe(null);
     expect(getPinetControlCommandFromText("/exit now please")).toBeNull();
     expect(getPinetControlCommandFromText("please /reload")).toBeNull();
   });
 
-  it("builds structured control metadata", () => {
+  it("builds structured control metadata and body", () => {
     expect(buildPinetControlMetadata("reload")).toEqual({
-      kind: "pinet_control",
-      command: "reload",
+      type: "pinet:control",
+      action: "reload",
     });
+    expect(buildPinetControlMessage("reload")).toBe('{"type":"pinet:control","action":"reload"}');
   });
 
-  it("extracts structured control commands from a2a messages", () => {
+  it("normalizes outgoing control messages to the structured envelope", () => {
+    expect(normalizeOutgoingPinetControlMessage("/reload")).toEqual({
+      body: '{"type":"pinet:control","action":"reload"}',
+      metadata: { type: "pinet:control", action: "reload" },
+    });
+    expect(
+      normalizeOutgoingPinetControlMessage('{"type":"pinet:control","action":"exit"}', {
+        custom: true,
+      }),
+    ).toEqual({
+      body: '{"type":"pinet:control","action":"exit"}',
+      metadata: { custom: true, type: "pinet:control", action: "exit" },
+    });
+    expect(normalizeOutgoingPinetControlMessage("hello")).toBeNull();
+  });
+
+  it("extracts structured control commands from a2a metadata", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: "hello",
+        metadata: { a2a: true, type: "pinet:control", action: "reload" },
+      }),
+    ).toBe("reload");
+  });
+
+  it("keeps backward compatibility for legacy metadata and slash commands", () => {
     expect(
       extractPinetControlCommand({
         threadId: "a2a:sender:target",
@@ -423,9 +456,6 @@ describe("Pinet control helpers", () => {
         metadata: { a2a: true, kind: "pinet_control", command: "reload" },
       }),
     ).toBe("reload");
-  });
-
-  it("falls back to exact slash commands for a2a messages", () => {
     expect(
       extractPinetControlCommand({
         threadId: "a2a:sender:target",
@@ -433,16 +463,33 @@ describe("Pinet control helpers", () => {
         metadata: { a2a: true },
       }),
     ).toBe("exit");
+  });
+
+  it("extracts structured control commands from a2a JSON message bodies", () => {
     expect(
       extractPinetControlCommand({
         threadId: "a2a:sender:target",
-        body: "/exit now please",
+        body: '{"type":"pinet:control","action":"reload"}',
+        metadata: { a2a: true },
+      }),
+    ).toBe("reload");
+    expect(
+      extractPinetControlCommand({
+        threadId: "a2a:sender:target",
+        body: '{"type":"pinet:control","action":"noop"}',
         metadata: { a2a: true },
       }),
     ).toBeNull();
   });
 
-  it("ignores slash commands from non-a2a messages", () => {
+  it("ignores control commands from non-a2a messages", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "123.456",
+        body: '{"type":"pinet:control","action":"reload"}',
+        metadata: { channel: "D123" },
+      }),
+    ).toBeNull();
     expect(
       extractPinetControlCommand({
         threadId: "123.456",
