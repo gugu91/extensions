@@ -170,6 +170,18 @@ This repo is built by a mesh of human and AI agents coordinating via
 [Pinet](slack-bridge/README.md). Names are procedural and can rotate across
 sessions, so this section is a snapshot of the agents visible in today's work.
 
+### Today's agents (2026-04-03)
+
+| Agent                          | Contribution                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| 🐢 **Thunder Emerald Turtle**  | Merge queue operator (11 PRs rebased & merged), phantom subagent pollution fix (#237 / PR #244). |
+| 🦙 **Cobalt Slate Llama**      | RALPH "maintain momentum" message tweak (#246), RALPH broker self-nudge fix (#241 / PR #242).    |
+| 🐘 **Jade Rust Elephant**      | Auto-reload on reconnect (#238 / PR #243).                                                       |
+| 🦝 **Silver Coral Raccoon**    | npm publish preflight for all 4 packages.                                                        |
+| 🐢 **Orbit Lime Turtle 2**     | PR #242 code review.                                                                             |
+| 🐘 **Scarlet Bronze Elephant** | PR #244 code review.                                                                             |
+| 🫎 **Slate Emerald Moose**     | PR #243 code review.                                                                             |
+
 ### Today's agents (2026-04-02)
 
 | Agent                     | Contribution                                                                                                                                                                                        |
