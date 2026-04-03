@@ -602,7 +602,7 @@ describe("BrokerDB", () => {
     expect(agents[0].pid).toBe(200);
   });
 
-  it("registerAgent resumes previous identity by stableId", () => {
+  it("registerAgent refreshes identities for reconnecting stable agents", () => {
     const first = db.registerAgent("a1", "Original", "🧠", 100, undefined, "host:session:/tmp/a");
     db.unregisterAgent(first.id);
 
@@ -616,8 +616,8 @@ describe("BrokerDB", () => {
     );
 
     expect(resumed.id).toBe(first.id);
-    expect(resumed.name).toBe("Original");
-    expect(resumed.emoji).toBe("🧠");
+    expect(resumed.name).toBe("Different");
+    expect(resumed.emoji).toBe("🤖");
     expect(db.getAgents()).toHaveLength(1);
   });
 
@@ -817,7 +817,7 @@ describe("BrokerDB", () => {
     );
   });
 
-  it("startup reconciliation marks prior agents disconnected until they reconnect by stableId", () => {
+  it("startup reconciliation preserves ownership until reconnect and refreshes the returning identity", () => {
     const dbPath = path.join(dir, "restart.db");
     const firstDb = new BrokerDB(dbPath);
     firstDb.initialize();
@@ -851,8 +851,8 @@ describe("BrokerDB", () => {
     );
 
     expect(resumed.id).toBe(original.id);
-    expect(resumed.name).toBe("Hyper Owl");
-    expect(resumed.emoji).toBe("🦉");
+    expect(resumed.name).toBe("Different Owl");
+    expect(resumed.emoji).toBe("🦎");
     expect(restartedDb.getThread("t-restart")?.ownerAgent).toBe(original.id);
 
     restartedDb.close();
