@@ -229,7 +229,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
-  it("reconnect with same stableId reuses agent identity and thread ownership after a resumable disconnect", async () => {
+  it("reconnect with same stableId refreshes identity while preserving thread ownership", async () => {
     const reg1 = await client.register("resume-agent", "🔁", undefined, "host:session:/tmp/resume");
     await client.claimThread("t-resume");
     client.disconnect();
@@ -250,8 +250,8 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     );
 
     expect(reg2.agentId).toBe(reg1.agentId);
-    expect(reg2.name).toBe("resume-agent");
-    expect(reg2.emoji).toBe("🔁");
+    expect(reg2.name).toBe("different-name");
+    expect(reg2.emoji).toBe("❌");
 
     const threads = await client2.listThreads();
     expect(threads.map((thread) => thread.threadId)).toContain("t-resume");

@@ -649,15 +649,20 @@ export class BrokerDB implements BrokerDBInterface {
     const now = new Date().toISOString();
     const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
     const existingById = this.getAgentRowById(existing?.id ?? id);
+    const existingRow = existingById ?? existing;
     const agentId = existing?.id ?? id;
-    const hasSkinIdentity =
-      typeof metadata?.skinTheme === "string" && metadata.skinTheme.trim().length > 0;
-    const finalName = hasSkinIdentity
-      ? this.ensureUniqueAgentName(name, agentId)
-      : (existing?.name ?? this.ensureUniqueAgentName(name, agentId));
-    const finalEmoji = hasSkinIdentity ? emoji : (existing?.emoji ?? emoji);
+    const finalName = this.ensureUniqueAgentName(name, agentId);
+    const finalEmoji = emoji.trim() || existingRow?.emoji || "";
     const persistedStableId = stableId ?? existing?.stable_id ?? existingById?.stable_id ?? null;
-    const meta = metadata ? JSON.stringify(metadata) : null;
+    // Reconnecting agents are authoritative for their current runtime identity. If a
+    // stable session comes back with a new name/emoji, refresh the broker roster
+    // instead of replaying stale values from the previous broker DB row.
+    const finalMetadata =
+      metadata ??
+      (existingRow?.metadata
+        ? (JSON.parse(existingRow.metadata) as Record<string, unknown>)
+        : undefined);
+    const meta = finalMetadata ? JSON.stringify(finalMetadata) : null;
 
     db.prepare(
       `INSERT INTO agents (
@@ -691,7 +696,7 @@ export class BrokerDB implements BrokerDBInterface {
       connectedAt: now,
       lastSeen: now,
       lastHeartbeat: now,
-      metadata: metadata ?? null,
+      metadata: finalMetadata ?? null,
       status: "idle" as const,
       idleSince: now,
       lastActivity: null,
