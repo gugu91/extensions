@@ -3104,6 +3104,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Commands ───────────────────────────────────────
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
+    refreshSettings();
     const broker = await startBroker();
     const adapter = new SlackAdapter({
       botToken: botToken!,
@@ -3325,10 +3326,11 @@ export default function (pi: ExtensionAPI) {
       throw new Error(getPinetRegistrationBlockReason());
     }
 
+    refreshSettings();
     const client = new BrokerClient();
 
-    try {
-      await client.connect();
+    async function registerFollowerRuntime(): Promise<void> {
+      refreshSettings();
       const workerIdentity = resolveRuntimeAgentIdentity(
         { name: agentName, emoji: agentEmoji },
         settings,
@@ -3344,6 +3346,11 @@ export default function (pi: ExtensionAPI) {
         agentStableId,
       );
       applyRegistrationIdentity(registration);
+    }
+
+    try {
+      await client.connect();
+      await registerFollowerRuntime();
 
       const brokerClientRef: BrokerClientRef = {
         client,
@@ -3533,9 +3540,16 @@ export default function (pi: ExtensionAPI) {
 
       client.onReconnect(() => {
         void (async () => {
-          const registration = client.getRegisteredIdentity();
-          if (registration) {
-            applyRegistrationIdentity(registration);
+          try {
+            await registerFollowerRuntime();
+          } catch (err) {
+            console.error(
+              `[slack-bridge] follower reconnect registration refresh failed: ${msg(err)}`,
+            );
+            const registration = client.getRegisteredIdentity();
+            if (registration) {
+              applyRegistrationIdentity(registration);
+            }
           }
           await resumeThreadClaims();
           const currentlyIdle = ctx.isIdle?.() ?? true;
