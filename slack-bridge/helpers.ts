@@ -1088,7 +1088,7 @@ export function buildRalphLoopFollowUpMessage(
     `Timestamp: ${cycleStartedAt}`,
     ...evaluation.anomalies.map((anomaly) => `- ${anomaly}`),
     "",
-    "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+    "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, maintain momentum, and repair broker anomalies.",
   ].join("\n");
 }
 

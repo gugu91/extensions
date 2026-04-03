@@ -1768,7 +1768,7 @@ describe("buildRalphLoopCycleNotifications", () => {
         "- ghost agents detected: ghost-1",
         "- Idle Gecko idle with assigned work (2 inbox, 1 threads)",
         "",
-        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, maintain momentum, and repair broker anomalies.",
       ].join("\n"),
       anomalyStatus:
         "RALPH loop (2026-04-02T14:10:00.000Z): ghost agents detected: ghost-1; Idle Gecko idle with assigned work (2 inbox, 1 threads)",
@@ -1802,7 +1802,7 @@ describe("buildRalphLoopFollowUpMessage", () => {
         "- Idle Gecko idle with assigned work (2 inbox, 1 threads)",
         "- main checkout is on `feat/not-main`, expected `main`",
         "",
-        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, and repair broker anomalies.",
+        "Take action: reap ghosts, nudge idle workers, reassign stalled work, drain backlog, maintain momentum, and repair broker anomalies.",
       ].join("\n"),
     );
   });

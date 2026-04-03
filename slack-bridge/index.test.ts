@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { BrokerClient } from "./broker/client.js";
 import slackBridge from "./index.js";
-import { BrokerClient } from "./broker/client.js";
 
 type ToolDefinition = {
   name: string;
