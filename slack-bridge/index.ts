@@ -1868,6 +1868,7 @@ export default function (pi: ExtensionAPI) {
       currentBranch,
       brokerHeartbeatActive: brokerHeartbeatTimer != null,
       brokerMaintenanceActive: brokerMaintenanceTimer != null,
+      brokerAgentId: activeSelfId ?? undefined,
     };
     const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
 
@@ -2130,6 +2131,7 @@ export default function (pi: ExtensionAPI) {
         currentBranch,
         brokerHeartbeatActive: brokerHeartbeatTimer != null,
         brokerMaintenanceActive: brokerMaintenanceTimer != null,
+        brokerAgentId: activeSelfId ?? undefined,
       };
       const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
 
