@@ -163,6 +163,51 @@ describe("BrokerClient — connect / disconnect", () => {
   });
 });
 
+describe("BrokerClient — mesh auth", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends an auth RPC during connect when a mesh secret is configured", async () => {
+    const client = new BrokerClient({ ...mock.connectOpts, meshSecret: "shared-secret" });
+    const connectPromise = client.connect();
+
+    await waitFor(() => mock.received.length === 1);
+    const authReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { secret: string };
+    };
+
+    expect(authReq.method).toBe("auth");
+    expect(authReq.params.secret).toBe("shared-secret");
+
+    mock.respondTo(mock.connections[0], authReq.id, { ok: true });
+    await connectPromise;
+    expect(client.isConnected()).toBe(true);
+
+    client.disconnect();
+  });
+
+  it("rejects connect when broker auth rejects the mesh secret", async () => {
+    const client = new BrokerClient({ ...mock.connectOpts, meshSecret: "wrong-secret" });
+    const connectPromise = client.connect();
+
+    await waitFor(() => mock.received.length === 1);
+    const authReq = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondError(mock.connections[0], authReq.id, -32001, "Invalid mesh secret.");
+
+    await expect(connectPromise).rejects.toThrow("Invalid mesh secret.");
+    expect(client.isConnected()).toBe(false);
+  });
+});
+
 describe("BrokerClient — register", () => {
   let mock: MockServer;
 

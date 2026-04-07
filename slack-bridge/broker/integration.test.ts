@@ -1135,3 +1135,70 @@ describe("ralph_cycles recording", () => {
     expect(db.getRecentRalphCycles(3)).toHaveLength(3);
   });
 });
+
+describe("broker integration — mesh auth", () => {
+  let dir: string;
+  let db: BrokerDB;
+  let server: BrokerSocketServer;
+
+  beforeEach(async () => {
+    dir = tmpDir();
+    db = new BrokerDB(path.join(dir, "auth.db"));
+    db.initialize();
+    server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 }, undefined, {
+      meshSecret: "shared-secret",
+      authTimeoutMs: 100,
+    });
+    await server.start();
+  });
+
+  afterEach(async () => {
+    await server.stop();
+    db.close();
+    cleanup(dir);
+  });
+
+  it("accepts clients that present the correct mesh secret", async () => {
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+
+    const client = new BrokerClient({
+      host: info.host,
+      port: info.port,
+      meshSecret: "shared-secret",
+    });
+    await client.connect();
+
+    const reg = await client.register("trusted-agent", "🔐");
+    expect(reg.agentId).toBeDefined();
+
+    client.disconnect();
+  });
+
+  it("rejects clients that do not authenticate before calling broker methods", async () => {
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+
+    const client = new BrokerClient({ host: info.host, port: info.port });
+    await client.connect();
+
+    await expect(client.register("intruder", "🚫")).rejects.toThrow(
+      "Authentication required before calling broker methods.",
+    );
+    await waitFor(() => !client.isConnected());
+  });
+
+  it("rejects clients that present the wrong mesh secret", async () => {
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+
+    const client = new BrokerClient({
+      host: info.host,
+      port: info.port,
+      meshSecret: "wrong-secret",
+    });
+
+    await expect(client.connect()).rejects.toThrow("Invalid mesh secret.");
+    expect(client.isConnected()).toBe(false);
+  });
+});

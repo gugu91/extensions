@@ -1,9 +1,10 @@
 import * as fs from "node:fs";
 import { BrokerDB } from "./schema.js";
+import { loadOrCreateMeshSecret } from "./auth.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import type { ListenTarget } from "./socket-server.js";
 import { LeaderLock } from "./leader.js";
-import { getDefaultSocketPath } from "./paths.js";
+import { getDefaultMeshSecretPath, getDefaultSocketPath } from "./paths.js";
 import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
@@ -36,6 +37,8 @@ export interface BrokerOptions {
   /** Full listen target — overrides socketPath when provided */
   listenTarget?: ListenTarget;
   lockPath?: string;
+  meshSecret?: string;
+  meshSecretPath?: string;
 }
 
 export interface Broker {
@@ -86,7 +89,10 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
     }
   }
 
-  const server = new BrokerSocketServer(db, target);
+  const meshSecretPath = options.meshSecretPath ?? getDefaultMeshSecretPath();
+  const meshSecret = options.meshSecret?.trim() || loadOrCreateMeshSecret(meshSecretPath);
+
+  const server = new BrokerSocketServer(db, target, undefined, { meshSecret });
   try {
     await server.start();
   } catch (err) {
