@@ -1,5 +1,5 @@
 {
-  "name": "@gugu91/pi-slack-api",
+  "name": "@gugu910/pi-slack-api",
   "version": "0.1.0",
   "type": "module",
   "description": "Typed Slack Web API client and CLI generated from Slack's OpenAPI spec",

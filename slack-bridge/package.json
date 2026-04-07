@@ -1,5 +1,5 @@
 {
-  "name": "@gugu91/pi-slack-bridge",
+  "name": "@gugu910/pi-slack-bridge",
   "version": "0.1.0",
   "type": "module",
   "description": "Slack assistant integration for pi (Pinet) — multi-agent broker, thread routing, and inbox tools",
@@ -39,6 +39,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@gugu91/pi-ext-types": "workspace:*"
+    "@gugu910/pi-ext-types": "workspace:*"
   }
 }

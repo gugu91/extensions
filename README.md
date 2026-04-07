@@ -120,22 +120,22 @@ caching.
 
 ```
 extensions/
-├── slack-bridge/       # @gugu91/pi-slack-bridge
+├── slack-bridge/       # @gugu910/pi-slack-bridge
 │   ├── broker/         #   message routing, socket server, adapters
 │   ├── index.ts        #   extension entry point
 │   └── package.json    #   workspace package + pi manifest
-├── slack-api/          # @gugu91/pi-slack-api
+├── slack-api/          # @gugu910/pi-slack-api
 │   ├── generated/      #   generated typed Slack Web API client
 │   ├── cli.ts          #   CLI wrapper around generated methods
 │   └── package.json    #   workspace package + pi manifest
-├── nvim-bridge/        # @gugu91/pi-nvim-bridge
+├── nvim-bridge/        # @gugu910/pi-nvim-bridge
 │   ├── nvim/           #   Neovim Lua plugin
 │   ├── index.ts        #   extension entry point
 │   └── package.json
-├── neon-psql/          # @gugu91/pi-neon-psql
+├── neon-psql/          # @gugu910/pi-neon-psql
 │   ├── index.ts        #   extension entry point
 │   └── package.json
-├── types/              # @gugu91/pi-ext-types (shared .d.ts)
+├── types/              # @gugu910/pi-ext-types (shared .d.ts)
 ├── plans/              # Architecture docs
 ├── .pi/                # Pi config (skills, agents)
 ├── turbo.json          # Turborepo task config

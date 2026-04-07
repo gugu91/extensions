@@ -43,13 +43,13 @@ importers:
 
   neon-psql:
     dependencies:
-      "@gugu91/pi-ext-types":
+      "@gugu910/pi-ext-types":
         specifier: workspace:*
         version: link:../types
 
   nvim-bridge:
     dependencies:
-      "@gugu91/pi-ext-types":
+      "@gugu910/pi-ext-types":
         specifier: workspace:*
         version: link:../types
 
@@ -64,7 +64,7 @@ importers:
 
   slack-bridge:
     dependencies:
-      "@gugu91/pi-ext-types":
+      "@gugu910/pi-ext-types":
         specifier: workspace:*
         version: link:../types
 

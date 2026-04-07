@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@gugu91/pi-ext-types/typebox";
+import { Type } from "@gugu910/pi-ext-types/typebox";
 import * as crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
