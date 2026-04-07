@@ -1589,6 +1589,7 @@ export default function (pi: ExtensionAPI) {
       unclaimedThreads.delete(threadTs);
       persistState();
     },
+    getBotUserId: () => botUserId,
     claimThreadOwnership: (threadTs, channelId) => {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
         activeRouter.claimThread(threadTs, activeSelfId);

@@ -76,6 +76,7 @@ export interface RegisterSlackToolsDeps {
     status: "created" | "refreshed" | "conflict";
     conflict?: { toolPattern: string; action: string };
   };
+  getBotUserId: () => string | null;
 }
 
 function buildSlackInboxPromptGuidelines(): string[] {
@@ -175,6 +176,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     claimThreadOwnership,
     clearPendingEyes,
     registerConfirmationRequest,
+    getBotUserId,
   } = deps;
 
   async function resolveCanvasTarget(
@@ -1485,6 +1487,114 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return {
         content: [{ type: "text", text: `Created channel #${channel.name} (${channel.id})` }],
         details: { id: channel.id, name: channel.name },
+      };
+    },
+  });
+
+  // ─── Project channel creation ──────────────────────────
+
+  pi.registerTool({
+    name: "slack_project_create",
+    label: "Slack Project Create",
+    description:
+      "Create a Slack project channel with an attached RFC canvas and bot membership in one step.",
+    promptSnippet:
+      "Create a project channel, attach an RFC/spec canvas, and invite the Pinet bot — all in one call.",
+    parameters: Type.Object({
+      name: Type.String({
+        description: "Channel name (lowercase, no spaces, max 80 chars)",
+      }),
+      topic: Type.Optional(Type.String({ description: "Channel topic" })),
+      purpose: Type.Optional(Type.String({ description: "Channel purpose" })),
+      canvas_title: Type.Optional(
+        Type.String({ description: "Title for the RFC/spec canvas (defaults to channel name)" }),
+      ),
+      canvas_markdown: Type.Optional(
+        Type.String({ description: "Markdown content for the RFC/spec canvas" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_project_create",
+        undefined,
+        `name=${params.name} | topic=${params.topic ?? ""} | canvas=${params.canvas_title ?? params.name}`,
+      );
+
+      // 1. Create the channel
+      const createResponse = await slack("conversations.create", getBotToken(), {
+        name: params.name,
+      });
+      const channel = createResponse.channel as { id: string; name: string };
+      rememberChannel(channel.name, channel.id);
+
+      // 2. Set topic and purpose if provided
+      if (params.topic) {
+        await slack("conversations.setTopic", getBotToken(), {
+          channel: channel.id,
+          topic: params.topic,
+        });
+      }
+      if (params.purpose) {
+        await slack("conversations.setPurpose", getBotToken(), {
+          channel: channel.id,
+          purpose: params.purpose,
+        });
+      }
+
+      // 3. Invite the bot to the channel (if we know the bot user id)
+      const botId = getBotUserId();
+      let botInvited = false;
+      if (botId) {
+        try {
+          await slack("conversations.invite", getBotToken(), {
+            channel: channel.id,
+            users: botId,
+          });
+          botInvited = true;
+        } catch (err) {
+          // already_in_channel is fine — the bot created the channel so it's already a member
+          if (isSlackMethodError(err, "conversations.invite", "already_in_channel")) {
+            botInvited = true;
+          }
+          // Other errors are non-fatal — the channel still works, just without explicit bot membership
+        }
+      }
+
+      // 4. Create the channel canvas with the RFC/spec
+      const canvasTitle = params.canvas_title?.trim() || `${channel.name} RFC`;
+      let canvasId: string | null = null;
+      try {
+        const canvasRequest = buildSlackCanvasCreateRequest({
+          kind: "channel",
+          title: canvasTitle,
+          markdown: params.canvas_markdown,
+          channelId: channel.id,
+        });
+        const canvasResponse = await slack(canvasRequest.method, getBotToken(), canvasRequest.body);
+        canvasId = canvasResponse.canvas_id as string;
+      } catch {
+        // Canvas creation failure is non-fatal — the channel is still usable
+      }
+
+      const parts = [`Created project channel #${channel.name} (${channel.id})`];
+      if (canvasId) {
+        parts.push(`RFC canvas: ${canvasId} — "${canvasTitle}"`);
+      } else {
+        parts.push("Canvas creation failed — create it manually with slack_canvas_create.");
+      }
+      if (botInvited) {
+        parts.push("Bot joined the channel.");
+      }
+
+      return {
+        content: [{ type: "text", text: parts.join("\n") }],
+        details: {
+          channel_id: channel.id,
+          channel_name: channel.name,
+          canvas_id: canvasId,
+          canvas_title: canvasTitle,
+          bot_invited: botInvited,
+        },
       };
     },
   });
