@@ -100,7 +100,7 @@ export default function (pi: ExtensionAPI) {
 ```json
 // package.json
 {
-  "name": "@gugu91/pi-slack-bridge",
+  "name": "@gugu910/pi-slack-bridge",
   "keywords": ["pi-package"],
   "pi": { "extensions": ["./index.ts"] }
 }

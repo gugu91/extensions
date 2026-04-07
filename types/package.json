@@ -1,5 +1,5 @@
 {
-  "name": "@gugu91/pi-ext-types",
+  "name": "@gugu910/pi-ext-types",
   "version": "0.1.0",
   "type": "module",
   "description": "Shared ambient type declarations and workspace helpers for pi extensions",

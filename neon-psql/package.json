@@ -1,5 +1,5 @@
 {
-  "name": "@gugu91/pi-neon-psql",
+  "name": "@gugu910/pi-neon-psql",
   "version": "0.1.0",
   "type": "module",
   "description": "Neon Postgres tunnel + psql tool for pi",
@@ -41,6 +41,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@gugu91/pi-ext-types": "workspace:*"
+    "@gugu910/pi-ext-types": "workspace:*"
   }
 }

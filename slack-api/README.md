@@ -12,7 +12,7 @@ Typed Slack Web API client + CLI generated from Slack's OpenAPI spec with
 ## Regenerate the client
 
 ```bash
-pnpm --filter @gugu91/pi-slack-api run generate
+pnpm --filter @gugu910/pi-slack-api run generate
 ```
 
 The generator currently tries these sources in order:
@@ -27,13 +27,13 @@ The generator currently tries these sources in order:
 List all generated Slack methods:
 
 ```bash
-pnpm --filter @gugu91/pi-slack-api exec node --experimental-strip-types cli.ts list
+pnpm --filter @gugu910/pi-slack-api exec node --experimental-strip-types cli.ts list
 ```
 
 Call a method with repeated key/value params:
 
 ```bash
-pnpm --filter @gugu91/pi-slack-api exec node --experimental-strip-types cli.ts conversations.list \
+pnpm --filter @gugu910/pi-slack-api exec node --experimental-strip-types cli.ts conversations.list \
   --token "$SLACK_TOKEN" \
   --param limit=50
 ```
@@ -41,7 +41,7 @@ pnpm --filter @gugu91/pi-slack-api exec node --experimental-strip-types cli.ts c
 Call a method with JSON input:
 
 ```bash
-pnpm --filter @gugu91/pi-slack-api exec node --experimental-strip-types cli.ts chat.postMessage \
+pnpm --filter @gugu910/pi-slack-api exec node --experimental-strip-types cli.ts chat.postMessage \
   --token "$SLACK_TOKEN" \
   --input '{"channel":"C123","text":"hello from slack-api"}'
 ```

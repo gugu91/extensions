@@ -11,11 +11,11 @@ First public release prep for the Pi extensions monorepo. This cut rolls up 66 p
 ### Version verification
 
 - `pi-extensions` — `0.1.0`
-- `@gugu91/pi-slack-bridge` — `0.1.0`
-- `@gugu91/pi-nvim-bridge` — `0.1.0`
-- `@gugu91/pi-neon-psql` — `0.1.0`
-- `@gugu91/pi-slack-api` — `0.1.0`
-- `@gugu91/pi-ext-types` — `0.1.0`
+- `@gugu910/pi-slack-bridge` — `0.1.0`
+- `@gugu910/pi-nvim-bridge` — `0.1.0`
+- `@gugu910/pi-neon-psql` — `0.1.0`
+- `@gugu910/pi-slack-api` — `0.1.0`
+- `@gugu910/pi-ext-types` — `0.1.0`
 
 ### Release highlights
 
