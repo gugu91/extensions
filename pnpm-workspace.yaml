@@ -3,4 +3,3 @@ packages:
   - slack-api
   - nvim-bridge
   - neon-psql
-  - types
