@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gugu91/extensions.git",
+    "url": "git+https://github.com/gugu910/extensions.git",
     "directory": "slack-api"
   },
   "publishConfig": {

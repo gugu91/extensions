@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gugu91/extensions.git",
+    "url": "git+https://github.com/gugu910/extensions.git",
     "directory": "neon-psql"
   },
   "publishConfig": {
@@ -39,9 +39,6 @@
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@gugu910/pi-ext-types": "workspace:*"
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.49"

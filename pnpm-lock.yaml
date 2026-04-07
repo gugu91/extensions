@@ -42,20 +42,12 @@ importers:
         version: 4.1.2(@types/node@22.19.11)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.11)(jiti@2.6.1)(yaml@2.8.2))
 
   neon-psql:
-    dependencies:
-      "@gugu910/pi-ext-types":
-        specifier: workspace:*
-        version: link:../types
     devDependencies:
       "@sinclair/typebox":
         specifier: ^0.34.49
         version: 0.34.49
 
   nvim-bridge:
-    dependencies:
-      "@gugu910/pi-ext-types":
-        specifier: workspace:*
-        version: link:../types
     devDependencies:
       "@sinclair/typebox":
         specifier: ^0.34.49
@@ -68,19 +60,9 @@ importers:
         version: 7.15.0
 
   slack-bridge:
-    dependencies:
-      "@gugu910/pi-ext-types":
-        specifier: workspace:*
-        version: link:../types
     devDependencies:
       "@sinclair/typebox":
         specifier: ^0.34.49
-        version: 0.34.49
-
-  types:
-    dependencies:
-      "@sinclair/typebox":
-        specifier: ^0.34.41
         version: 0.34.49
 
 packages:
