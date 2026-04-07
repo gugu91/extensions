@@ -14,7 +14,7 @@ import {
   truncateHead,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "@gugu910/pi-ext-types/typebox";
+import { Type } from "@sinclair/typebox";
 
 import {
   buildInjectedValues as computeInjectedValues,

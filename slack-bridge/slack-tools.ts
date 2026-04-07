@@ -1,6 +1,6 @@
 import os from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@gugu910/pi-ext-types/typebox";
+import { Type } from "@sinclair/typebox";
 import type { InboxMessage } from "./helpers.js";
 import type { SlackResult } from "./slack-api.js";
 import {

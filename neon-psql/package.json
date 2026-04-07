@@ -42,5 +42,8 @@
   },
   "dependencies": {
     "@gugu910/pi-ext-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49"
   }
 }
