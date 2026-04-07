@@ -1109,6 +1109,58 @@ describe("SlackAdapter — send", () => {
     expect(meta.event_payload.emoji).toBe("🤖");
   });
 
+  it("includes agent_owner in metadata when agentOwnerToken is provided", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+
+    await adapter.send({
+      threadId: "100.200",
+      channel: "C123",
+      text: "Hello",
+      agentName: "TestBot",
+      agentOwnerToken: "owner:abcd1234efgh5678",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    const meta = body.metadata as {
+      event_type: string;
+      event_payload: Record<string, unknown>;
+    };
+    expect(meta.event_payload.agent).toBe("TestBot");
+    expect(meta.event_payload.agent_owner).toBe("owner:abcd1234efgh5678");
+  });
+
+  it("includes metadata when only agentOwnerToken is set (no agentName)", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+
+    await adapter.send({
+      threadId: "100.200",
+      channel: "C123",
+      text: "Hello",
+      agentOwnerToken: "owner:abcd1234efgh5678",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    const meta = body.metadata as {
+      event_type: string;
+      event_payload: Record<string, unknown>;
+    };
+    expect(meta.event_type).toBe("pi_agent_msg");
+    expect(meta.event_payload.agent_owner).toBe("owner:abcd1234efgh5678");
+    expect(meta.event_payload.agent).toBeUndefined();
+  });
+
   it("does not include metadata when no agentName or metadata", async () => {
     fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
 

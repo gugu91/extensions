@@ -289,11 +289,12 @@ export class SlackAdapter implements MessageAdapter {
       thread_ts: msg.threadId,
     };
 
-    if (msg.agentName ?? msg.metadata) {
+    if (msg.agentName ?? msg.agentOwnerToken ?? msg.metadata) {
       body.metadata = {
         event_type: "pi_agent_msg",
         event_payload: {
           ...(msg.agentName ? { agent: msg.agentName } : {}),
+          ...(msg.agentOwnerToken ? { agent_owner: msg.agentOwnerToken } : {}),
           ...(msg.agentEmoji ? { emoji: msg.agentEmoji } : {}),
           ...msg.metadata,
         },

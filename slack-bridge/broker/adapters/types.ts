@@ -18,6 +18,7 @@ export interface OutboundMessage {
   text: string;
   agentName?: string;
   agentEmoji?: string;
+  agentOwnerToken?: string;
   metadata?: Record<string, unknown>;
 }
 

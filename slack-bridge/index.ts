@@ -1245,19 +1245,30 @@ export default function (pi: ExtensionAPI) {
       }
 
       const localOwner = threads.get(threadTs)?.owner;
-      if (localOwner && localOwner !== agentName) return;
+      if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
+        return;
+      }
+      if (localOwner) {
+        const thread = threads.get(threadTs);
+        if (thread) {
+          normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
+        }
+      }
 
       if (!localOwner && !unclaimedThreads.has(threadTs)) {
         const remoteOwner = await resolveThreadOwner(item.channel, threadTs);
         if (shuttingDown) return;
-        if (remoteOwner && remoteOwner !== agentName) {
+        if (
+          remoteOwner &&
+          !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)
+        ) {
           const thread = threads.get(threadTs);
           if (thread) thread.owner = remoteOwner;
           return;
         }
-        if (remoteOwner === agentName) {
+        if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
           const thread = threads.get(threadTs);
-          if (thread) thread.owner = agentName;
+          if (thread) thread.owner = agentOwnerToken;
         }
         if (!remoteOwner) {
           unclaimedThreads.add(threadTs);
@@ -1432,19 +1443,27 @@ export default function (pi: ExtensionAPI) {
     }
 
     const localOwner = threads.get(normalized.threadTs)?.owner;
-    if (localOwner && localOwner !== agentName) return;
+    if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
+      return;
+    }
+    if (localOwner) {
+      const thread = threads.get(normalized.threadTs);
+      if (thread) {
+        normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
+      }
+    }
 
     if (!localOwner && !unclaimedThreads.has(normalized.threadTs)) {
       const remoteOwner = await resolveThreadOwner(normalized.channel, normalized.threadTs);
       if (shuttingDown) return;
-      if (remoteOwner && remoteOwner !== agentName) {
+      if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
         const thread = threads.get(normalized.threadTs);
         if (thread) thread.owner = remoteOwner;
         return;
       }
-      if (remoteOwner === agentName) {
+      if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
         const thread = threads.get(normalized.threadTs);
-        if (thread) thread.owner = agentName;
+        if (thread) thread.owner = agentOwnerToken;
       }
       if (!remoteOwner) {
         unclaimedThreads.add(normalized.threadTs);
