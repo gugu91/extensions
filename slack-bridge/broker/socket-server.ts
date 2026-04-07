@@ -14,6 +14,7 @@ import {
   RPC_METHOD_NOT_FOUND,
   RPC_INVALID_PARAMS,
   RPC_INTERNAL_ERROR,
+  RPC_AUTH_REQUIRED,
 } from "./types.js";
 
 export type SlackProxyFn = (
@@ -23,6 +24,7 @@ export type SlackProxyFn = (
 
 export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 15_000;
 export const DEFAULT_PRUNE_INTERVAL_MS = 5_000;
+export const DEFAULT_AUTH_TIMEOUT_MS = 2_000;
 
 // ─── Listen target: Unix socket path or TCP host:port ────
 
@@ -53,6 +55,8 @@ export type AgentRegistrationResolver = (input: {
 export interface BrokerSocketServerOptions {
   heartbeatTimeoutMs?: number;
   pruneIntervalMs?: number;
+  authTimeoutMs?: number;
+  meshSecret?: string;
 }
 
 // ─── Connection state ────────────────────────────────────
@@ -60,6 +64,8 @@ export interface BrokerSocketServerOptions {
 interface ConnectionState {
   agentId: string | null;
   buffer: string;
+  authenticated: boolean;
+  authTimer: ReturnType<typeof setTimeout> | null;
 }
 
 // ─── RPC helpers ─────────────────────────────────────────
@@ -131,6 +137,8 @@ export class BrokerSocketServer {
   private readonly connections = new Map<net.Socket, ConnectionState>();
   private readonly heartbeatTimeoutMs: number;
   private readonly pruneIntervalMs: number;
+  private readonly authTimeoutMs: number;
+  private readonly meshSecret: string | null;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private assignedPort: number | null = null;
   private agentMessageCallback: AgentMessageCallback | null = null;
@@ -148,6 +156,9 @@ export class BrokerSocketServer {
     this.slackProxyFn = slackProxyFn ?? null;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
     this.pruneIntervalMs = options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
+    this.authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
+    const meshSecret = options.meshSecret?.trim();
+    this.meshSecret = meshSecret && meshSecret.length > 0 ? meshSecret : null;
     if (typeof target === "string") {
       this.target = { type: "unix", path: target };
     } else if (target) {
@@ -264,6 +275,7 @@ export class BrokerSocketServer {
   setAgentRegistrationResolver(resolver: AgentRegistrationResolver | null): void {
     this.agentRegistrationResolver = resolver;
   }
+
   private startPruning(): void {
     this.stopPruning();
     this.pruneTimer = setInterval(() => {
@@ -282,6 +294,25 @@ export class BrokerSocketServer {
     this.pruneTimer = null;
   }
 
+  private clearAuthTimer(state: ConnectionState): void {
+    if (!state.authTimer) return;
+    clearTimeout(state.authTimer);
+    state.authTimer = null;
+  }
+
+  private startAuthTimer(socket: net.Socket, state: ConnectionState): void {
+    this.clearAuthTimer(state);
+    if (state.authenticated || !this.meshSecret) {
+      return;
+    }
+
+    state.authTimer = setTimeout(() => {
+      this.clearAuthTimer(state);
+      socket.destroy();
+    }, this.authTimeoutMs);
+    state.authTimer.unref?.();
+  }
+
   private disconnectDuplicateConnections(agentId: string, currentSocket: net.Socket): void {
     for (const [socket, state] of this.connections) {
       if (socket === currentSocket || state.agentId !== agentId) {
@@ -295,8 +326,14 @@ export class BrokerSocketServer {
   // ─── Connection handling ─────────────────────────────
 
   private onConnection(socket: net.Socket): void {
-    const state: ConnectionState = { agentId: null, buffer: "" };
+    const state: ConnectionState = {
+      agentId: null,
+      buffer: "",
+      authenticated: this.meshSecret == null,
+      authTimer: null,
+    };
     this.connections.set(socket, state);
+    this.startAuthTimer(socket, state);
 
     socket.on("data", (chunk) => {
       state.buffer += chunk.toString("utf-8");
@@ -304,6 +341,7 @@ export class BrokerSocketServer {
     });
 
     socket.on("close", () => {
+      this.clearAuthTimer(state);
       if (state.agentId) {
         this.db.disconnectAgent(state.agentId, this.heartbeatTimeoutMs);
       }
@@ -373,7 +411,18 @@ export class BrokerSocketServer {
     socket: net.Socket,
   ): Promise<JsonRpcResponse> {
     try {
+      if (!state.authenticated && req.method !== "auth") {
+        setImmediate(() => socket.destroy());
+        return rpcError(
+          req.id,
+          RPC_AUTH_REQUIRED,
+          "Authentication required before calling broker methods.",
+        );
+      }
+
       switch (req.method) {
+        case "auth":
+          return this.handleAuth(req, state, socket);
         case "register":
           return this.handleRegister(req, state, socket);
         case "unregister":
@@ -414,6 +463,34 @@ export class BrokerSocketServer {
   }
 
   // ─── Method handlers ─────────────────────────────────
+
+  private handleAuth(
+    req: JsonRpcRequest,
+    state: ConnectionState,
+    socket: net.Socket,
+  ): JsonRpcResponse {
+    if (!this.meshSecret) {
+      state.authenticated = true;
+      this.clearAuthTimer(state);
+      return rpcOk(req.id, { ok: true });
+    }
+
+    const params = req.params ?? {};
+    const providedSecret = typeof params.secret === "string" ? params.secret.trim() : "";
+    if (!providedSecret) {
+      setImmediate(() => socket.destroy());
+      return rpcError(req.id, RPC_AUTH_REQUIRED, "Mesh secret is required.");
+    }
+
+    if (providedSecret !== this.meshSecret) {
+      setImmediate(() => socket.destroy());
+      return rpcError(req.id, RPC_AUTH_REQUIRED, "Invalid mesh secret.");
+    }
+
+    state.authenticated = true;
+    this.clearAuthTimer(state);
+    return rpcOk(req.id, { ok: true });
+  }
 
   private handleRegister(
     req: JsonRpcRequest,

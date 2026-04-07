@@ -194,9 +194,10 @@ The `manifest.yaml` includes all required scopes and events, including `files:wr
 for `slack_upload`, `chat:write` for `slack_schedule`, bookmark/pin scopes for
 `slack_bookmark` and `slack_pin`, `users:read` + `users.getPresence` / `dnd.info`
 for presence checks, `app_home_opened` for the Home tab dashboard, `reaction_added`
-+ `reactions:read` plus `presence_change` for Slack-side awareness events, and
-`interactivity.is_enabled: true` for buttons and modals. Use it when creating
-the app (**From a manifest**) or paste it into **App Manifest** in settings.
+
+- `reactions:read` plus `presence_change` for Slack-side awareness events, and
+  `interactivity.is_enabled: true` for buttons and modals. Use it when creating
+  the app (**From a manifest**) or paste it into **App Manifest** in settings.
 
 To push the checked-in manifest back to Slack, run:
 
@@ -277,6 +278,10 @@ agent. Only listed users' messages are queued; others receive a polite
 rejection. If not set, all users are allowed.
 
 Find user IDs in Slack: click a user's profile → **More** → **Copy member ID**.
+
+Pinet broker/worker connections on the same machine also use a local shared
+mesh secret. On first broker start, slack-bridge creates `~/.pi/pinet.secret`
+and follower runtimes read that file automatically before joining the mesh.
 
 ## Architecture
 

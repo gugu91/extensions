@@ -30,3 +30,10 @@ export const DEFAULT_SOCKET_PATH = getDefaultSocketPath();
 export function getDefaultDbPath(): string {
   return path.join(getPinetConfigDir(), "pinet-broker.db");
 }
+
+// ─── Mesh auth paths ─────────────────────────────────────
+
+/** Shared secret file used to authenticate local Pinet mesh clients: ~/.pi/pinet.secret */
+export function getDefaultMeshSecretPath(): string {
+  return path.join(getPinetConfigDir(), "pinet.secret");
+}

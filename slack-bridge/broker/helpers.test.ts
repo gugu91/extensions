@@ -1819,11 +1819,14 @@ describe("startBroker leader lock", () => {
   });
 
   /** Helper: start a broker with TCP + per-test dir, track for cleanup */
-  async function launch(overrides: { lockPath?: string; dbSuffix?: string } = {}): Promise<Broker> {
+  async function launch(
+    overrides: { lockPath?: string; dbSuffix?: string; meshSecretPath?: string } = {},
+  ): Promise<Broker> {
     const b = await startBroker({
       dbPath: path.join(dir, `${overrides.dbSuffix ?? "test"}.db`),
       listenTarget: TCP_TARGET,
       lockPath: overrides.lockPath ?? path.join(dir, "broker.lock"),
+      meshSecretPath: overrides.meshSecretPath ?? path.join(dir, "pinet.secret"),
     });
     brokers.push(b);
     return b;
@@ -1853,6 +1856,7 @@ describe("startBroker leader lock", () => {
         dbPath: path.join(dir, "test2.db"),
         listenTarget: TCP_TARGET,
         lockPath,
+        meshSecretPath: path.join(dir, "pinet.secret"),
       }),
     ).rejects.toThrow("Another pinet broker is already running");
   });
@@ -1877,6 +1881,16 @@ describe("startBroker leader lock", () => {
     expect(broker.lock.isLeader()).toBe(true);
   });
 
+  it("creates and persists a mesh secret on startup", async () => {
+    const meshSecretPath = path.join(dir, "pinet.secret");
+
+    await launch({ meshSecretPath });
+
+    expect(fs.existsSync(meshSecretPath)).toBe(true);
+    const secret = fs.readFileSync(meshSecretPath, "utf-8").trim();
+    expect(secret).toHaveLength(64);
+  });
+
   it("releases lock when db initialization fails", async () => {
     const lockPath = path.join(dir, "broker.lock");
 
@@ -1889,6 +1903,7 @@ describe("startBroker leader lock", () => {
         dbPath: badDbPath,
         listenTarget: TCP_TARGET,
         lockPath,
+        meshSecretPath: path.join(dir, "pinet.secret"),
       }),
     ).rejects.toThrow();
 

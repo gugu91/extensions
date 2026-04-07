@@ -106,6 +106,7 @@ import {
   type BrokerMaintenanceResult,
 } from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import { getDefaultMeshSecretPath } from "./broker/paths.js";
 import {
   dispatchBroadcastAgentMessage,
   dispatchDirectAgentMessage,
@@ -3329,7 +3330,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     refreshSettings();
-    const client = new BrokerClient();
+    const client = new BrokerClient({
+      path: DEFAULT_SOCKET_PATH,
+      meshSecretPath: getDefaultMeshSecretPath(),
+    });
 
     async function registerFollowerRuntime(): Promise<void> {
       refreshSettings();

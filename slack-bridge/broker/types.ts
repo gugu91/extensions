@@ -135,6 +135,9 @@ export const RPC_METHOD_NOT_FOUND = -32601;
 export const RPC_INVALID_PARAMS = -32602;
 export const RPC_INTERNAL_ERROR = -32603;
 
+// Server-defined broker auth error codes
+export const RPC_AUTH_REQUIRED = -32001;
+
 // ─── Message adapter (canonical types from adapters) ─────
 
 import type {

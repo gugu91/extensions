@@ -1,4 +1,5 @@
 import * as net from "node:net";
+import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -115,10 +116,17 @@ export interface AgentBroadcastResult {
 
 export type BrokerConnectOpts = { path: string } | { host: string; port: number };
 
+export interface BrokerClientAuthOptions {
+  meshSecret?: string;
+  meshSecretPath?: string;
+}
+
 // ─── BrokerClient ────────────────────────────────────────
 
 export class BrokerClient {
   private readonly connectOpts: BrokerConnectOpts;
+  private readonly meshSecret: string | null;
+  private readonly meshSecretPath: string | null;
   private socket: net.Socket | null = null;
   private connected = false;
   private shuttingDown = false;
@@ -134,21 +142,44 @@ export class BrokerClient {
   private readonly pending = new Map<number, PendingRequest>();
   private buffer = "";
 
-  constructor(opts?: string | BrokerConnectOpts) {
+  constructor(opts?: string | (BrokerConnectOpts & BrokerClientAuthOptions)) {
     if (opts === undefined) {
       this.connectOpts = { path: DEFAULT_SOCKET_PATH };
-    } else if (typeof opts === "string") {
-      this.connectOpts = { path: opts };
-    } else {
-      this.connectOpts = opts;
+      this.meshSecret = null;
+      this.meshSecretPath = null;
+      return;
     }
+
+    if (typeof opts === "string") {
+      this.connectOpts = { path: opts };
+      this.meshSecret = null;
+      this.meshSecretPath = null;
+      return;
+    }
+
+    if ("path" in opts) {
+      this.connectOpts = { path: opts.path };
+    } else {
+      this.connectOpts = { host: opts.host, port: opts.port };
+    }
+
+    const meshSecret = opts.meshSecret?.trim();
+    this.meshSecret = meshSecret && meshSecret.length > 0 ? meshSecret : null;
+    const meshSecretPath = opts.meshSecretPath?.trim();
+    this.meshSecretPath = meshSecretPath && meshSecretPath.length > 0 ? meshSecretPath : null;
   }
 
   // ─── Connection ──────────────────────────────────────
 
-  connect(): Promise<void> {
+  async connect(): Promise<void> {
     this.shuttingDown = false;
-    return this.connectSocket();
+    await this.connectSocket();
+    try {
+      await this.authenticateIfNeeded();
+    } catch (err) {
+      this.disconnect();
+      throw err;
+    }
   }
 
   disconnect(): void {
@@ -184,6 +215,24 @@ export class BrokerClient {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  private resolveMeshSecret(): string | null {
+    if (this.meshSecret) {
+      return this.meshSecret;
+    }
+    if (this.meshSecretPath) {
+      return readMeshSecret(this.meshSecretPath);
+    }
+    return null;
+  }
+
+  private async authenticateIfNeeded(): Promise<void> {
+    const meshSecret = this.resolveMeshSecret();
+    if (!meshSecret) {
+      return;
+    }
+    await this.request("auth", { secret: meshSecret });
   }
 
   // ─── Registration ────────────────────────────────────
@@ -468,9 +517,7 @@ export class BrokerClient {
     });
   }
 
-  private async performRegister(
-    snapshot: RegistrationSnapshot,
-  ): Promise<{
+  private async performRegister(snapshot: RegistrationSnapshot): Promise<{
     agentId: string;
     name: string;
     emoji: string;
@@ -503,6 +550,7 @@ export class BrokerClient {
     }
 
     try {
+      await this.authenticateIfNeeded();
       if (this.registrationSnapshot) {
         await this.performRegister(this.registrationSnapshot);
       }
