@@ -8,6 +8,7 @@ import {
   buildSlackCanvasEditRequest,
   buildSlackCanvasSectionsLookupRequest,
   extractSlackChannelCanvasId,
+  normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
 } from "./canvases.js";
@@ -1965,6 +1966,30 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
       const channelInput = params.channel?.trim();
       const channelId = channelInput ? await resolveChannel(channelInput) : undefined;
+      const kind = normalizeSlackCanvasCreateKind(params.kind);
+
+      // For channel canvases, check if one already exists before creating
+      if (kind === "channel" && channelId) {
+        const info = await slack("conversations.info", getBotToken(), { channel: channelId });
+        const existingCanvasId = extractSlackChannelCanvasId(info);
+        if (existingCanvasId) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Canvas already exists for ${channelInput ?? channelId}: ${existingCanvasId}. Returning existing canvas instead of creating a duplicate.`,
+              },
+            ],
+            details: {
+              canvas_id: existingCanvasId,
+              kind: "channel",
+              channel: channelId,
+              existing: true,
+            },
+          };
+        }
+      }
+
       const request = buildSlackCanvasCreateRequest({
         kind: params.kind,
         title: params.title,

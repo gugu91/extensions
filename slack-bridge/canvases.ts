@@ -247,3 +247,8 @@ export function extractSlackChannelCanvasId(response: Record<string, unknown>): 
 
   return null;
 }
+
+export function extractExistingChannelCanvasId(response: Record<string, unknown>): string | null {
+  const canvasId = extractSlackChannelCanvasId(response);
+  return canvasId;
+}
