@@ -37,21 +37,11 @@ import {
   buildAgentDisplayInfo,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
-  rewriteRalphLoopGhostAnomalies,
-  buildRalphLoopNudgeMessage,
-  buildRalphLoopAnomalySignature,
-  buildRalphLoopCycleNotifications,
-  buildRalphLoopStatusMessage,
-  shouldDeliverRalphLoopFollowUp,
-  DEFAULT_RALPH_LOOP_INTERVAL_MS,
-  DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
-  DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
   partitionFollowerInboxEntries,
   agentOwnsThread,
   buildPinetOwnerToken,
-  generateAgentName,
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
   resolveRuntimeAgentIdentity,
@@ -112,6 +102,14 @@ import {
   isBroadcastChannelTarget,
 } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
+import { registerPinetCommands } from "./pinet-commands.js";
+import {
+  type RalphLoopDeps,
+  createRalphLoopState,
+  resetRalphLoopState,
+  startRalphLoop,
+  stopRalphLoop,
+} from "./ralph-loop.js";
 import {
   extractSlackInteractivePayloadFromEnvelope,
   normalizeSlackBlockActionPayload,
@@ -133,13 +131,10 @@ import {
 } from "./follower-delivery.js";
 import {
   extractTaskAssignmentsFromMessage,
-  getPendingTaskAssignmentReport,
-  hasTaskAssignmentStatusChange,
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
 } from "./task-assignments.js";
 import {
-  formatRecentActivityLogEntries,
   SlackActivityLogger,
   type ActivityLogEntry,
   type ActivityLogTone,
@@ -1647,21 +1642,12 @@ export default function (pi: ExtensionAPI) {
   let activeSelfId: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceTimer: ReturnType<typeof setInterval> | null = null;
-  let brokerRalphLoopTimer: ReturnType<typeof setInterval> | null = null;
+  const ralphLoopState = createRalphLoopState();
   let brokerScheduledWakeupTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceRunning = false;
-  let brokerRalphLoopRunning = false;
   let brokerScheduledWakeupRunning = false;
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
-  let lastBrokerRalphLoopNonGhostSignature = "";
-  let lastBrokerRalphLoopHadOutstandingAnomalies = false;
-  let lastBrokerRalphLoopFollowUpAt = 0;
-  let brokerRalphLoopFollowUpPending = false;
-  const lastReportedGhostIds = new Set<string>();
-  let lastBrokerTaskAssignmentReportSignature = "";
-  let pendingBrokerTaskAssignmentReport: { message: string; signature: string } | null = null;
-  const lastBrokerNudges = new Map<string, number>();
 
   function getPinetRegistrationBlockReason(): string {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
@@ -2152,394 +2138,54 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  async function runBrokerRalphLoop(ctx: ExtensionContext): Promise<void> {
-    if (!activeBroker || !activeSelfId || brokerRalphLoopRunning) return;
-
-    brokerRalphLoopRunning = true;
-    const cycleStartedAt = new Date().toISOString();
-    const cycleStartMs = Date.now();
-    try {
-      runBrokerMaintenance(ctx);
-
-      const db = activeBroker.db;
-      const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
-
-      const workloads = db.getAllAgents().map((agent) => ({
-        ...agent,
-        pendingInboxCount: db.getPendingInboxCount(agent.id),
-        ownedThreadCount: db.getOwnedThreadCount(agent.id),
-      }));
-      const pendingBacklogCount = db.getBacklogCount("pending");
-      const evaluationOptions: RalphLoopEvaluationOptions = {
-        now: Date.now(),
-        heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
-        heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
-        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
-        pendingBacklogCount,
-        currentBranch,
-        brokerHeartbeatActive: brokerHeartbeatTimer != null,
-        brokerMaintenanceActive: brokerMaintenanceTimer != null,
-        brokerAgentId: activeSelfId ?? undefined,
-      };
-      const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
-
-      const now = Date.now();
-      const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
-      for (const workload of workloads) {
-        if (!nudgeAgentIds.has(workload.id)) {
-          lastBrokerNudges.delete(workload.id);
-          continue;
-        }
-
-        const lastNudgeAt = lastBrokerNudges.get(workload.id) ?? 0;
-        if (now - lastNudgeAt < DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS) {
-          continue;
-        }
-
-        sendBrokerMaintenanceMessage(
-          workload.id,
-          buildRalphLoopNudgeMessage(
-            workload.pendingInboxCount,
-            workload.ownedThreadCount,
-            cycleStartedAt,
-          ),
-        );
-        lastBrokerNudges.set(workload.id, now);
-      }
-
-      const ghostRewrite = rewriteRalphLoopGhostAnomalies(evaluation, lastReportedGhostIds);
-      lastReportedGhostIds.clear();
-      for (const ghostId of ghostRewrite.nextReportedGhostIds) {
-        lastReportedGhostIds.add(ghostId);
-      }
-
-      const visibleEvaluation = ghostRewrite.evaluation;
-      const visibleSignature = buildRalphLoopAnomalySignature(visibleEvaluation);
-      const nonGhostSignature = ghostRewrite.nonGhostAnomalies.join("|");
-      const hasOutstandingAnomalies = evaluation.anomalies.length > 0;
-      const ralphNotifications = buildRalphLoopCycleNotifications(
-        visibleEvaluation,
-        cycleStartedAt,
-      );
-      const followUpPrompt =
-        ghostRewrite.newGhostIds.length === 0 &&
-        ghostRewrite.clearedGhostIds.length > 0 &&
-        ghostRewrite.nonGhostAnomalies.length === 0
-          ? null
-          : ralphNotifications.followUpPrompt;
-
-      const agentsById = new Map(
-        workloads.map((workload) => [workload.id, { emoji: workload.emoji, name: workload.name }]),
-      );
-      let projectedAssignments: ResolvedTaskAssignment[] = [];
-      const trackedAssignments = db.listTaskAssignments();
-      if (trackedAssignments.length === 0) {
-        pendingBrokerTaskAssignmentReport = null;
-        lastBrokerTaskAssignmentReportSignature = "";
-      } else {
-        const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
-        const changedAssignments = resolvedAssignments.filter(hasTaskAssignmentStatusChange);
-        projectedAssignments = resolvedAssignments.map((assignment) => {
-          if (hasTaskAssignmentStatusChange(assignment)) {
-            db.updateTaskAssignmentProgress(
-              assignment.id,
-              assignment.nextStatus,
-              assignment.nextPrNumber,
-            );
-          }
-
-          return {
-            ...assignment,
-            status: assignment.nextStatus,
-            prNumber: assignment.nextPrNumber,
-          };
-        });
-
-        if (changedAssignments.length > 0) {
-          const openedCount = changedAssignments.filter(
-            (assignment) => assignment.nextStatus === "pr_open",
-          ).length;
-          const mergedCount = changedAssignments.filter(
-            (assignment) => assignment.nextStatus === "pr_merged",
-          ).length;
-          const closedCount = changedAssignments.filter(
-            (assignment) => assignment.nextStatus === "pr_closed",
-          ).length;
-          const tone: ActivityLogTone =
-            closedCount > 0 ? "warning" : mergedCount > 0 || openedCount > 0 ? "success" : "info";
-          const title =
-            mergedCount > 0
-              ? mergedCount === 1
-                ? "Task merged"
-                : "Tasks merged"
-              : openedCount > 0
-                ? openedCount === 1
-                  ? "Worker completion recorded"
-                  : "Worker completions recorded"
-                : "Task progress updated";
-          const summaryParts = [];
-          if (openedCount > 0) {
-            summaryParts.push(
-              `${openedCount} worker completion${openedCount === 1 ? "" : "s"} moved to PR open`,
-            );
-          }
-          if (mergedCount > 0) {
-            summaryParts.push(`${mergedCount} PR${mergedCount === 1 ? "" : "s"} merged`);
-          }
-          if (closedCount > 0) {
-            summaryParts.push(`${closedCount} PR${closedCount === 1 ? "" : "s"} closed`);
-          }
-          if (summaryParts.length === 0) {
-            summaryParts.push(
-              `${changedAssignments.length} tracked assignment${changedAssignments.length === 1 ? " changed" : "s changed"}`,
-            );
-          }
-          logBrokerActivity({
-            kind: "task_progress",
-            level: "actions",
-            title,
-            summary: summaryParts.join("; "),
-            details: changedAssignments.map((assignment) => {
-              const next = summarizeTrackedAssignmentStatus(
-                assignment.nextStatus,
-                assignment.nextPrNumber,
-                assignment.branch,
-              );
-              return `${formatTrackedAgent(assignment.agentId)} — #${assignment.issueNumber}: ${next.summary}`;
-            }),
-            fields: [
-              { label: "Updated", value: changedAssignments.length },
-              { label: "Merged", value: mergedCount },
-              { label: "PR open", value: openedCount },
-              { label: "Cycle", value: cycleStartedAt },
-            ],
-            tone,
-          });
-        }
-
-        pendingBrokerTaskAssignmentReport = getPendingTaskAssignmentReport(
-          projectedAssignments,
-          agentsById,
-          lastBrokerTaskAssignmentReportSignature,
-          cycleStartedAt,
-        );
-      }
-      // Keep cooldown state across transient clean cycles so flapping anomalies
-      // do not immediately re-notify when they return.
-      const shouldDeliverFollowUp =
-        followUpPrompt != null &&
-        shouldDeliverRalphLoopFollowUp({
-          signature: visibleSignature,
-          lastDeliveredAt: lastBrokerRalphLoopFollowUpAt,
-          now,
-          cooldownMs: DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
-          pending: brokerRalphLoopFollowUpPending,
-          idle: ctx.isIdle?.() ?? true,
-        });
-      if (shouldDeliverFollowUp && followUpPrompt) {
-        trySendBrokerFollowUp(followUpPrompt, () => {
-          brokerRalphLoopFollowUpPending = true;
-          lastBrokerRalphLoopFollowUpAt = now;
-        });
-      }
-      if (pendingBrokerTaskAssignmentReport && (ctx.isIdle?.() ?? true)) {
-        const reportToDeliver = pendingBrokerTaskAssignmentReport;
-        trySendBrokerFollowUp(reportToDeliver.message, () => {
-          lastBrokerTaskAssignmentReportSignature = reportToDeliver.signature;
-          pendingBrokerTaskAssignmentReport = null;
-        });
-      }
-
-      const shouldWarn =
-        ghostRewrite.newGhostIds.length > 0 ||
-        (nonGhostSignature.length > 0 &&
-          nonGhostSignature !== lastBrokerRalphLoopNonGhostSignature);
-      const shouldInform =
-        ghostRewrite.clearedGhostIds.length > 0 && visibleEvaluation.anomalies.length > 0;
-      if (shouldWarn) {
-        ctx.ui.notify(ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected", "warning");
-      } else if (shouldInform) {
-        ctx.ui.notify(ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected", "info");
-      } else if (!hasOutstandingAnomalies && lastBrokerRalphLoopHadOutstandingAnomalies) {
-        ctx.ui.notify(ralphNotifications.recoveryStatus, "info");
-      }
-
-      if (shouldWarn || shouldInform) {
-        logBrokerActivity({
-          kind: "ralph_event",
-          level: "actions",
-          title: shouldWarn ? "RALPH anomaly detected" : "RALPH status updated",
-          summary: ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected",
-          details: visibleEvaluation.anomalies,
-          fields: [
-            { label: "Ghosts", value: visibleEvaluation.ghostAgentIds.length },
-            { label: "Stuck", value: visibleEvaluation.stuckAgentIds.length },
-            { label: "Nudged", value: visibleEvaluation.nudgeAgentIds.length },
-            { label: "Backlog", value: pendingBacklogCount },
-            { label: "Follow-up", value: shouldDeliverFollowUp },
-          ],
-          tone: shouldWarn ? "warning" : "info",
-        });
-      } else if (!hasOutstandingAnomalies && lastBrokerRalphLoopHadOutstandingAnomalies) {
-        logBrokerActivity({
-          kind: "ralph_event",
-          level: "actions",
-          title: "RALPH recovered",
-          summary: ralphNotifications.recoveryStatus,
-          details: ["Previous ghost/stall/backlog anomalies cleared."],
-          fields: [
-            { label: "Backlog", value: pendingBacklogCount },
-            { label: "Idle workers", value: visibleEvaluation.idleDrainAgentIds.length },
-          ],
-          tone: "success",
-        });
-      } else {
-        logBrokerActivity({
-          kind: "ralph_cycle",
-          level: "verbose",
-          title: "RALPH cycle",
-          summary:
-            visibleEvaluation.anomalies.length > 0
-              ? `${visibleEvaluation.anomalies.length} anomaly entries observed this cycle.`
-              : "Broker health steady this cycle.",
-          details: visibleEvaluation.anomalies.length > 0 ? visibleEvaluation.anomalies : undefined,
-          fields: [
-            { label: "Ghosts", value: visibleEvaluation.ghostAgentIds.length },
-            { label: "Stuck", value: visibleEvaluation.stuckAgentIds.length },
-            { label: "Nudged", value: visibleEvaluation.nudgeAgentIds.length },
-            { label: "Idle", value: visibleEvaluation.idleDrainAgentIds.length },
-            { label: "Backlog", value: pendingBacklogCount },
-          ],
-          tone: visibleEvaluation.anomalies.length > 0 ? "warning" : "info",
-        });
-      }
-      lastBrokerRalphLoopNonGhostSignature = nonGhostSignature;
-      lastBrokerRalphLoopHadOutstandingAnomalies = hasOutstandingAnomalies;
-
-      let recentRalphCycles: Array<{
-        startedAt: string;
-        completedAt: string | null;
-        durationMs: number | null;
-        ghostAgentIds: string[];
-        stuckAgentIds: string[];
-        anomalies: string[];
-        followUpDelivered: boolean;
-        agentCount: number;
-        backlogCount: number;
-      }> = [];
-
-      // #103: Record ralph cycle for observability
-      try {
-        const cycleCompletedAt = new Date().toISOString();
-        db.recordRalphCycle({
-          startedAt: cycleStartedAt,
-          completedAt: cycleCompletedAt,
-          durationMs: Date.now() - cycleStartMs,
-          ghostAgentIds: visibleEvaluation.ghostAgentIds,
-          nudgeAgentIds: visibleEvaluation.nudgeAgentIds,
-          idleDrainAgentIds: visibleEvaluation.idleDrainAgentIds,
-          stuckAgentIds: visibleEvaluation.stuckAgentIds,
-          anomalies: visibleEvaluation.anomalies,
-          anomalySignature: visibleSignature,
-          followUpDelivered: shouldDeliverFollowUp,
-          agentCount: workloads.filter((w) => !w.disconnectedAt).length,
-          backlogCount: pendingBacklogCount,
-        });
-        recentRalphCycles = db.getRecentRalphCycles(5).map((cycle) => ({
-          startedAt: cycle.startedAt,
-          completedAt: cycle.completedAt,
-          durationMs: cycle.durationMs,
-          ghostAgentIds: cycle.ghostAgentIds,
-          stuckAgentIds: cycle.stuckAgentIds,
-          anomalies: cycle.anomalies,
-          followUpDelivered: cycle.followUpDelivered,
-          agentCount: cycle.agentCount,
-          backlogCount: cycle.backlogCount,
-        }));
-      } catch {
-        /* best effort — don't let cycle recording break the loop */
-      }
-
-      const controlPlaneSnapshot = buildBrokerControlPlaneDashboardSnapshot({
-        workloads,
-        evaluation: visibleEvaluation,
-        evaluationOptions,
-        maintenance: lastBrokerMaintenance,
-        assignments: projectedAssignments,
-        recentCycles: recentRalphCycles,
-        cycleStartedAt,
-        cycleDurationMs: Date.now() - cycleStartMs,
-        currentBranch,
-        homedir: os.homedir(),
-      });
-      lastBrokerControlPlaneHomeTabSnapshot = controlPlaneSnapshot;
-
-      try {
-        await refreshBrokerControlPlaneCanvasDashboard(ctx, {
-          workloads,
-          evaluation: visibleEvaluation,
-          evaluationOptions,
-          maintenance: lastBrokerMaintenance,
-          assignments: projectedAssignments,
-          recentCycles: recentRalphCycles,
-          cycleStartedAt,
-          cycleDurationMs: Date.now() - cycleStartMs,
-          currentBranch,
-        });
-      } catch (canvasErr) {
-        const canvasMessage = `Pinet broker control plane canvas refresh failed: ${msg(canvasErr)}`;
-        if (canvasMessage !== lastBrokerControlPlaneCanvasError) {
-          ctx.ui.notify(canvasMessage, "warning");
-        }
-        lastBrokerControlPlaneCanvasError = canvasMessage;
-      }
-
-      try {
-        await refreshBrokerControlPlaneHomeTabs(ctx, controlPlaneSnapshot, cycleStartedAt);
-      } catch (homeTabErr) {
-        const homeTabMessage = `Pinet Home tab publish failed: ${msg(homeTabErr)}`;
-        if (homeTabMessage !== lastBrokerControlPlaneHomeTabError) {
-          ctx.ui.notify(homeTabMessage, "warning");
-        }
-        lastBrokerControlPlaneHomeTabError = homeTabMessage;
-      }
-    } catch (err) {
-      ctx.ui.notify(buildRalphLoopStatusMessage(`failed: ${msg(err)}`, cycleStartedAt), "error");
-      logBrokerActivity({
-        kind: "ralph_error",
-        level: "errors",
-        title: "RALPH loop failed",
-        summary: msg(err),
-        fields: [{ label: "Cycle", value: cycleStartedAt }],
-        tone: "error",
-      });
-    } finally {
-      brokerRalphLoopRunning = false;
-    }
+  function getRalphLoopDeps(): RalphLoopDeps {
+    return {
+      getBrokerDb: () => (activeBroker?.db as BrokerDB) ?? null,
+      getBrokerAgentId: () => activeSelfId,
+      heartbeatTimerActive: () => brokerHeartbeatTimer != null,
+      maintenanceTimerActive: () => brokerMaintenanceTimer != null,
+      runMaintenance: (c) => runBrokerMaintenance(c),
+      sendMaintenanceMessage: (id, body) => sendBrokerMaintenanceMessage(id, body),
+      trySendFollowUp: (body, onDelivered) => trySendBrokerFollowUp(body, onDelivered),
+      logActivity: (entry) => logBrokerActivity(entry),
+      formatTrackedAgent,
+      summarizeTrackedAssignmentStatus: (status, prNumber, branch) =>
+        summarizeTrackedAssignmentStatus(
+          status as Parameters<typeof summarizeTrackedAssignmentStatus>[0],
+          prNumber,
+          branch,
+        ),
+      refreshCanvasDashboard: (c, input) =>
+        refreshBrokerControlPlaneCanvasDashboard(
+          c,
+          input as Parameters<typeof refreshBrokerControlPlaneCanvasDashboard>[1],
+        ),
+      refreshHomeTabs: (c, snapshot, at) => refreshBrokerControlPlaneHomeTabs(c, snapshot, at),
+      getLastMaintenance: () => lastBrokerMaintenance,
+      buildControlPlaneDashboardSnapshot: (input) =>
+        buildBrokerControlPlaneDashboardSnapshot(
+          input as unknown as Parameters<typeof buildBrokerControlPlaneDashboardSnapshot>[0],
+        ),
+      setLastHomeTabSnapshot: (s) => {
+        lastBrokerControlPlaneHomeTabSnapshot = s;
+      },
+      getLastCanvasError: () => lastBrokerControlPlaneCanvasError,
+      setLastCanvasError: (e) => {
+        lastBrokerControlPlaneCanvasError = e;
+      },
+      getLastHomeTabError: () => lastBrokerControlPlaneHomeTabError,
+      setLastHomeTabError: (e) => {
+        lastBrokerControlPlaneHomeTabError = e;
+      },
+    };
   }
 
   function startBrokerRalphLoop(ctx: ExtensionContext): void {
-    stopBrokerRalphLoop();
-    brokerRalphLoopTimer = setInterval(() => {
-      void runBrokerRalphLoop(ctx);
-    }, DEFAULT_RALPH_LOOP_INTERVAL_MS);
-    brokerRalphLoopTimer.unref?.();
-    void runBrokerRalphLoop(ctx);
+    startRalphLoop(ctx, ralphLoopState, getRalphLoopDeps());
   }
 
   function stopBrokerRalphLoop(): void {
-    if (brokerRalphLoopTimer) {
-      clearInterval(brokerRalphLoopTimer);
-      brokerRalphLoopTimer = null;
-    }
-    lastBrokerNudges.clear();
-    lastReportedGhostIds.clear();
-    lastBrokerRalphLoopNonGhostSignature = "";
-    lastBrokerRalphLoopHadOutstandingAnomalies = false;
-    lastBrokerRalphLoopFollowUpAt = 0;
-    brokerRalphLoopFollowUpPending = false;
-    lastBrokerTaskAssignmentReportSignature = "";
-    pendingBrokerTaskAssignmentReport = null;
+    stopRalphLoop(ralphLoopState);
     lastBrokerControlPlaneHomeTabSnapshot = null;
   }
 
@@ -2726,15 +2372,13 @@ export default function (pi: ExtensionAPI) {
     activeSelfId = null;
     lastBrokerMaintenance = null;
     lastBrokerMaintenanceSignature = "";
-    lastBrokerRalphLoopNonGhostSignature = "";
-    lastBrokerRalphLoopHadOutstandingAnomalies = false;
     lastBrokerControlPlaneCanvasRefreshAt = null;
     lastBrokerControlPlaneCanvasError = null;
     lastBrokerControlPlaneHomeTabSnapshot = null;
     lastBrokerControlPlaneHomeTabRefreshAt = null;
     lastBrokerControlPlaneHomeTabError = null;
     brokerControlPlaneHomeTabViewers.clear();
-    lastReportedGhostIds.clear();
+    resetRalphLoopState(ralphLoopState);
     resetBrokerDeliveryState(brokerDeliveryState);
 
     if (brokerClient) {
@@ -3358,25 +3002,43 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  pi.registerCommand("pinet-start", {
-    description: "Start Pinet as the broker (Slack connection + message routing)",
-    handler: async (_args, ctx) => {
-      if (pinetRegistrationBlocked) {
-        ctx.ui.notify(getPinetRegistrationBlockReason(), "warning");
-        return;
-      }
-      if (pinetEnabled) {
-        ctx.ui.notify(`Pinet already running (${brokerRole})`, "info");
-        return;
-      }
+  registerPinetCommands(pi, {
+    pinetEnabled: () => pinetEnabled,
+    pinetRegistrationBlocked: () => pinetRegistrationBlocked,
+    brokerRole: () => brokerRole,
+    agentName: () => agentName,
+    agentEmoji: () => agentEmoji,
+    agentOwnerToken: () => agentOwnerToken,
+    agentPersonality: () => agentPersonality,
+    agentAliases: () => agentAliases,
+    botUserId: () => botUserId,
+    activeSkinTheme: () => activeSkinTheme,
+    lastDmChannel: () => lastDmChannel,
+    threads: () => threads,
+    allowedUsers: () => allowedUsers,
+    inboxLength: () => inbox.length,
+    activityLogger: () => activityLogger,
+    settings: () => settings,
+    lastBrokerMaintenance: () => lastBrokerMaintenance,
+    isBrokerControlPlaneCanvasEnabled,
+    getConfiguredBrokerControlPlaneCanvasId,
+    getConfiguredBrokerControlPlaneCanvasChannel,
+    lastBrokerControlPlaneCanvasRefreshAt: () => lastBrokerControlPlaneCanvasRefreshAt,
+    lastBrokerControlPlaneCanvasError: () => lastBrokerControlPlaneCanvasError,
+    getBrokerControlPlaneHomeTabViewerIds,
+    lastBrokerControlPlaneHomeTabRefreshAt: () => lastBrokerControlPlaneHomeTabRefreshAt,
+    lastBrokerControlPlaneHomeTabError: () => lastBrokerControlPlaneHomeTabError,
+    getPinetRegistrationBlockReason,
+    connectAsBroker,
+    connectAsFollower,
+    disconnectFollower,
+    sendPinetAgentMessage,
+    signalAgentFree,
+    applyMeshSkin,
+    applyLocalAgentIdentity,
+    setExtStatus,
+    setExtCtx: (ctx) => {
       extCtx = ctx;
-
-      try {
-        await connectAsBroker(ctx);
-      } catch (err) {
-        ctx.ui.notify(`Pinet broker failed: ${msg(err)}`, "error");
-        setExtStatus(ctx, "error");
-      }
     },
   });
 
@@ -3679,254 +3341,6 @@ export default function (pi: ExtensionAPI) {
     return { unregisterError };
   }
 
-  pi.registerCommand("pinet-follow", {
-    description: "Connect to an existing Pinet broker as a follower",
-    handler: async (_args, ctx) => {
-      if (pinetRegistrationBlocked) {
-        ctx.ui.notify(getPinetRegistrationBlockReason(), "warning");
-        return;
-      }
-      if (pinetEnabled) {
-        ctx.ui.notify(`Pinet already running (${brokerRole})`, "info");
-        return;
-      }
-      extCtx = ctx;
-
-      try {
-        await connectAsFollower(ctx);
-        ctx.ui.notify(`${agentEmoji} ${agentName} — following broker`, "info");
-      } catch (err) {
-        ctx.ui.notify(`Pinet follow failed: ${msg(err)}`, "error");
-        setExtStatus(ctx, "error");
-      }
-    },
-  });
-
-  pi.registerCommand("pinet-unfollow", {
-    description: "Disconnect from the Pinet broker and keep working locally",
-    handler: async (_args, ctx) => {
-      if (!pinetEnabled || brokerRole == null) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
-        return;
-      }
-
-      if (brokerRole !== "follower") {
-        ctx.ui.notify(
-          "Pinet is running as broker; /pinet-unfollow only applies to followers.",
-          "warning",
-        );
-        return;
-      }
-
-      const { unregisterError } = await disconnectFollower(ctx);
-      if (unregisterError) {
-        ctx.ui.notify(
-          `Pinet follower disconnected locally, but broker deregistration failed: ${unregisterError}`,
-          "warning",
-        );
-        return;
-      }
-
-      ctx.ui.notify(
-        `${agentEmoji} ${agentName} — disconnected from broker; local session still running`,
-        "info",
-      );
-    },
-  });
-  pi.registerCommand("pinet-reload", {
-    description: "Tell a connected Pinet agent to reload itself",
-    handler: async (args, ctx) => {
-      const target = args.trim();
-      if (!target) {
-        ctx.ui.notify("Usage: /pinet-reload <agent-name-or-id>", "warning");
-        return;
-      }
-
-      try {
-        const result = await sendPinetAgentMessage(target, "/reload");
-        ctx.ui.notify(`Sent /reload to ${result.target}`, "info");
-      } catch (err) {
-        ctx.ui.notify(`Pinet reload failed: ${msg(err)}`, "error");
-      }
-    },
-  });
-
-  pi.registerCommand("pinet-exit", {
-    description: "Tell a connected Pinet agent to exit gracefully",
-    handler: async (args, ctx) => {
-      const target = args.trim();
-      if (!target) {
-        ctx.ui.notify("Usage: /pinet-exit <agent-name-or-id>", "warning");
-        return;
-      }
-
-      try {
-        const result = await sendPinetAgentMessage(target, "/exit");
-        ctx.ui.notify(`Sent /exit to ${result.target}`, "info");
-      } catch (err) {
-        ctx.ui.notify(`Pinet exit failed: ${msg(err)}`, "error");
-      }
-    },
-  });
-  pi.registerCommand("pinet-free", {
-    description: "Mark this Pinet agent idle/free for new work",
-    handler: async (_args, ctx) => {
-      if (!pinetEnabled) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
-        return;
-      }
-
-      try {
-        const result = signalAgentFree(ctx, { requirePinet: true });
-        const suffix = result.drainedQueuedInbox
-          ? ` Processing ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? "" : "s"} now.`
-          : result.queuedInboxCount > 0
-            ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`
-            : "";
-        ctx.ui.notify(`Marked ${agentEmoji} ${agentName} idle/free for new work.${suffix}`, "info");
-      } catch (err) {
-        ctx.ui.notify(`Pinet free failed: ${msg(err)}`, "error");
-      }
-    },
-  });
-
-  pi.registerCommand("pinet-skin", {
-    description: "Regenerate the mesh naming/personality skin from a theme",
-    handler: async (args, ctx) => {
-      if (!pinetEnabled || brokerRole == null) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
-        return;
-      }
-      if (brokerRole !== "broker") {
-        ctx.ui.notify("/pinet-skin can only run on the active broker.", "warning");
-        return;
-      }
-
-      try {
-        const result = applyMeshSkin(args);
-        ctx.ui.notify(
-          `Applied mesh skin "${result.theme}" to ${result.updatedAgents.length} agent${result.updatedAgents.length === 1 ? "" : "s"}.`,
-          "info",
-        );
-      } catch (err) {
-        ctx.ui.notify(`Pinet skin failed: ${msg(err)}`, "error");
-      }
-    },
-  });
-
-  pi.registerCommand("pinet-status", {
-    description: "Show Pinet status",
-    handler: async (_args, ctx) => {
-      if (!pinetEnabled) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
-        return;
-      }
-      const mode = brokerRole === "broker" ? "broker" : "follower";
-      const socket = mode;
-      const ownedCount = [...threads.values()].filter((t) =>
-        agentOwnsThread(t.owner, agentName, agentAliases, agentOwnerToken),
-      ).length;
-      const allowlistInfo = allowedUsers
-        ? `Allowed users: ${[...allowedUsers].join(", ")}`
-        : "Allowed users: all (no allowlist set)";
-      const defaultChInfo = settings.defaultChannel
-        ? `Default channel: ${settings.defaultChannel}`
-        : "Default channel: none";
-      const activityLogInfo = settings.logChannel
-        ? `Activity log: ${settings.logChannel} (${settings.logLevel ?? "actions"})`
-        : "Activity log: disabled";
-      const brokerHealthInfo =
-        mode === "broker" && lastBrokerMaintenance
-          ? [
-              `Pending backlog: ${lastBrokerMaintenance.pendingBacklogCount}`,
-              `Last maintenance: assigned ${lastBrokerMaintenance.assignedBacklogCount}, reaped ${lastBrokerMaintenance.reapedAgentIds.length}, repaired ${lastBrokerMaintenance.repairedThreadClaims}`,
-              ...(lastBrokerMaintenance.anomalies.length > 0
-                ? [`Health: ${lastBrokerMaintenance.anomalies.join("; ")}`]
-                : []),
-            ]
-          : [];
-      const brokerCanvasInfo =
-        mode === "broker"
-          ? [
-              `Control plane canvas: ${
-                isBrokerControlPlaneCanvasEnabled()
-                  ? (getConfiguredBrokerControlPlaneCanvasId() ??
-                    `pending (${getConfiguredBrokerControlPlaneCanvasChannel() ?? "no target"})`)
-                  : "disabled"
-              }`,
-              ...(lastBrokerControlPlaneCanvasRefreshAt
-                ? [`Canvas refreshed: ${lastBrokerControlPlaneCanvasRefreshAt}`]
-                : []),
-              ...(lastBrokerControlPlaneCanvasError
-                ? [`Canvas status: ${lastBrokerControlPlaneCanvasError}`]
-                : []),
-              `Home tab viewers: ${getBrokerControlPlaneHomeTabViewerIds().length}`,
-              ...(lastBrokerControlPlaneHomeTabRefreshAt
-                ? [`Home tab refreshed: ${lastBrokerControlPlaneHomeTabRefreshAt}`]
-                : []),
-              ...(lastBrokerControlPlaneHomeTabError
-                ? [`Home tab status: ${lastBrokerControlPlaneHomeTabError}`]
-                : []),
-            ]
-          : [];
-      ctx.ui.notify(
-        [
-          `Mode: ${mode}`,
-          `Agent: ${agentEmoji} ${agentName}`,
-          `Bot: ${botUserId ?? "unknown"}`,
-          `Connection: ${socket}`,
-          `Skin: ${activeSkinTheme ?? "(legacy/manual)"}`,
-          ...(agentPersonality ? [`Persona: ${agentPersonality}`] : []),
-          `Threads: ${threads.size} (${ownedCount} owned by ${agentName})`,
-          `DM channel: ${lastDmChannel ?? "none yet"}`,
-          allowlistInfo,
-          defaultChInfo,
-          activityLogInfo,
-          ...brokerHealthInfo,
-          ...brokerCanvasInfo,
-        ].join("\n"),
-        "info",
-      );
-    },
-  });
-
-  const showActivityLogs = async (_args: string, ctx: ExtensionContext) => {
-    const channelInfo = settings.logChannel
-      ? `${settings.logChannel} (${settings.logLevel ?? "actions"})`
-      : "disabled";
-    ctx.ui.notify(
-      [
-        `Activity log channel: ${channelInfo}`,
-        formatRecentActivityLogEntries(activityLogger.getRecentEntries(10)),
-      ].join("\n\n"),
-      settings.logChannel ? "info" : "warning",
-    );
-  };
-
-  pi.registerCommand("pinet-logs", {
-    description: "Show recent broker activity log entries",
-    handler: showActivityLogs,
-  });
-
-  pi.registerCommand("slack-logs", {
-    description: "Show recent broker activity log entries",
-    handler: showActivityLogs,
-  });
-
-  pi.registerCommand("pinet-rename", {
-    description: "Rename this Pinet agent",
-    handler: async (args, ctx) => {
-      const newName = args.trim();
-      if (!newName) {
-        const fresh = generateAgentName(undefined, brokerRole === "broker" ? "broker" : "worker");
-        applyLocalAgentIdentity(fresh.name, fresh.emoji, agentPersonality);
-      } else {
-        applyLocalAgentIdentity(newName, agentEmoji, agentPersonality);
-      }
-      ctx.ui.notify(`${agentEmoji} Agent renamed to: ${agentName}`, "info");
-    },
-  });
-
   // ─── Lifecycle ──────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
@@ -4208,7 +3622,7 @@ export default function (pi: ExtensionAPI) {
       if (thread) await clearThreadStatus(thread.channelId, ts);
     }
     thinking.clear();
-    brokerRalphLoopFollowUpPending = false;
+    ralphLoopState.followUpPending = false;
 
     signalAgentFree(ctx);
   });
