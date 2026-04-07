@@ -144,6 +144,25 @@ describe("registerSlackTools", () => {
         return conversationsRepliesResponses.shift() as SlackResult;
       }
 
+      if (method === "conversations.create") {
+        const name = typeof body?.name === "string" ? body.name : "test-channel";
+        return {
+          ok: true,
+          channel: { id: "C_PROJ", name },
+        } as unknown as SlackResult;
+      }
+
+      if (method === "conversations.canvases.create") {
+        return { ok: true, canvas_id: "CANVAS_1" } as unknown as SlackResult;
+      }
+
+      if (method === "conversations.info") {
+        return {
+          ok: true,
+          channel: { id: body?.channel ?? "C_PROJ", properties: {} },
+        } as unknown as SlackResult;
+      }
+
       return {
         ok: true,
         token,
@@ -176,6 +195,7 @@ describe("registerSlackTools", () => {
       claimThreadOwnership: () => {},
       clearPendingEyes: () => {},
       registerConfirmationRequest: () => ({ status: "created" }),
+      getBotUserId: () => "U_BOT",
     });
 
     return {
@@ -869,5 +889,65 @@ describe("registerSlackTools", () => {
         },
       ],
     });
+  });
+
+  // ─── slack_project_create ─────────────────────────────
+
+  it("creates a project channel with canvas and bot invite in one call", async () => {
+    const { slack, tools } = setup();
+
+    const result = await tools.get("slack_project_create")!.execute("tool-proj-1", {
+      name: "proj-alpha",
+      topic: "Alpha project",
+      canvas_title: "Alpha RFC",
+      canvas_markdown: "# Overview\nProject goals.",
+    });
+
+    expect(slack).toHaveBeenCalledWith("conversations.create", "xoxb-initial", {
+      name: "proj-alpha",
+    });
+    expect(slack).toHaveBeenCalledWith("conversations.setTopic", "xoxb-initial", {
+      channel: "C_PROJ",
+      topic: "Alpha project",
+    });
+    expect(slack).toHaveBeenCalledWith(
+      "conversations.invite",
+      "xoxb-initial",
+      expect.objectContaining({ channel: "C_PROJ", users: "U_BOT" }),
+    );
+    expect(slack).toHaveBeenCalledWith(
+      "conversations.canvases.create",
+      "xoxb-initial",
+      expect.objectContaining({ channel_id: "C_PROJ", title: "Alpha RFC" }),
+    );
+
+    const details = (result as { details: Record<string, unknown> }).details;
+    expect(details.channel_id).toBe("C_PROJ");
+    expect(details.channel_name).toBe("proj-alpha");
+    expect(details.canvas_id).toBe("CANVAS_1");
+    expect(details.bot_invited).toBe(true);
+  });
+
+  it("creates project channel even when canvas creation fails", async () => {
+    const { slack, tools } = setup();
+
+    // Override slack to fail on canvas creation
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "conversations.canvases.create") {
+          throw new Error("canvas_error");
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    const result = await tools.get("slack_project_create")!.execute("tool-proj-2", {
+      name: "proj-beta",
+    });
+
+    const details = (result as { details: Record<string, unknown> }).details;
+    expect(details.channel_id).toBe("C_PROJ");
+    expect(details.canvas_id).toBeNull();
   });
 });
