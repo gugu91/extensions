@@ -1,33 +1,59 @@
-export type JsonObject = Record<string, unknown>;
-export type RequestContainer = "body" | "headers" | "path" | "query";
+import type { WebClient } from "@slack/web-api";
 
-export function operationIdToSdkExportName(operationId: string): string {
-  const [first = "", ...rest] = operationId.split("_").filter(Boolean);
-  return first + rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+export type JsonObject = Record<string, unknown>;
+
+/**
+ * Discover callable Slack Web API methods by walking the WebClient prototype chain.
+ * Returns dot-notated method names like "chat.postMessage", "conversations.list", etc.
+ */
+export function discoverMethods(client: WebClient): string[] {
+  const methods: string[] = [];
+
+  for (const namespace of Object.keys(client)) {
+    const member = (client as unknown as Record<string, unknown>)[namespace];
+    if (typeof member !== "object" || member === null || typeof namespace !== "string") continue;
+    // Skip private/internal properties and known non-API namespaces
+    if (namespace.startsWith("_") || namespace === "token" || namespace === "slackApiUrl") continue;
+
+    for (const key of Object.keys(member)) {
+      if (typeof (member as Record<string, unknown>)[key] === "function") {
+        methods.push(`${namespace}.${key}`);
+      }
+    }
+  }
+
+  // Also check for top-level methods (e.g. api.test)
+  return methods.sort();
+}
+
+/**
+ * Resolve a dot-notated method name to a callable function on the WebClient.
+ */
+export function resolveMethod(
+  client: WebClient,
+  methodName: string,
+): ((...args: unknown[]) => Promise<unknown>) | null {
+  const parts = methodName.split(".");
+  if (parts.length < 2) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let target: any = client;
+  for (const part of parts) {
+    if (target == null || typeof target !== "object") return null;
+    target = target[part];
+  }
+
+  return typeof target === "function" ? (target as (...args: unknown[]) => Promise<unknown>) : null;
 }
 
 export function parseCliValue(raw: string): unknown {
   const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return "";
-  }
-
-  if (trimmed === "true") {
-    return true;
-  }
-  if (trimmed === "false") {
-    return false;
-  }
-  if (trimmed === "null") {
-    return null;
-  }
-  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
-    return Number(trimmed);
-  }
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return JSON.parse(trimmed) as unknown;
-  }
-
+  if (trimmed.length === 0) return "";
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return JSON.parse(trimmed) as unknown;
   return raw;
 }
 
@@ -36,17 +62,11 @@ export function parseKeyValueArg(entry: string): { key: string; value: unknown }
   if (separatorIndex <= 0) {
     throw new Error(`Expected KEY=VALUE, received: ${entry}`);
   }
-
   const key = entry.slice(0, separatorIndex).trim();
   if (!key) {
     throw new Error(`Expected KEY=VALUE, received: ${entry}`);
   }
-
-  const rawValue = entry.slice(separatorIndex + 1);
-  return {
-    key,
-    value: parseCliValue(rawValue),
-  };
+  return { key, value: parseCliValue(entry.slice(separatorIndex + 1)) };
 }
 
 export function parseJsonObject(raw: string): JsonObject {
@@ -66,36 +86,6 @@ export function mergeInput(
     merged[entry.key] = entry.value;
   }
   return merged;
-}
-
-export function nestMethodInput(
-  flatInput: JsonObject,
-  parameterLocations: Readonly<Record<string, RequestContainer>>,
-): JsonObject {
-  const nested: JsonObject = {};
-
-  for (const [key, value] of Object.entries(flatInput)) {
-    if (
-      (key === "body" || key === "headers" || key === "path" || key === "query") &&
-      isJsonObject(value)
-    ) {
-      nested[key] = { ...(nested[key] as JsonObject | undefined), ...value };
-      continue;
-    }
-
-    const container = parameterLocations[key];
-    if (!container) {
-      nested[key] = value;
-      continue;
-    }
-
-    const currentSection = nested[container];
-    const nextSection: JsonObject = isJsonObject(currentSection) ? { ...currentSection } : {};
-    nextSection[key] = value;
-    nested[container] = nextSection;
-  }
-
-  return nested;
 }
 
 export function isJsonObject(value: unknown): value is JsonObject {
