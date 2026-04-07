@@ -1,313 +1,257 @@
 # slack-bridge (Pinet)
 
-Pi extension that turns the agent into a Slack assistant app. Users open
-Pinet from Slack's sidebar, type a message, and the pi agent responds — no
-channel setup required.
+Slack assistant integration for [pi](https://github.com/badlogic/pi-mono) — multi-agent broker, thread routing, and inbox tools powered by Socket Mode.
 
-## How it works
+## Install
 
-```
-User opens Pinet in Slack
-  └─► types a message
-        └─► 👀 reaction appears
-              └─► message queued for pi agent
-                    └─► agent responds via slack_send
-                          └─► 👀 removed, reply appears in thread
+```bash
+pi install @gugu910/pi-slack-bridge
 ```
 
-**Hybrid inbox model:** Messages queue up while the agent is busy. When the
-agent finishes its current task, it automatically drains the inbox and responds.
-If the agent is idle, incoming messages are processed immediately.
+Or with npm:
 
-## Tools
+```bash
+npm install @gugu910/pi-slack-bridge
+```
 
-| Tool                                                                                | Description                                  |
-| ----------------------------------------------------------------------------------- | -------------------------------------------- |
-| `slack_send(text, thread_ts?, blocks?)`                                             | Reply in a thread or start new               |
-| `slack_react(emoji, thread_ts?, timestamp?, channel?)`                              | Add an emoji reaction to a Slack message     |
-| `slack_presence(user?, users?)`                                                     | Check active/away/DND status for Slack users |
-| `slack_upload(content?, path?, filename?, filetype?, title?, channel?, thread_ts?)` | Upload a file/snippet into Slack or a thread |
-| `slack_schedule(text, channel?, thread_ts?, delay?, at?)`                           | Schedule a Slack message for later           |
-| `slack_pin(action, message_ts, channel?, thread_ts?)`                               | Pin or unpin a Slack message                 |
-| `slack_bookmark(action, channel?, thread_ts?, title?, url?, emoji?, bookmark_id?)`  | Add, list, or remove channel bookmarks       |
-| `slack_export(thread_ts, channel?, format?, include_metadata?, oldest?, latest?)`   | Export a Slack thread for docs or archival   |
-| `slack_read(thread_ts, limit?)`                                                     | Read thread messages                         |
-| `slack_inbox()`                                                                     | Check pending messages manually              |
-| `slack_blocks_build(template, ...)`                                                 | Build common Block Kit payloads              |
-| `slack_modal_build(template, ...)`                                                  | Build common Slack modal payloads            |
-| `slack_modal_open(trigger_id, view, thread_ts?)`                                    | Open a Slack modal                           |
-| `slack_modal_push(trigger_id, view, thread_ts?)`                                    | Push a new modal step onto the stack         |
-| `slack_modal_update(view, view_id?, external_id?, hash?, thread_ts?)`               | Update an existing open modal                |
-| `slack_create_channel(name, topic?, purpose?)`                                      | Create a project channel                     |
-| `slack_post_channel(channel?, text, thread_ts?, blocks?)`                           | Post to a channel                            |
-| `slack_read_channel(channel, thread_ts?, limit?)`                                   | Read channel history or thread               |
-| `slack_canvas_create(title?, markdown?, channel?, kind?)`                           | Create standalone or channel canvases        |
-| `slack_canvas_update(canvas_id?, channel?, markdown, mode?, ...)`                   | Append, prepend, or replace canvas content   |
+## Prerequisites
 
-`slack_upload` supports either inline `content` or a guarded local `path`. For
-safety, local uploads are limited to files inside the current working directory
-or the system temp directory.
+- A Slack workspace where you have permission to install apps
+- Node.js 22+ (uses native `fetch` and `WebSocket`)
+- [pi](https://github.com/badlogic/pi-mono) installed
 
-`slack_schedule` supports delayed messages via `delay` (for example `30m` or
-`2h`) and absolute scheduling via `at` (ISO-8601 UTC timestamp).
+## Slack App Setup
 
-`slack_pin` highlights a specific Slack message by timestamp. `slack_bookmark`
-manages durable channel-header links such as repos, dashboards, docs, and
-runbooks.
+### 1. Create the app
 
-`slack_export` turns a thread into markdown, plain text, or JSON with resolved
-authors, timestamps, and attachment links so it can be archived into docs,
-files, canvases, or follow-up summaries.
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
+2. Choose **From a manifest**
+3. Select your workspace
+4. Paste the contents of [`manifest.yaml`](./manifest.yaml) from this directory
+5. Click **Create**
 
-`slack_presence` checks one or more Slack users via `users.getPresence` and
-`dnd.info`, so the agent can see whether people are active, away, or currently
-in Do Not Disturb before sending review requests or other pings. It accepts a
-single `user` or batch `users`, supports user IDs / mentions / names, and uses
-a short cache to avoid hammering Slack.
-
-## Features
-
-- **Slack Assistant** — appears in Slack's sidebar, native conversation UI
-- **Queued inbox** — messages don't interrupt the agent mid-task
-- **Auto-drain** — inbox processed when agent is idle or finishes a task
-- **Reactions** — 👀 on receive, removed on reply; reaction-triggered commands can queue work from emoji alone
-- **Suggested prompts** — shown when a user opens a new conversation
-- **Multi-user** — handles concurrent conversations from different users
-- **@mentions** — tag Pinet in any channel and it responds in-thread
-- **Channel & canvas tools** — create/read/post in channels and maintain persistent Slack canvases
-- **Broker control plane canvas** — the broker can maintain a live Slack canvas with agent roster, task/PR state, and RALPH health on every cycle
-- **Home tab dashboard** — opening Pinet from Slack Apps publishes the same control-plane status into the app Home tab with Block Kit
-- **Block Kit messages** — send rich Slack layouts via the optional `blocks` parameter
-- **Interactive workflows** — `block_actions` button clicks and `view_submission` modal submits are routed back into the inbox as structured events
-- **Slack modals** — open, push, and update modal views for confirmations, forms, and multi-step workflows
-- **File & snippet uploads** — share diffs, logs, screenshots, exports, and long code snippets without pasting giant messages
-- **Scheduled & delayed messages** — queue reminders, timed announcements, and follow-ups without waiting around
-- **Pins & bookmarks** — highlight key messages and manage durable channel-header links
-- **Presence-aware messaging** — check whether teammates are active, away, or in DND before pinging them
-- **Thread export & archival** — convert Slack threads into reusable markdown, plain text, or JSON
-- **Activity log channel** — broker-side assignments, completions, merges, stalls, and RALPH events can be mirrored into a dedicated Slack log thread
-- **Agent identity** — agents pick a fun name + emoji per task
-- **Thread persistence** — thread state survives `/reload`
-- **Remote agent control** — send `/reload` or `/exit` to another Pinet agent
-- **User allowlist** — restrict who can interact with the agent
-
-## Setup
-
-### 1. Create a Slack App
-
-https://api.slack.com/apps → **Create New App** → **From a manifest** →
-paste `manifest.yaml` from this directory.
+The manifest configures Socket Mode, the assistant view, all required bot scopes, and event subscriptions automatically.
 
 ### 2. Generate tokens
 
-- **App-Level Token:** Basic Information → App-Level Tokens → Generate
-  with `connections:write` scope → copy the `xapp-...` token
-- **Bot Token:** OAuth & Permissions → Install to Workspace → copy the
-  `xoxb-...` token
-- **App Config Token:** App settings page → **Your App Configuration Tokens** →
-  Generate Token → copy the `xoxe.xoxp-...` token
-- **App ID:** Basic Information → **App Credentials** → copy the `A...` app ID
+You need two tokens:
 
-### 3. Configure
+| Token               | Where to find it                                                                 | Looks like   |
+| ------------------- | -------------------------------------------------------------------------------- | ------------ |
+| **App-Level Token** | Basic Information → App-Level Tokens → Generate (with `connections:write` scope) | `xapp-1-...` |
+| **Bot Token**       | OAuth & Permissions → Install to Workspace → Bot User OAuth Token                | `xoxb-...`   |
 
-Add to `~/.pi/agent/settings.json`:
+### 3. Required bot scopes
+
+These are included in the manifest, but for reference:
+
+```
+app_mentions:read    assistant:write      bookmarks:read
+bookmarks:write      canvases:read        canvases:write
+channels:history     channels:read        chat:write
+files:write          groups:history       groups:read
+im:history           im:read              im:write
+pins:read            pins:write           reactions:read
+reactions:write      users:read
+```
+
+## Configuration
+
+Add your tokens to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "slack-bridge": {
+    "botToken": "xoxb-your-bot-token",
+    "appToken": "xapp-your-app-token"
+  }
+}
+```
+
+That's it for a minimal setup. Start pi and Pinet appears in Slack's sidebar.
+
+### Environment variables (alternative)
+
+```bash
+export SLACK_BOT_TOKEN="xoxb-..."
+export SLACK_APP_TOKEN="xapp-..."
+```
+
+Settings in `settings.json` take priority over env vars.
+
+### Full settings reference
 
 ```json
 {
   "slack-bridge": {
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
-    "appId": "A0123456789",
-    "appConfigToken": "xoxe.xoxp-...",
     "allowedUsers": ["U09GWL270LA"],
     "defaultChannel": "C0APL58LB1R",
     "logChannel": "#pinet-logs",
     "logLevel": "actions",
-    "controlPlaneCanvasEnabled": true,
-    "controlPlaneCanvasChannel": "C0APL58LB1R",
-    "controlPlaneCanvasTitle": "Pinet Broker Control Plane",
-    "reactionCommands": {
-      "📝": "summarize",
-      "🐛": "file-issue",
-      "👀": "review",
-      "✅": "approve",
-      "🔄": "retry"
-    },
-    "suggestedPrompts": [
-      { "title": "Status", "message": "What are you working on?" },
-      { "title": "Help", "message": "I need help with something" }
-    ]
+    "autoFollow": true,
+    "suggestedPrompts": [{ "title": "Status", "message": "What are you working on?" }],
+    "security": {
+      "readOnly": false,
+      "requireConfirmation": ["slack_create_channel"],
+      "blockedTools": []
+    }
   }
 }
 ```
 
-| Key                         | Required | Description                                                                |
-| --------------------------- | -------- | -------------------------------------------------------------------------- |
-| `botToken`                  | yes      | Bot User OAuth Token (`xoxb-...`)                                          |
-| `appToken`                  | yes      | App-Level Token for Socket Mode (`xapp-...`)                               |
-| `appId`                     | deploy   | Slack app ID (`A...`) for manifest deploy/update                           |
-| `appConfigToken`            | deploy   | App configuration token (`xoxe.xoxp-...`)                                  |
-| `allowedUsers`              | no       | Slack user IDs allowed to interact                                         |
-| `defaultChannel`            | no       | Default channel for `slack_post_channel` and control-plane canvas fallback |
-| `logChannel`                | no       | Broker activity log channel name or ID                                     |
-| `logLevel`                  | no       | `errors`, `actions` (default), or `verbose`                                |
-| `controlPlaneCanvasEnabled` | no       | Enable the broker-maintained control plane canvas (defaults to true)       |
-| `controlPlaneCanvasId`      | no       | Existing canvas ID to update instead of creating/finding a channel canvas  |
-| `controlPlaneCanvasChannel` | no       | Channel ID/name used to create or recover the broker control plane canvas  |
-| `controlPlaneCanvasTitle`   | no       | Title used when the broker creates the control plane canvas                |
-| `reactionCommands`          | no       | Emoji/name → action mapping for `reaction_added`                           |
-| `suggestedPrompts`          | no       | Prompts shown on new assistant thread                                      |
+| Key                            | Required | Description                                           |
+| ------------------------------ | -------- | ----------------------------------------------------- |
+| `botToken`                     | **yes**  | Bot User OAuth Token (`xoxb-...`)                     |
+| `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)          |
+| `allowedUsers`                 | no       | Slack user IDs that can interact (all users if unset) |
+| `defaultChannel`               | no       | Default channel for `slack_post_channel`              |
+| `logChannel`                   | no       | Channel for broker activity logs                      |
+| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`     |
+| `autoFollow`                   | no       | Auto-connect as follower when broker is running       |
+| `suggestedPrompts`             | no       | Prompts shown when a user opens a new conversation    |
+| `security.readOnly`            | no       | Block all write tools                                 |
+| `security.requireConfirmation` | no       | Tools that need user approval before executing        |
+| `security.blockedTools`        | no       | Tools that are completely disabled                    |
 
-> Runtime tokens can also be set via `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`
-> env vars (settings.json takes priority).
->
-> Manifest deploy also reads `SLACK_APP_ID` and `SLACK_APP_CONFIG_TOKEN`
-> (or `SLACK_CONFIG_TOKEN`). The Socket Mode `xapp-...` token cannot be used
-> with `apps.manifest.update`.
->
-> If `controlPlaneCanvasId` is not set, the broker will try to create or recover a
-> channel canvas from `controlPlaneCanvasChannel`, falling back to `defaultChannel`.
+## Usage
 
-`reactionCommands` accepts either Slack reaction names (`eyes`, `repeat`) or the
-emoji characters themselves (`👀`, `🔄`). The default mappings include `📝`
-→ summarize and `🐛` → file-issue, and you can extend them with review /
-approve / retry style actions as needed.
+Once configured, Pinet appears in Slack's sidebar. Users open it, type a message, and the pi agent responds.
 
-`logChannel` enables a broker-only observability feed. When configured, the
-broker posts structured activity updates into a daily thread in that channel.
-Default `logLevel` is `actions`, which captures worker task assignments,
-completion/PR-open transitions, merges, stalls, maintenance anomalies, and
-RALPH events. Use `errors` for failures only or `verbose` to also include
-routine broker/worker status chatter.
-
-### 4. Install extension
-
-```bash
-ln -s /path/to/extensions/slack-bridge ~/.pi/agent/extensions/slack-bridge
+```
+User opens Pinet in Slack sidebar
+  └─► types a message
+        └─► 👀 reaction appears (thinking)
+              └─► message queued for pi agent
+                    └─► agent responds via slack_send
+                          └─► 👀 removed, reply appears in thread
 ```
 
-Then `/reload` in pi. Pinet appears in Slack's sidebar automatically.
+Messages queue while the agent is busy. When the agent finishes, it automatically drains the inbox and responds.
 
-## Manifest
+### Available tools
 
-The `manifest.yaml` includes all required scopes and events, including `files:write`
-for `slack_upload`, `chat:write` for `slack_schedule`, bookmark/pin scopes for
-`slack_bookmark` and `slack_pin`, `users:read` + `users.getPresence` / `dnd.info`
-for presence checks, `app_home_opened` for the Home tab dashboard, `reaction_added`
+| Tool                   | Description                                                    |
+| ---------------------- | -------------------------------------------------------------- |
+| `slack_send`           | Reply in a Slack assistant thread                              |
+| `slack_react`          | Add an emoji reaction to a message                             |
+| `slack_read`           | Read messages from a thread                                    |
+| `slack_inbox`          | Check pending incoming messages                                |
+| `slack_upload`         | Upload files, snippets, or diffs into Slack                    |
+| `slack_schedule`       | Schedule a message for later delivery                          |
+| `slack_post_channel`   | Post to a channel (by name or ID)                              |
+| `slack_read_channel`   | Read channel history or a thread in a channel                  |
+| `slack_create_channel` | Create a new Slack channel                                     |
+| `slack_project_create` | Create a project channel + RFC canvas + bot invite in one call |
+| `slack_pin`            | Pin or unpin a message                                         |
+| `slack_bookmark`       | Add, list, or remove channel bookmarks                         |
+| `slack_export`         | Export a thread as markdown, plain text, or JSON               |
+| `slack_presence`       | Check if users are active, away, or in DND                     |
+| `slack_canvas_create`  | Create a standalone or channel canvas                          |
+| `slack_canvas_update`  | Append, prepend, or replace canvas content                     |
+| `slack_blocks_build`   | Build Block Kit message templates                              |
+| `slack_modal_build`    | Build Slack modal templates                                    |
+| `slack_modal_open`     | Open a modal from a trigger interaction                        |
+| `slack_modal_push`     | Push a new step onto a modal stack                             |
+| `slack_modal_update`   | Update an existing open modal                                  |
+| `slack_confirm_action` | Request user confirmation before a dangerous action            |
 
-- `reactions:read` plus `presence_change` for Slack-side awareness events, and
-  `interactivity.is_enabled: true` for buttons and modals. Use it when creating
-  the app (**From a manifest**) or paste it into **App Manifest** in settings.
+### Slash commands
 
-To push the checked-in manifest back to Slack, run:
+| Command         | Description                                         |
+| --------------- | --------------------------------------------------- |
+| `/pinet-status` | Show connection status, threads, and agent identity |
+| `/pinet-rename` | Change the agent's display name                     |
+| `/pinet-logs`   | Show recent broker activity log entries             |
+| `/slack-logs`   | Show recent Slack bridge log entries                |
+
+## Pinet (Multi-Agent Mode)
+
+Pinet supports a broker/follower architecture for coordinating multiple pi agents over Slack.
+
+### Quick start
+
+**Broker** (one per mesh — coordinates routing and health):
+
+```
+/pinet-start
+```
+
+**Follower** (workers that connect to the broker):
+
+```
+/pinet-follow
+```
+
+Or set `"autoFollow": true` in settings to auto-connect when a broker is running.
+
+### Multi-agent tools
+
+| Tool             | Description                                           |
+| ---------------- | ----------------------------------------------------- |
+| `pinet_message`  | Send a message to another connected agent             |
+| `pinet_agents`   | List connected agents with status and capabilities    |
+| `pinet_free`     | Signal that this agent is idle and available for work |
+| `pinet_schedule` | Schedule a future wake-up message for this agent      |
+
+### Broker commands
+
+| Command                 | Description                                |
+| ----------------------- | ------------------------------------------ |
+| `/pinet-start`          | Start as the mesh broker                   |
+| `/pinet-follow`         | Connect as a follower worker               |
+| `/pinet-unfollow`       | Disconnect from the broker                 |
+| `/pinet-reload <agent>` | Ask another agent to reload                |
+| `/pinet-exit <agent>`   | Ask another agent to exit                  |
+| `/pinet-free`           | Mark this agent as idle                    |
+| `/pinet-skin <theme>`   | Change the mesh naming theme (broker only) |
+
+### How it works
+
+- The **broker** runs Slack Socket Mode, routes messages to agents, monitors health via the RALPH loop, and maintains a control plane canvas
+- **Followers** connect to the broker over a local Unix socket, poll for work, and report results
+- Agents authenticate using a shared local secret (`~/.pi/pinet.secret`, created automatically)
+- Thread ownership is first-responder-wins — the first agent to reply claims the thread
+
+## Security
+
+- **User allowlist**: Set `allowedUsers` to restrict who can interact with Pinet
+- **Tool guardrails**: Use `security.requireConfirmation` and `security.blockedTools` to control tool access
+- **Mesh authentication**: Broker/follower connections use a local shared secret file
+
+Find Slack user IDs: click a user's profile → **More** → **Copy member ID**.
+
+---
+
+## Development
+
+### Build
+
+```bash
+pnpm run build
+```
+
+### Lint / Typecheck / Test
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+```
+
+### Deploy manifest to Slack
 
 ```bash
 pnpm deploy:slack
 ```
 
-The deploy command validates `slack-bridge/manifest.yaml`, updates the target
-Slack app through `apps.manifest.update`, and reports any bot/user scope
-changes.
+Requires `appId` and `appConfigToken` in settings (or `SLACK_APP_ID` / `SLACK_APP_CONFIG_TOKEN` env vars).
 
-## Block Kit examples
+### Architecture
 
-Use `slack_blocks_build` for common templates, or pass raw Block Kit JSON directly to `slack_send` / `slack_post_channel`.
-
-Example `slack_send` payload:
-
-```json
-{
-  "thread_ts": "123.456",
-  "text": "Deploy complete",
-  "blocks": [
-    {
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "*Deploy complete*\nBranch: `main`\nCommit: `abc123`"
-      }
-    },
-    {
-      "type": "actions",
-      "elements": [
-        {
-          "type": "button",
-          "text": { "type": "plain_text", "text": "Rollback" },
-          "action_id": "deploy.rollback",
-          "style": "danger",
-          "value": "rollback:prod"
-        }
-      ]
-    }
-  ]
-}
-```
-
-Button clicks arrive back through the inbox as structured events with metadata like `kind=slack_block_action`, `triggerId`, `actionId`, `value`, and best-effort `parsedValue` when the button value is JSON.
-
-## Modal workflows
-
-Use `slack_modal_build` to generate common modal payloads, then pass the returned `view`
-into `slack_modal_open`, `slack_modal_push`, or `slack_modal_update`.
-
-- `slack_modal_open` / `slack_modal_push` need a fresh `trigger_id` from a recent
-  Slack interaction (button click or modal submit). Trigger IDs expire after roughly
-  3 seconds, so if Slack returns `invalid_trigger`, ask the user to click again and
-  reopen the modal immediately.
-- Pass `thread_ts` when opening or pushing a modal if you want later `view_submission`
-  payloads routed back into the original Slack thread.
-- Modal submissions arrive through the inbox as `kind=slack_view_submission` with
-  `callbackId`, `viewId`, and parsed `stateValues`.
-
-Example `slack_modal_build` confirmation request:
-
-```json
-{
-  "template": "confirmation",
-  "title": "Deploy approval",
-  "text": "Ready to deploy to production.",
-  "confirm_phrase": "CONFIRM",
-  "callback_id": "deploy.confirm"
-}
-```
-
-## Security
-
-Set `allowedUsers` in settings.json to restrict who can interact with the
-agent. Only listed users' messages are queued; others receive a polite
-rejection. If not set, all users are allowed.
-
-Find user IDs in Slack: click a user's profile → **More** → **Copy member ID**.
-
-Pinet broker/worker connections on the same machine also use a local shared
-mesh secret. On first broker start, slack-bridge creates `~/.pi/pinet.secret`
-and follower runtimes read that file automatically before joining the mesh.
-
-## Architecture
-
-- **Socket Mode** — outbound WebSocket from pi to Slack (no public URL needed)
-- **Zero npm deps** — native `fetch` + `WebSocket` (Node 22+)
-- **Hybrid inbox** — queue when busy, auto-process when idle
-- **Reactions** — 👀 as lightweight "thinking" indicator (no chat lock)
-- **Agent naming** — Pinet can keep the default whimsical mesh skin or regenerate themed names/personalities for the whole mesh
-
-## Pinet control commands
-
-Use these local commands to control another connected Pinet agent by name or ID:
-
-- `/pinet-reload <agent>` — ask the target agent to reload cleanly
-- `/pinet-exit <agent>` — ask the target agent to disconnect cleanly and exit
-- `/pinet-free` — mark this agent idle/free and available for new work
-- `/pinet-logs` / `/slack-logs` — show the most recent broker activity log entries captured this session
-- `/pinet-skin <theme>` — broker-only mesh skin switch; `default` keeps the whimsical built-in skin, any other free-form theme regenerates themed names and personalities for the connected mesh
-
-Agents can also send the exact A2A message `/reload` or `/exit` via `pinet_message`; the
-receiver handles it automatically instead of surfacing it to the LLM as normal work.
-When a worker finishes all assigned work, it can call the `pinet_free` tool (or `/pinet-free`)
-to explicitly signal availability for new assignments.
-
-## Status
-
-Use `/slack` in pi to check connection status, active threads, and DM channel.
-
-Footer shows `slack ✦` when connected, with unread count (e.g. `slack ✦ 3`).
+- **Socket Mode** — outbound WebSocket, no public URL needed
+- **Zero runtime npm deps** — native `fetch`, `WebSocket`, `node:sqlite` (Node 22+)
+- **Hybrid inbox** — queue when busy, auto-drain when idle
+- **Reactions** — 👀 as a lightweight "thinking" indicator
+- **Thread persistence** — thread state survives `/reload`
