@@ -1,21 +1,45 @@
 import { describe, expect, it } from "vitest";
+import { WebClient } from "@slack/web-api";
 
 import {
+  discoverMethods,
   isJsonObject,
   mergeInput,
-  nestMethodInput,
-  operationIdToSdkExportName,
   parseCliValue,
   parseJsonObject,
   parseKeyValueArg,
+  resolveMethod,
 } from "./cli-helpers.ts";
 
-describe("operationIdToSdkExportName", () => {
-  it("camel-cases Slack operation ids", () => {
-    expect(operationIdToSdkExportName("auth_test")).toBe("authTest");
-    expect(operationIdToSdkExportName("files_getUploadURLExternal")).toBe(
-      "filesGetUploadURLExternal",
-    );
+describe("discoverMethods", () => {
+  it("returns dot-notated method names from a WebClient", () => {
+    const client = new WebClient();
+    const methods = discoverMethods(client);
+    expect(methods).toContain("chat.postMessage");
+    expect(methods).toContain("conversations.list");
+    expect(methods).toContain("auth.test");
+    expect(methods.length).toBeGreaterThan(50);
+  });
+
+  it("returns a sorted list", () => {
+    const client = new WebClient();
+    const methods = discoverMethods(client);
+    const sorted = [...methods].sort();
+    expect(methods).toEqual(sorted);
+  });
+});
+
+describe("resolveMethod", () => {
+  it("resolves a known method to a function", () => {
+    const client = new WebClient();
+    const fn = resolveMethod(client, "chat.postMessage");
+    expect(typeof fn).toBe("function");
+  });
+
+  it("returns null for unknown methods", () => {
+    const client = new WebClient();
+    expect(resolveMethod(client, "does.not.exist")).toBeNull();
+    expect(resolveMethod(client, "noNamespace")).toBeNull();
   });
 });
 
@@ -64,47 +88,6 @@ describe("mergeInput", () => {
       channel: "C123",
       text: "after",
       unfurl_links: false,
-    });
-  });
-});
-
-describe("nestMethodInput", () => {
-  it("routes flat params into body/query/header containers", () => {
-    expect(
-      nestMethodInput(
-        {
-          token: "xoxb-test",
-          channel: "C123",
-          text: "hello",
-          limit: 50,
-        },
-        {
-          token: "headers",
-          channel: "body",
-          text: "body",
-          limit: "query",
-        },
-      ),
-    ).toEqual({
-      headers: { token: "xoxb-test" },
-      body: { channel: "C123", text: "hello" },
-      query: { limit: 50 },
-    });
-  });
-
-  it("preserves explicit nested sections as an escape hatch", () => {
-    expect(
-      nestMethodInput(
-        {
-          headers: { token: "xoxb-test" },
-          query: { limit: 20 },
-          cursor: "abc",
-        },
-        { cursor: "query" },
-      ),
-    ).toEqual({
-      headers: { token: "xoxb-test" },
-      query: { limit: 20, cursor: "abc" },
     });
   });
 });

@@ -1,68 +1,28 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { WebClient } from "@slack/web-api";
 
-import * as sdk from "./generated/sdk.gen.ts";
-import { client } from "./generated/client.gen.ts";
-import {
-  methodNameToCanonicalMethod,
-  methodNameToParameterLocations,
-  methodNameToSdkExport,
-  slackMethodNames,
-} from "./generated/methods.gen.ts";
 import {
   type JsonObject,
-  type RequestContainer,
+  discoverMethods,
   mergeInput,
-  nestMethodInput,
   parseJsonObject,
   parseKeyValueArg,
+  resolveMethod,
 } from "./cli-helpers.ts";
 
-const DEFAULT_BASE_URL = "https://slack.com/api";
 const EXECUTABLE_NAME = "slack-api";
-
-type SdkModule = typeof sdk;
-type SdkMethodName = keyof typeof methodNameToSdkExport;
-type CanonicalMethodName = keyof typeof methodNameToParameterLocations;
-type CallableSdkExport = Extract<
-  SdkModule[keyof SdkModule],
-  (...args: never[]) => Promise<unknown>
->;
 
 function printUsage(): void {
   console.error(`Usage:
   ${EXECUTABLE_NAME} list
-  ${EXECUTABLE_NAME} <method> [--token <token>] [--base-url <url>] [--input <json>] [--input-file <path>] [--param KEY=VALUE ...]
+  ${EXECUTABLE_NAME} <method> [--token <token>] [--input <json>] [--input-file <path>] [--param KEY=VALUE ...]
 
 Examples:
   ${EXECUTABLE_NAME} auth.test --token xoxb-...
   ${EXECUTABLE_NAME} conversations.list --token xoxb-... --param limit=50
   ${EXECUTABLE_NAME} chat.postMessage --token xoxb-... --input '{"channel":"C123","text":"hello"}'
 `);
-}
-
-function resolveMethod(methodName: string): {
-  canonicalMethodName: CanonicalMethodName;
-  method: CallableSdkExport;
-  parameterLocations: Readonly<Record<string, RequestContainer>>;
-} {
-  const canonicalMethodName =
-    methodNameToCanonicalMethod[methodName as keyof typeof methodNameToCanonicalMethod];
-  const resolvedExportName = methodNameToSdkExport[methodName as SdkMethodName];
-  if (!canonicalMethodName || !resolvedExportName) {
-    throw new Error(`Unknown Slack API method: ${methodName}`);
-  }
-
-  const candidate = sdk[resolvedExportName as keyof SdkModule];
-  if (typeof candidate !== "function") {
-    throw new Error(`Generated SDK export is not callable: ${resolvedExportName}`);
-  }
-
-  return {
-    canonicalMethodName,
-    method: candidate as CallableSdkExport,
-    parameterLocations: methodNameToParameterLocations[canonicalMethodName],
-  };
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -73,14 +33,14 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (subcommand === "list") {
-    for (const methodName of slackMethodNames) {
-      console.log(methodName);
+    const client = new WebClient();
+    for (const method of discoverMethods(client)) {
+      console.log(method);
     }
     return;
   }
 
   let token = process.env.SLACK_TOKEN;
-  let baseUrl = DEFAULT_BASE_URL;
   let inputArg: string | undefined;
   let inputFile: string | undefined;
   const paramArgs: string[] = [];
@@ -89,45 +49,28 @@ async function main(argv: string[]): Promise<void> {
     const arg = rest[index];
     if (arg === "--token") {
       const value = rest[++index];
-      if (value === undefined) {
-        throw new Error("Missing value after --token");
-      }
+      if (value === undefined) throw new Error("Missing value after --token");
       token = value;
-      continue;
-    }
-    if (arg === "--base-url") {
-      const value = rest[++index];
-      if (value === undefined) {
-        throw new Error("Missing value after --base-url");
-      }
-      baseUrl = value;
       continue;
     }
     if (arg === "--input") {
       const value = rest[++index];
-      if (value === undefined) {
-        throw new Error("Missing value after --input");
-      }
+      if (value === undefined) throw new Error("Missing value after --input");
       inputArg = value;
       continue;
     }
     if (arg === "--input-file") {
       const value = rest[++index];
-      if (value === undefined) {
-        throw new Error("Missing value after --input-file");
-      }
+      if (value === undefined) throw new Error("Missing value after --input-file");
       inputFile = value;
       continue;
     }
     if (arg === "--param") {
       const value = rest[++index];
-      if (value === undefined) {
-        throw new Error("Missing value after --param");
-      }
+      if (value === undefined) throw new Error("Missing value after --param");
       paramArgs.push(value);
       continue;
     }
-
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -141,18 +84,15 @@ async function main(argv: string[]): Promise<void> {
   } else if (inputFile) {
     input = parseJsonObject(await readFile(inputFile, "utf8"));
   }
-
   input = mergeInput(input, paramArgs.map(parseKeyValueArg));
-  if (token && input.token === undefined) {
-    input.token = token;
+
+  const client = new WebClient(token);
+  const method = resolveMethod(client, subcommand);
+  if (!method) {
+    throw new Error(`Unknown Slack API method: ${subcommand}`);
   }
 
-  const { method, parameterLocations } = resolveMethod(subcommand);
-  const requestOptions = nestMethodInput(input, parameterLocations);
-
-  client.setConfig({ baseUrl });
-
-  const result = await method(requestOptions as never);
+  const result = await method(input);
   console.log(JSON.stringify(result, null, 2));
 }
 
