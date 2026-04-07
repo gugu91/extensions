@@ -56,6 +56,10 @@ importers:
       "@gugu910/pi-ext-types":
         specifier: workspace:*
         version: link:../types
+    devDependencies:
+      "@sinclair/typebox":
+        specifier: ^0.34.49
+        version: 0.34.49
 
   slack-api:
     dependencies:
