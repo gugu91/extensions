@@ -25,6 +25,10 @@ class StubBrokerDBInterface implements BrokerDBInterface {
     return this.agents.find((agent) => agent.id === agentId) ?? null;
   }
 
+  getAgentByStableId(stableId: string): AgentInfo | null {
+    return this.agents.find((agent) => agent.stableId === stableId) ?? null;
+  }
+
   getAgents(): AgentInfo[] {
     return this.agents.filter((agent) => !agent.disconnectedAt);
   }
@@ -149,6 +153,22 @@ describe("findAgentMention", () => {
 
   it("handles empty agent list", () => {
     expect(findAgentMention("CodeBot help", [])).toBeNull();
+  });
+
+  it("prefers the longest matching name to avoid prefix collisions", () => {
+    const overlapping = [
+      makeAgent({ id: "a-short", name: "Code" }),
+      makeAgent({ id: "a-long", name: "CodeBot" }),
+    ];
+    expect(findAgentMention("hey CodeBot, review this", overlapping)?.id).toBe("a-long");
+  });
+
+  it("still matches the shorter name when only it appears", () => {
+    const overlapping = [
+      makeAgent({ id: "a-short", name: "Code" }),
+      makeAgent({ id: "a-long", name: "CodeBot" }),
+    ];
+    expect(findAgentMention("fix the Code style please", overlapping)?.id).toBe("a-short");
   });
 });
 
@@ -295,6 +315,38 @@ describe("MessageRouter — route", () => {
 
     expect(decision).toEqual({ action: "unrouted" });
     expect(db.threads.get("t-offline")?.ownerAgent).toBeNull();
+  });
+
+  it("falls back to stableId when the UUID owner is not found but a reconnected agent matches", () => {
+    // Thread was owned by agent "old-uuid" which no longer exists.
+    // A new agent "new-uuid" has reconnected with the same stableId.
+    db.threads.set("t-stable", makeThread({ threadId: "t-stable", ownerAgent: "old-uuid" }));
+    db.agents = [makeAgent({ id: "new-uuid", name: "ReconnectedBot", stableId: "old-uuid" })];
+
+    const decision = router.route(makeMessage({ threadId: "t-stable" }));
+
+    // Should deliver to the reconnected agent and re-bind the thread.
+    expect(decision).toEqual({ action: "deliver", agentId: "new-uuid" });
+    expect(db.threads.get("t-stable")?.ownerAgent).toBe("new-uuid");
+  });
+
+  it("does not stableId-match when the reconnected agent is disconnected and not resumable", () => {
+    db.threads.set("t-stable2", makeThread({ threadId: "t-stable2", ownerAgent: "old-uuid" }));
+    db.agents = [
+      makeAgent({
+        id: "new-uuid",
+        name: "OfflineBot",
+        stableId: "old-uuid",
+        disconnectedAt: "2026-01-01T00:00:00Z",
+        resumableUntil: null,
+      }),
+    ];
+
+    const decision = router.route(makeMessage({ threadId: "t-stable2" }));
+
+    // Agent is disconnected without resumable window — should clear and fall through.
+    expect(decision).toEqual({ action: "unrouted" });
+    expect(db.threads.get("t-stable2")?.ownerAgent).toBeNull();
   });
 });
 

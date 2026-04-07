@@ -945,6 +945,11 @@ export class BrokerDB implements BrokerDBInterface {
     return row ?? null;
   }
 
+  getAgentByStableId(stableId: string): AgentInfo | null {
+    const row = this.getAgentRowByStableId(stableId);
+    return row ? rowToAgent(row) : null;
+  }
+
   private getAgentRowByStableId(stableId: string): AgentRow | null {
     const db = this.getDb();
     const row = db.prepare("SELECT * FROM agents WHERE stable_id = ?").get(stableId) as

@@ -155,6 +155,7 @@ export type MessageAdapter = _MessageAdapter;
 export interface BrokerDBInterface {
   getThread(threadId: string): ThreadInfo | null;
   getAgentById(agentId: string): AgentInfo | null;
+  getAgentByStableId(stableId: string): AgentInfo | null;
   getAgents(): AgentInfo[];
   getChannelAssignment(channel: string): ChannelAssignment | null;
   getAllowedUsers(): Set<string> | null;

@@ -6,17 +6,24 @@ import type { AgentInfo, BrokerDBInterface, InboundMessage, RoutingDecision } fr
  * Extract an agent name mention from message text.
  * Matches patterns like "hey AgentName," or "@AgentName" or just "AgentName"
  * at word boundaries (case-insensitive).
+ *
+ * When multiple agents match, the longest name wins so that "CodeBot" is
+ * preferred over "Code" and similar-prefix collisions are avoided.
  */
 export function findAgentMention(text: string, agents: AgentInfo[]): AgentInfo | null {
   const lower = text.toLowerCase();
+  let bestMatch: AgentInfo | null = null;
+  let bestLength = 0;
   for (const agent of agents) {
     const name = agent.name.toLowerCase();
     if (!name) continue;
-    // Match agent name at a word boundary
     const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, "i");
-    if (pattern.test(lower)) return agent;
+    if (pattern.test(lower) && name.length > bestLength) {
+      bestMatch = agent;
+      bestLength = name.length;
+    }
   }
-  return null;
+  return bestMatch;
 }
 
 function escapeRegExp(s: string): string {
@@ -57,11 +64,28 @@ export class MessageRouter {
     const agents = this.db.getAgents();
 
     // 1. Thread ownership — if thread already has an owner, route there.
+    //    First resolve by agent ID (authoritative UUID binding).
+    //    If the UUID is gone, fall back to stableId: the agent may have
+    //    reconnected with a new UUID but the same stableId.
     //    Disconnected owners are only routable during an explicit resumable
     //    window; graceful unregister should release ownership immediately.
     let thread = this.db.getThread(msg.threadId);
     if (thread?.ownerAgent) {
       const owner = this.db.getAgentById(thread.ownerAgent);
+
+      // stableId fallback: look up the former owner (possibly disconnected)
+      // to recover its stableId, then find a currently connected agent that
+      // registered with the same stableId.  This covers the edge case where
+      // the DB was partially cleaned and the reconnected agent got a new UUID.
+      if (!owner) {
+        const formerOwner = this.db.getAgentByStableId(thread.ownerAgent);
+        if (formerOwner && formerOwner.id !== thread.ownerAgent && isRoutableOwner(formerOwner)) {
+          // Re-bind to current agent ID so future lookups are O(1).
+          this.db.updateThread(msg.threadId, { ownerAgent: formerOwner.id });
+          return { action: "deliver", agentId: formerOwner.id };
+        }
+      }
+
       if (owner && isRoutableOwner(owner)) {
         return { action: "deliver", agentId: owner.id };
       }
