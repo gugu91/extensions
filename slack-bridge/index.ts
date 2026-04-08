@@ -2952,16 +2952,6 @@ export default function (pi: ExtensionAPI) {
       selfId = selfAgent.id;
       applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
 
-      resetBrokerDeliveryState(brokerDeliveryState);
-      const recoveredBrokerMessages = broker.db.getPendingInboxCount(selfId);
-      const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
-      if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
-        ctx.ui.notify(
-          `Pinet broker recovered ${recoveredBrokerMessages} pending message${recoveredBrokerMessages === 1 ? "" : "s"} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
-          "info",
-        );
-      }
-
       adapter.onInbound((inMsg) => {
         // Track thread metadata locally as a cache without claiming broker ownership.
         trackBrokerInboundThread(threads, inMsg);
@@ -3002,6 +2992,23 @@ export default function (pi: ExtensionAPI) {
       activeBroker = broker;
       activeRouter = router;
       activeSelfId = selfId;
+      brokerRole = "broker";
+      pinetEnabled = true;
+
+      resetBrokerDeliveryState(brokerDeliveryState);
+      const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
+      const recoveredTargetedBacklogCount = broker.db.recoverPendingTargetedBacklog(selfId);
+      const recoveredBrokerMessages = broker.db.getPendingInboxCount(selfId);
+      if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
+        const recoveredTargetedDetail =
+          recoveredTargetedBacklogCount > 0
+            ? ` including ${recoveredTargetedBacklogCount} recovered targeted backlog item${recoveredTargetedBacklogCount === 1 ? "" : "s"}`
+            : "";
+        ctx.ui.notify(
+          `Pinet broker recovered ${recoveredBrokerMessages} pending message${recoveredBrokerMessages === 1 ? "" : "s"}${recoveredTargetedDetail} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
+          "info",
+        );
+      }
       syncBrokerDbInbox(selfId, broker.db, ctx);
 
       // When a worker sends a pinet_message targeting the broker, the socket server writes to the
@@ -3026,8 +3033,6 @@ export default function (pi: ExtensionAPI) {
         });
       });
 
-      brokerRole = "broker";
-      pinetEnabled = true;
       startBrokerHeartbeat();
       startBrokerMaintenance(ctx);
       startBrokerRalphLoop(ctx);
@@ -3042,6 +3047,11 @@ export default function (pi: ExtensionAPI) {
           recoveredBrokerMessages > 0 || releasedBrokerClaims > 0
             ? [
                 `Recovered ${recoveredBrokerMessages} pending broker inbox item${recoveredBrokerMessages === 1 ? "" : "s"}.`,
+                ...(recoveredTargetedBacklogCount > 0
+                  ? [
+                      `Recovered ${recoveredTargetedBacklogCount} targeted backlog item${recoveredTargetedBacklogCount === 1 ? "" : "s"} during startup.`,
+                    ]
+                  : []),
                 `Released ${releasedBrokerClaims} stale broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}.`,
               ]
             : undefined,
