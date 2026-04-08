@@ -74,6 +74,7 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
           branch: "feat/control-plane-canvas",
           status: "pr_open",
           prNumber: 221,
+          issueState: "OPEN",
           updatedAt: "2026-04-02T17:00:05.000Z",
         },
         {
@@ -82,6 +83,7 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
           branch: "fix/broker-name-format",
           status: "pr_merged",
           prNumber: 205,
+          issueState: "OPEN",
           updatedAt: "2026-04-02T16:59:05.000Z",
         },
       ],

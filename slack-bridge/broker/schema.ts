@@ -1806,6 +1806,43 @@ export class BrokerDB implements BrokerDBInterface {
     }));
   }
 
+  getMessagesByIds(messageIds: number[]): BrokerMessage[] {
+    if (messageIds.length === 0) {
+      return [];
+    }
+
+    const db = this.getDb();
+    const placeholders = messageIds.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `SELECT id, thread_id, source, direction, sender, body, metadata, created_at
+         FROM messages
+         WHERE id IN (${placeholders})
+         ORDER BY id ASC`,
+      )
+      .all(...messageIds) as unknown as Array<{
+      id: number;
+      thread_id: string;
+      source: string;
+      direction: string;
+      sender: string;
+      body: string;
+      metadata: string | null;
+      created_at: string;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      threadId: row.thread_id,
+      source: row.source,
+      direction: row.direction as "inbound" | "outbound",
+      sender: row.sender,
+      body: row.body,
+      metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+      createdAt: row.created_at,
+    }));
+  }
+
   markDelivered(inboxIds: number[], agentId?: string): void {
     if (inboxIds.length === 0) return;
     const db = this.getDb();

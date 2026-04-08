@@ -5,6 +5,7 @@ import {
   extractTaskAssignmentsFromMessage,
   getPendingTaskAssignmentReport,
   hasTaskAssignmentStatusChange,
+  normalizeTrackedTaskAssignments,
   resolveTaskAssignments,
   type CommandRunner,
 } from "./task-assignments.js";
@@ -48,11 +49,106 @@ describe("extractTaskAssignmentsFromMessage", () => {
     ]);
   });
 
-  it("ignores PR references when extracting task assignments", () => {
-    const message = "Please follow up on Issue #114. Related PR #171 already exists.";
+  it("extracts the canonical issue from an issue/pr handoff and ignores historical status references", () => {
+    const message = [
+      "Status:",
+      "- PR #291 closed in favor of issue #293",
+      "- PR #292 is now the only remaining blocker",
+      "",
+      "Your lane:",
+      "- Issue/PR: #287 / PR #292",
+      "- Branch: `fix/pinet-follow-auth-method`",
+    ].join("\n");
 
     expect(extractTaskAssignmentsFromMessage(message)).toEqual([
-      { issueNumber: 114, branch: null },
+      { issueNumber: 287, branch: "fix/pinet-follow-auth-method" },
+    ]);
+  });
+
+  it("ignores update and status-only messages that are not real assignments", () => {
+    const message = [
+      "Update: PR #272 is merged, issue #271 is closed, issue #273 is closed as absorbed, and PR #274 is closed as superseded.",
+      "I also opened #275 for the separate purge-grace question.",
+      "Please stand down and return idle/free.",
+    ].join("\n");
+
+    expect(extractTaskAssignmentsFromMessage(message)).toEqual([]);
+  });
+});
+
+describe("normalizeTrackedTaskAssignments", () => {
+  it("drops stale update rows and repairs the canonical issue and branch from the source message", () => {
+    const assignments = [
+      makeAssignment({
+        id: 23,
+        agentId: "worker-1",
+        issueNumber: 293,
+        branch: "fix/pinet-follow-auth-method",
+        status: "pr_merged",
+        prNumber: 292,
+        sourceMessageId: 2146,
+        updatedAt: "2026-04-08T12:20:26.626Z",
+      }),
+      makeAssignment({
+        id: 22,
+        agentId: "worker-1",
+        issueNumber: 287,
+        status: "assigned",
+        sourceMessageId: 1822,
+        updatedAt: "2026-04-08T10:30:48.213Z",
+      }),
+      makeAssignment({
+        id: 15,
+        agentId: "worker-2",
+        issueNumber: 271,
+        status: "assigned",
+        sourceMessageId: 1575,
+        updatedAt: "2026-04-08T09:28:12.228Z",
+      }),
+    ];
+
+    const normalized = normalizeTrackedTaskAssignments(
+      assignments,
+      new Map([
+        [
+          1822,
+          [
+            "Small add-on for your PR #289 read-only review.",
+            "Please include one extra line in your verdict:",
+            "- whether PR #289 likely also resolves issue #287",
+          ].join("\n"),
+        ],
+        [
+          2146,
+          [
+            "Status:",
+            "- PR #291 closed in favor of issue #293",
+            "- PR #292 is now the only remaining blocker",
+            "",
+            "Your lane:",
+            "- Issue/PR: #287 / PR #292",
+            "- Branch: `fix/pinet-follow-auth-method`",
+          ].join("\n"),
+        ],
+        [
+          1575,
+          [
+            "Update: PR #272 is merged, issue #271 is closed, issue #273 is closed as absorbed, and PR #274 is closed as superseded.",
+            "I also opened #275 for the separate purge-grace question.",
+            "Please stand down and return idle/free.",
+          ].join("\n"),
+        ],
+      ]),
+    );
+
+    expect(normalized).toEqual([
+      expect.objectContaining({
+        id: 23,
+        issueNumber: 287,
+        branch: "fix/pinet-follow-auth-method",
+        prNumber: 292,
+        status: "pr_merged",
+      }),
     ]);
   });
 });
@@ -151,7 +247,14 @@ describe("resolveTaskAssignments", () => {
     const assignments = await resolveTaskAssignments(
       [
         makeAssignment({ id: 1, agentId: "worker-1", issueNumber: 114, branch: "feat/open-pr" }),
-        makeAssignment({ id: 2, agentId: "worker-2", issueNumber: 115, branch: "feat/merged-pr" }),
+        makeAssignment({
+          id: 2,
+          agentId: "worker-2",
+          issueNumber: 115,
+          branch: "feat/merged-pr",
+          status: "pr_open",
+          prNumber: 202,
+        }),
       ],
       "/repo",
       runner,
@@ -204,6 +307,86 @@ describe("resolveTaskAssignments", () => {
 
     expect(assignment.nextStatus).toBe("pr_merged");
     expect(assignment.nextPrNumber).toBe(202);
+  });
+
+  it("does not attach a historical merged PR to an open issue without prior PR linkage", async () => {
+    const runner: CommandRunner = vi.fn(async (file, args) => {
+      if (
+        file === "git" &&
+        args.slice(0, 4).join(" ") === "rev-parse --verify --quiet origin/main"
+      ) {
+        return { stdout: "origin/main\n" };
+      }
+      if (file === "git" && args[0] === "rev-parse") {
+        return { stdout: `${args.at(-1)}\n` };
+      }
+      if (file === "git" && args[0] === "rev-list") {
+        return { stdout: "0\n" };
+      }
+      if (file === "gh" && args[0] === "issue" && args[1] === "view") {
+        return { stdout: JSON.stringify({ number: 287, state: "OPEN" }) };
+      }
+      if (file === "gh" && args[0] === "pr" && args[1] === "list") {
+        return {
+          stdout: JSON.stringify([
+            {
+              number: 292,
+              state: "CLOSED",
+              mergedAt: "2026-04-08T12:20:08.000Z",
+              headRefName: "fix/pinet-follow-auth-method",
+            },
+          ]),
+        };
+      }
+      throw new Error(`unexpected command: ${file} ${args.join(" ")}`);
+    });
+
+    const [assignment] = await resolveTaskAssignments(
+      [
+        makeAssignment({
+          id: 1,
+          agentId: "worker-1",
+          issueNumber: 287,
+          branch: "fix/pinet-follow-auth-method",
+          status: "assigned",
+          prNumber: null,
+        }),
+      ],
+      "/repo",
+      runner,
+    );
+
+    expect(assignment.nextStatus).toBe("assigned");
+    expect(assignment.nextPrNumber).toBeNull();
+  });
+
+  it("marks closed issues as hidden historical residue", async () => {
+    const runner: CommandRunner = vi.fn(async (file, args) => {
+      if (
+        file === "git" &&
+        args.slice(0, 4).join(" ") === "rev-parse --verify --quiet origin/main"
+      ) {
+        return { stdout: "origin/main\n" };
+      }
+      if (file === "gh" && args[0] === "issue" && args[1] === "view") {
+        return { stdout: JSON.stringify({ number: 271, state: "CLOSED" }) };
+      }
+      if (file === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]\n" };
+      }
+      throw new Error(`unexpected command: ${file} ${args.join(" ")}`);
+    });
+
+    const [assignment] = await resolveTaskAssignments(
+      [makeAssignment({ id: 1, agentId: "worker-1", issueNumber: 271, status: "assigned" })],
+      "/repo",
+      runner,
+    );
+
+    expect(assignment.nextStatus).toBe("assigned");
+    expect(assignment.nextPrNumber).toBeNull();
+    expect(assignment.issueState).toBe("CLOSED");
+    expect(hasTaskAssignmentStatusChange(assignment)).toBe(false);
   });
 });
 
@@ -268,6 +451,25 @@ describe("buildTaskAssignmentReport", () => {
         "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️",
       ].join("\n"),
     );
+  });
+
+  it("hides closed issues even when the stored status is still assigned", () => {
+    const closedAssignment = {
+      ...makeAssignment({
+        id: 1,
+        agentId: "worker-2",
+        issueNumber: 271,
+        status: "assigned",
+      }),
+      issueState: "CLOSED" as const,
+    };
+
+    const report = buildTaskAssignmentReport(
+      [closedAssignment],
+      new Map([["worker-2", makeAgent("worker-2", "Frozen Raven", "🐦‍⬛")]]),
+    );
+
+    expect(report).toBeNull();
   });
 });
 

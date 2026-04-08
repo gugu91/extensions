@@ -19,6 +19,7 @@ import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import {
   getPendingTaskAssignmentReport,
   hasTaskAssignmentStatusChange,
+  normalizeTrackedTaskAssignments,
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
 } from "./task-assignments.js";
@@ -200,7 +201,22 @@ export async function runRalphLoopCycle(
       workloads.map((workload) => [workload.id, { emoji: workload.emoji, name: workload.name }]),
     );
     let projectedAssignments: ResolvedTaskAssignment[] = [];
-    const trackedAssignments = db.listTaskAssignments();
+    const rawTrackedAssignments = db.listTaskAssignments();
+    const trackedAssignmentSourceIds = [
+      ...new Set(
+        rawTrackedAssignments
+          .map((assignment) => assignment.sourceMessageId)
+          .filter((messageId): messageId is number => messageId != null),
+      ),
+    ];
+    const trackedAssignments = normalizeTrackedTaskAssignments(
+      rawTrackedAssignments,
+      new Map(
+        db
+          .getMessagesByIds(trackedAssignmentSourceIds)
+          .map((message) => [message.id, message.body]),
+      ),
+    );
     if (trackedAssignments.length === 0) {
       state.pendingTaskAssignmentReport = null;
       state.taskAssignmentReportSignature = "";
