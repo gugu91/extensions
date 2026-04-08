@@ -41,7 +41,7 @@ const EXPLICIT_BRANCH_LABEL_REGEX =
   /\bbranch(?:\s+to\s+work\s+on|\s+name)?\s*:\s*[`"']?([A-Za-z0-9._/-]+)\b/i;
 const ISSUE_PR_LINE_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\/pr\s*:\s*#(\d+)\b/gi;
 const ISSUE_LINE_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\s*:\s*#(\d+)\b/gi;
-const ISSUE_HEADING_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\s+#(\d+)\b/gi;
+const ISSUE_HEADING_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\s+#(\d+)(?=\s*(?:[—–:-]|$))/gi;
 const TASK_ISSUE_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?task\s*:\s*[^\n#]*\bissue\s*#(\d+)\b/gi;
 const NEW_TASK_ISSUE_REGEX =
   /(?:^|\n)\s*(?:[-*]\s*)?new(?:\s+[a-z-]+){0,3}\s+task\b[^\n#]*\bissue\s*#(\d+)\b/gi;

@@ -74,6 +74,18 @@ describe("extractTaskAssignmentsFromMessage", () => {
 
     expect(extractTaskAssignmentsFromMessage(message)).toEqual([]);
   });
+
+  it("does not treat issue-opened update bullets as assignments", () => {
+    const message = [
+      "Update from the thicket:",
+      "- PR #272 merged",
+      "- PR #274 closed as superseded",
+      "- issue #275 opened to preserve the separate purge-grace idea",
+      "No further action needed unless you want to acknowledge cleanup complete and return idle/free.",
+    ].join("\n");
+
+    expect(extractTaskAssignmentsFromMessage(message)).toEqual([]);
+  });
 });
 
 describe("normalizeTrackedTaskAssignments", () => {
@@ -96,6 +108,15 @@ describe("normalizeTrackedTaskAssignments", () => {
         status: "assigned",
         sourceMessageId: 1822,
         updatedAt: "2026-04-08T10:30:48.213Z",
+      }),
+      makeAssignment({
+        id: 17,
+        agentId: "worker-3",
+        issueNumber: 275,
+        branch: "hygiene",
+        status: "assigned",
+        sourceMessageId: 1573,
+        updatedAt: "2026-04-08T09:28:12.227Z",
       }),
       makeAssignment({
         id: 15,
@@ -128,6 +149,16 @@ describe("normalizeTrackedTaskAssignments", () => {
             "Your lane:",
             "- Issue/PR: #287 / PR #292",
             "- Branch: `fix/pinet-follow-auth-method`",
+          ].join("\n"),
+        ],
+        [
+          1573,
+          [
+            "Update from the thicket:",
+            "- PR #272 merged",
+            "- PR #274 closed as superseded",
+            "- issue #275 opened to preserve the separate purge-grace idea",
+            "No further action needed unless you want to acknowledge cleanup complete and return idle/free.",
           ].join("\n"),
         ],
         [
