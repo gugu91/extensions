@@ -1470,6 +1470,81 @@ describe("BrokerDB", () => {
     expect(db.getBacklogCount("dropped")).toBe(0);
   });
 
+  it("markDelivered leaves assigned untargeted backlog intact after ack", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    const backlog = db.queueUnroutedMessage(
+      {
+        source: "slack",
+        threadId: "t-untargeted-ack",
+        channel: "C1",
+        userId: "U1",
+        text: "leave this assigned",
+        timestamp: "100.200",
+      },
+      "no_route",
+    );
+
+    expect(db.assignBacklogEntry(backlog.id, "worker-1")?.status).toBe("assigned");
+
+    const inbox = db.getInbox("worker-1");
+    expect(inbox).toHaveLength(1);
+
+    db.markDelivered([inbox[0].entry.id], "worker-1");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    const row = sqlite
+      .prepare(
+        "SELECT status, preferred_agent_id, assigned_agent_id FROM unrouted_backlog WHERE id = ?",
+      )
+      .get(backlog.id) as
+      | { status: string; preferred_agent_id: string | null; assigned_agent_id: string | null }
+      | undefined;
+
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getBacklogCount("assigned")).toBe(1);
+    expect(row).toEqual({
+      status: "assigned",
+      preferred_agent_id: null,
+      assigned_agent_id: "worker-1",
+    });
+  });
+
+  it("markDeliveredByMessageId leaves assigned untargeted backlog intact after ack", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+    const backlog = db.queueUnroutedMessage(
+      {
+        source: "slack",
+        threadId: "t-untargeted-ack-by-message",
+        channel: "C1",
+        userId: "U1",
+        text: "leave this assigned too",
+        timestamp: "100.200",
+      },
+      "no_route",
+    );
+
+    expect(db.assignBacklogEntry(backlog.id, "worker-1")?.status).toBe("assigned");
+
+    db.markDeliveredByMessageId(backlog.messageId, "worker-1");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    const row = sqlite
+      .prepare(
+        "SELECT status, preferred_agent_id, assigned_agent_id FROM unrouted_backlog WHERE id = ?",
+      )
+      .get(backlog.id) as
+      | { status: string; preferred_agent_id: string | null; assigned_agent_id: string | null }
+      | undefined;
+
+    expect(db.getInbox("worker-1")).toHaveLength(0);
+    expect(db.getBacklogCount("assigned")).toBe(1);
+    expect(row).toEqual({
+      status: "assigned",
+      preferred_agent_id: null,
+      assigned_agent_id: "worker-1",
+    });
+  });
+
   it("insertMessage with metadata round-trips JSON", () => {
     db.registerAgent("a1", "Agent", "🔵", 1);
     db.createThread("t1", "slack", "#general", "a1");
