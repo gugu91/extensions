@@ -9,10 +9,16 @@ export interface ThreadRepairResult {
   releasedAgentIds: string[];
 }
 
+export interface BacklogAssignmentRepairResult {
+  resetToPendingCount: number;
+  droppedCount: number;
+}
+
 export interface BrokerMaintenanceDB {
   pruneStaleAgents(staleAfterMs: number): string[];
   purgeDisconnectedAgents(graceMs?: number): string[];
   repairThreadOwnership(): ThreadRepairResult;
+  repairOrphanedAssignedBacklog(): BacklogAssignmentRepairResult;
   requeueUndeliveredMessages(agentId: string, reason?: string): number;
   getPendingBacklog(limit?: number): BacklogEntry[];
   getBacklogCount(status?: BacklogEntry["status"]): number;
@@ -82,6 +88,7 @@ export function runBrokerMaintenancePass(
   for (const agentId of repaired.releasedAgentIds) {
     db.requeueUndeliveredMessages(agentId, "agent_disconnected");
   }
+  const repairedAssignments = db.repairOrphanedAssignedBacklog();
   const repairedThreadClaims = repaired.releasedClaimCount;
   const brokerAgentId = options.brokerAgentId;
 
@@ -97,7 +104,8 @@ export function runBrokerMaintenancePass(
 
   const nudgedAgentIds = new Set<string>();
   let assignedBacklogCount = 0;
-  let droppedBacklogCount = 0;
+  const resetAssignedBacklogCount = repairedAssignments.resetToPendingCount;
+  let droppedBacklogCount = repairedAssignments.droppedCount;
 
   for (const backlog of db.getPendingBacklog(options.backlogLimit ?? 50)) {
     const preferredAgent = backlog.preferredAgentId
@@ -150,6 +158,11 @@ export function runBrokerMaintenancePass(
   if (repairedThreadClaims > 0) {
     anomalies.push(
       `released ${repairedThreadClaims} orphaned thread claim${repairedThreadClaims === 1 ? "" : "s"}`,
+    );
+  }
+  if (resetAssignedBacklogCount > 0) {
+    anomalies.push(
+      `reset ${resetAssignedBacklogCount} orphaned targeted backlog assignment${resetAssignedBacklogCount === 1 ? "" : "s"} to pending`,
     );
   }
   if (droppedBacklogCount > 0) {

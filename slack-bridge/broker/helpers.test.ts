@@ -1198,10 +1198,9 @@ describe("BrokerDB", () => {
     expect(db.getThread("t-gone-maint")?.ownerAgent).toBeNull();
   });
 
-  it("maintenance drops stale targeted backlog once the preferred agent is purged", () => {
+  it("maintenance resets orphaned assigned targeted backlog to pending while the preferred agent is still resumable", () => {
     db.registerAgent("sender", "Sender", "📤", 1);
     db.registerAgent("receiver", "Receiver", "📥", 2);
-    db.registerAgent("idle-worker", "Idle Worker", "🫡", 3);
     db.createThread("a2a:sender:receiver", "agent", "", "sender");
     db.insertMessage(
       "a2a:sender:receiver",
@@ -1215,12 +1214,75 @@ describe("BrokerDB", () => {
         a2a: true,
       },
     );
-    db.unregisterAgent("receiver");
+    db.requeueUndeliveredMessages("receiver");
+
+    const backlog = db.getPendingBacklog()[0];
+    expect(backlog.preferredAgentId).toBe("receiver");
+    db.assignBacklogEntry(backlog.id, "receiver");
+    db.disconnectAgent("receiver", 60_000);
 
     const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
     sqlite
-      .prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?")
-      .run(new Date(Date.now() - 2 * 60 * 60_000).toISOString(), "receiver");
+      .prepare("DELETE FROM inbox WHERE message_id = ? AND agent_id = ?")
+      .run(backlog.messageId, "receiver");
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    const repairedBacklog = sqlite
+      .prepare(
+        "SELECT status, reason, preferred_agent_id, assigned_agent_id FROM unrouted_backlog WHERE id = ?",
+      )
+      .get(backlog.id) as
+      | {
+          status: string;
+          reason: string;
+          preferred_agent_id: string | null;
+          assigned_agent_id: string | null;
+        }
+      | undefined;
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(result.anomalies).toContain("reset 1 orphaned targeted backlog assignment to pending");
+    expect(db.getAgentById("receiver")).not.toBeNull();
+    expect(repairedBacklog).toEqual({
+      status: "pending",
+      reason: "agent_disconnected",
+      preferred_agent_id: "receiver",
+      assigned_agent_id: null,
+    });
+  });
+
+  it("maintenance drops stale targeted backlog once the preferred agent is purged", () => {
+    db.registerAgent("sender", "Sender", "📤", 1);
+    db.registerAgent("receiver", "Receiver", "📥", 2);
+    db.createThread("a2a:sender:receiver", "agent", "", "sender");
+    db.insertMessage(
+      "a2a:sender:receiver",
+      "agent",
+      "inbound",
+      "sender",
+      "please pick this up",
+      ["receiver"],
+      {
+        senderAgent: "Sender",
+        a2a: true,
+      },
+    );
+    db.requeueUndeliveredMessages("receiver");
+
+    const backlog = db.getPendingBacklog()[0];
+    expect(backlog.preferredAgentId).toBe("receiver");
+    db.assignBacklogEntry(backlog.id, "receiver");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare("DELETE FROM inbox WHERE message_id = ? AND agent_id = ?")
+      .run(backlog.messageId, "receiver");
+    sqlite.prepare("DELETE FROM agents WHERE id = ?").run("receiver");
 
     const result = runBrokerMaintenancePass(db, {
       staleAfterMs: 15_000,
@@ -1229,10 +1291,15 @@ describe("BrokerDB", () => {
 
     const droppedBacklog = sqlite
       .prepare(
-        "SELECT status, reason, preferred_agent_id FROM unrouted_backlog WHERE thread_id = ?",
+        "SELECT status, reason, preferred_agent_id, assigned_agent_id FROM unrouted_backlog WHERE id = ?",
       )
-      .get("a2a:sender:receiver") as
-      | { status: string; reason: string; preferred_agent_id: string | null }
+      .get(backlog.id) as
+      | {
+          status: string;
+          reason: string;
+          preferred_agent_id: string | null;
+          assigned_agent_id: string | null;
+        }
       | undefined;
 
     expect(result.pendingBacklogCount).toBe(0);
@@ -1245,6 +1312,7 @@ describe("BrokerDB", () => {
       status: "dropped",
       reason: "preferred_agent_missing",
       preferred_agent_id: "receiver",
+      assigned_agent_id: null,
     });
   });
 
