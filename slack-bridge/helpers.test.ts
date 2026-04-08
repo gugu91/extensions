@@ -960,6 +960,9 @@ describe("shortenPath", () => {
 });
 
 describe("Pinet skin helpers", () => {
+  const sentenceCount = (value: string) =>
+    (value.match(/[.!?](?:\s|$)/g) ?? []).length || (value.trim().length > 0 ? 1 : 0);
+
   it("builds the default whimsical skin deterministically", () => {
     const assignment = buildPinetSkinAssignment({
       theme: "default",
@@ -973,7 +976,7 @@ describe("Pinet skin helpers", () => {
     expect(assignment.personality).toContain("Default whimsical worker skin");
   });
 
-  it("builds a custom free-form skin with role-aware identity", () => {
+  it("builds a custom free-form skin with role-aware identity and distinct voice guidance", () => {
     const broker = buildPinetSkinAssignment({
       theme: "night's watch from ASOIAF",
       role: "broker",
@@ -989,6 +992,35 @@ describe("Pinet skin helpers", () => {
     expect(broker.name).not.toBe(worker.name);
     expect(broker.personality).toContain("night's watch from ASOIAF");
     expect(worker.personality).toContain("night's watch from ASOIAF");
+    expect(broker.personality).toContain("broker-side");
+    expect(worker.personality).toContain("worker-side");
+    expect(broker.personality).not.toContain("Lean into the vibe");
+    expect(worker.personality).not.toContain("Lean into the vibe");
+    expect(broker.personality).toMatch(
+      /keep the cadence .* while staying unmistakably broker-side/i,
+    );
+    expect(worker.personality).toMatch(
+      /keep the cadence .* while staying unmistakably worker-side/i,
+    );
+    expect(sentenceCount(broker.personality)).toBeLessThanOrEqual(2);
+    expect(sentenceCount(worker.personality)).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps representative themes distinct in voice, not just generated names", () => {
+    const mythic = buildPinetSkinAssignment({
+      theme: "the fellowship of the ring",
+      role: "worker",
+      seed: "worker-a",
+    });
+    const neon = buildPinetSkinAssignment({
+      theme: "cyberpunk hackers",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(mythic.personality).toContain("the fellowship of the ring");
+    expect(neon.personality).toContain("cyberpunk hackers");
+    expect(mythic.personality).not.toBe(neon.personality);
   });
 
   it("builds and extracts structured skin update metadata for a2a messages", () => {
@@ -1078,13 +1110,17 @@ describe("Pinet skin helpers", () => {
     ]);
   });
 
-  it("builds a prompt guideline for active skin personalities", () => {
-    expect(
-      buildPinetSkinPromptGuideline(
-        "the fellowship of the ring",
-        "Sound like a warm but capable questing specialist.",
-      ),
-    ).toContain("the fellowship of the ring");
+  it("builds a prompt guideline that keeps the flavor creative but safety-railed", () => {
+    const guideline = buildPinetSkinPromptGuideline(
+      "the fellowship of the ring",
+      "Carry the air of the fellowship of the ring — steady, watchful, and warm; keep the cadence weathered, ceremonial, and clean, while staying unmistakably worker-side with exact status, visible blockers, and tight execution.",
+    );
+
+    expect(guideline).toContain("PINET SKIN: the fellowship of the ring");
+    expect(guideline).toContain("Keep the flavor in voice only");
+    expect(guideline).toContain("technical accuracy");
+    expect(guideline).toContain("role separation");
+    expect(sentenceCount(guideline ?? "")).toBeLessThanOrEqual(3);
     expect(buildPinetSkinPromptGuideline(null, "persona")).toBeNull();
   });
 });

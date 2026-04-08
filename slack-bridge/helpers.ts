@@ -1313,7 +1313,7 @@ export function buildPinetSkinPromptGuideline(
   personality: string | null | undefined,
 ): string | null {
   if (!theme || !personality) return null;
-  return `PINET SKIN: ${theme}. Persona: ${personality}`;
+  return `PINET SKIN: ${theme}. Persona: ${personality} Keep the flavor in voice only — never weaken clarity, technical accuracy, blocker/status discipline, or broker/worker role separation.`;
 }
 
 export function buildIdentityReplyGuidelines(
@@ -2281,24 +2281,38 @@ const PINET_SKIN_TRAITS = [
   "confident without being loud",
 ];
 
-const PINET_SKIN_SPEECH_STYLES = [
-  "Speak with crisp, vivid phrasing.",
-  "Keep a little lore and flair in the cadence.",
-  "Sound like a seasoned specialist with strong opinions.",
-  "Use concise status updates with a bit of character.",
-  "Lean into the vibe without becoming hard to understand.",
+const PINET_SKIN_OPENING_TEMPLATES = [
+  "Let {theme} shape the voice",
+  "Carry the air of {theme}",
+  "Draw the cadence from {theme}",
+  "Sound like someone who belongs in {theme}",
 ];
 
-const PINET_SKIN_ROLE_FOCUS = {
+const PINET_SKIN_CADENCE_STYLES = [
+  "terse, vivid, and sure-footed",
+  "weathered, ceremonial, and clean",
+  "cool-headed, high-signal, and slightly dramatic",
+  "dry, sharp, and mission-minded",
+  "quietly theatrical but still easy to parse",
+];
+
+const PINET_SKIN_IMAGERY_STYLES = [
+  "with hints of {motif} in the phrasing",
+  "with a trace of {motif} atmosphere in the wording",
+  "with {motif} imagery kept light and readable",
+  "with {motif} flavor threaded through the cadence",
+];
+
+const PINET_SKIN_ROLE_DISCIPLINE = {
   broker: [
-    "Prioritize mesh coordination, delegation, and calm command presence.",
-    "Act like mission control: delegate clearly, monitor health, and keep the mesh moving.",
-    "Project steady leadership while staying operationally strict.",
+    "staying unmistakably broker-side with calm command, crisp delegation, and clean mesh status",
+    "staying unmistakably broker-side with steady coordination, clear handoffs, and visible system health",
+    "staying unmistakably broker-side with quiet authority, exact routing, and disciplined escalation",
   ],
   worker: [
-    "Prioritize hands-on execution, fast feedback, and visible progress.",
-    "Feel like a field specialist: practical, autonomous, and good at reporting blockers.",
-    "Bring a little swagger, but keep the work precise and accountable.",
+    "staying unmistakably worker-side with exact status, visible blockers, and tight execution",
+    "staying unmistakably worker-side with practical progress, crisp handoffs, and honest blocker reports",
+    "staying unmistakably worker-side with direct implementation, precise updates, and clean closure",
   ],
 } as const;
 
@@ -2318,6 +2332,52 @@ function singularizeSkinToken(token: string): string {
 
 function pickSkinValue<T>(values: readonly T[], seed: string, label: string): T {
   return values[hashString(`${seed}:${label}`) % values.length];
+}
+
+function pickDistinctSkinValues<T>(values: readonly T[], seed: string, labels: string[]): T[] {
+  const picked: T[] = [];
+  for (const label of labels) {
+    let next = pickSkinValue(values, seed, label);
+    if (picked.includes(next)) {
+      const startIndex = values.indexOf(next);
+      for (let offset = 1; offset < values.length; offset += 1) {
+        const candidate = values[(startIndex + offset) % values.length];
+        if (!picked.includes(candidate)) {
+          next = candidate;
+          break;
+        }
+      }
+    }
+    if (!picked.includes(next)) {
+      picked.push(next);
+    }
+  }
+  return picked;
+}
+
+function renderSkinTemplate(template: string, values: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_match, key: string) => values[key] ?? "");
+}
+
+function formatSkinTraitList(traits: string[]): string {
+  if (traits.length === 0) {
+    return "steady, clear, and dependable";
+  }
+  if (traits.length === 1) {
+    return traits[0] ?? "steady";
+  }
+  if (traits.length === 2) {
+    return `${traits[0]} and ${traits[1]}`;
+  }
+  return `${traits.slice(0, -1).join(", ")}, and ${traits.at(-1)}`;
+}
+
+function buildSkinMotif(primary: string, secondary: string): string {
+  const normalizedPrimary = primary.toLowerCase();
+  const normalizedSecondary = secondary.toLowerCase();
+  return normalizedPrimary === normalizedSecondary
+    ? normalizedPrimary
+    : `${normalizedPrimary} and ${normalizedSecondary}`;
 }
 
 function getPinetSkinTokens(theme: string): string[] {
@@ -2375,24 +2435,33 @@ export function buildPinetSkinAssignment(options: {
     options.role === "broker"
       ? pickSkinValue(PINET_SKIN_BROKER_EMOJIS, options.seed, "leader-emoji")
       : pickSkinValue(PINET_SKIN_WORKER_EMOJIS, options.seed, "worker-emoji");
-  const firstTrait = pickSkinValue(PINET_SKIN_TRAITS, options.seed, "trait-a");
-  const secondTrait = pickSkinValue(
+  const [firstTrait, secondTrait, thirdTrait] = pickDistinctSkinValues(
     PINET_SKIN_TRAITS,
-    `${options.seed}:${normalizedTheme}`,
-    "trait-b",
+    options.seed,
+    ["trait-a", `${normalizedTheme}:trait-b`, `${options.role}:trait-c`],
   );
-  const speechStyle = pickSkinValue(PINET_SKIN_SPEECH_STYLES, options.seed, "speech-style");
-  const roleFocus = pickSkinValue(PINET_SKIN_ROLE_FOCUS[options.role], options.seed, "role-focus");
+  const openingTemplate = pickSkinValue(PINET_SKIN_OPENING_TEMPLATES, options.seed, "opening");
+  const cadenceStyle = pickSkinValue(PINET_SKIN_CADENCE_STYLES, options.seed, "cadence-style");
+  const imageryStyle = pickSkinValue(PINET_SKIN_IMAGERY_STYLES, options.seed, "imagery-style");
+  const roleDiscipline = pickSkinValue(
+    PINET_SKIN_ROLE_DISCIPLINE[options.role],
+    options.seed,
+    "role-discipline",
+  );
   const workerCore = secondary === modifier ? primary : secondary;
   const name =
     options.role === "broker" ? `${primary} ${title}` : `${modifier} ${workerCore} ${title}`;
+  const traitList = formatSkinTraitList([firstTrait, secondTrait, thirdTrait].filter(Boolean));
+  const motif = buildSkinMotif(primary, secondary);
+  const opening = renderSkinTemplate(openingTemplate, { theme: normalizedTheme });
+  const imagery = renderSkinTemplate(imageryStyle, { motif });
 
   return {
     theme: normalizedTheme,
     role: options.role,
     name,
     emoji,
-    personality: `Lean into the vibe of "${normalizedTheme}". Be ${firstTrait}, ${secondTrait}. ${speechStyle} ${roleFocus}`,
+    personality: `${opening} — ${traitList}; keep the cadence ${cadenceStyle}, ${imagery}, while ${roleDiscipline}.`,
   };
 }
 
