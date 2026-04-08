@@ -2,9 +2,40 @@
 
 All notable changes to this repository are documented in this file.
 
+## [0.1.2] - 2026-04-08
+
+Pinet v0.1.2 is a refreshed patch release for `@gugu910/pi-slack-bridge` cut from current `main`. The earlier `0.1.1` repo prep never shipped to npm, so this release supersedes that unpublished cut while keeping the release surface intentionally focused: the Slack bridge package bumps to `0.1.2`, the private monorepo package moves to `0.1.2` for repo-level version tracking, and the other workspace packages stay at their current versions.
+
+### Version verification
+
+- `pi-extensions` — `0.1.2` (private repo package)
+- `@gugu910/pi-slack-bridge` — `0.1.2`
+- `@gugu910/pi-nvim-bridge` — `0.1.0` (unchanged)
+- `@gugu910/pi-neon-psql` — `0.1.0` (unchanged)
+- `@gugu910/pi-slack-api` — `0.2.0` (unchanged)
+
+### Release highlights
+
+- Carries forward the unpublished `0.1.1` prep surface already on `main`: mesh-auth hardening, structured control messages, Home tab/dashboard work, stable-ID thread binding, backlog recovery, and `slack_project_create`.
+- Finishes publish-surface polish for the public Slack bridge package, including MIT license packaging, runtime TypeBox dependency placement, and dry-run pack verification improvements.
+- Fixes several operator-facing Pinet reliability gaps that landed after the original `0.1.1` prep: closeout ack echo loops, stale worker-status residue, broker-targeted backlog recovery during inbox sync, top-level Slack tool recovery after reload, bogus operator-update task residue, and Slack thread reply routing / durable explicit takeover handling.
+- Includes the merged helper-only skin-voice guidance refresh that shipped on `main` after the earlier prep.
+
+### Included pull requests since the unpublished `0.1.1` prep
+
+- [#302](https://github.com/gugu91/extensions/pull/302) — chore: adopt MIT license for repo and workspace packages
+- [#303](https://github.com/gugu91/extensions/pull/303) — fix: stop Pinet closeout acknowledgement echo loops (#299)
+- [#305](https://github.com/gugu91/extensions/pull/305) — fix: finish slack-bridge 0.1.1 publish hygiene
+- [#306](https://github.com/gugu91/extensions/pull/306) — fix: stop stale worker status residue
+- [#308](https://github.com/gugu91/extensions/pull/308) — fix: recover broker-targeted backlog during inbox sync (#307)
+- [#310](https://github.com/gugu91/extensions/pull/310) — fix: recover top-level Slack tools after reload (#279)
+- [#311](https://github.com/gugu91/extensions/pull/311) — fix: stop operator update task residue (#309)
+- [#313](https://github.com/gugu91/extensions/pull/313) — feat: enrich Pinet skin voice guidance (#270)
+- [#321](https://github.com/gugu91/extensions/pull/321) — fix: keep Slack thread replies on the right worker (#319)
+
 ## [0.1.1] - 2026-04-08
 
-Pinet v0.1.1 is a targeted patch release for `@gugu910/pi-slack-bridge`. The release surface is intentionally minimal: the Slack bridge package bumps to `0.1.1`, the private monorepo package moves to `0.1.1` for repo-level version tracking, and the other workspace packages stay at their current versions.
+Pinet v0.1.1 was the original unpublished release-prep cut for `@gugu910/pi-slack-bridge`. It is kept here for historical context because `0.1.2` supersedes it as the first publish-ready patch cut after `0.1.0`.
 
 ### Version verification
 
