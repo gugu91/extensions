@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import {
   assessUrl,
   buildInstallInstructions,
+  normalizeStorageStatePath,
+  resolveStorageStatePath,
   safeRequestPageId,
   sanitizeLabel,
+  STORAGE_STATE_RELATIVE_DIR,
   truncateText,
   type SecurityOptions,
 } from "./helpers.ts";
@@ -117,4 +123,69 @@ test("truncateText trims oversized content and marks truncation", () => {
   const result = truncateText(input, 20, 3);
   assert.match(result, /truncated/);
   assert.doesNotMatch(result, /line-9/);
+});
+
+test("normalizeStorageStatePath keeps storage state files under the guarded directory", () => {
+  assert.equal(
+    normalizeStorageStatePath("github-login.json"),
+    `${STORAGE_STATE_RELATIVE_DIR}/github-login.json`,
+  );
+  assert.equal(
+    normalizeStorageStatePath(`${STORAGE_STATE_RELATIVE_DIR}/nested/auth.json`),
+    `${STORAGE_STATE_RELATIVE_DIR}/nested/auth.json`,
+  );
+});
+
+test("normalizeStorageStatePath rejects absolute paths, traversal, and non-json files", () => {
+  assert.throws(() => normalizeStorageStatePath("/tmp/auth.json"), /workspace-local/);
+  assert.throws(() => normalizeStorageStatePath("../auth.json"), /traversal/i);
+  assert.throws(() => normalizeStorageStatePath("auth.txt"), /\.json/);
+});
+
+test("resolveStorageStatePath prepares safe write targets under the guarded workspace directory", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "browser-playwright-state-write-"));
+  const resolved = await resolveStorageStatePath(workspaceRoot, "team/login.json", "write");
+
+  assert.equal(resolved.relativePath, `${STORAGE_STATE_RELATIVE_DIR}/team/login.json`);
+  assert.equal(
+    resolved.absolutePath,
+    resolve(await realpath(workspaceRoot), `${STORAGE_STATE_RELATIVE_DIR}/team/login.json`),
+  );
+});
+
+test("resolveStorageStatePath reads workspace-local storage state files", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "browser-playwright-state-read-"));
+  const target = resolve(workspaceRoot, `${STORAGE_STATE_RELATIVE_DIR}/saved/login.json`);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, JSON.stringify({ cookies: [], origins: [] }), { encoding: "utf8" });
+
+  const resolved = await resolveStorageStatePath(
+    workspaceRoot,
+    `${STORAGE_STATE_RELATIVE_DIR}/saved/login.json`,
+    "read",
+  );
+
+  assert.equal(resolved.relativePath, `${STORAGE_STATE_RELATIVE_DIR}/saved/login.json`);
+  assert.equal(resolved.absolutePath, await realpath(target));
+});
+
+test("resolveStorageStatePath rejects symlink escapes for reads and writes", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "browser-playwright-state-symlink-"));
+  const outsideRoot = await mkdtemp(join(tmpdir(), "browser-playwright-state-outside-"));
+  const storageRoot = resolve(workspaceRoot, STORAGE_STATE_RELATIVE_DIR);
+  const linkPath = resolve(storageRoot, "linked.json");
+  const outsideFile = resolve(outsideRoot, "outside.json");
+
+  await mkdir(dirname(linkPath), { recursive: true });
+  await writeFile(outsideFile, JSON.stringify({ cookies: [], origins: [] }), { encoding: "utf8" });
+  await symlink(outsideFile, linkPath);
+
+  await assert.rejects(
+    () => resolveStorageStatePath(workspaceRoot, "linked.json", "read"),
+    /symlink|outside the guarded workspace directory/,
+  );
+  await assert.rejects(
+    () => resolveStorageStatePath(workspaceRoot, "linked.json", "write"),
+    /symlink|outside the guarded workspace directory/,
+  );
 });

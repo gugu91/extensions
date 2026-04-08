@@ -1,3 +1,6 @@
+import { lstat, mkdir, realpath } from "node:fs/promises";
+import { dirname, extname, isAbsolute, normalize, relative, resolve } from "node:path";
+
 export type UrlDecision =
   | { allowed: true }
   | {
@@ -14,6 +17,7 @@ export type SecurityOptions = {
 export type SupportedBrowserEngine = "chromium" | "firefox" | "webkit";
 
 export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
+export const STORAGE_STATE_RELATIVE_DIR = ".pi/artifacts/browser-playwright/storage-state";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
 
@@ -87,6 +91,124 @@ export function safeRequestPageId<PageLike>(
   } catch {
     return null;
   }
+}
+
+function isSubpath(basePath: string, targetPath: string): boolean {
+  const rel = relative(basePath, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+export function normalizeStorageStatePath(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    throw new Error("storage_state_path must be a non-empty relative JSON path.");
+  }
+  if (trimmed.includes("\0")) {
+    throw new Error("storage_state_path must not contain NUL bytes.");
+  }
+  if (trimmed.split(/[\\/]+/).some((segment) => segment === "..")) {
+    throw new Error(
+      `storage_state_path must stay within \`${STORAGE_STATE_RELATIVE_DIR}/\` and cannot use traversal segments.`,
+    );
+  }
+
+  const normalizedInput = normalize(trimmed).replace(/\\/g, "/").replace(/^\.\//, "");
+  if (isAbsolute(normalizedInput) || /^[A-Za-z]:\//.test(normalizedInput)) {
+    throw new Error("storage_state_path must be relative and workspace-local.");
+  }
+
+  const relativePath =
+    normalizedInput === STORAGE_STATE_RELATIVE_DIR ||
+    normalizedInput.startsWith(`${STORAGE_STATE_RELATIVE_DIR}/`)
+      ? normalizedInput
+      : `${STORAGE_STATE_RELATIVE_DIR}/${normalizedInput}`;
+
+  if (
+    relativePath === STORAGE_STATE_RELATIVE_DIR ||
+    relativePath.endsWith("/") ||
+    relativePath.split("/").some((segment) => segment === "..")
+  ) {
+    throw new Error(
+      `storage_state_path must stay within \`${STORAGE_STATE_RELATIVE_DIR}/\` and cannot use traversal segments.`,
+    );
+  }
+
+  if (extname(relativePath).toLowerCase() !== ".json") {
+    throw new Error("storage_state_path must end with `.json`.");
+  }
+
+  return relativePath;
+}
+
+export async function resolveStorageStatePath(
+  workspaceRoot: string,
+  input: string,
+  mode: "read" | "write",
+): Promise<{ absolutePath: string; relativePath: string }> {
+  const workspaceRootReal = await realpath(workspaceRoot);
+  const relativePath = normalizeStorageStatePath(input);
+  const absolutePath = resolve(workspaceRootReal, relativePath);
+  const storageStateRoot = resolve(workspaceRootReal, STORAGE_STATE_RELATIVE_DIR);
+
+  if (!isSubpath(storageStateRoot, absolutePath)) {
+    throw new Error(
+      `storage_state_path must resolve inside \`${STORAGE_STATE_RELATIVE_DIR}/\` within the workspace.`,
+    );
+  }
+
+  if (mode === "write") {
+    await mkdir(dirname(absolutePath), { recursive: true });
+    const parentReal = await realpath(dirname(absolutePath));
+    if (!isSubpath(storageStateRoot, parentReal)) {
+      throw new Error("Refusing to write storage state outside the guarded workspace directory.");
+    }
+
+    try {
+      const existing = await lstat(absolutePath);
+      if (existing.isSymbolicLink()) {
+        throw new Error(`Refusing to write storage state through symlink: ${relativePath}`);
+      }
+      if (!existing.isFile()) {
+        throw new Error(`Storage state path must point to a regular JSON file: ${relativePath}`);
+      }
+      const existingReal = await realpath(absolutePath);
+      if (!isSubpath(storageStateRoot, existingReal)) {
+        throw new Error("Refusing to write storage state outside the guarded workspace directory.");
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    return { absolutePath, relativePath };
+  }
+
+  let statResult: Awaited<ReturnType<typeof lstat>>;
+  try {
+    statResult = await lstat(absolutePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new Error(`Storage state file not found: ${relativePath}`);
+    }
+    throw error;
+  }
+
+  if (statResult.isSymbolicLink()) {
+    throw new Error(`Refusing to read storage state through symlink: ${relativePath}`);
+  }
+  if (!statResult.isFile()) {
+    throw new Error(`Storage state path must point to a regular JSON file: ${relativePath}`);
+  }
+
+  const realFilePath = await realpath(absolutePath);
+  if (!isSubpath(storageStateRoot, realFilePath)) {
+    throw new Error("Refusing to read storage state outside the guarded workspace directory.");
+  }
+
+  return { absolutePath: realFilePath, relativePath };
 }
 
 function normalizeUrl(input: string): URL {
