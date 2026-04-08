@@ -469,6 +469,49 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("expires requeued a2a work once the intended recipient is purged", async () => {
+    await client.register("sender-agent", "📤", undefined, "host:session:/tmp/sender-expire");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    const reg2 = await client2.register(
+      "receiver-agent",
+      "📥",
+      undefined,
+      "host:session:/tmp/receiver-expire",
+    );
+
+    await client.sendAgentMessage("receiver-agent", "Expire if receiver is gone");
+    await waitFor(() => db.getInbox(reg2.agentId).length === 1);
+
+    await client2.unregister();
+
+    let result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+
+    expect(db.purgeDisconnectedAgents(0)).toEqual([reg2.agentId]);
+
+    result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:20.000Z"),
+    });
+
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(result.anomalies).toContain("expired 1 stale targeted backlog item");
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(1);
+    expect(await client.pollInbox()).toHaveLength(0);
+
+    client2.disconnect();
+  });
+
   it("agent.message returns error for unknown target", async () => {
     await client.register("lonely-agent", "😢");
     await expect(client.sendAgentMessage("ghost-agent", "Hello?")).rejects.toThrow(

@@ -17,9 +17,11 @@ export interface BrokerMaintenanceDB {
   getPendingBacklog(limit?: number): BacklogEntry[];
   getBacklogCount(status?: BacklogEntry["status"]): number;
   getAgents(): AgentInfo[];
+  getAgentById(agentId: string): AgentInfo | null;
   getPendingInboxCount(agentId: string): number;
   getThread(threadId: string): ThreadInfo | null;
   assignBacklogEntry(id: number, agentId: string): BacklogEntry | null;
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null;
 }
 
 export interface BrokerMaintenanceOptions {
@@ -95,12 +97,21 @@ export function runBrokerMaintenancePass(
 
   const nudgedAgentIds = new Set<string>();
   let assignedBacklogCount = 0;
+  let expiredTargetedBacklogCount = 0;
 
   for (const backlog of db.getPendingBacklog(options.backlogLimit ?? 50)) {
     const preferredAgent = backlog.preferredAgentId
       ? (agents.find((agent) => agent.id === backlog.preferredAgentId) ?? null)
       : null;
     if (backlog.preferredAgentId && !preferredAgent) {
+      if (db.getAgentById(backlog.preferredAgentId)) {
+        continue;
+      }
+
+      const dropped = db.dropBacklogEntry(backlog.id, "preferred_agent_missing");
+      if (dropped) {
+        expiredTargetedBacklogCount += 1;
+      }
       continue;
     }
 
@@ -140,6 +151,11 @@ export function runBrokerMaintenancePass(
   if (repairedThreadClaims > 0) {
     anomalies.push(
       `released ${repairedThreadClaims} orphaned thread claim${repairedThreadClaims === 1 ? "" : "s"}`,
+    );
+  }
+  if (expiredTargetedBacklogCount > 0) {
+    anomalies.push(
+      `expired ${expiredTargetedBacklogCount} stale targeted backlog item${expiredTargetedBacklogCount === 1 ? "" : "s"}`,
     );
   }
   if (pendingBacklogCount > 0 && agentLoads.length === 0) {

@@ -187,7 +187,7 @@ export function defaultDbPath(): string {
 }
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
-export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
+export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 15 * 60_000;
 export const CURRENT_BROKER_SCHEMA_VERSION = 10;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
@@ -1183,6 +1183,28 @@ export class BrokerDB implements BrokerDBInterface {
       ).run(agentId, now, now, id);
 
       this.updateThread(row.thread_id, { ownerAgent: agentId, channel: row.channel });
+
+      return this.getBacklogById(id);
+    });
+  }
+
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null {
+    const db = this.getDb();
+
+    return this.withTransaction(() => {
+      const row = db
+        .prepare("SELECT * FROM unrouted_backlog WHERE id = ? AND status = 'pending'")
+        .get(id) as BacklogRow | undefined;
+      if (!row) return null;
+
+      db.prepare(
+        `UPDATE unrouted_backlog
+         SET status = 'dropped',
+             reason = ?,
+             assigned_agent_id = NULL,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(reason, new Date().toISOString(), id);
 
       return this.getBacklogById(id);
     });

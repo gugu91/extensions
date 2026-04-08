@@ -10,6 +10,7 @@ import {
 
 class StubMaintenanceDB implements BrokerMaintenanceDB {
   agents: AgentInfo[] = [];
+  knownAgents = new Map<string, AgentInfo>();
   backlog: BacklogEntry[] = [];
   threads = new Map<string, ThreadInfo>();
   pendingInboxCounts = new Map<string, number>();
@@ -54,6 +55,12 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
     return this.agents;
   }
 
+  getAgentById(agentId: string): AgentInfo | null {
+    return (
+      this.agents.find((agent) => agent.id === agentId) ?? this.knownAgents.get(agentId) ?? null
+    );
+  }
+
   getPendingInboxCount(agentId: string): number {
     return this.pendingInboxCounts.get(agentId) ?? 0;
   }
@@ -69,6 +76,15 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
     entry.assignedAgentId = agentId;
     entry.attemptCount += 1;
     this.pendingInboxCounts.set(agentId, (this.pendingInboxCounts.get(agentId) ?? 0) + 1);
+    return entry;
+  }
+
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null {
+    const entry = this.backlog.find((backlog) => backlog.id === id) ?? null;
+    if (!entry) return null;
+    entry.status = "dropped";
+    entry.reason = reason;
+    entry.assignedAgentId = null;
     return entry;
   }
 }
@@ -197,6 +213,7 @@ describe("runBrokerMaintenancePass", () => {
 
   it("holds targeted backlog until the intended agent is live", () => {
     db.agents = [makeAgent({ id: "sender", name: "Sender" })];
+    db.knownAgents.set("receiver", makeAgent({ id: "receiver", name: "Receiver" }));
     db.backlog = [
       makeBacklog({ id: 1, threadId: "a2a:sender:receiver", preferredAgentId: "receiver" }),
     ];
@@ -244,6 +261,24 @@ describe("runBrokerMaintenancePass", () => {
 
     expect(result.assignedBacklogCount).toBe(1);
     expect(db.backlog[0].assignedAgentId).toBe("receiver");
+  });
+
+  it("expires targeted backlog once the intended agent no longer exists", () => {
+    db.agents = [makeAgent({ id: "sender", name: "Sender" })];
+    db.backlog = [
+      makeBacklog({ id: 1, threadId: "a2a:sender:receiver", preferredAgentId: "receiver" }),
+    ];
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(db.backlog[0].status).toBe("dropped");
+    expect(db.backlog[0].reason).toBe("preferred_agent_missing");
+    expect(result.anomalies).toContain("expired 1 stale targeted backlog item");
   });
 
   it("leaves backlog pending and reports an anomaly when no workers are available", () => {

@@ -4,7 +4,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as net from "node:net";
-import { BrokerDB, CURRENT_BROKER_SCHEMA_VERSION } from "./schema.js";
+import {
+  BrokerDB,
+  CURRENT_BROKER_SCHEMA_VERSION,
+  DEFAULT_DISCONNECTED_PURGE_GRACE_MS,
+} from "./schema.js";
 import { LeaderLock } from "./leader.js";
 import { startBroker, type Broker } from "./index.js";
 import { runBrokerMaintenancePass } from "./maintenance.js";
@@ -1077,6 +1081,22 @@ describe("BrokerDB", () => {
     expect(db.getThread("t-gone")?.ownerAgent).toBeNull();
     // Messages should be moved to backlog for reassignment
     expect(db.getPendingBacklog().map((entry) => entry.threadId)).toContain("t-gone");
+  });
+
+  it("purgeDisconnectedAgents uses the default grace window for stale ghosts", () => {
+    db.registerAgent("ghost", "Ghost", "⚫️", 3);
+    db.disconnectAgent("ghost", 0);
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?")
+      .run(
+        new Date(Date.now() - DEFAULT_DISCONNECTED_PURGE_GRACE_MS - 1_000).toISOString(),
+        "ghost",
+      );
+
+    expect(db.purgeDisconnectedAgents()).toEqual(["ghost"]);
+    expect(db.getAgentById("ghost")).toBeNull();
   });
 
   it("queueUnroutedMessage persists pending backlog without assigning an owner", () => {
