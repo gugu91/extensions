@@ -89,7 +89,7 @@ import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
-import { MessageRouter } from "./broker/router.js";
+import { MessageRouter, extractPiAgentThreadOwnerHint } from "./broker/router.js";
 import {
   DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS,
   DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
@@ -2983,37 +2983,99 @@ export default function (pi: ExtensionAPI) {
       selfId = selfAgent.id;
       applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
 
+      const brokerThreadOwnerHintCache = new TtlCache<
+        string,
+        { agentOwner?: string; agentName?: string }
+      >({
+        maxSize: 2000,
+        ttlMs: 60 * 1000,
+      });
+
+      async function resolveBrokerThreadOwnerHint(
+        channel: string,
+        threadTs: string,
+      ): Promise<{ agentOwner?: string; agentName?: string } | null> {
+        if (!channel || !threadTs) return null;
+
+        const cacheKey = `${channel}:${threadTs}`;
+        const cached = brokerThreadOwnerHintCache.get(cacheKey);
+        if (cached) {
+          return cached;
+        }
+
+        try {
+          const response = await slack("conversations.replies", botToken!, {
+            channel,
+            ts: threadTs,
+            limit: 200,
+            include_all_metadata: true,
+          });
+          const replies = (response.messages as Record<string, unknown>[]) ?? [];
+          const hint = extractPiAgentThreadOwnerHint(replies);
+          if (hint) {
+            brokerThreadOwnerHintCache.set(cacheKey, hint);
+          }
+          return hint;
+        } catch {
+          return null;
+        }
+      }
+
       adapter.onInbound((inMsg) => {
-        // Track thread metadata locally as a cache without claiming broker ownership.
-        trackBrokerInboundThread(threads, inMsg);
+        void (async () => {
+          try {
+            const ownerHint =
+              inMsg.source === "slack" && inMsg.threadId && inMsg.channel
+                ? await resolveBrokerThreadOwnerHint(inMsg.channel, inMsg.threadId)
+                : null;
+            const routedMessage =
+              ownerHint && (ownerHint.agentOwner || ownerHint.agentName)
+                ? {
+                    ...inMsg,
+                    metadata: {
+                      ...(inMsg.metadata ?? {}),
+                      ...(ownerHint.agentOwner
+                        ? { threadOwnerAgentOwner: ownerHint.agentOwner }
+                        : {}),
+                      ...(ownerHint.agentName ? { threadOwnerAgentName: ownerHint.agentName } : {}),
+                    },
+                  }
+                : inMsg;
 
-        const decision = router.route(inMsg);
+            // Track thread metadata locally as a cache without claiming broker ownership.
+            trackBrokerInboundThread(threads, routedMessage);
 
-        if (inMsg.threadId && inMsg.channel) {
-          broker.db.updateThread(inMsg.threadId, {
-            source: inMsg.source,
-            channel: inMsg.channel,
-          });
-        }
+            const decision = router.route(routedMessage);
 
-        if (decision.action === "deliver" && decision.agentId !== selfId) {
-          broker.db.queueMessage(decision.agentId, inMsg);
-          return;
-        }
+            if (routedMessage.threadId && routedMessage.channel) {
+              broker.db.updateThread(routedMessage.threadId, {
+                source: routedMessage.source,
+                channel: routedMessage.channel,
+              });
+            }
 
-        if (decision.action === "deliver" || decision.action === "unrouted") {
-          // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
-          inbox.push({
-            channel: inMsg.channel,
-            threadTs: inMsg.threadId,
-            userId: inMsg.userId,
-            text: inMsg.text,
-            timestamp: inMsg.timestamp,
-            metadata: inMsg.metadata ?? null,
-          });
-          updateBadge();
-          maybeDrainInboxIfIdle(extCtx ?? undefined);
-        }
+            if (decision.action === "deliver" && decision.agentId !== selfId) {
+              broker.db.queueMessage(decision.agentId, routedMessage);
+              return;
+            }
+
+            if (decision.action === "deliver" || decision.action === "unrouted") {
+              // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
+              inbox.push({
+                channel: routedMessage.channel,
+                threadTs: routedMessage.threadId,
+                userId: routedMessage.userId,
+                text: routedMessage.text,
+                timestamp: routedMessage.timestamp,
+                metadata: routedMessage.metadata ?? null,
+              });
+              updateBadge();
+              maybeDrainInboxIfIdle(extCtx ?? undefined);
+            }
+          } catch (err) {
+            console.error(`[slack-bridge] broker inbound routing failed: ${msg(err)}`);
+          }
+        })();
       });
 
       broker.addAdapter(adapter);

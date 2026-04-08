@@ -1,6 +1,25 @@
+import { buildPinetOwnerToken } from "../helpers.js";
 import type { AgentInfo, BrokerDBInterface, InboundMessage, RoutingDecision } from "./types.js";
 
 // ─── Helpers ─────────────────────────────────────────────
+
+export interface ThreadOwnerHint {
+  agentOwner?: string;
+  agentName?: string;
+}
+
+export type ExplicitThreadDirective =
+  | { kind: "stand_down"; agent: AgentInfo }
+  | { kind: "retarget"; agent: AgentInfo };
+
+interface AgentMentionCandidate {
+  agent: AgentInfo;
+  term: string;
+}
+
+const THREAD_STAND_DOWN_REGEX = /\bstand down\b/i;
+const THREAD_RETARGET_REGEX =
+  /\b(?:take over|pick (?:this|it) up|pick this up|pick it up|handle this|grab this|you take this|reassign(?: this)?(?: to)?|switch(?: this)?(?: to)?|move(?: this)?(?: to)?|route(?: this)?(?: to)?|transfer(?: this)?(?: to)?|pass(?: this)?(?: to)?|hand(?: this)?(?: to)?|give(?: this)?(?: to)?)\b/i;
 
 /**
  * Extract an agent name mention from message text.
@@ -11,19 +30,147 @@ import type { AgentInfo, BrokerDBInterface, InboundMessage, RoutingDecision } fr
  * preferred over "Code" and similar-prefix collisions are avoided.
  */
 export function findAgentMention(text: string, agents: AgentInfo[]): AgentInfo | null {
+  return findBestAgentMention(text, buildAgentMentionCandidates(agents, false));
+}
+
+export function extractPiAgentThreadOwnerHint(
+  replies: ReadonlyArray<Record<string, unknown>>,
+): ThreadOwnerHint | null {
+  for (const message of replies) {
+    if (!message.bot_id) continue;
+    const metadata = message.metadata as
+      | {
+          event_type?: string;
+          event_payload?: { agent?: string; agent_owner?: string };
+        }
+      | undefined;
+    if (metadata?.event_type !== "pi_agent_msg") continue;
+
+    const agentOwner =
+      typeof metadata.event_payload?.agent_owner === "string" &&
+      metadata.event_payload.agent_owner.trim().length > 0
+        ? metadata.event_payload.agent_owner.trim()
+        : undefined;
+    const agentName =
+      typeof metadata.event_payload?.agent === "string" &&
+      metadata.event_payload.agent.trim().length > 0
+        ? metadata.event_payload.agent.trim()
+        : undefined;
+
+    if (agentOwner || agentName) {
+      return {
+        ...(agentOwner ? { agentOwner } : {}),
+        ...(agentName ? { agentName } : {}),
+      };
+    }
+  }
+  return null;
+}
+
+export function findExplicitThreadDirective(
+  text: string,
+  agents: AgentInfo[],
+): ExplicitThreadDirective | null {
+  if (!THREAD_STAND_DOWN_REGEX.test(text) && !THREAD_RETARGET_REGEX.test(text)) {
+    return null;
+  }
+
+  const mention = findBestAgentMention(text, buildAgentMentionCandidates(agents, true));
+  if (!mention) return null;
+
+  if (THREAD_STAND_DOWN_REGEX.test(text)) {
+    return { kind: "stand_down", agent: mention };
+  }
+
+  if (THREAD_RETARGET_REGEX.test(text)) {
+    return { kind: "retarget", agent: mention };
+  }
+
+  return null;
+}
+
+function buildAgentMentionCandidates(
+  agents: AgentInfo[],
+  includeUniqueTailAlias: boolean,
+): AgentMentionCandidate[] {
+  const candidates: AgentMentionCandidate[] = [];
+  const tailCounts = new Map<string, number>();
+
+  for (const agent of agents) {
+    const tail = getAgentTailAlias(agent.name);
+    if (tail) {
+      tailCounts.set(tail, (tailCounts.get(tail) ?? 0) + 1);
+    }
+  }
+
+  for (const agent of agents) {
+    if (agent.name.trim()) {
+      candidates.push({ agent, term: agent.name.trim() });
+    }
+
+    if (!includeUniqueTailAlias) continue;
+    const tail = getAgentTailAlias(agent.name);
+    if (!tail || tailCounts.get(tail) !== 1) continue;
+    candidates.push({ agent, term: tail });
+  }
+
+  return candidates;
+}
+
+function getAgentTailAlias(name: string): string | null {
+  const tokens = name
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const tail = tokens.at(-1)?.toLowerCase() ?? "";
+  return tail.length >= 4 ? tail : null;
+}
+
+function findBestAgentMention(text: string, candidates: AgentMentionCandidate[]): AgentInfo | null {
   const lower = text.toLowerCase();
   let bestMatch: AgentInfo | null = null;
   let bestLength = 0;
-  for (const agent of agents) {
-    const name = agent.name.toLowerCase();
-    if (!name) continue;
-    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, "i");
-    if (pattern.test(lower) && name.length > bestLength) {
-      bestMatch = agent;
-      bestLength = name.length;
+
+  for (const candidate of candidates) {
+    const term = candidate.term.toLowerCase();
+    if (!term) continue;
+    const pattern = new RegExp(`\\b${escapeRegExp(term)}\\b`, "i");
+    if (pattern.test(lower) && term.length > bestLength) {
+      bestMatch = candidate.agent;
+      bestLength = term.length;
     }
   }
+
   return bestMatch;
+}
+
+function resolveAgentFromThreadOwnerHint(
+  metadata: Record<string, unknown> | undefined,
+  agents: AgentInfo[],
+): AgentInfo | null {
+  const hintedOwner =
+    typeof metadata?.threadOwnerAgentOwner === "string" && metadata.threadOwnerAgentOwner
+      ? metadata.threadOwnerAgentOwner
+      : null;
+  if (hintedOwner) {
+    const ownerMatch = agents.find(
+      (agent) => agent.stableId && buildPinetOwnerToken(agent.stableId) === hintedOwner,
+    );
+    if (ownerMatch) {
+      return ownerMatch;
+    }
+  }
+
+  const hintedName =
+    typeof metadata?.threadOwnerAgentName === "string" && metadata.threadOwnerAgentName
+      ? metadata.threadOwnerAgentName
+      : null;
+  if (!hintedName) {
+    return null;
+  }
+
+  return findBestAgentMention(hintedName, buildAgentMentionCandidates(agents, false));
 }
 
 function escapeRegExp(s: string): string {
@@ -49,9 +196,9 @@ export class MessageRouter {
    *
    * Priority order:
    * 1. User allowlist — reject if user not allowed
-   * 2. Thread ownership — existing thread with an owner agent
-   * 3. Channel assignment — channel mapped to a specific agent
-   * 4. Direct address — message mentions an agent by name
+   * 2. Explicit thread control — stand-down / reassignment signals in-thread
+   * 3. Known-thread ownership — authoritative owner hint, then broker DB owner
+   * 4. New-thread channel assignment / direct address
    * 5. Unrouted — no match found
    */
   route(msg: InboundMessage): RoutingDecision {
@@ -62,51 +209,57 @@ export class MessageRouter {
     }
 
     const agents = this.db.getAgents();
-
-    // 1. Thread ownership — if thread already has an owner, route there.
-    //    First resolve by agent ID (authoritative UUID binding).
-    //    If the UUID is gone, fall back to stableId: the agent may have
-    //    reconnected with a new UUID but the same stableId.
-    //    Disconnected owners are only routable during an explicit resumable
-    //    window; graceful unregister should release ownership immediately.
     let thread = this.db.getThread(msg.threadId);
-    if (thread?.ownerAgent) {
-      const owner = this.db.getAgentById(thread.ownerAgent);
+    const explicitDirective = findExplicitThreadDirective(msg.text, agents);
 
-      // stableId fallback: look up the former owner (possibly disconnected)
-      // to recover its stableId, then find a currently connected agent that
-      // registered with the same stableId.  This covers the edge case where
-      // the DB was partially cleaned and the reconnected agent got a new UUID.
-      if (!owner) {
-        const formerOwner = this.db.getAgentByStableId(thread.ownerAgent);
-        if (formerOwner && formerOwner.id !== thread.ownerAgent && isRoutableOwner(formerOwner)) {
-          // Re-bind to current agent ID so future lookups are O(1).
-          this.db.updateThread(msg.threadId, { ownerAgent: formerOwner.id });
-          return { action: "deliver", agentId: formerOwner.id };
+    if (explicitDirective) {
+      if (thread) {
+        if (explicitDirective.kind === "retarget") {
+          this.db.updateThread(msg.threadId, {
+            ownerAgent: explicitDirective.agent.id,
+            channel: msg.channel,
+            source: msg.source,
+          });
         }
-      }
-
-      if (owner && isRoutableOwner(owner)) {
-        return { action: "deliver", agentId: owner.id };
-      }
-      // Owner is gone or no longer routable — clear ownership and fall through.
-      this.db.updateThread(msg.threadId, { ownerAgent: null });
-      thread = this.db.getThread(msg.threadId);
-    }
-
-    // 2. Channel assignment — if channel is mapped to a connected agent
-    const assignment = this.db.getChannelAssignment(msg.channel);
-    if (assignment) {
-      const assigned = agents.find((agent) => agent.id === assignment.agentId);
-      if (assigned) {
-        return { action: "deliver", agentId: assigned.id };
+        return { action: "deliver", agentId: explicitDirective.agent.id };
       }
     }
 
-    // 3. Direct address — message mentions an agent by name.
-    //    If the thread is new or currently unclaimed, bind it to the
-    //    mentioned agent so follow-up replies keep routing there.
-    if (!thread?.ownerAgent) {
+    if (thread) {
+      const hintedOwner = resolveAgentFromThreadOwnerHint(msg.metadata, agents);
+      if (hintedOwner && isRoutableOwner(hintedOwner)) {
+        if (thread.ownerAgent !== hintedOwner.id) {
+          this.db.updateThread(msg.threadId, { ownerAgent: hintedOwner.id, channel: msg.channel });
+        }
+        return { action: "deliver", agentId: hintedOwner.id };
+      }
+
+      if (thread.ownerAgent) {
+        const owner = this.db.getAgentById(thread.ownerAgent);
+
+        // stableId fallback: look up the former owner (possibly disconnected)
+        // to recover its stableId, then find a currently connected agent that
+        // registered with the same stableId. This covers the edge case where
+        // the DB was partially cleaned and the reconnected agent got a new UUID.
+        if (!owner) {
+          const formerOwner = this.db.getAgentByStableId(thread.ownerAgent);
+          if (formerOwner && formerOwner.id !== thread.ownerAgent && isRoutableOwner(formerOwner)) {
+            this.db.updateThread(msg.threadId, { ownerAgent: formerOwner.id });
+            return { action: "deliver", agentId: formerOwner.id };
+          }
+        }
+
+        if (owner && isRoutableOwner(owner)) {
+          return { action: "deliver", agentId: owner.id };
+        }
+
+        // Owner is gone or no longer routable — clear ownership so the thread can
+        // be explicitly rebound, but do not leak a known-thread reply to another
+        // worker through generic fallback routing.
+        this.db.updateThread(msg.threadId, { ownerAgent: null });
+        thread = this.db.getThread(msg.threadId);
+      }
+
       const mentioned = findAgentMention(msg.text, agents);
       if (mentioned) {
         const claimed = this.db.claimThread(msg.threadId, mentioned.id, msg.source, msg.channel);
@@ -122,9 +275,35 @@ export class MessageRouter {
           return { action: "deliver", agentId: claimedOwner.id };
         }
       }
+
+      return { action: "unrouted" };
     }
 
-    // 4. No match
+    // New thread / top-level message: channel assignment can still steer work.
+    const assignment = this.db.getChannelAssignment(msg.channel);
+    if (assignment) {
+      const assigned = agents.find((agent) => agent.id === assignment.agentId);
+      if (assigned) {
+        return { action: "deliver", agentId: assigned.id };
+      }
+    }
+
+    const mentioned = findAgentMention(msg.text, agents);
+    if (mentioned) {
+      const claimed = this.db.claimThread(msg.threadId, mentioned.id, msg.source, msg.channel);
+      if (claimed) {
+        return { action: "deliver", agentId: mentioned.id };
+      }
+
+      const claimedThread = this.db.getThread(msg.threadId);
+      const claimedOwner = claimedThread?.ownerAgent
+        ? this.db.getAgentById(claimedThread.ownerAgent)
+        : null;
+      if (claimedOwner && isRoutableOwner(claimedOwner)) {
+        return { action: "deliver", agentId: claimedOwner.id };
+      }
+    }
+
     return { action: "unrouted" };
   }
 

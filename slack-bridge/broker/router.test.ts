@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { MessageRouter, findAgentMention } from "./router.js";
+import {
+  MessageRouter,
+  extractPiAgentThreadOwnerHint,
+  findAgentMention,
+  findExplicitThreadDirective,
+} from "./router.js";
 import type {
   AgentInfo,
   BrokerDBInterface,
@@ -172,6 +177,84 @@ describe("findAgentMention", () => {
   });
 });
 
+describe("extractPiAgentThreadOwnerHint", () => {
+  it("returns the first pi_agent_msg owner hint from thread replies", () => {
+    expect(
+      extractPiAgentThreadOwnerHint([
+        {
+          bot_id: "B1",
+          metadata: {
+            event_type: "pi_agent_msg",
+            event_payload: {
+              agent: "Pixel Lime Hippo",
+              agent_owner: "owner:hippo",
+            },
+          },
+        },
+        {
+          bot_id: "B2",
+          metadata: {
+            event_type: "pi_agent_msg",
+            event_payload: {
+              agent: "Aurora Pearl Cobra",
+              agent_owner: "owner:cobra",
+            },
+          },
+        },
+      ]),
+    ).toEqual({
+      agentName: "Pixel Lime Hippo",
+      agentOwner: "owner:hippo",
+    });
+  });
+
+  it("ignores non-pinet bot metadata and returns null when no owner hint exists", () => {
+    expect(
+      extractPiAgentThreadOwnerHint([
+        {
+          bot_id: "B1",
+          metadata: {
+            event_type: "other_event",
+            event_payload: { agent: "Other Bot" },
+          },
+        },
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("findExplicitThreadDirective", () => {
+  const agents = [
+    makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" }),
+    makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" }),
+  ];
+
+  it("finds a stand-down directive using a unique tail alias", () => {
+    expect(findExplicitThreadDirective("cobra stand down", agents)).toMatchObject({
+      kind: "stand_down",
+      agent: expect.objectContaining({ id: "cobra" }),
+    });
+  });
+
+  it("finds a reassignment directive in an owned thread", () => {
+    expect(
+      findExplicitThreadDirective("Pixel Lime Hippo please take over this thread", agents),
+    ).toMatchObject({
+      kind: "retarget",
+      agent: expect.objectContaining({ id: "hippo" }),
+    });
+  });
+
+  it("does not treat a plain parenthetical target as a reassignment signal", () => {
+    expect(
+      findExplicitThreadDirective(
+        "ok nice I set that on merge, can you read them (Hippo) and come up with next steps?",
+        agents,
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("MessageRouter — route", () => {
   let db: StubBrokerDBInterface;
   let router: MessageRouter;
@@ -189,6 +272,46 @@ describe("MessageRouter — route", () => {
     const decision = router.route(makeMessage({ threadId: "t-100" }));
 
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+  });
+
+  it("prefers the canonical Slack thread owner hint over a stale competing owner", () => {
+    const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
+    const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
+    db.agents = [hippo, cobra];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "cobra" }));
+
+    const decision = router.route(
+      makeMessage({
+        threadId: "t-100",
+        text: "ok nice I set that on merge, can you read them (Hippo) and come up with next steps?",
+        metadata: {
+          threadOwnerAgentOwner: "owner:99b0f2b5e8a7874e",
+          threadOwnerAgentName: "Pixel Lime Hippo",
+        },
+      }),
+    );
+
+    expect(decision).toEqual({ action: "deliver", agentId: "hippo" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBe("hippo");
+  });
+
+  it("does not leak a known-thread reply to a channel assignment when ownership is missing", () => {
+    const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo" });
+    const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra" });
+    db.agents = [hippo, cobra];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: null, channel: "C001" }));
+    db.channelAssignments.set("C001", { channel: "C001", agentId: "cobra" });
+
+    const decision = router.route(
+      makeMessage({
+        threadId: "t-100",
+        channel: "C001",
+        text: "also check for hardcoded routes pls",
+      }),
+    );
+
+    expect(decision).toEqual({ action: "unrouted" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBeNull();
   });
 
   it("routes to channel assignment when no thread owner", () => {
@@ -270,6 +393,32 @@ describe("MessageRouter — route", () => {
     const decision = router.route(makeMessage({ channel: "C001", text: "hey MentionBot, help" }));
 
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+  });
+
+  it("preserves explicit stand-down routing without transferring thread ownership", () => {
+    const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
+    const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
+    db.agents = [hippo, cobra];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "hippo" }));
+
+    const decision = router.route(makeMessage({ threadId: "t-100", text: "cobra stand down" }));
+
+    expect(decision).toEqual({ action: "deliver", agentId: "cobra" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBe("hippo");
+  });
+
+  it("preserves explicit reassignment by transferring thread ownership", () => {
+    const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
+    const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
+    db.agents = [hippo, cobra];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "cobra" }));
+
+    const decision = router.route(
+      makeMessage({ threadId: "t-100", text: "Pixel Lime Hippo please take over this thread" }),
+    );
+
+    expect(decision).toEqual({ action: "deliver", agentId: "hippo" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBe("hippo");
   });
 
   it("falls back to unrouted when thread owner is gone", () => {
