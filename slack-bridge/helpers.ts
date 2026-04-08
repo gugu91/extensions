@@ -1313,7 +1313,13 @@ export function buildPinetSkinPromptGuideline(
   personality: string | null | undefined,
 ): string | null {
   if (!theme || !personality) return null;
-  return `PINET SKIN: ${theme}. Persona: ${personality}`;
+  return clampPinetSkinText(
+    `PINET SKIN (${formatPinetSkinThemeLabel(theme)}): ${clampPinetSkinText(
+      personality,
+      MAX_PINET_SKIN_PERSONALITY_LENGTH,
+    )} Keep it additive: flavor cadence and word choice, never clarity, accuracy, blocker/status discipline, or role boundaries.`,
+    MAX_PINET_SKIN_PROMPT_GUIDELINE_LENGTH,
+  );
 }
 
 export function buildIdentityReplyGuidelines(
@@ -2192,6 +2198,10 @@ export interface PinetSkinAssignment {
 
 export const DEFAULT_PINET_SKIN_THEME = "default";
 
+const MAX_PINET_SKIN_THEME_LABEL_LENGTH = 60;
+const MAX_PINET_SKIN_PERSONALITY_LENGTH = 260;
+const MAX_PINET_SKIN_PROMPT_GUIDELINE_LENGTH = 460;
+
 const PINET_SKIN_STOP_WORDS = new Set([
   "a",
   "an",
@@ -2266,7 +2276,7 @@ const PINET_SKIN_MODIFIERS = [
 const PINET_SKIN_BROKER_EMOJIS = ["🧭", "🛡️", "🛰️", "🪄", "👑", "🧠", "🦉", "🌙"];
 const PINET_SKIN_WORKER_EMOJIS = ["⚡", "🗡️", "🛠️", "🕶️", "🧪", "🧰", "🧿", "📡", "🔧", "🛰️"];
 
-const PINET_SKIN_TRAITS = [
+const PINET_SKIN_DEMEANORS = [
   "calm under pressure",
   "sharp-eyed about details",
   "quietly theatrical",
@@ -2281,26 +2291,180 @@ const PINET_SKIN_TRAITS = [
   "confident without being loud",
 ];
 
-const PINET_SKIN_SPEECH_STYLES = [
-  "Speak with crisp, vivid phrasing.",
-  "Keep a little lore and flair in the cadence.",
-  "Sound like a seasoned specialist with strong opinions.",
-  "Use concise status updates with a bit of character.",
-  "Lean into the vibe without becoming hard to understand.",
-];
-
 const PINET_SKIN_ROLE_FOCUS = {
   broker: [
-    "Prioritize mesh coordination, delegation, and calm command presence.",
-    "Act like mission control: delegate clearly, monitor health, and keep the mesh moving.",
-    "Project steady leadership while staying operationally strict.",
+    "Coordinate, delegate, and guard role lines.",
+    "Stay in mission control: route cleanly and watch mesh health.",
+    "Lead quietly, keep the mesh moving, never blur roles.",
   ],
   worker: [
-    "Prioritize hands-on execution, fast feedback, and visible progress.",
-    "Feel like a field specialist: practical, autonomous, and good at reporting blockers.",
-    "Bring a little swagger, but keep the work precise and accountable.",
+    "Ship cleanly, show progress, surface blockers fast.",
+    "Work autonomously, hand off crisply, keep status visible.",
+    "Keep the flair light and the execution exact.",
   ],
 } as const;
+
+interface PinetSkinVoiceProfile {
+  matchTokens: readonly string[];
+  cadences: readonly string[];
+  imagery: readonly string[];
+  diction: readonly string[];
+}
+
+const PINET_SKIN_GENERIC_VOICE_PROFILE: PinetSkinVoiceProfile = {
+  matchTokens: [],
+  cadences: [
+    "distinct but disciplined pacing",
+    "measured specialist calm",
+    "confident, signal-first rhythm",
+  ],
+  imagery: [
+    "just enough theme-colored detail",
+    "a few memorable touches",
+    "light scene-setting color",
+  ],
+  diction: [
+    "precise verbs and clean nouns",
+    "readable specialist phrasing",
+    "tight status language",
+  ],
+};
+
+const PINET_SKIN_VOICE_PROFILES: readonly PinetSkinVoiceProfile[] = [
+  {
+    matchTokens: ["cyber", "cyberpunk", "hacker", "hackers", "neon", "chrome", "circuit", "matrix"],
+    cadences: [
+      "clipped, high-signal tempo",
+      "cool operator composure",
+      "a fast terminal-room rhythm",
+    ],
+    imagery: ["neon-and-static touches", "back-alley console imagery", "midnight terminal color"],
+    diction: [
+      "precise technical verbs",
+      "sharp nouns and terse status lines",
+      "clean operator shorthand kept readable",
+    ],
+  },
+  {
+    matchTokens: [
+      "night",
+      "watch",
+      "fellowship",
+      "ring",
+      "quest",
+      "kingdom",
+      "dragon",
+      "throne",
+      "asoiaf",
+      "myth",
+    ],
+    cadences: [
+      "watchful, oath-keeping calm",
+      "quest-log steadiness",
+      "campfire-veteran confidence",
+    ],
+    imagery: [
+      "watchfire and banner imagery",
+      "maps, oaths, and cold-night touches",
+      "sentinel-and-hearth color",
+    ],
+    diction: [
+      "plainspoken duty-first wording",
+      "measured reports with a hint of legend",
+      "mythic color without purple prose",
+    ],
+  },
+  {
+    matchTokens: [
+      "apollo",
+      "mission",
+      "control",
+      "space",
+      "orbit",
+      "orbital",
+      "rocket",
+      "lunar",
+      "solar",
+      "star",
+      "galaxy",
+    ],
+    cadences: ["mission-control composure", "countdown-ready brevity", "flight-loop precision"],
+    imagery: [
+      "telemetry and console-room touches",
+      "launch-window color",
+      "starfield and instrument-panel imagery",
+    ],
+    diction: [
+      "checklist language and clean callouts",
+      "status-board phrasing",
+      "disciplined technical shorthand",
+    ],
+  },
+  {
+    matchTokens: [
+      "ghibli",
+      "spirit",
+      "forest",
+      "garden",
+      "moss",
+      "river",
+      "wind",
+      "moon",
+      "woods",
+      "meadow",
+      "lantern",
+    ],
+    cadences: ["quiet, observant calm", "gentle confidence", "an unhurried but alert pace"],
+    imagery: [
+      "lantern, weather, and small-wonder touches",
+      "moss, wind, and water color",
+      "natural textures used lightly",
+    ],
+    diction: [
+      "warm precise wording",
+      "soft edges around hard facts",
+      "calm plain language with a little glow",
+    ],
+  },
+  {
+    matchTokens: [
+      "deep",
+      "sea",
+      "ocean",
+      "salvage",
+      "tide",
+      "reef",
+      "abyss",
+      "harbor",
+      "submarine",
+      "dive",
+      "nautical",
+    ],
+    cadences: ["steady dive-team calm", "sonar-sweep patience", "weathered deckhand brevity"],
+    imagery: [
+      "rope, tide, and pressure-gauge touches",
+      "salvage-yard detail",
+      "deep-water color used sparingly",
+    ],
+    diction: [
+      "measured callouts and sturdy verbs",
+      "crew-ready status language",
+      "practical field vocabulary",
+    ],
+  },
+];
+
+const PINET_SKIN_PERSONALITY_OPENERS = [
+  'Let "{theme}" steer the cadence: {cadence}, {demeanor}.',
+  'Take cues from "{theme}": {cadence}, {demeanor}.',
+  'Carry "{theme}" as a quiet doctrine: {cadence}, {demeanor}.',
+];
+
+const PINET_SKIN_PERSONALITY_STYLE_TEMPLATES = [
+  "Favor {diction} with {imagery}; stay scannable.",
+  "Use {diction} and {imagery}; keep status crisp.",
+  "Keep the wording {diction}, brushed with {imagery}, and quick to read.",
+];
 
 function titleCaseSkinToken(token: string): string {
   return token.length === 0 ? token : token[0].toUpperCase() + token.slice(1);
@@ -2320,6 +2484,20 @@ function pickSkinValue<T>(values: readonly T[], seed: string, label: string): T 
   return values[hashString(`${seed}:${label}`) % values.length];
 }
 
+function clampPinetSkinText(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+
+  const sliceLength = Math.max(0, maxLength - 1);
+  return `${trimmed.slice(0, sliceLength).trimEnd()}…`;
+}
+
+function formatPinetSkinThemeLabel(theme: string): string {
+  return clampPinetSkinText(theme, MAX_PINET_SKIN_THEME_LABEL_LENGTH);
+}
+
 function getPinetSkinTokens(theme: string): string[] {
   const rawTokens = theme.toLowerCase().match(/[a-z0-9]+/g) ?? [];
   const meaningful = rawTokens
@@ -2335,6 +2513,44 @@ export function normalizePinetSkinTheme(theme: string | undefined): string | nul
   const trimmed = theme?.trim();
   if (!trimmed) return null;
   return trimmed.toLowerCase() === DEFAULT_PINET_SKIN_THEME ? DEFAULT_PINET_SKIN_THEME : trimmed;
+}
+
+function mergeUniqueSkinValues(...lists: ReadonlyArray<readonly string[]>): string[] {
+  const merged: string[] = [];
+  for (const list of lists) {
+    for (const value of list) {
+      if (!merged.includes(value)) {
+        merged.push(value);
+      }
+    }
+  }
+  return merged;
+}
+
+function resolvePinetSkinVoiceProfile(
+  theme: string,
+): Pick<PinetSkinVoiceProfile, "cadences" | "imagery" | "diction"> {
+  const rawTokens: string[] = theme.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const matchedProfiles = PINET_SKIN_VOICE_PROFILES.filter((profile) =>
+    profile.matchTokens.some((token) => rawTokens.includes(token)),
+  );
+
+  if (matchedProfiles.length === 0) {
+    return PINET_SKIN_GENERIC_VOICE_PROFILE;
+  }
+
+  return {
+    cadences: mergeUniqueSkinValues(...matchedProfiles.map((profile) => profile.cadences)),
+    imagery: mergeUniqueSkinValues(...matchedProfiles.map((profile) => profile.imagery)),
+    diction: mergeUniqueSkinValues(...matchedProfiles.map((profile) => profile.diction)),
+  };
+}
+
+function fillPinetSkinTemplate(template: string, values: Record<string, string>): string {
+  return Object.entries(values).reduce(
+    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+    template,
+  );
 }
 
 export function buildPinetSkinAssignment(options: {
@@ -2359,6 +2575,7 @@ export function buildPinetSkinAssignment(options: {
     };
   }
 
+  const themeLabel = formatPinetSkinThemeLabel(normalizedTheme);
   const tokens = getPinetSkinTokens(normalizedTheme);
   const primary = pickSkinValue(tokens, options.seed, "primary-token");
   const alternateTokens = tokens.filter((token) => token !== primary);
@@ -2375,13 +2592,50 @@ export function buildPinetSkinAssignment(options: {
     options.role === "broker"
       ? pickSkinValue(PINET_SKIN_BROKER_EMOJIS, options.seed, "leader-emoji")
       : pickSkinValue(PINET_SKIN_WORKER_EMOJIS, options.seed, "worker-emoji");
-  const firstTrait = pickSkinValue(PINET_SKIN_TRAITS, options.seed, "trait-a");
-  const secondTrait = pickSkinValue(
-    PINET_SKIN_TRAITS,
+  const demeanor = pickSkinValue(
+    PINET_SKIN_DEMEANORS,
     `${options.seed}:${normalizedTheme}`,
-    "trait-b",
+    "demeanor",
   );
-  const speechStyle = pickSkinValue(PINET_SKIN_SPEECH_STYLES, options.seed, "speech-style");
+  const voice = resolvePinetSkinVoiceProfile(normalizedTheme);
+  const cadence = pickSkinValue(
+    voice.cadences,
+    `${options.seed}:${normalizedTheme}`,
+    "voice-cadence",
+  );
+  const imagery = pickSkinValue(
+    voice.imagery,
+    `${options.seed}:${normalizedTheme}`,
+    "voice-imagery",
+  );
+  const diction = pickSkinValue(
+    voice.diction,
+    `${options.seed}:${normalizedTheme}`,
+    "voice-diction",
+  );
+  const opener = fillPinetSkinTemplate(
+    pickSkinValue(
+      PINET_SKIN_PERSONALITY_OPENERS,
+      `${options.seed}:${normalizedTheme}`,
+      "persona-opener",
+    ),
+    {
+      theme: themeLabel,
+      cadence,
+      demeanor,
+    },
+  );
+  const style = fillPinetSkinTemplate(
+    pickSkinValue(
+      PINET_SKIN_PERSONALITY_STYLE_TEMPLATES,
+      `${options.seed}:${normalizedTheme}:${options.role}`,
+      "persona-style",
+    ),
+    {
+      diction,
+      imagery,
+    },
+  );
   const roleFocus = pickSkinValue(PINET_SKIN_ROLE_FOCUS[options.role], options.seed, "role-focus");
   const workerCore = secondary === modifier ? primary : secondary;
   const name =
@@ -2392,7 +2646,10 @@ export function buildPinetSkinAssignment(options: {
     role: options.role,
     name,
     emoji,
-    personality: `Lean into the vibe of "${normalizedTheme}". Be ${firstTrait}, ${secondTrait}. ${speechStyle} ${roleFocus}`,
+    personality: clampPinetSkinText(
+      `${opener} ${style} ${roleFocus}`,
+      MAX_PINET_SKIN_PERSONALITY_LENGTH,
+    ),
   };
 }
 
