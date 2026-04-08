@@ -223,6 +223,27 @@ describe("runBrokerMaintenancePass", () => {
     expect(db.backlog[0].assignedAgentId).toBe("worker-1");
   });
 
+  it("rebinds broker-targeted backlog to the live broker even though brokers are excluded from worker assignment", () => {
+    db.agents = [
+      makeAgent({ id: "broker-1", name: "Broker", metadata: { role: "broker" } }),
+      makeAgent({ id: "worker-1", name: "Worker" }),
+    ];
+    db.backlog = [
+      makeBacklog({ id: 1, threadId: "a2a:sender:broker-1", preferredAgentId: "broker-1" }),
+    ];
+
+    const result = runBrokerMaintenancePass(db, {
+      brokerAgentId: "broker-1",
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(1);
+    expect(result.nudgedAgentIds).toEqual([]);
+    expect(db.backlog[0].assignedAgentId).toBe("broker-1");
+    expect(result.anomalies).toContain("rebound 1 broker-targeted backlog item to the live broker");
+  });
+
   it("prefers the live thread owner before other idle workers", () => {
     db.agents = [
       makeAgent({ id: "worker-1", name: "Owner" }),

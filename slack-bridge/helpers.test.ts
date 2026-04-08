@@ -42,6 +42,7 @@ import {
   isRalphNudgeEntry,
   isAgentToAgentEntry,
   partitionFollowerInboxEntries,
+  syncBrokerInboxEntries,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
   buildIdentityReplyGuidelines,
@@ -834,6 +835,72 @@ describe("Pinet skin helpers", () => {
       emoji: "🕶️",
       personality: "Lean into the vibe of cyberpunk hackers.",
     });
+  });
+
+  it("syncBrokerInboxEntries separates direct broker control, skin updates, and regular inbox messages", () => {
+    const skinMetadata = buildPinetSkinMetadata({
+      theme: "cyberpunk hackers",
+      name: "Chrome Hacker Cipher",
+      emoji: "🕶️",
+      personality: "Lean into the vibe of cyberpunk hackers.",
+    });
+
+    const result = syncBrokerInboxEntries([
+      {
+        inboxId: 11,
+        message: {
+          threadId: "a2a:sender:broker",
+          sender: "sender-agent",
+          body: "/reload",
+          createdAt: "2026-04-01T00:00:00.000Z",
+          metadata: { a2a: true, kind: "pinet_control", command: "reload" },
+        },
+      },
+      {
+        inboxId: 12,
+        message: {
+          threadId: "a2a:sender:broker",
+          sender: "sender-agent",
+          body: "skin update",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          metadata: { a2a: true, ...skinMetadata },
+        },
+      },
+      {
+        inboxId: 13,
+        message: {
+          threadId: "a2a:sender:broker",
+          sender: "sender-agent",
+          body: "plain broker report",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          metadata: { a2a: true, senderAgent: "sender-agent" },
+        },
+      },
+    ]);
+
+    expect(result.controlEntries).toEqual([{ inboxId: 11, command: "reload" }]);
+    expect(result.skinEntries).toEqual([
+      {
+        inboxId: 12,
+        update: {
+          theme: "cyberpunk hackers",
+          name: "Chrome Hacker Cipher",
+          emoji: "🕶️",
+          personality: "Lean into the vibe of cyberpunk hackers.",
+        },
+      },
+    ]);
+    expect(result.inboxMessages).toEqual([
+      {
+        channel: "",
+        threadTs: "a2a:sender:broker",
+        userId: "sender-agent",
+        text: "plain broker report",
+        timestamp: "2026-04-01T00:00:02.000Z",
+        brokerInboxId: 13,
+        metadata: { a2a: true, senderAgent: "sender-agent" },
+      },
+    ]);
   });
 
   it("builds a prompt guideline for active skin personalities", () => {

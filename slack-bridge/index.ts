@@ -55,6 +55,7 @@ import {
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   syncFollowerInboxEntries,
+  syncBrokerInboxEntries,
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
@@ -1653,7 +1654,7 @@ export default function (pi: ExtensionAPI) {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
   }
 
-  function syncBrokerDbInbox(agentId: string, db: BrokerDB): void {
+  function syncBrokerDbInbox(agentId: string, db: BrokerDB, ctx: ExtensionContext): void {
     const pending = db
       .getInbox(agentId)
       .filter((item) => !isBrokerInboxIdTracked(brokerDeliveryState, item.entry.id));
@@ -1661,28 +1662,58 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    queueBrokerInboxIds(
-      brokerDeliveryState,
-      pending.map((item) => item.entry.id),
+    const synced = syncBrokerInboxEntries(
+      pending.map((item) => ({
+        inboxId: item.entry.id,
+        message: {
+          threadId: item.message.threadId,
+          sender:
+            typeof item.message.metadata?.senderAgent === "string"
+              ? item.message.metadata.senderAgent
+              : item.message.sender,
+          body: item.message.body,
+          createdAt: item.message.createdAt,
+          metadata: item.message.metadata,
+        },
+      })),
     );
 
-    for (const item of pending) {
-      const meta = item.message.metadata ?? {};
-      const senderName =
-        typeof meta.senderAgent === "string" ? meta.senderAgent : item.message.sender;
-      inbox.push({
-        channel: "",
-        threadTs: item.message.threadId,
-        userId: senderName,
-        text: item.message.body,
-        timestamp: item.message.createdAt,
-        brokerInboxId: item.entry.id,
-        metadata: meta,
-      });
+    const handledInboxIds = new Set<number>();
+    for (const entry of synced.controlEntries) {
+      try {
+        if (requestRemoteControl(entry.command, ctx)) {
+          handledInboxIds.add(entry.inboxId);
+        }
+      } catch (err) {
+        ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
+      }
     }
 
+    for (const entry of synced.skinEntries) {
+      activeSkinTheme = entry.update.theme;
+      applyLocalAgentIdentity(entry.update.name, entry.update.emoji, entry.update.personality);
+      handledInboxIds.add(entry.inboxId);
+    }
+
+    if (handledInboxIds.size > 0) {
+      db.markDelivered([...handledInboxIds], agentId);
+    }
+
+    if (synced.inboxMessages.length === 0) {
+      return;
+    }
+
+    queueBrokerInboxIds(
+      brokerDeliveryState,
+      synced.inboxMessages.flatMap((message) =>
+        message.brokerInboxId != null ? [message.brokerInboxId] : [],
+      ),
+    );
+
+    inbox.push(...synced.inboxMessages);
+
     updateBadge();
-    maybeDrainInboxIfIdle(extCtx ?? undefined);
+    maybeDrainInboxIfIdle(ctx);
   }
 
   function startBrokerHeartbeat(): void {
@@ -1716,6 +1747,7 @@ export default function (pi: ExtensionAPI) {
         staleAfterMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
         busyAssignmentAgeMs: DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
       });
+      syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
       lastBrokerMaintenance = result;
 
       const signature = result.anomalies.join("|");
@@ -1810,7 +1842,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const deliveries = (activeBroker.db as BrokerDB).deliverDueScheduledWakeups();
       if (deliveries.length > 0 && activeSelfId) {
-        syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB);
+        syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
       }
     } catch (err) {
       ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(err)}`, "error");
@@ -2911,7 +2943,7 @@ export default function (pi: ExtensionAPI) {
       activeBroker = broker;
       activeRouter = router;
       activeSelfId = selfId;
-      syncBrokerDbInbox(selfId, broker.db);
+      syncBrokerDbInbox(selfId, broker.db, ctx);
 
       // When a worker sends a pinet_message targeting the broker, the socket server writes to the
       // DB inbox but the broker only reads its in-memory inbox. Sync the durable inbox into memory
@@ -2936,7 +2968,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        syncBrokerDbInbox(selfId, broker.db);
+        syncBrokerDbInbox(selfId, broker.db, ctx);
       });
       broker.server.onAgentStatusChange((changedAgentId, status) => {
         if (status === "idle") {
