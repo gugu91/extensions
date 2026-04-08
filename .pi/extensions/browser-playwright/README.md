@@ -8,6 +8,7 @@ It is designed for real browsing and lightweight web interaction, not just test 
 - navigate public sites
 - snapshot and extract page content
 - click, fill, press, wait, inspect tabs, and capture screenshots
+- explicitly export and reuse Playwright `storageState` JSON under guarded workspace-local paths
 - keep screenshots and artifacts inside the workspace
 - block localhost and private/internal network targets by default
 
@@ -99,10 +100,12 @@ Recommended practice:
 
 Important limitations:
 
-- session state is process-local and in-memory only
+- live browser sessions are still process-local and in-memory only
 - a Pi reload or process restart drops live browser sessions
-- stored Playwright session mounting/import is not supported in #282
-- importing/exporting saved `storageState`, cookies, or localStorage for login reuse is follow-up work, not current behavior
+- explicit Playwright `storageState` JSON import/export is supported only through guarded workspace-local files under `.pi/artifacts/browser-playwright/storage-state/`
+- persistence is explicit opt-in only — there is no auto-save on close, reload, or shutdown
+- arbitrary browser profile mounting, arbitrary absolute host paths, traversal, and symlink escapes are not supported
+- tool output never echoes raw cookies, tokens, or localStorage/auth payloads
 
 ## Artifacts
 
@@ -113,6 +116,12 @@ Screenshots are written under:
 Current screenshot layout:
 
 - `.pi/artifacts/browser-playwright/<session_id>/<timestamp>-<label>.png`
+
+Storage state layout:
+
+- `.pi/artifacts/browser-playwright/storage-state/<name>.json`
+- bare filenames passed to storage-state APIs are rooted there automatically
+- that directory is gitignored in this repo because saved `storageState` files may contain live auth material
 
 `browser_screenshot` returns structured metadata including:
 
@@ -136,8 +145,9 @@ Required tools provided:
 8. `browser_press`
 9. `browser_wait_for`
 10. `browser_screenshot`
-11. `browser_tabs`
-12. `browser_close`
+11. `browser_storage_state_save`
+12. `browser_tabs`
+13. `browser_close`
 
 ## Usage flows
 
@@ -193,7 +203,34 @@ Tool: `browser_wait_for`
 
 Tool: `browser_screenshot`
 
-### 3. Trusted local app after explicit opt-in
+### 3. Save login state and reuse it later
+
+Save the current browser context explicitly:
+
+```json
+{ "session_id": "<session_id>", "path": "github-login.json" }
+```
+
+Tool: `browser_storage_state_save`
+
+Start a new session with that guarded storage state file:
+
+```json
+{
+  "storage_state_path": "github-login.json",
+  "url": "https://github.com"
+}
+```
+
+Tool: `browser_session_start`
+
+Notes:
+
+- `storage_state_path` must resolve under `.pi/artifacts/browser-playwright/storage-state/`
+- bare filenames are rooted there automatically
+- storage-state reuse is explicit only; the extension never auto-saves session state
+
+### 4. Trusted local app after explicit opt-in
 
 First opt in:
 
@@ -218,4 +255,5 @@ Without the env opt-in, that navigation is blocked.
 - keep `page_id` from previous results when a task depends on a specific tab
 - use `browser_snapshot` before interacting when you need a quick page map
 - use `browser_extract` for selector-specific text/attribute reads
+- use `browser_storage_state_save` only when a workflow explicitly needs later authenticated reuse
 - close sessions you no longer need with `browser_close`

@@ -9,9 +9,12 @@ import {
   buildInstallInstructions,
   envFlag,
   parseIntegerEnv,
+  readStorageStateFile,
   safeRequestPageId,
   sanitizeLabel,
+  STORAGE_STATE_RELATIVE_DIR,
   truncateText,
+  writeStorageStateFile,
   type SupportedBrowserEngine,
 } from "./helpers.ts";
 import type {
@@ -83,10 +86,12 @@ type BrowserSession = {
   consoleEntries: ConsoleEntry[];
   blockedRequests: BlockedRequestEntry[];
   networkSummary: NetworkSummary;
+  storageStatePath: string | null;
 };
 
 const EXTENSION_DIR = fileURLToPath(new URL(".", import.meta.url));
-const ARTIFACT_ROOT = resolve(EXTENSION_DIR, "../../artifacts/browser-playwright");
+const DEFAULT_WORKSPACE_ROOT = resolve(EXTENSION_DIR, "../../..");
+const ARTIFACT_RELATIVE_DIR = ".pi/artifacts/browser-playwright";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 20_000;
@@ -380,8 +385,8 @@ async function waitForPossibleNavigation(
   }
 }
 
-async function ensureArtifactsDir(): Promise<void> {
-  await mkdir(ARTIFACT_ROOT, { recursive: true });
+async function ensureArtifactsDir(artifactRoot: string): Promise<void> {
+  await mkdir(artifactRoot, { recursive: true });
 }
 
 async function buildElementSummary(
@@ -475,7 +480,16 @@ async function closeSession(session: BrowserSession): Promise<void> {
   }
 }
 
-export default function browserPlaywrightExtension(pi: ExtensionAPI) {
+type BrowserPlaywrightExtensionOptions = {
+  workspaceRoot?: string;
+};
+
+export default function browserPlaywrightExtension(
+  pi: ExtensionAPI,
+  options: BrowserPlaywrightExtensionOptions = {},
+) {
+  const workspaceRoot = resolve(options.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT);
+  const artifactRoot = resolve(workspaceRoot, ARTIFACT_RELATIVE_DIR);
   const sessions = new Map<string, BrowserSession>();
   let cleanupTimer: NodeJS.Timeout | null = setInterval(() => {
     void cleanupExpiredSessions();
@@ -520,6 +534,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Reuse browser session_id values across related browsing steps instead of starting a fresh browser every time.",
       "Use browser_navigate to visit public sites and browser_tabs to inspect or switch tabs.",
+      "Only load saved storageState when the workflow explicitly needs authenticated session reuse.",
     ],
     parameters: Type.Object({
       browser: Type.Optional(
@@ -531,6 +546,12 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       url: Type.Optional(Type.String({ description: "Optional initial URL to open." })),
       viewport_width: Type.Optional(Type.Number({ description: "Viewport width in pixels." })),
       viewport_height: Type.Optional(Type.Number({ description: "Viewport height in pixels." })),
+      storage_state_path: Type.Optional(
+        Type.String({
+          description:
+            "Optional guarded JSON path for Playwright storageState reuse. Relative paths are rooted under `.pi/artifacts/browser-playwright/storage-state/`.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) {
@@ -538,7 +559,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       }
 
       await cleanupExpiredSessions();
-      await ensureArtifactsDir();
+      await ensureArtifactsDir(artifactRoot);
 
       const browserEngine = (params.browser ?? "chromium") as BrowserEngine;
       const playwright = await loadPlaywright(browserEngine);
@@ -562,11 +583,15 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       }
 
       try {
+        const storageState = params.storage_state_path
+          ? await readStorageStateFile(workspaceRoot, params.storage_state_path)
+          : null;
         const context = await browser.newContext({
           viewport:
             params.viewport_width && params.viewport_height
               ? { width: params.viewport_width, height: params.viewport_height }
               : { width: 1280, height: 800 },
+          ...(storageState ? { storageState: storageState.storageState } : {}),
         });
 
         const session: BrowserSession = {
@@ -587,6 +612,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             blocked_requests: 0,
             failed_requests: 0,
           },
+          storageStatePath: storageState?.relativePath ?? null,
         };
 
         await context.route("**/*", async (route: Route) => {
@@ -647,7 +673,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
                   created_at: session.createdAt,
                   active_page_id: activePage?.id ?? null,
                   pages,
-                  artifact_dir: relative(resolve(EXTENSION_DIR, "../../.."), ARTIFACT_ROOT),
+                  artifact_dir: relative(workspaceRoot, artifactRoot),
+                  storage_state_path: session.storageStatePath,
+                  storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
                   safety: {
                     allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
                     allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
@@ -665,7 +693,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             created_at: session.createdAt,
             active_page_id: activePage?.id ?? null,
             pages,
-            artifact_dir: relative(resolve(EXTENSION_DIR, "../../.."), ARTIFACT_ROOT),
+            artifact_dir: relative(workspaceRoot, artifactRoot),
+            storage_state_path: session.storageStatePath,
+            storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
             safety: {
               allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
               allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
@@ -703,6 +733,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         active_page_id: session.activePageId,
         page_count: pages.length,
         pages,
+        storage_state_path: session.storageStatePath,
+        storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
         network_summary: session.networkSummary,
         recent_console: session.consoleEntries,
         blocked_requests: session.blockedRequests,
@@ -1134,11 +1166,11 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) throw new Error("Cancelled before screenshot.");
       await cleanupExpiredSessions();
-      await ensureArtifactsDir();
+      await ensureArtifactsDir(artifactRoot);
       const session = getSessionOrThrow(sessions, params.session_id);
       const pageRecord = await resolvePageRecord(session, params.page_id, false);
       const page = pageRecord.page;
-      const sessionArtifactDir = resolve(ARTIFACT_ROOT, session.id);
+      const sessionArtifactDir = resolve(artifactRoot, session.id);
       await mkdir(sessionArtifactDir, { recursive: true });
 
       const timestamp = nowIso().replace(/[:.]/g, "-");
@@ -1151,7 +1183,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       });
       touchPage(pageRecord);
 
-      const relativePath = relative(resolve(EXTENSION_DIR, "../../.."), absolutePath);
+      const relativePath = relative(workspaceRoot, absolutePath);
       const result = {
         session_id: session.id,
         page_id: pageRecord.id,
@@ -1160,6 +1192,46 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         title: await safeTitle(page),
         timestamp: nowIso(),
         full_page: params.full_page ?? false,
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_storage_state_save",
+    label: "Browser Storage State Save",
+    description:
+      "Export explicit Playwright storageState JSON into a guarded workspace-local path for later reuse.",
+    promptSnippet:
+      "Persist explicit opt-in Playwright storageState JSON under a guarded workspace-local path.",
+    promptGuidelines: [
+      "Only save storageState when the workflow explicitly needs later authenticated session reuse.",
+      "Do not expose raw cookies, tokens, or localStorage values in tool output.",
+    ],
+    parameters: Type.Object({
+      session_id: Type.String({ description: "Browser session_id." }),
+      path: Type.String({
+        description:
+          "Guarded JSON path to save under `.pi/artifacts/browser-playwright/storage-state/`. Bare filenames are rooted there automatically.",
+      }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      if (signal?.aborted) throw new Error("Cancelled before saving storage state.");
+      await cleanupExpiredSessions();
+      await ensureArtifactsDir(artifactRoot);
+      const session = getSessionOrThrow(sessions, params.session_id);
+      const storageState = await session.context.storageState();
+      const storageStatePath = await writeStorageStateFile(workspaceRoot, params.path, storageState);
+      touchSession(session);
+
+      const result = {
+        session_id: session.id,
+        path: storageStatePath.relativePath,
+        saved_at: nowIso(),
+        size_bytes: storageStatePath.sizeBytes,
       };
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

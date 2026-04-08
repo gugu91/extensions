@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, normalize, relative, resolve } from "node:path";
+import type { BrowserContextOptions } from "playwright";
+
 export type UrlDecision =
   | { allowed: true }
   | {
@@ -14,8 +20,13 @@ export type SecurityOptions = {
 export type SupportedBrowserEngine = "chromium" | "firefox" | "webkit";
 
 export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
+export const STORAGE_STATE_RELATIVE_DIR = ".pi/artifacts/browser-playwright/storage-state";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
+
+export type StorageStatePayload = Exclude<BrowserContextOptions["storageState"], string | undefined>;
+
+const NOFOLLOW_FLAG = fsConstants.O_NOFOLLOW ?? 0;
 
 export function parseIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -87,6 +98,229 @@ export function safeRequestPageId<PageLike>(
   } catch {
     return null;
   }
+}
+
+function isSubpath(basePath: string, targetPath: string): boolean {
+  const rel = relative(basePath, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+export function normalizeStorageStatePath(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    throw new Error("storage_state_path must be a non-empty relative JSON path.");
+  }
+  if (trimmed.includes("\0")) {
+    throw new Error("storage_state_path must not contain NUL bytes.");
+  }
+  if (trimmed.split(/[\\/]+/).some((segment) => segment === "..")) {
+    throw new Error(
+      `storage_state_path must stay within \`${STORAGE_STATE_RELATIVE_DIR}/\` and cannot use traversal segments.`,
+    );
+  }
+
+  const normalizedInput = normalize(trimmed).replace(/\\/g, "/").replace(/^\.\//, "");
+  if (isAbsolute(normalizedInput) || /^[A-Za-z]:\//.test(normalizedInput)) {
+    throw new Error("storage_state_path must be relative and workspace-local.");
+  }
+
+  const relativePath =
+    normalizedInput === STORAGE_STATE_RELATIVE_DIR ||
+    normalizedInput.startsWith(`${STORAGE_STATE_RELATIVE_DIR}/`)
+      ? normalizedInput
+      : `${STORAGE_STATE_RELATIVE_DIR}/${normalizedInput}`;
+
+  if (
+    relativePath === STORAGE_STATE_RELATIVE_DIR ||
+    relativePath.endsWith("/") ||
+    relativePath.split("/").some((segment) => segment === "..")
+  ) {
+    throw new Error(
+      `storage_state_path must stay within \`${STORAGE_STATE_RELATIVE_DIR}/\` and cannot use traversal segments.`,
+    );
+  }
+
+  if (extname(relativePath).toLowerCase() !== ".json") {
+    throw new Error("storage_state_path must end with `.json`.");
+  }
+
+  return relativePath;
+}
+
+export async function resolveStorageStatePath(
+  workspaceRoot: string,
+  input: string,
+  mode: "read" | "write",
+): Promise<{ absolutePath: string; relativePath: string }> {
+  const workspaceRootReal = await realpath(workspaceRoot);
+  const relativePath = normalizeStorageStatePath(input);
+  const absolutePath = resolve(workspaceRootReal, relativePath);
+  const storageStateRoot = resolve(workspaceRootReal, STORAGE_STATE_RELATIVE_DIR);
+
+  if (!isSubpath(storageStateRoot, absolutePath)) {
+    throw new Error(
+      `storage_state_path must resolve inside \`${STORAGE_STATE_RELATIVE_DIR}/\` within the workspace.`,
+    );
+  }
+
+  if (mode === "write") {
+    await mkdir(dirname(absolutePath), { recursive: true });
+    const parentReal = await realpath(dirname(absolutePath));
+    if (!isSubpath(storageStateRoot, parentReal)) {
+      throw new Error("Refusing to write storage state outside the guarded workspace directory.");
+    }
+
+    try {
+      const existing = await lstat(absolutePath);
+      if (existing.isSymbolicLink()) {
+        throw new Error(`Refusing to write storage state through symlink: ${relativePath}`);
+      }
+      if (!existing.isFile()) {
+        throw new Error(`Storage state path must point to a regular JSON file: ${relativePath}`);
+      }
+      const existingReal = await realpath(absolutePath);
+      if (!isSubpath(storageStateRoot, existingReal)) {
+        throw new Error("Refusing to write storage state outside the guarded workspace directory.");
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    return { absolutePath, relativePath };
+  }
+
+  let statResult: Awaited<ReturnType<typeof lstat>>;
+  try {
+    statResult = await lstat(absolutePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new Error(`Storage state file not found: ${relativePath}`);
+    }
+    throw error;
+  }
+
+  if (statResult.isSymbolicLink()) {
+    throw new Error(`Refusing to read storage state through symlink: ${relativePath}`);
+  }
+  if (!statResult.isFile()) {
+    throw new Error(`Storage state path must point to a regular JSON file: ${relativePath}`);
+  }
+
+  const realFilePath = await realpath(absolutePath);
+  if (!isSubpath(storageStateRoot, realFilePath)) {
+    throw new Error("Refusing to read storage state outside the guarded workspace directory.");
+  }
+
+  return { absolutePath: realFilePath, relativePath };
+}
+
+function parseStorageStatePayload(
+  text: string,
+  relativePath: string,
+): StorageStatePayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Invalid storage state JSON: ${relativePath}`, {
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
+    throw new Error(`Storage state file must contain a JSON object: ${relativePath}`);
+  }
+
+  const record = parsed as Record<string, unknown>;
+  if ("cookies" in record && !Array.isArray(record.cookies)) {
+    throw new Error(`Storage state \`cookies\` must be an array: ${relativePath}`);
+  }
+  if ("origins" in record && !Array.isArray(record.origins)) {
+    throw new Error(`Storage state \`origins\` must be an array: ${relativePath}`);
+  }
+
+  return {
+    ...record,
+    cookies: Array.isArray(record.cookies) ? record.cookies : [],
+    origins: Array.isArray(record.origins) ? record.origins : [],
+  } as StorageStatePayload;
+}
+
+export async function readStorageStateFile(
+  workspaceRoot: string,
+  input: string,
+): Promise<{
+  absolutePath: string;
+  relativePath: string;
+  storageState: StorageStatePayload;
+}> {
+  const { absolutePath, relativePath } = await resolveStorageStatePath(workspaceRoot, input, "read");
+  const handle = await open(absolutePath, fsConstants.O_RDONLY | NOFOLLOW_FLAG);
+  try {
+    const text = await handle.readFile({ encoding: "utf8" });
+    return {
+      absolutePath,
+      relativePath,
+      storageState: parseStorageStatePayload(text, relativePath),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function writeStorageStateFile(
+  workspaceRoot: string,
+  input: string,
+  payload: StorageStatePayload,
+): Promise<{ absolutePath: string; relativePath: string; sizeBytes: number }> {
+  const { absolutePath, relativePath } = await resolveStorageStatePath(workspaceRoot, input, "write");
+  const parentReal = await realpath(dirname(absolutePath));
+  const finalPath = resolve(parentReal, basename(absolutePath));
+  const tempPath = resolve(parentReal, `.tmp-${randomUUID()}.json`);
+  const text = `${JSON.stringify(payload, null, 2)}\n`;
+
+  const handle = await open(
+    tempPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW_FLAG,
+    0o600,
+  );
+  try {
+    await handle.writeFile(text, { encoding: "utf8" });
+  } finally {
+    await handle.close();
+  }
+
+  try {
+    try {
+      const existing = await lstat(finalPath);
+      if (existing.isSymbolicLink()) {
+        throw new Error(`Refusing to write storage state through symlink: ${relativePath}`);
+      }
+      if (!existing.isFile()) {
+        throw new Error(`Storage state path must point to a regular JSON file: ${relativePath}`);
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    await rename(tempPath, finalPath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+
+  return {
+    absolutePath: finalPath,
+    relativePath,
+    sizeBytes: Buffer.byteLength(text),
+  };
 }
 
 function normalizeUrl(input: string): URL {
