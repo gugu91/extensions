@@ -3,8 +3,11 @@ import test from "node:test";
 import {
   assessUrl,
   buildInstallInstructions,
+  buildStorageStateFileName,
+  isPlaywrightStorageState,
   safeRequestPageId,
   sanitizeLabel,
+  sanitizeStorageStateName,
   truncateText,
   type SecurityOptions,
 } from "./helpers.ts";
@@ -110,6 +113,25 @@ test("safeRequestPageId returns null for service-worker-style requests without a
 test("sanitizeLabel keeps filenames safe and stable", () => {
   assert.equal(sanitizeLabel("Search Results / Docs"), "search-results-docs");
   assert.equal(sanitizeLabel("   "), "screenshot");
+});
+
+test("sanitizeStorageStateName keeps saved state names workspace-safe", () => {
+  assert.equal(sanitizeStorageStateName(" GitHub Login .json "), "github-login");
+  assert.equal(sanitizeStorageStateName("../../Prod Session"), "prod-session");
+});
+
+test("buildStorageStateFileName appends a normalized json filename", () => {
+  assert.equal(buildStorageStateFileName("QA Session"), "qa-session.json");
+});
+
+test("sanitizeStorageStateName rejects empty names", () => {
+  assert.throws(() => sanitizeStorageStateName("   "), /letter or number/);
+});
+
+test("isPlaywrightStorageState validates the expected top-level shape", () => {
+  assert.equal(isPlaywrightStorageState({ cookies: [], origins: [] }), true);
+  assert.equal(isPlaywrightStorageState({ cookies: [] }), false);
+  assert.equal(isPlaywrightStorageState(null), false);
 });
 
 test("truncateText trims oversized content and marks truncation", () => {
