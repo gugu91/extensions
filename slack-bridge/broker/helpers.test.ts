@@ -1356,10 +1356,37 @@ describe("BrokerDB", () => {
     expect(thread.source).toBe("slack");
     expect(thread.channel).toBe("#general");
     expect(thread.ownerAgent).toBe("a1");
+    expect(thread.ownerBinding).toBeNull();
 
     const fetched = db.getThread("t1");
     expect(fetched).not.toBeNull();
     expect(fetched!.threadId).toBe("t1");
+  });
+
+  it("persists explicit thread ownership bindings across restart", () => {
+    db.createThread({
+      threadId: "t-explicit",
+      source: "slack",
+      channel: "#general",
+      ownerAgent: "hippo",
+      ownerBinding: "explicit",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+
+    expect(db.getThread("t-explicit")).toMatchObject({
+      ownerAgent: "hippo",
+      ownerBinding: "explicit",
+    });
+
+    db.close();
+    db = new BrokerDB(path.join(dir, "test.db"));
+    db.initialize();
+
+    expect(db.getThread("t-explicit")).toMatchObject({
+      ownerAgent: "hippo",
+      ownerBinding: "explicit",
+    });
   });
 
   it("getThread returns null for missing thread", () => {

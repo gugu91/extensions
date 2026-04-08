@@ -46,6 +46,7 @@ interface ThreadRow {
   source: string;
   channel: string;
   owner_agent: string | null;
+  owner_binding: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -131,6 +132,7 @@ function rowToThread(row: ThreadRow): ThreadInfo {
     source: row.source,
     channel: row.channel,
     ownerAgent: row.owner_agent,
+    ownerBinding: row.owner_binding === "explicit" ? "explicit" : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -188,7 +190,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 10;
+export const CURRENT_BROKER_SCHEMA_VERSION = 11;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -235,6 +237,7 @@ function createCoreTables(db: DatabaseSync): void {
       source TEXT NOT NULL,
       channel TEXT NOT NULL,
       owner_agent TEXT,
+      owner_binding TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -370,6 +373,11 @@ function addObservabilityColumns(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_ralph_cycles_started
       ON ralph_cycles(started_at);
   `);
+}
+
+function addThreadOwnershipBindingColumn(db: DatabaseSync): void {
+  createCoreTables(db);
+  ensureColumn(db, "threads", "owner_binding", "ALTER TABLE threads ADD COLUMN owner_binding TEXT");
 }
 
 function addBacklogAffinityColumns(db: DatabaseSync): void {
@@ -544,6 +552,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 10:
           createSettingsTable(db);
+          break;
+        case 11:
+          addThreadOwnershipBindingColumn(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -981,17 +992,20 @@ export class BrokerDB implements BrokerDBInterface {
     const ch = typeof threadOrId === "string" ? channel! : threadOrId.channel;
     const owner = typeof threadOrId === "string" ? (ownerAgent ?? null) : threadOrId.ownerAgent;
 
+    const ownerBinding = typeof threadOrId === "string" ? null : (threadOrId.ownerBinding ?? null);
+
     db.prepare(
-      `INSERT INTO threads (thread_id, source, channel, owner_agent, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO threads (thread_id, source, channel, owner_agent, owner_binding, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(thread_id) DO UPDATE SET updated_at = excluded.updated_at`,
-    ).run(tId, src, ch, owner, now, now);
+    ).run(tId, src, ch, owner, ownerBinding, now, now);
 
     return {
       threadId: tId,
       source: src,
       channel: ch,
       ownerAgent: owner,
+      ownerBinding,
       createdAt: now,
       updatedAt: now,
     };
@@ -1005,13 +1019,14 @@ export class BrokerDB implements BrokerDBInterface {
     const existing = this.getThread(threadId);
     if (!existing) {
       db.prepare(
-        `INSERT INTO threads (thread_id, source, channel, owner_agent, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO threads (thread_id, source, channel, owner_agent, owner_binding, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         threadId,
         updates.source ?? "slack",
         updates.channel ?? "",
         updates.ownerAgent !== undefined ? updates.ownerAgent : null,
+        updates.ownerBinding !== undefined ? updates.ownerBinding : null,
         now,
         now,
       );
@@ -1033,6 +1048,10 @@ export class BrokerDB implements BrokerDBInterface {
       sets.push("source = ?");
       values.push(updates.source);
     }
+    if (updates.ownerBinding !== undefined) {
+      sets.push("owner_binding = ?");
+      values.push(updates.ownerBinding);
+    }
 
     sets.push("updated_at = ?");
     values.push(now);
@@ -1049,13 +1068,13 @@ export class BrokerDB implements BrokerDBInterface {
     // if the thread is currently unclaimed or already owned by this agent.
     // A single statement avoids the TOCTOU race of read-then-write. (#125)
     db.prepare(
-      `INSERT INTO threads (thread_id, source, channel, owner_agent, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO threads (thread_id, source, channel, owner_agent, owner_binding, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(thread_id) DO UPDATE SET
          owner_agent = excluded.owner_agent,
          updated_at = excluded.updated_at
        WHERE threads.owner_agent IS NULL OR threads.owner_agent = excluded.owner_agent`,
-    ).run(threadId, source, channel, agentId, now, now);
+    ).run(threadId, source, channel, agentId, null, now, now);
 
     // Verify: read back the owner.  If the WHERE clause above didn't
     // match (another agent owns the thread), the row was not updated
