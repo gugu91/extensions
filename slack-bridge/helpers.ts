@@ -175,14 +175,66 @@ function getPinetSenderLabel(message: FollowerInboxEntry["message"]): string {
   return senderId || senderAgent || "unknown-agent";
 }
 
+const PINET_TERMINAL_STAND_DOWN_PATTERNS = [
+  /\bno further repl(?:y|ies) (?:are|is) needed\b/i,
+  /\bno further acknowledg(?:ement|ements) (?:are|is) needed\b/i,
+  /\bno reply is needed\b/i,
+  /\bhard stop on this [^.\n]*thread\b/i,
+  /\bno more work is needed\b/i,
+  /\bstand down\b/i,
+  /\bstay free(?:\/| and )quiet\b/i,
+  /\bstay quiet(?:\/| and )free\b/i,
+  /\bthread is already satisfied\b/i,
+  /\bunless I (?:assign|ask for) (?:a )?(?:genuinely )?new task\b/i,
+];
+
+const PINET_ACTIONABLE_TASK_PATTERNS = [
+  /\bnew [a-z-]+ lane\b/i,
+  /\bissue:\b/i,
+  /\btask:\b/i,
+  /\bworktree setup:\b/i,
+  /\bplease ACK\/work\/ask\/report\b/i,
+];
+
+export function isTerminalPinetStandDownMessage(body: string | null | undefined): boolean {
+  const normalized = body?.replace(/\s+/g, " ").trim() ?? "";
+  if (!normalized) {
+    return false;
+  }
+
+  const hasTerminalCue = PINET_TERMINAL_STAND_DOWN_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  if (!hasTerminalCue) {
+    return false;
+  }
+
+  return !PINET_ACTIONABLE_TASK_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string {
-  const lines = entries.map((entry) => {
+  const annotatedEntries = entries.map((entry) => ({
+    entry,
+    terminalStandDown: isTerminalPinetStandDownMessage(entry.message.body),
+  }));
+
+  const lines = annotatedEntries.map(({ entry, terminalStandDown }) => {
     const threadTs = entry.message.threadId ?? "";
     const sender = getPinetSenderLabel(entry.message);
-    return `[thread ${threadTs}] ${sender}: ${entry.message.body ?? ""}`;
+    const standDownSuffix = terminalStandDown ? " [terminal stand-down]" : "";
+    return `[thread ${threadTs}] ${sender}${standDownSuffix}: ${entry.message.body ?? ""}`;
   });
 
-  return `New Pinet messages:\n${lines.join("\n")}\n\nReply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.`;
+  const hasTerminalStandDown = annotatedEntries.some((entry) => entry.terminalStandDown);
+  const hasActionableWork = annotatedEntries.some((entry) => !entry.terminalStandDown);
+
+  const guidance = hasTerminalStandDown
+    ? hasActionableWork
+      ? "Reply via pinet_message for actionable work only. For messages marked [terminal stand-down], do NOT acknowledge or reply unless you have a real blocker or materially new finding. For new tasks, ACK briefly, do the work, report blockers immediately, report the outcome when done."
+      : "Reply via pinet_message only if you have a real blocker or materially new finding. Treat messages marked [terminal stand-down] as closed; do NOT send another acknowledgement."
+    : "Reply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.";
+
+  return `New Pinet messages:\n${lines.join("\n")}\n\n${guidance}`;
 }
 
 // ─── Pinet control messages ─────────────────────────────
@@ -1241,6 +1293,7 @@ export function buildWorkerPromptGuidelines(): string[] {
     "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
     "5. When you have finished all assigned work and are waiting for more, call `pinet_free` (or `/pinet-free`) to mark yourself idle/free for the broker.",
     "Always reply where the task came from.",
+    "If a Pinet thread explicitly says things like 'no further replies are needed', 'hard stop', or 'stay free/quiet unless a new task appears', treat it as a terminal closeout. Do NOT send another acknowledgement unless you have a real blocker, a materially new finding, or a genuinely new task arrives in that thread.",
     "",
     "REPLY TOOL RULES:",
     "- If you received a task via `pinet_message`, reply via `pinet_message` to the sender.",

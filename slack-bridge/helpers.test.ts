@@ -9,6 +9,7 @@ import {
   isUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
+  isTerminalPinetStandDownMessage,
   parsePinetControlCommand,
   getPinetControlCommandFromText,
   buildPinetControlMetadata,
@@ -432,6 +433,24 @@ describe("formatInboxMessages", () => {
   });
 });
 
+describe("isTerminalPinetStandDownMessage", () => {
+  it("detects explicit thread closeout instructions", () => {
+    expect(
+      isTerminalPinetStandDownMessage(
+        "Hard stop on this thread now: no further acknowledgements are needed. Stay free and quiet unless I assign a new task here.",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not misclassify a fresh task assignment as terminal", () => {
+    expect(
+      isTerminalPinetStandDownMessage(
+        "New implementation lane for you — please ACK/work/ask/report back here. Issue: #299. Worktree setup: git worktree add ...",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("formatPinetInboxMessages", () => {
   it("formats agent messages with reply guidance", () => {
     const result = formatPinetInboxMessages([
@@ -450,6 +469,7 @@ describe("formatPinetInboxMessages", () => {
       "[thread a2a:broker:worker] broker-id (Broker Bunny): Take issue #175",
     );
     expect(result).toContain("Reply via pinet_message.");
+    expect(result).toContain("ACK briefly, do the work");
   });
 
   it("falls back to the sender id when no senderAgent metadata exists", () => {
@@ -465,6 +485,54 @@ describe("formatPinetInboxMessages", () => {
     ]);
 
     expect(result).toContain("[thread a2a:broker:worker] broker-id: hello");
+  });
+
+  it("marks terminal stand-down messages as closed and suppresses reflex ack guidance", () => {
+    const result = formatPinetInboxMessages([
+      {
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker-id",
+          body: "Hard stop on this thread now: no further acknowledgements are needed. Stay free and quiet unless I assign a new task here.",
+          metadata: { senderAgent: "Broker Bunny", a2a: true },
+        },
+      },
+    ]);
+
+    expect(result).toContain("[terminal stand-down]");
+    expect(result).toContain("Treat messages marked [terminal stand-down] as closed");
+    expect(result).toContain("do NOT send another acknowledgement");
+    expect(result).not.toContain(
+      "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
+    );
+  });
+
+  it("keeps new-task reply guidance when a batch mixes closeout and actionable work", () => {
+    const result = formatPinetInboxMessages([
+      {
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker-id",
+          body: "No further replies are needed on this closed lane; stay free/quiet unless I assign a genuinely new task.",
+          metadata: { senderAgent: "Broker Bunny", a2a: true },
+        },
+      },
+      {
+        message: {
+          threadId: "a2a:broker:worker",
+          sender: "broker-id",
+          body: "New implementation lane for you — please ACK/work/ask/report back here. Issue: #299.",
+          metadata: { senderAgent: "Broker Bunny", a2a: true },
+        },
+      },
+    ]);
+
+    expect(result).toContain("[terminal stand-down]");
+    expect(result).toContain("Reply via pinet_message for actionable work only.");
+    expect(result).toContain("For new tasks, ACK briefly, do the work");
+    expect(result).toContain(
+      "do NOT acknowledge or reply unless you have a real blocker or materially new finding",
+    );
   });
 });
 
@@ -1116,6 +1184,15 @@ describe("buildWorkerPromptGuidelines", () => {
     expect(joined).toContain("pinet_free");
     expect(joined).toContain("/pinet-free");
     expect(joined).toContain("idle/free");
+  });
+
+  it("tells workers not to acknowledge terminal broker stand-downs", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("no further replies are needed");
+    expect(joined).toContain("hard stop");
+    expect(joined).toContain("Do NOT send another acknowledgement");
+    expect(joined).toContain("genuinely new task");
   });
 });
 
