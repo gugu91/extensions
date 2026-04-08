@@ -1656,6 +1656,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   function syncBrokerDbInbox(agentId: string, db: BrokerDB, ctx: ExtensionContext): void {
+    // Broker-targeted messages can fall back into pending backlog outside startup
+    // recovery (for example during disconnect/requeue paths). Rebind them before
+    // mirroring the durable inbox into memory so fresh zero-attempt residue does
+    // not wait for a separate maintenance rebound.
+    db.recoverPendingTargetedBacklog(agentId);
+
     const pending = db
       .getInbox(agentId)
       .filter((item) => !isBrokerInboxIdTracked(brokerDeliveryState, item.entry.id));
