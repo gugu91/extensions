@@ -383,9 +383,10 @@ describe("resolveTaskAssignments", () => {
       runner,
     );
 
-    expect(assignment.nextStatus).toBe("issue_closed");
+    expect(assignment.nextStatus).toBe("assigned");
     expect(assignment.nextPrNumber).toBeNull();
     expect(assignment.issueState).toBe("CLOSED");
+    expect(hasTaskAssignmentStatusChange(assignment)).toBe(false);
   });
 });
 
@@ -450,6 +451,25 @@ describe("buildTaskAssignmentReport", () => {
         "- 🐦‍⬛ Frozen Raven: #103 → no commits, no PR ⚠️",
       ].join("\n"),
     );
+  });
+
+  it("hides closed issues even when the stored status is still assigned", () => {
+    const closedAssignment = {
+      ...makeAssignment({
+        id: 1,
+        agentId: "worker-2",
+        issueNumber: 271,
+        status: "assigned",
+      }),
+      issueState: "CLOSED" as const,
+    };
+
+    const report = buildTaskAssignmentReport(
+      [closedAssignment],
+      new Map([["worker-2", makeAgent("worker-2", "Frozen Raven", "🐦‍⬛")]]),
+    );
+
+    expect(report).toBeNull();
   });
 });
 

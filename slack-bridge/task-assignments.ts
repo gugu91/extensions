@@ -384,18 +384,8 @@ function resolveTaskStatus(
   assignment: TaskAssignmentInfo,
   branchAheadCount: number,
   pr: PullRequestSnapshot | null | undefined,
-  issueState: ResolvedTaskAssignment["issueState"],
 ): Pick<ResolvedTaskAssignment, "nextStatus" | "nextPrNumber"> {
-  if (issueState === "CLOSED") {
-    return {
-      nextStatus: "issue_closed",
-      nextPrNumber: pr?.number ?? assignment.prNumber,
-    };
-  }
-  if (
-    pr === undefined &&
-    (assignment.status.startsWith("pr_") || assignment.status === "issue_closed")
-  ) {
+  if (pr === undefined && assignment.status.startsWith("pr_")) {
     return { nextStatus: assignment.status, nextPrNumber: assignment.prNumber };
   }
   if (pr?.state.toUpperCase() === "OPEN") {
@@ -498,7 +488,6 @@ export async function resolveTaskAssignments(
         assignment,
         branchAheadCount,
         resolvedPr,
-        issueState,
       );
       return {
         ...assignment,
@@ -527,8 +516,6 @@ function formatTaskProgressFragment(
       return `#${assignment.issueNumber} → PR #${assignment.prNumber ?? "?"} OPEN 🔄`;
     case "pr_closed":
       return `#${assignment.issueNumber} → PR #${assignment.prNumber ?? "?"} CLOSED ⚠️`;
-    case "issue_closed":
-      return `#${assignment.issueNumber} → issue closed ✅`;
     case "branch_pushed":
       return `#${assignment.issueNumber} → commits on ${assignment.branch ?? "tracked branch"}, no PR 👀`;
     case "assigned":
@@ -537,12 +524,15 @@ function formatTaskProgressFragment(
   }
 }
 
-function getVisibleTaskAssignmentReportEntries(
-  assignments: Array<
-    Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">
-  >,
-): Array<Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">> {
-  return assignments.filter((assignment) => assignment.status !== "issue_closed");
+function getVisibleTaskAssignmentReportEntries<
+  T extends Pick<
+    TaskAssignmentInfo,
+    "agentId" | "issueNumber" | "branch" | "status" | "prNumber"
+  > & {
+    issueState?: ResolvedTaskAssignment["issueState"];
+  },
+>(assignments: T[]): T[] {
+  return assignments.filter((assignment) => assignment.issueState !== "CLOSED");
 }
 
 function formatAgentLabel(

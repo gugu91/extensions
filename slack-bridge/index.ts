@@ -746,7 +746,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function summarizeTrackedAssignmentStatus(
-    status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed" | "issue_closed",
+    status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed",
     prNumber: number | null,
     branch: string | null,
   ): { summary: string; tone: ActivityLogTone } {
@@ -765,11 +765,6 @@ export default function (pi: ExtensionAPI) {
         return {
           summary: `PR #${prNumber ?? "?"} closed without merge`,
           tone: "warning",
-        };
-      case "issue_closed":
-        return {
-          summary: "issue closed",
-          tone: "success",
         };
       case "branch_pushed":
         return {

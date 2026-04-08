@@ -88,7 +88,7 @@ export interface BuildBrokerControlPlaneDashboardSnapshotInput {
   assignments: Array<
     Pick<
       ResolvedTaskAssignment,
-      "agentId" | "issueNumber" | "branch" | "status" | "prNumber" | "updatedAt"
+      "agentId" | "issueNumber" | "branch" | "status" | "prNumber" | "updatedAt" | "issueState"
     >
   >;
   recentCycles: BrokerControlPlaneRecentCycle[];
@@ -181,8 +181,6 @@ function formatTaskStatusShort(
       return `#${assignment.issueNumber} PR #${assignment.prNumber ?? "?"} merged`;
     case "pr_closed":
       return `#${assignment.issueNumber} PR #${assignment.prNumber ?? "?"} closed`;
-    case "issue_closed":
-      return `#${assignment.issueNumber} issue closed`;
     case "branch_pushed":
       return `#${assignment.issueNumber} pushed ${assignment.branch ?? "branch"}`;
     case "assigned":
@@ -224,7 +222,7 @@ export function buildBrokerControlPlaneDashboardSnapshot(
 ): BrokerControlPlaneDashboardSnapshot {
   const homedir = input.homedir ?? process.env.HOME ?? "";
   const visibleAssignments = input.assignments.filter(
-    (assignment) => assignment.status !== "issue_closed",
+    (assignment) => assignment.issueState !== "CLOSED",
   );
   const assignmentsByAgent = new Map<
     string,
