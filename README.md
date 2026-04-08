@@ -3,11 +3,12 @@
 Pi extensions monorepo — Slack, Neovim, and Neon Postgres integrations for
 the [pi coding agent](https://github.com/nicholasgasior/pi-coding-agent).
 
-Current state: the repo is in a fast-moving Pinet buildout with **50+ merged
-PRs in a single day with minimal human intervention**, a broker/follower Slack
-mesh, persistent PiComms, Slack canvases, scheduled wake-ups, worktree
-guardrails, a checked-in Slack manifest deploy command, and name-driven agent
-personalities. Slack file uploads are also in active flight.
+Current state: the repo has moved from the initial **50+ merged PRs in a
+single day** sprint into a broader Pinet stabilization and docs pass, with a
+broker/follower Slack mesh, persistent PiComms, Slack canvases, scheduled
+wake-ups, worktree guardrails, checked-in Slack manifest deploy tooling,
+optional mesh auth, and a project-local browser-playwright extension for
+interactive browsing and screenshots.
 
 ## Extensions
 
@@ -22,16 +23,22 @@ personalities. Slack file uploads are also in active flight.
 ## Current state snapshot
 
 - **Broker mesh** — Slack-bridge now runs a broker/follower Pinet workflow with
-  routing, inbox sync, broadcast channels, reload/unfollow controls, and
-  scheduled wake-ups.
-- **Slack tooling** — the Slack extension now includes canvases and a root
-  `pnpm deploy:slack` command for pushing `slack-bridge/manifest.yaml` via the
-  Slack App Manifest API.
-- **Communication polish** — agents keep stable identities, now speak with
-  lightweight name-matched personalities, and report worker assignment status
-  back through the RALPH loop.
-- **Active work** — Slack file uploads are currently in flight in
-  [PR #201](https://github.com/gugu91/extensions/pull/201).
+  routing, inbox sync, broadcast channels, reload/unfollow controls,
+  scheduled wake-ups, and optional/configurable shared-secret mesh auth.
+- **Slack tooling** — the Slack extension includes canvases, uploads,
+  modals, bookmarks, pinning, exports, and a root `pnpm deploy:slack` command
+  for pushing `slack-bridge/manifest.yaml` via the Slack App Manifest API.
+- **Browser automation** — the repo now carries a project-local
+  [`browser-playwright`](.pi/extensions/browser-playwright/README.md)
+  extension with reusable sessions, multi-tab browsing, request guardrails,
+  and workspace-local screenshot artifacts.
+- **Recent wave** — browser-playwright landed alongside the Pinet v0.1.1 prep,
+  mesh-secret optionality, auth-mismatch clarification, and refreshed mesh-auth
+  docs ([#282](https://github.com/gugu91/extensions/pull/282),
+  [#288](https://github.com/gugu91/extensions/pull/288),
+  [#289](https://github.com/gugu91/extensions/pull/289),
+  [#292](https://github.com/gugu91/extensions/pull/292),
+  [#294](https://github.com/gugu91/extensions/pull/294)).
 
 ## Philosophy
 
@@ -169,6 +176,16 @@ expectations and the required smoke checklist.
 This repo is built by a mesh of human and AI agents coordinating via
 [Pinet](slack-bridge/README.md). Names are procedural and can rotate across
 sessions, so this section is a snapshot of the agents visible in today's work.
+Entries are sourced from the relevant PR, Pinet, and PiComms trail rather than
+`git shortlog` alone.
+
+### Today's agents (2026-04-08)
+
+| Agent                       | Contribution                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🦔 **Ember Ivory Hedgehog** | Coordinated the read-only post-merge sweep, opened [#296](https://github.com/gugu91/extensions/issues/296), and turned the browser/Pinet docs drift into a focused README refresh lane.                                                                                                                                                                                                                                   |
+| 🦥 **Stellar Ebony Sloth**  | Traced the canonical contributor/acknowledgement locations, confirmed the root README drift after [#282](https://github.com/gugu91/extensions/pull/282), [#289](https://github.com/gugu91/extensions/pull/289), [#292](https://github.com/gugu91/extensions/pull/292), and [#294](https://github.com/gugu91/extensions/pull/294), then refreshed the snapshot in [#296](https://github.com/gugu91/extensions/issues/296). |
+| 🐧 **Patch Puffin**         | Approved the Pinet v0.1.1 release-prep metadata and publish-surface review in [PR #288](https://github.com/gugu91/extensions/pull/288).                                                                                                                                                                                                                                                                                   |
 
 ### Today's agents (2026-04-03)
 
