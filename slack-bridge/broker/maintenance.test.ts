@@ -10,6 +10,7 @@ import {
 
 class StubMaintenanceDB implements BrokerMaintenanceDB {
   agents: AgentInfo[] = [];
+  knownAgents: AgentInfo[] = [];
   backlog: BacklogEntry[] = [];
   threads = new Map<string, ThreadInfo>();
   pendingInboxCounts = new Map<string, number>();
@@ -17,6 +18,8 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
   repairedThreadClaims = 0;
   repairedAgentIds: string[] = [];
   requeuedAgents: string[] = [];
+  droppedBacklogIds: number[] = [];
+  healthyAssignedBacklogIds = new Set<number>();
   methodCalls: string[] = [];
 
   pruneStaleAgents(_staleAfterMs: number): string[] {
@@ -42,12 +45,51 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
     return 0;
   }
 
+  repairOrphanedAssignedBacklog(): { resetToPendingCount: number; droppedCount: number } {
+    this.methodCalls.push("repair-assigned");
+    let resetToPendingCount = 0;
+    let droppedCount = 0;
+
+    for (const entry of this.backlog) {
+      if (
+        entry.status !== "assigned" ||
+        !entry.preferredAgentId ||
+        this.healthyAssignedBacklogIds.has(entry.id)
+      ) {
+        continue;
+      }
+
+      if (this.getAgentById(entry.preferredAgentId)) {
+        entry.status = "pending";
+        entry.assignedAgentId = null;
+        resetToPendingCount += 1;
+        continue;
+      }
+
+      entry.status = "dropped";
+      entry.reason = "preferred_agent_missing";
+      entry.assignedAgentId = null;
+      this.droppedBacklogIds.push(entry.id);
+      droppedCount += 1;
+    }
+
+    return { resetToPendingCount, droppedCount };
+  }
+
   getPendingBacklog(limit = 50): BacklogEntry[] {
     return this.backlog.filter((entry) => entry.status === "pending").slice(0, limit);
   }
 
   getBacklogCount(status: BacklogEntry["status"] = "pending"): number {
     return this.backlog.filter((entry) => entry.status === status).length;
+  }
+
+  getAgentById(agentId: string): AgentInfo | null {
+    return (
+      this.agents.find((agent) => agent.id === agentId) ??
+      this.knownAgents.find((agent) => agent.id === agentId) ??
+      null
+    );
   }
 
   getAgents(): AgentInfo[] {
@@ -69,6 +111,16 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
     entry.assignedAgentId = agentId;
     entry.attemptCount += 1;
     this.pendingInboxCounts.set(agentId, (this.pendingInboxCounts.get(agentId) ?? 0) + 1);
+    return entry;
+  }
+
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null {
+    const entry = this.backlog.find((backlog) => backlog.id === id) ?? null;
+    if (!entry) return null;
+    entry.status = "dropped";
+    entry.reason = reason;
+    entry.assignedAgentId = null;
+    this.droppedBacklogIds.push(id);
     return entry;
   }
 }
@@ -197,6 +249,14 @@ describe("runBrokerMaintenancePass", () => {
 
   it("holds targeted backlog until the intended agent is live", () => {
     db.agents = [makeAgent({ id: "sender", name: "Sender" })];
+    db.knownAgents = [
+      makeAgent({
+        id: "receiver",
+        name: "Receiver",
+        disconnectedAt: "2026-04-01T00:00:05.000Z",
+        resumableUntil: "2026-04-01T00:01:00.000Z",
+      }),
+    ];
     db.backlog = [
       makeBacklog({ id: 1, threadId: "a2a:sender:receiver", preferredAgentId: "receiver" }),
     ];
@@ -246,6 +306,95 @@ describe("runBrokerMaintenancePass", () => {
     expect(db.backlog[0].assignedAgentId).toBe("receiver");
   });
 
+  it("drops targeted backlog once the preferred agent is no longer resolvable", () => {
+    db.agents = [
+      makeAgent({ id: "sender", name: "Sender" }),
+      makeAgent({ id: "other", name: "Other" }),
+    ];
+    db.backlog = [
+      makeBacklog({ id: 1, threadId: "a2a:sender:missing", preferredAgentId: "missing" }),
+    ];
+    db.threads.set("a2a:sender:missing", {
+      threadId: "a2a:sender:missing",
+      source: "agent",
+      channel: "",
+      ownerAgent: "sender",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    });
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(db.backlog[0].status).toBe("dropped");
+    expect(db.backlog[0].reason).toBe("preferred_agent_missing");
+    expect(db.droppedBacklogIds).toEqual([1]);
+    expect(result.anomalies).toContain("dropped 1 undeliverable targeted backlog entry");
+  });
+
+  it("repairs orphaned targeted assignments back to pending while the preferred agent is still known", () => {
+    db.agents = [makeAgent({ id: "sender", name: "Sender" })];
+    db.knownAgents = [
+      makeAgent({
+        id: "receiver",
+        name: "Receiver",
+        disconnectedAt: "2026-04-01T00:00:05.000Z",
+        resumableUntil: "2026-04-01T00:01:00.000Z",
+      }),
+    ];
+    db.backlog = [
+      makeBacklog({
+        id: 1,
+        threadId: "a2a:sender:receiver",
+        status: "assigned",
+        preferredAgentId: "receiver",
+        assignedAgentId: "receiver",
+        reason: "agent_disconnected",
+      }),
+    ];
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(db.backlog[0].status).toBe("pending");
+    expect(db.backlog[0].assignedAgentId).toBeNull();
+    expect(result.anomalies).toContain("reset 1 orphaned targeted backlog assignment to pending");
+  });
+
+  it("drops orphaned targeted assignments once the preferred agent is gone", () => {
+    db.agents = [makeAgent({ id: "sender", name: "Sender" })];
+    db.backlog = [
+      makeBacklog({
+        id: 1,
+        threadId: "a2a:sender:receiver",
+        status: "assigned",
+        preferredAgentId: "receiver",
+        assignedAgentId: "receiver",
+        reason: "agent_disconnected",
+      }),
+    ];
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(db.backlog[0].status).toBe("dropped");
+    expect(db.backlog[0].reason).toBe("preferred_agent_missing");
+    expect(db.droppedBacklogIds).toEqual([1]);
+    expect(result.anomalies).toContain("dropped 1 undeliverable targeted backlog entry");
+  });
+
   it("leaves backlog pending and reports an anomaly when no workers are available", () => {
     db.backlog = [makeBacklog({ id: 1, threadId: "t-1" })];
 
@@ -278,7 +427,7 @@ describe("runBrokerMaintenancePass", () => {
       now: Date.parse("2026-04-01T00:00:10.000Z"),
     });
 
-    expect(db.methodCalls.slice(0, 3)).toEqual(["prune", "purge", "repair"]);
+    expect(db.methodCalls.slice(0, 4)).toEqual(["prune", "purge", "repair", "repair-assigned"]);
   });
 
   it("surfaces stale-agent and orphaned-thread repair activity", () => {

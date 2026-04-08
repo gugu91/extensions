@@ -1188,6 +1188,104 @@ export class BrokerDB implements BrokerDBInterface {
     });
   }
 
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const result = db
+      .prepare(
+        `UPDATE unrouted_backlog
+         SET status = 'dropped',
+             reason = ?,
+             assigned_agent_id = NULL,
+             updated_at = ?
+         WHERE id = ?
+           AND status = 'pending'`,
+      )
+      .run(reason, now, id);
+
+    if (Number(result.changes ?? 0) === 0) {
+      return null;
+    }
+
+    return this.getBacklogById(id);
+  }
+
+  repairOrphanedAssignedBacklog(): { resetToPendingCount: number; droppedCount: number } {
+    const db = this.getDb();
+
+    return this.withTransaction(() => {
+      const rows = db
+        .prepare(
+          `SELECT id, message_id, preferred_agent_id, assigned_agent_id
+           FROM unrouted_backlog
+           WHERE status = 'assigned'
+             AND preferred_agent_id IS NOT NULL
+             AND (
+               assigned_agent_id IS NULL
+               OR assigned_agent_id NOT IN (SELECT id FROM agents)
+               OR NOT EXISTS (
+                 SELECT 1
+                 FROM inbox
+                 WHERE inbox.message_id = unrouted_backlog.message_id
+                   AND inbox.agent_id = unrouted_backlog.assigned_agent_id
+               )
+             )`,
+        )
+        .all() as Array<{
+        id: number;
+        message_id: number;
+        preferred_agent_id: string;
+        assigned_agent_id: string | null;
+      }>;
+
+      if (rows.length === 0) {
+        return { resetToPendingCount: 0, droppedCount: 0 };
+      }
+
+      const now = new Date().toISOString();
+      const clearStaleInbox = db.prepare(
+        `DELETE FROM inbox
+         WHERE message_id = ?
+           AND agent_id = ?`,
+      );
+      const resetPending = db.prepare(
+        `UPDATE unrouted_backlog
+         SET status = 'pending',
+             assigned_agent_id = NULL,
+             updated_at = ?
+         WHERE id = ?
+           AND status = 'assigned'`,
+      );
+      const dropAssigned = db.prepare(
+        `UPDATE unrouted_backlog
+         SET status = 'dropped',
+             reason = 'preferred_agent_missing',
+             assigned_agent_id = NULL,
+             updated_at = ?
+         WHERE id = ?
+           AND status = 'assigned'`,
+      );
+
+      let resetToPendingCount = 0;
+      let droppedCount = 0;
+
+      for (const row of rows) {
+        if (row.assigned_agent_id) {
+          clearStaleInbox.run(row.message_id, row.assigned_agent_id);
+        }
+
+        if (this.getAgentRowById(row.preferred_agent_id)) {
+          resetToPendingCount += Number(resetPending.run(now, row.id).changes ?? 0);
+          continue;
+        }
+
+        droppedCount += Number(dropAssigned.run(now, row.id).changes ?? 0);
+      }
+
+      return { resetToPendingCount, droppedCount };
+    });
+  }
+
   requeueUndeliveredMessages(agentId: string, reason = "agent_disconnected"): number {
     return this.withTransaction(() => this.requeueUndeliveredMessagesInternal(agentId, reason));
   }
