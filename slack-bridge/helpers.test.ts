@@ -973,7 +973,7 @@ describe("Pinet skin helpers", () => {
     expect(assignment.personality).toContain("Default whimsical worker skin");
   });
 
-  it("builds a custom free-form skin with role-aware identity", () => {
+  it("builds a custom free-form skin with role-aware identity and bounded voice guidance", () => {
     const broker = buildPinetSkinAssignment({
       theme: "night's watch from ASOIAF",
       role: "broker",
@@ -989,6 +989,48 @@ describe("Pinet skin helpers", () => {
     expect(broker.name).not.toBe(worker.name);
     expect(broker.personality).toContain("night's watch from ASOIAF");
     expect(worker.personality).toContain("night's watch from ASOIAF");
+    expect(broker.personality).not.toBe(worker.personality);
+    expect(broker.personality).toMatch(/mission control|guard role lines|blur roles/);
+    expect(worker.personality).toMatch(/surface blockers|status visible|execution exact/);
+    expect(broker.personality.match(/\./g)?.length ?? 0).toBeLessThanOrEqual(3);
+    expect(worker.personality.match(/\./g)?.length ?? 0).toBeLessThanOrEqual(3);
+    expect(broker.personality.length).toBeLessThanOrEqual(260);
+    expect(worker.personality.length).toBeLessThanOrEqual(260);
+  });
+
+  it("makes contrasting custom themes sound materially different with the same seed", () => {
+    const cyberpunk = buildPinetSkinAssignment({
+      theme: "cyberpunk hackers",
+      role: "worker",
+      seed: "worker-a",
+    });
+    const missionControl = buildPinetSkinAssignment({
+      theme: "apollo mission control",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(cyberpunk.personality).not.toBe(missionControl.personality);
+    expect(cyberpunk.personality).toContain("cyberpunk hackers");
+    expect(missionControl.personality).toContain("apollo mission control");
+    expect(cyberpunk.personality).toMatch(/terminal|neon|operator|technical/);
+    expect(missionControl.personality).toMatch(/mission-control|telemetry|checklist|status-board/);
+  });
+
+  it("caps personality and prompt guideline length for long free-form themes", () => {
+    const longTheme = `${'night\'s watch from "ASOIAF" + cyberpunk hackers + apollo mission control + deep sea salvage + '.repeat(4)}studio ghibli spirits`;
+    const assignment = buildPinetSkinAssignment({
+      theme: longTheme,
+      role: "broker",
+      seed: "broker-a",
+    });
+    const guideline = buildPinetSkinPromptGuideline(longTheme, assignment.personality);
+
+    expect(assignment.personality.length).toBeLessThanOrEqual(260);
+    expect(guideline).not.toBeNull();
+    expect(guideline!.length).toBeLessThanOrEqual(460);
+    expect(guideline).toContain("PINET SKIN (");
+    expect(guideline).toContain("role boundaries");
   });
 
   it("builds and extracts structured skin update metadata for a2a messages", () => {
@@ -1079,12 +1121,16 @@ describe("Pinet skin helpers", () => {
   });
 
   it("builds a prompt guideline for active skin personalities", () => {
-    expect(
-      buildPinetSkinPromptGuideline(
-        "the fellowship of the ring",
-        "Sound like a warm but capable questing specialist.",
-      ),
-    ).toContain("the fellowship of the ring");
+    const guideline = buildPinetSkinPromptGuideline(
+      "the fellowship of the ring",
+      "Sound like a warm but capable questing specialist.",
+    );
+
+    expect(guideline).toContain("the fellowship of the ring");
+    expect(guideline).toContain("Keep it additive");
+    expect(guideline).toContain("accuracy");
+    expect(guideline).toContain("role boundaries");
+    expect(guideline!.length).toBeLessThanOrEqual(460);
     expect(buildPinetSkinPromptGuideline(null, "persona")).toBeNull();
   });
 });
