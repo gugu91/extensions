@@ -2,6 +2,36 @@
 
 All notable changes to this repository are documented in this file.
 
+## [0.1.1] - 2026-04-08
+
+Pinet v0.1.1 is a targeted patch release for `@gugu910/pi-slack-bridge`. The release surface is intentionally minimal: the Slack bridge package bumps to `0.1.1`, the private monorepo package moves to `0.1.1` for repo-level version tracking, and the other workspace packages stay at their current versions.
+
+### Version verification
+
+- `pi-extensions` — `0.1.1` (private repo package)
+- `@gugu910/pi-slack-bridge` — `0.1.1`
+- `@gugu910/pi-nvim-bridge` — `0.1.0` (unchanged)
+- `@gugu910/pi-neon-psql` — `0.1.0` (unchanged)
+- `@gugu910/pi-slack-api` — `0.2.0` (unchanged)
+
+### Release highlights
+
+- Hardened Pinet coordination with local shared-secret mesh auth, structured control messages, reconnect refresh, and headless-subagent isolation.
+- Added the Pinet Home tab dashboard, an end-user README refresh, and broker routing fixes such as stable-ID thread binding.
+- Fixed targeted backlog recovery so stale targeted A2A backlog no longer remains stranded after purge and maintenance.
+- Included Slack bridge package surface updates that shipped in the same cut, including `slack_project_create` and channel canvas dedup.
+
+### Included pull requests
+
+- [#231](https://github.com/gugu91/extensions/pull/231) — feat: add Pinet Home tab dashboard
+- [#243](https://github.com/gugu91/extensions/pull/243) — fix: auto-refresh Pinet registration on reconnect
+- [#244](https://github.com/gugu91/extensions/pull/244) — fix: stop headless subagents from joining Pinet
+- [#250](https://github.com/gugu91/extensions/pull/250) — feat: structure Pinet control messages
+- [#257](https://github.com/gugu91/extensions/pull/257) — feat: add pinet mesh authentication with local shared secret
+- [#258](https://github.com/gugu91/extensions/pull/258) — feat: add slack_project_create tool
+- [#268](https://github.com/gugu91/extensions/pull/268) — fix: thread binding uses stable IDs first, fuzzy name as fallback
+- [#272](https://github.com/gugu91/extensions/pull/272) — fix: drop stale targeted backlog after purge
+
 ## [0.1.0] - 2026-04-02
 
 First public release prep for the Pi extensions monorepo. This cut rolls up 66 pull requests merged on 2026-04-02 and aligns with the publish-ready package metadata landed in [#222](https://github.com/gugu91/extensions/pull/222).
