@@ -1188,6 +1188,28 @@ export class BrokerDB implements BrokerDBInterface {
     });
   }
 
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const result = db
+      .prepare(
+        `UPDATE unrouted_backlog
+         SET status = 'dropped',
+             reason = ?,
+             assigned_agent_id = NULL,
+             updated_at = ?
+         WHERE id = ?
+           AND status = 'pending'`,
+      )
+      .run(reason, now, id);
+
+    if (Number(result.changes ?? 0) === 0) {
+      return null;
+    }
+
+    return this.getBacklogById(id);
+  }
+
   requeueUndeliveredMessages(agentId: string, reason = "agent_disconnected"): number {
     return this.withTransaction(() => this.requeueUndeliveredMessagesInternal(agentId, reason));
   }

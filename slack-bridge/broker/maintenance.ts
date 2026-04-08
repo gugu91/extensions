@@ -16,10 +16,12 @@ export interface BrokerMaintenanceDB {
   requeueUndeliveredMessages(agentId: string, reason?: string): number;
   getPendingBacklog(limit?: number): BacklogEntry[];
   getBacklogCount(status?: BacklogEntry["status"]): number;
+  getAgentById(agentId: string): AgentInfo | null;
   getAgents(): AgentInfo[];
   getPendingInboxCount(agentId: string): number;
   getThread(threadId: string): ThreadInfo | null;
   assignBacklogEntry(id: number, agentId: string): BacklogEntry | null;
+  dropBacklogEntry(id: number, reason: string): BacklogEntry | null;
 }
 
 export interface BrokerMaintenanceOptions {
@@ -95,12 +97,20 @@ export function runBrokerMaintenancePass(
 
   const nudgedAgentIds = new Set<string>();
   let assignedBacklogCount = 0;
+  let droppedBacklogCount = 0;
 
   for (const backlog of db.getPendingBacklog(options.backlogLimit ?? 50)) {
     const preferredAgent = backlog.preferredAgentId
       ? (agents.find((agent) => agent.id === backlog.preferredAgentId) ?? null)
       : null;
     if (backlog.preferredAgentId && !preferredAgent) {
+      const knownPreferredAgent = db.getAgentById(backlog.preferredAgentId);
+      if (!knownPreferredAgent) {
+        const dropped = db.dropBacklogEntry(backlog.id, "preferred_agent_missing");
+        if (dropped) {
+          droppedBacklogCount += 1;
+        }
+      }
       continue;
     }
 
@@ -140,6 +150,11 @@ export function runBrokerMaintenancePass(
   if (repairedThreadClaims > 0) {
     anomalies.push(
       `released ${repairedThreadClaims} orphaned thread claim${repairedThreadClaims === 1 ? "" : "s"}`,
+    );
+  }
+  if (droppedBacklogCount > 0) {
+    anomalies.push(
+      `dropped ${droppedBacklogCount} undeliverable targeted backlog entr${droppedBacklogCount === 1 ? "y" : "ies"}`,
     );
   }
   if (pendingBacklogCount > 0 && agentLoads.length === 0) {

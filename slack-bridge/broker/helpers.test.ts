@@ -1198,6 +1198,56 @@ describe("BrokerDB", () => {
     expect(db.getThread("t-gone-maint")?.ownerAgent).toBeNull();
   });
 
+  it("maintenance drops stale targeted backlog once the preferred agent is purged", () => {
+    db.registerAgent("sender", "Sender", "📤", 1);
+    db.registerAgent("receiver", "Receiver", "📥", 2);
+    db.registerAgent("idle-worker", "Idle Worker", "🫡", 3);
+    db.createThread("a2a:sender:receiver", "agent", "", "sender");
+    db.insertMessage(
+      "a2a:sender:receiver",
+      "agent",
+      "inbound",
+      "sender",
+      "please pick this up",
+      ["receiver"],
+      {
+        senderAgent: "Sender",
+        a2a: true,
+      },
+    );
+    db.unregisterAgent("receiver");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare("UPDATE agents SET disconnected_at = ?, resumable_until = NULL WHERE id = ?")
+      .run(new Date(Date.now() - 2 * 60 * 60_000).toISOString(), "receiver");
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    const droppedBacklog = sqlite
+      .prepare(
+        "SELECT status, reason, preferred_agent_id FROM unrouted_backlog WHERE thread_id = ?",
+      )
+      .get("a2a:sender:receiver") as
+      | { status: string; reason: string; preferred_agent_id: string | null }
+      | undefined;
+
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.anomalies).toContain("dropped 1 undeliverable targeted backlog entry");
+    expect(db.getAgentById("receiver")).toBeNull();
+    expect(db.getBacklogCount("pending")).toBe(0);
+    expect(db.getBacklogCount("dropped")).toBe(1);
+    expect(droppedBacklog).toEqual({
+      status: "dropped",
+      reason: "preferred_agent_missing",
+      preferred_agent_id: "receiver",
+    });
+  });
+
   it("createThread and getThread", () => {
     const thread = db.createThread("t1", "slack", "#general", "a1");
     expect(thread.threadId).toBe("t1");
