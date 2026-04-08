@@ -106,6 +106,14 @@ interface RegistrationResult {
   metadata?: Record<string, unknown> | null;
 }
 
+function getErrorCode(err: unknown): string | null {
+  if (typeof err !== "object" || err == null || !("code" in err)) {
+    return null;
+  }
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
 export interface AgentBroadcastResult {
   channel: string;
   messageIds: number[];
@@ -222,7 +230,16 @@ export class BrokerClient {
       return this.meshSecret;
     }
     if (this.meshSecretPath) {
-      return readMeshSecret(this.meshSecretPath);
+      try {
+        return readMeshSecret(this.meshSecretPath);
+      } catch (err) {
+        if (getErrorCode(err) === "ENOENT") {
+          throw new Error(
+            `Configured Pinet mesh secret file not found: ${this.meshSecretPath}. Set slack-bridge.meshSecretPath to an existing file, provide slack-bridge.meshSecret directly, or leave both unset to disable shared-secret auth.`,
+          );
+        }
+        throw err;
+      }
     }
     return null;
   }

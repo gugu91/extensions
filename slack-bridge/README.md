@@ -79,6 +79,16 @@ export SLACK_APP_TOKEN="xapp-..."
 
 Settings in `settings.json` take priority over env vars.
 
+Optional Pinet mesh auth can also be configured via environment variables:
+
+```bash
+export PINET_MESH_SECRET="shared-secret"
+# or
+export PINET_MESH_SECRET_PATH="$HOME/.config/pi/pinet.secret"
+```
+
+If `meshSecret` and `meshSecretPath` are both unset, broker/follower mesh auth is disabled.
+
 ### Full settings reference
 
 ```json
@@ -91,6 +101,7 @@ Settings in `settings.json` take priority over env vars.
     "logChannel": "#pinet-logs",
     "logLevel": "actions",
     "autoFollow": true,
+    "meshSecretPath": "/Users/alice/.config/pi/pinet.secret",
     "suggestedPrompts": [{ "title": "Status", "message": "What are you working on?" }],
     "security": {
       "readOnly": false,
@@ -101,19 +112,21 @@ Settings in `settings.json` take priority over env vars.
 }
 ```
 
-| Key                            | Required | Description                                           |
-| ------------------------------ | -------- | ----------------------------------------------------- |
-| `botToken`                     | **yes**  | Bot User OAuth Token (`xoxb-...`)                     |
-| `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)          |
-| `allowedUsers`                 | no       | Slack user IDs that can interact (all users if unset) |
-| `defaultChannel`               | no       | Default channel for `slack_post_channel`              |
-| `logChannel`                   | no       | Channel for broker activity logs                      |
-| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`     |
-| `autoFollow`                   | no       | Auto-connect as follower when broker is running       |
-| `suggestedPrompts`             | no       | Prompts shown when a user opens a new conversation    |
-| `security.readOnly`            | no       | Block all write tools                                 |
-| `security.requireConfirmation` | no       | Tools that need user approval before executing        |
-| `security.blockedTools`        | no       | Tools that are completely disabled                    |
+| Key                            | Required | Description                                                                            |
+| ------------------------------ | -------- | -------------------------------------------------------------------------------------- |
+| `botToken`                     | **yes**  | Bot User OAuth Token (`xoxb-...`)                                                      |
+| `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)                                           |
+| `allowedUsers`                 | no       | Slack user IDs that can interact (all users if unset)                                  |
+| `defaultChannel`               | no       | Default channel for `slack_post_channel`                                               |
+| `logChannel`                   | no       | Channel for broker activity logs                                                       |
+| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                      |
+| `autoFollow`                   | no       | Auto-connect as follower when broker is running                                        |
+| `meshSecret`                   | no       | Optional inline Pinet shared secret; overrides `meshSecretPath`                        |
+| `meshSecretPath`               | no       | Optional path to a shared-secret file; broker creates it if missing, followers read it |
+| `suggestedPrompts`             | no       | Prompts shown when a user opens a new conversation                                     |
+| `security.readOnly`            | no       | Block all write tools                                                                  |
+| `security.requireConfirmation` | no       | Tools that need user approval before executing                                         |
+| `security.blockedTools`        | no       | Tools that are completely disabled                                                     |
 
 ## Usage
 
@@ -211,14 +224,14 @@ Or set `"autoFollow": true` in settings to auto-connect when a broker is running
 
 - The **broker** runs Slack Socket Mode, routes messages to agents, monitors health via the RALPH loop, and maintains a control plane canvas
 - **Followers** connect to the broker over a local Unix socket, poll for work, and report results
-- Agents authenticate using a shared local secret (`~/.pi/pinet.secret`, created automatically)
+- Agents can optionally authenticate using a shared local secret (`meshSecret` or `meshSecretPath`)
 - Thread ownership is first-responder-wins — the first agent to reply claims the thread
 
 ## Security
 
 - **User allowlist**: Set `allowedUsers` to restrict who can interact with Pinet
 - **Tool guardrails**: Use `security.requireConfirmation` and `security.blockedTools` to control tool access
-- **Mesh authentication**: Broker/follower connections use a local shared secret file
+- **Mesh authentication**: Optional. Configure `meshSecret` or `meshSecretPath` to require a shared secret; leave both unset to disable shared-secret auth
 
 Find Slack user IDs: click a user's profile → **More** → **Copy member ID**.
 

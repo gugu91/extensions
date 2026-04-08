@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   loadSettings,
+  resolvePinetMeshAuth,
   buildAllowlist,
   isUserAllowed,
   formatInboxMessages,
@@ -215,6 +216,22 @@ describe("loadSettings", () => {
     expect(result.logLevel).toBe("errors");
   });
 
+  it("returns mesh auth settings", () => {
+    const p = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(
+      p,
+      JSON.stringify({
+        "slack-bridge": {
+          meshSecret: "shared-secret",
+          meshSecretPath: "/tmp/pinet.secret",
+        },
+      }),
+    );
+    const result = loadSettings(p);
+    expect(result.meshSecret).toBe("shared-secret");
+    expect(result.meshSecretPath).toBe("/tmp/pinet.secret");
+  });
+
   it("returns control plane canvas settings", () => {
     const p = path.join(tmpDir, "settings.json");
     const settings = {
@@ -231,6 +248,62 @@ describe("loadSettings", () => {
     expect(result.controlPlaneCanvasId).toBe("F123");
     expect(result.controlPlaneCanvasChannel).toBe("ops-control");
     expect(result.controlPlaneCanvasTitle).toBe("Mesh Status");
+  });
+});
+
+describe("resolvePinetMeshAuth", () => {
+  it("returns nulls when no mesh auth is configured", () => {
+    expect(resolvePinetMeshAuth({}, {})).toEqual({
+      meshSecret: null,
+      meshSecretPath: null,
+    });
+  });
+
+  it("prefers settings over environment fallbacks", () => {
+    expect(
+      resolvePinetMeshAuth(
+        { meshSecret: " from-settings ", meshSecretPath: "/settings/secret" },
+        {
+          ...process.env,
+          PINET_MESH_SECRET: "from-env",
+          PINET_MESH_SECRET_PATH: "/env/secret",
+        },
+      ),
+    ).toEqual({
+      meshSecret: "from-settings",
+      meshSecretPath: null,
+    });
+  });
+
+  it("falls back to environment when settings are unset", () => {
+    expect(
+      resolvePinetMeshAuth(
+        {},
+        {
+          ...process.env,
+          PINET_MESH_SECRET_PATH: " /env/secret ",
+        },
+      ),
+    ).toEqual({
+      meshSecret: null,
+      meshSecretPath: "/env/secret",
+    });
+  });
+
+  it("keeps settings meshSecretPath ahead of environment mesh auth", () => {
+    expect(
+      resolvePinetMeshAuth(
+        { meshSecretPath: "/settings/secret" },
+        {
+          ...process.env,
+          PINET_MESH_SECRET: " env-secret ",
+          PINET_MESH_SECRET_PATH: "/env/secret",
+        },
+      ),
+    ).toEqual({
+      meshSecret: null,
+      meshSecretPath: "/settings/secret",
+    });
   });
 });
 

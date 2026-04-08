@@ -2077,7 +2077,7 @@ describe("startBroker leader lock", () => {
       dbPath: path.join(dir, `${overrides.dbSuffix ?? "test"}.db`),
       listenTarget: TCP_TARGET,
       lockPath: overrides.lockPath ?? path.join(dir, "broker.lock"),
-      meshSecretPath: overrides.meshSecretPath ?? path.join(dir, "pinet.secret"),
+      ...(overrides.meshSecretPath ? { meshSecretPath: overrides.meshSecretPath } : {}),
     });
     brokers.push(b);
     return b;
@@ -2132,7 +2132,15 @@ describe("startBroker leader lock", () => {
     expect(broker.lock.isLeader()).toBe(true);
   });
 
-  it("creates and persists a mesh secret on startup", async () => {
+  it("starts without creating a mesh secret when none is configured", async () => {
+    const meshSecretPath = path.join(dir, "pinet.secret");
+
+    await launch();
+
+    expect(fs.existsSync(meshSecretPath)).toBe(false);
+  });
+
+  it("creates and persists a mesh secret on startup when a secret path is configured", async () => {
     const meshSecretPath = path.join(dir, "pinet.secret");
 
     await launch({ meshSecretPath });

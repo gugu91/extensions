@@ -4,7 +4,7 @@ import { loadOrCreateMeshSecret } from "./auth.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import type { ListenTarget } from "./socket-server.js";
 import { LeaderLock } from "./leader.js";
-import { getDefaultMeshSecretPath, getDefaultSocketPath } from "./paths.js";
+import { getDefaultSocketPath } from "./paths.js";
 import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
@@ -89,10 +89,14 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
     }
   }
 
-  const meshSecretPath = options.meshSecretPath ?? getDefaultMeshSecretPath();
-  const meshSecret = options.meshSecret?.trim() || loadOrCreateMeshSecret(meshSecretPath);
+  const meshSecret = options.meshSecret?.trim() || null;
+  const meshSecretPath = options.meshSecretPath?.trim() || null;
+  const resolvedMeshSecret =
+    meshSecret || (meshSecretPath ? loadOrCreateMeshSecret(meshSecretPath) : null);
 
-  const server = new BrokerSocketServer(db, target, undefined, { meshSecret });
+  const server = new BrokerSocketServer(db, target, undefined, {
+    ...(resolvedMeshSecret ? { meshSecret: resolvedMeshSecret } : {}),
+  });
   try {
     await server.start();
   } catch (err) {
