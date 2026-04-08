@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildSlackCanvasCreateRequest,
   buildSlackCanvasEditRequest,
+  buildSlackCanvasReadRequest,
   buildSlackCanvasSectionsLookupRequest,
+  extractSlackCanvasMarkdown,
   extractSlackChannelCanvasId,
   normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasSectionType,
@@ -177,6 +179,18 @@ describe("buildSlackCanvasEditRequest", () => {
   });
 });
 
+describe("buildSlackCanvasReadRequest", () => {
+  it("builds a read request from a canvas id", () => {
+    expect(buildSlackCanvasReadRequest({ canvasId: "F123" })).toEqual({ canvas_id: "F123" });
+  });
+
+  it("rejects missing canvas ids", () => {
+    expect(() => buildSlackCanvasReadRequest({ canvasId: "" })).toThrow(
+      "Canvas reads require a canvas ID.",
+    );
+  });
+});
+
 describe("buildSlackCanvasSectionsLookupRequest", () => {
   it("builds lookup criteria from text only", () => {
     expect(
@@ -203,6 +217,21 @@ describe("buildSlackCanvasSectionsLookupRequest", () => {
         section_types: ["h2"],
       },
     });
+  });
+});
+
+describe("extractSlackCanvasMarkdown", () => {
+  it("joins markdown from all sections", () => {
+    expect(
+      extractSlackCanvasMarkdown([
+        { id: "s1", markdown: "# Header" },
+        { id: "s2", markdown: "Body text" },
+      ]),
+    ).toBe("# Header\n\nBody text");
+  });
+
+  it("returns an empty string when sections have no markdown", () => {
+    expect(extractSlackCanvasMarkdown([{ id: "s1" }, { id: "s2", markdown: "   " }])).toBe("");
   });
 });
 

@@ -34,6 +34,14 @@ describe("registerSlackTools", () => {
       members: [],
       response_metadata: { next_cursor: "" },
     } as SlackResult;
+    let conversationsInfoResponse: SlackResult = {
+      ok: true,
+      channel: { id: "C_PROJ", properties: {} },
+    } as SlackResult;
+    let canvasSectionsLookupResponse: SlackResult = {
+      ok: true,
+      sections: [],
+    } as SlackResult;
     const presenceResponses = new Map<string, SlackResult>();
     const dndResponses = new Map<string, SlackResult>();
 
@@ -157,10 +165,11 @@ describe("registerSlackTools", () => {
       }
 
       if (method === "conversations.info") {
-        return {
-          ok: true,
-          channel: { id: body?.channel ?? "C_PROJ", properties: {} },
-        } as unknown as SlackResult;
+        return conversationsInfoResponse;
+      }
+
+      if (method === "canvases.sections.lookup") {
+        return canvasSectionsLookupResponse;
       }
 
       return {
@@ -219,6 +228,12 @@ describe("registerSlackTools", () => {
       },
       setUsersListResponse: (response: SlackResult) => {
         usersListResponse = response;
+      },
+      setConversationsInfoResponse: (response: SlackResult) => {
+        conversationsInfoResponse = response;
+      },
+      setCanvasSectionsLookupResponse: (response: SlackResult) => {
+        canvasSectionsLookupResponse = response;
       },
       setPresenceResponse: (userId: string, response: SlackResult) => {
         presenceResponses.set(userId, response);
@@ -888,6 +903,70 @@ describe("registerSlackTools", () => {
           },
         },
       ],
+    });
+  });
+
+  it("reads canvas markdown by canvas_id", async () => {
+    const { slack, tools, setCanvasSectionsLookupResponse } = setup();
+    setCanvasSectionsLookupResponse({
+      ok: true,
+      sections: [
+        { id: "temp:C:1", markdown: "# Results" },
+        { id: "temp:C:2", markdown: "- Test A ✅\n- Test B ✅" },
+      ],
+    } as SlackResult);
+
+    const result = await tools.get("slack_canvas_read")!.execute("tool-canvas-read-1", {
+      canvas_id: "F123",
+    });
+
+    expect(slack).toHaveBeenCalledWith("canvases.sections.lookup", "xoxb-initial", {
+      canvas_id: "F123",
+    });
+    expect(result.content?.[0]?.text).toContain("Read canvas F123.");
+    expect(result.content?.[0]?.text).toContain("# Results\n\n- Test A ✅\n- Test B ✅");
+    expect(result.details).toEqual({
+      canvas_id: "F123",
+      channel: undefined,
+      markdown: "# Results\n\n- Test A ✅\n- Test B ✅",
+      section_count: 2,
+      sections: [
+        { id: "temp:C:1", markdown: "# Results" },
+        { id: "temp:C:2", markdown: "- Test A ✅\n- Test B ✅" },
+      ],
+    });
+  });
+
+  it("reads a channel canvas after resolving canvas_id from conversations.info", async () => {
+    const { slack, tools, setCanvasSectionsLookupResponse, setConversationsInfoResponse } = setup();
+    setConversationsInfoResponse({
+      ok: true,
+      channel: {
+        id: "resolved:eng",
+        properties: { canvas: { id: "FCHAN" } },
+      },
+    } as SlackResult);
+    setCanvasSectionsLookupResponse({
+      ok: true,
+      sections: [{ id: "temp:C:1", markdown: "Channel notes" }],
+    } as SlackResult);
+
+    const result = await tools.get("slack_canvas_read")!.execute("tool-canvas-read-2", {
+      channel: "eng",
+    });
+
+    expect(slack).toHaveBeenCalledWith("conversations.info", "xoxb-initial", {
+      channel: "resolved:eng",
+    });
+    expect(slack).toHaveBeenCalledWith("canvases.sections.lookup", "xoxb-initial", {
+      canvas_id: "FCHAN",
+    });
+    expect(result.content?.[0]?.text).toContain("Read channel canvas FCHAN for eng.");
+    expect(result.details).toMatchObject({
+      canvas_id: "FCHAN",
+      channel: "resolved:eng",
+      markdown: "Channel notes",
+      section_count: 1,
     });
   });
 

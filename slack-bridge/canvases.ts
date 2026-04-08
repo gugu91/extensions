@@ -45,8 +45,13 @@ export interface SlackCanvasSectionLookupRequest {
   };
 }
 
+export interface SlackCanvasReadRequest {
+  canvas_id: string;
+}
+
 export interface SlackCanvasSectionLookupResult {
   id?: string;
+  markdown?: string;
 }
 
 function normalizeOptionalString(value?: string): string | undefined {
@@ -193,6 +198,27 @@ export function buildSlackCanvasSectionsLookupRequest(input: {
       ...(sectionType ? { section_types: [sectionType] } : {}),
     },
   };
+}
+
+export function buildSlackCanvasReadRequest(input: { canvasId: string }): SlackCanvasReadRequest {
+  const canvasId = normalizeOptionalString(input.canvasId);
+  if (!canvasId) {
+    throw new Error("Canvas reads require a canvas ID.");
+  }
+
+  return { canvas_id: canvasId };
+}
+
+export function extractSlackCanvasMarkdown(
+  sections: SlackCanvasSectionLookupResult[] | undefined,
+): string {
+  const markdown = (sections ?? [])
+    .map((section) => normalizeOptionalString(section.markdown))
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n")
+    .trim();
+
+  return markdown;
 }
 
 export function pickSlackCanvasSectionId(

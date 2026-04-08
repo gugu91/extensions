@@ -6,7 +6,9 @@ import type { SlackResult } from "./slack-api.js";
 import {
   buildSlackCanvasCreateRequest,
   buildSlackCanvasEditRequest,
+  buildSlackCanvasReadRequest,
   buildSlackCanvasSectionsLookupRequest,
+  extractSlackCanvasMarkdown,
   extractSlackChannelCanvasId,
   normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasUpdateMode,
@@ -2235,6 +2237,57 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           channel: target.channelId,
           mode,
           section_id: sectionId,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_canvas_read",
+    label: "Slack Canvas Read",
+    description: "Read Slack canvas content by canvas ID or by resolving a channel canvas.",
+    promptSnippet:
+      "Read a Slack canvas when you need to inspect what a user wrote or edited there. Returns markdown content so you can respond based on the canvas itself.",
+    parameters: Type.Object({
+      canvas_id: Type.Optional(Type.String({ description: "Canvas ID to read" })),
+      channel: Type.Optional(
+        Type.String({ description: "Channel name or ID whose channel canvas should be read" }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_canvas_read",
+        undefined,
+        `canvas_id=${params.canvas_id ?? ""} | channel=${params.channel ?? ""}`,
+      );
+
+      const target = await resolveCanvasTarget(params.canvas_id, params.channel);
+      const request = buildSlackCanvasReadRequest({ canvasId: target.canvasId });
+      const response = await slack(
+        "canvases.sections.lookup",
+        getBotToken(),
+        request as unknown as Record<string, unknown>,
+      );
+      const sections = response.sections as Array<{ id?: string; markdown?: string }> | undefined;
+      const markdown = extractSlackCanvasMarkdown(sections);
+      const sectionCount = sections?.length ?? 0;
+      const targetSummary = target.channelLabel
+        ? `Read channel canvas ${target.canvasId} for ${target.channelLabel}.`
+        : `Read canvas ${target.canvasId}.`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${targetSummary}\n\n${markdown || "(empty canvas)"}`,
+          },
+        ],
+        details: {
+          canvas_id: target.canvasId,
+          channel: target.channelId,
+          markdown,
+          section_count: sectionCount,
+          sections,
         },
       };
     },
