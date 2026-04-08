@@ -1,16 +1,19 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum, Type } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   assessUrl,
   buildInstallInstructions,
+  buildStorageStateFileName,
   envFlag,
+  isPlaywrightStorageState,
   parseIntegerEnv,
   safeRequestPageId,
   sanitizeLabel,
+  STORAGE_STATE_RELATIVE_DIR,
   truncateText,
   type SupportedBrowserEngine,
 } from "./helpers.ts";
@@ -28,6 +31,8 @@ import type {
 type PlaywrightModule = typeof import("playwright");
 
 type BrowserEngine = SupportedBrowserEngine;
+type PlaywrightStorageState = Awaited<ReturnType<BrowserContext["storageState"]>>;
+type BrowserNewContextOptions = Exclude<Parameters<Browser["newContext"]>[0], undefined>;
 
 type WaitUntil = "load" | "domcontentloaded" | "networkidle" | "commit";
 
@@ -69,6 +74,13 @@ type BrowserPageRecord = {
   lastActivityAt: string;
 };
 
+type MountedStorageStateSummary = {
+  name: string;
+  path: string;
+  cookie_count: number;
+  origin_count: number;
+};
+
 type BrowserSession = {
   id: string;
   browserEngine: BrowserEngine;
@@ -83,10 +95,13 @@ type BrowserSession = {
   consoleEntries: ConsoleEntry[];
   blockedRequests: BlockedRequestEntry[];
   networkSummary: NetworkSummary;
+  mountedStorageState: MountedStorageStateSummary | null;
 };
 
 const EXTENSION_DIR = fileURLToPath(new URL(".", import.meta.url));
-const ARTIFACT_ROOT = resolve(EXTENSION_DIR, "../../artifacts/browser-playwright");
+const WORKSPACE_ROOT = resolve(EXTENSION_DIR, "../../..");
+const ARTIFACT_ROOT = resolve(WORKSPACE_ROOT, ".pi/artifacts/browser-playwright");
+const STORAGE_STATE_ROOT = resolve(WORKSPACE_ROOT, STORAGE_STATE_RELATIVE_DIR);
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 20_000;
@@ -106,6 +121,141 @@ function nowIso(): string {
 function asErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function relativeFromWorkspace(absolutePath: string): string {
+  return relative(WORKSPACE_ROOT, absolutePath);
+}
+
+function isPathInsideDirectory(pathToCheck: string, directoryPath: string): boolean {
+  const rel = relative(directoryPath, pathToCheck);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function summarizeStorageState(storageState: PlaywrightStorageState): {
+  cookie_count: number;
+  origin_count: number;
+} {
+  return {
+    cookie_count: storageState.cookies.length,
+    origin_count: storageState.origins.length,
+  };
+}
+
+async function ensureStorageStateRoot(): Promise<string> {
+  await mkdir(STORAGE_STATE_ROOT, { recursive: true });
+
+  const workspaceRoot = await realpath(WORKSPACE_ROOT);
+  const storageStateRoot = await realpath(STORAGE_STATE_ROOT);
+  if (!isPathInsideDirectory(storageStateRoot, workspaceRoot)) {
+    throw new Error(
+      `Stored browser state directory must stay inside the workspace: \`${STORAGE_STATE_RELATIVE_DIR}\`.`,
+    );
+  }
+
+  return storageStateRoot;
+}
+
+async function assertRegularStorageStateFile(
+  absolutePath: string,
+  relativePath: string,
+  allowMissing: boolean,
+): Promise<void> {
+  try {
+    const stats = await lstat(absolutePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Stored browser state paths must not use symlinks: \`${relativePath}\`.`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Stored browser state must be a regular file: \`${relativePath}\`.`);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (allowMissing && code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function resolveStorageStateFile(name: string): Promise<{
+  name: string;
+  absolutePath: string;
+  relativePath: string;
+}> {
+  const fileName = buildStorageStateFileName(name);
+  const storageStateRoot = await ensureStorageStateRoot();
+  const absolutePath = resolve(storageStateRoot, fileName);
+  return {
+    name: fileName.replace(/\.json$/i, ""),
+    absolutePath,
+    relativePath: relativeFromWorkspace(absolutePath),
+  };
+}
+
+async function loadStoredStorageState(name: string): Promise<{
+  storageState: PlaywrightStorageState;
+  mountedStorageState: MountedStorageStateSummary;
+}> {
+  const resolvedState = await resolveStorageStateFile(name);
+  try {
+    await assertRegularStorageStateFile(
+      resolvedState.absolutePath,
+      resolvedState.relativePath,
+      false,
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      throw new Error(
+        `Stored browser state \`${resolvedState.name}\` was not found at \`${resolvedState.relativePath}\`. Use browser_storage_state_save to create it first.`,
+      );
+    }
+    throw error;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(resolvedState.absolutePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Stored browser state \`${resolvedState.name}\` is not valid JSON.`, {
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  if (!isPlaywrightStorageState(parsed)) {
+    throw new Error(
+      `Stored browser state \`${resolvedState.name}\` is not a valid Playwright storageState JSON file.`,
+    );
+  }
+
+  const summary = summarizeStorageState(parsed as PlaywrightStorageState);
+  return {
+    storageState: parsed as PlaywrightStorageState,
+    mountedStorageState: {
+      name: resolvedState.name,
+      path: resolvedState.relativePath,
+      ...summary,
+    },
+  };
+}
+
+async function saveStoredStorageState(
+  session: BrowserSession,
+  name: string,
+): Promise<MountedStorageStateSummary & { saved_at: string }> {
+  const resolvedState = await resolveStorageStateFile(name);
+  await assertRegularStorageStateFile(resolvedState.absolutePath, resolvedState.relativePath, true);
+
+  const storageState = await session.context.storageState();
+  await writeFile(resolvedState.absolutePath, `${JSON.stringify(storageState, null, 2)}\n`, "utf8");
+
+  return {
+    name: resolvedState.name,
+    path: resolvedState.relativePath,
+    ...summarizeStorageState(storageState),
+    saved_at: nowIso(),
+  };
 }
 
 async function loadPlaywright(browserEngine: BrowserEngine): Promise<PlaywrightModule> {
@@ -475,6 +625,11 @@ async function closeSession(session: BrowserSession): Promise<void> {
   }
 }
 
+export const __testables = {
+  loadStoredStorageState,
+  saveStoredStorageState,
+};
+
 export default function browserPlaywrightExtension(pi: ExtensionAPI) {
   const sessions = new Map<string, BrowserSession>();
   let cleanupTimer: NodeJS.Timeout | null = setInterval(() => {
@@ -531,6 +686,12 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       url: Type.Optional(Type.String({ description: "Optional initial URL to open." })),
       viewport_width: Type.Optional(Type.Number({ description: "Viewport width in pixels." })),
       viewport_height: Type.Optional(Type.Number({ description: "Viewport height in pixels." })),
+      storage_state_name: Type.Optional(
+        Type.String({
+          description:
+            "Optional saved storage state name to import from `.pi/state/browser-playwright/<name>.json`.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) {
@@ -544,6 +705,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       const playwright = await loadPlaywright(browserEngine);
       const browserType = playwright[browserEngine] as BrowserType;
       const headless = params.headless ?? true;
+      const loadedStorageState = params.storage_state_name
+        ? await loadStoredStorageState(params.storage_state_name)
+        : null;
 
       let browser: Browser | null = null;
       try {
@@ -562,12 +726,17 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       }
 
       try {
-        const context = await browser.newContext({
+        const contextOptions: BrowserNewContextOptions = {
           viewport:
             params.viewport_width && params.viewport_height
               ? { width: params.viewport_width, height: params.viewport_height }
               : { width: 1280, height: 800 },
-        });
+        };
+        if (loadedStorageState) {
+          contextOptions.storageState = loadedStorageState.storageState;
+        }
+
+        const context = await browser.newContext(contextOptions);
 
         const session: BrowserSession = {
           id: `browser_${randomUUID()}`,
@@ -587,6 +756,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             blocked_requests: 0,
             failed_requests: 0,
           },
+          mountedStorageState: loadedStorageState?.mountedStorageState ?? null,
         };
 
         await context.route("**/*", async (route: Route) => {
@@ -647,7 +817,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
                   created_at: session.createdAt,
                   active_page_id: activePage?.id ?? null,
                   pages,
-                  artifact_dir: relative(resolve(EXTENSION_DIR, "../../.."), ARTIFACT_ROOT),
+                  artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
+                  storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
+                  mounted_storage_state: session.mountedStorageState,
                   safety: {
                     allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
                     allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
@@ -665,7 +837,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             created_at: session.createdAt,
             active_page_id: activePage?.id ?? null,
             pages,
-            artifact_dir: relative(resolve(EXTENSION_DIR, "../../.."), ARTIFACT_ROOT),
+            artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
+            storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
+            mounted_storage_state: session.mountedStorageState,
             safety: {
               allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
               allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
@@ -703,9 +877,43 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         active_page_id: session.activePageId,
         page_count: pages.length,
         pages,
+        mounted_storage_state: session.mountedStorageState,
+        storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
         network_summary: session.networkSummary,
         recent_console: session.consoleEntries,
         blocked_requests: session.blockedRequests,
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_storage_state_save",
+    label: "Browser Storage State Save",
+    description: "Save a browser session's Playwright storageState JSON for explicit later reuse.",
+    promptSnippet: "Save a browser session's auth state for later explicit reuse in a new session.",
+    promptGuidelines: [
+      "Saved storage state is secret-bearing auth material. Use it only when explicit reuse is necessary.",
+      "Saved state files are written under `.pi/state/browser-playwright/` inside the workspace and are never echoed inline.",
+    ],
+    parameters: Type.Object({
+      session_id: Type.String({ description: "Browser session_id." }),
+      name: Type.String({
+        description:
+          "Name for the saved storage state. Stored as `<name>.json` under `.pi/state/browser-playwright/`.",
+      }),
+    }),
+    async execute(_toolCallId, params) {
+      await cleanupExpiredSessions();
+      const session = getSessionOrThrow(sessions, params.session_id);
+      const savedStorageState = await saveStoredStorageState(session, params.name);
+      const result = {
+        session_id: session.id,
+        browser: session.browserEngine,
+        saved_storage_state: savedStorageState,
       };
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -1151,7 +1359,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       });
       touchPage(pageRecord);
 
-      const relativePath = relative(resolve(EXTENSION_DIR, "../../.."), absolutePath);
+      const relativePath = relativeFromWorkspace(absolutePath);
       const result = {
         session_id: session.id,
         page_id: pageRecord.id,

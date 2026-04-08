@@ -8,6 +8,7 @@ It is designed for real browsing and lightweight web interaction, not just test 
 - navigate public sites
 - snapshot and extract page content
 - click, fill, press, wait, inspect tabs, and capture screenshots
+- explicitly save and later reuse workspace-local Playwright `storageState` JSON
 - keep screenshots and artifacts inside the workspace
 - block localhost and private/internal network targets by default
 
@@ -99,10 +100,35 @@ Recommended practice:
 
 Important limitations:
 
-- session state is process-local and in-memory only
+- live browser sessions are still process-local and in-memory only
 - a Pi reload or process restart drops live browser sessions
-- stored Playwright session mounting/import is not supported in #282
-- importing/exporting saved `storageState`, cookies, or localStorage for login reuse is follow-up work, not current behavior
+- saved auth reuse is explicit and file-based; it does not keep sessions alive across reloads by itself
+- only Playwright `storageState` JSON reuse is supported; arbitrary browser profile mounting is not
+
+## Stored storage state
+
+Explicit auth-state reuse is supported for Playwright `storageState` JSON only.
+
+Import into a new session:
+
+- pass `storage_state_name` to `browser_session_start`
+
+Export from an existing session:
+
+- use `browser_storage_state_save`
+
+Storage-state files are written under:
+
+- `.pi/state/browser-playwright/<name>.json`
+
+Safety rules:
+
+- storage-state files are **secret-bearing auth material**
+- storage-state reuse is **explicit opt-in only**
+- there is **no** auto-save on session close, Pi reload, or shutdown
+- tool results return only safe metadata like the saved path and counts, never raw cookies or token values
+- saved-state handling stays workspace-local; arbitrary host paths, traversal, symlink escapes, and browser-profile mounting are not supported
+- importing saved auth state does **not** weaken the extension's normal localhost/private-network blocking rules
 
 ## Artifacts
 
@@ -138,6 +164,7 @@ Required tools provided:
 10. `browser_screenshot`
 11. `browser_tabs`
 12. `browser_close`
+13. `browser_storage_state_save`
 
 ## Usage flows
 
@@ -210,6 +237,26 @@ Then navigate:
 Tool: `browser_navigate`
 
 Without the env opt-in, that navigation is blocked.
+
+### 4. Save login state, then reuse it explicitly later
+
+Save state from an authenticated session:
+
+```json
+{ "session_id": "<session_id>", "name": "github-login" }
+```
+
+Tool: `browser_storage_state_save`
+
+Start a new session with that saved state:
+
+```json
+{ "browser": "chromium", "storage_state_name": "github-login", "url": "https://github.com" }
+```
+
+Tool: `browser_session_start`
+
+This reuses the saved Playwright `storageState` JSON from `.pi/state/browser-playwright/github-login.json`.
 
 ## Notes for agents
 

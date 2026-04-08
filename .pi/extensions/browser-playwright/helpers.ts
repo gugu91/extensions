@@ -14,8 +14,11 @@ export type SecurityOptions = {
 export type SupportedBrowserEngine = "chromium" | "firefox" | "webkit";
 
 export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
+export const STORAGE_STATE_RELATIVE_DIR = ".pi/state/browser-playwright";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
+
+const STORAGE_STATE_NAME_MAX_CHARS = 80;
 
 export function parseIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -33,6 +36,26 @@ export function sanitizeLabel(value: string | undefined): string {
   const base = (value ?? "screenshot").trim().toLowerCase();
   const cleaned = base.replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   return cleaned.length > 0 ? cleaned.slice(0, 60) : "screenshot";
+}
+
+export function sanitizeStorageStateName(value: string): string {
+  const base = value
+    .trim()
+    .toLowerCase()
+    .replace(/\.json$/i, "")
+    .replace(/\.{2,}/g, "-");
+  const cleaned = base
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/^-+|-+$/g, "");
+  if (!/[a-z0-9]/.test(cleaned)) {
+    throw new Error("Storage state names must contain at least one letter or number.");
+  }
+  return cleaned.slice(0, STORAGE_STATE_NAME_MAX_CHARS);
+}
+
+export function buildStorageStateFileName(value: string): string {
+  return `${sanitizeStorageStateName(value)}.json`;
 }
 
 export function truncateText(
@@ -87,6 +110,17 @@ export function safeRequestPageId<PageLike>(
   } catch {
     return null;
   }
+}
+
+export function isPlaywrightStorageState(
+  value: unknown,
+): value is { cookies: unknown[]; origins: unknown[] } {
+  if (value == null || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as { cookies?: unknown; origins?: unknown };
+  return Array.isArray(record.cookies) && Array.isArray(record.origins);
 }
 
 function normalizeUrl(input: string): URL {
