@@ -187,6 +187,10 @@ export default function (pi: ExtensionAPI) {
 
   let slackRequests = createAbortableOperationTracker();
 
+  function resetTopLevelSlackRequests(): void {
+    slackRequests = createAbortableOperationTracker();
+  }
+
   async function slack(method: string, token: string, body?: Record<string, unknown>) {
     return slackRequests.run((signal) => callSlackAPI(method, token, body, { signal }));
   }
@@ -2536,6 +2540,11 @@ export default function (pi: ExtensionAPI) {
       },
       stopRuntime: async () => {
         await stopPinetRuntime(ctx, { releaseIdentity: false });
+        // Reload intentionally keeps the extension alive in-process, so restore a
+        // fresh top-level Slack request tracker after aborting the previous
+        // generation. This preserves shutdown abort semantics without leaving
+        // top-level Slack tools permanently stuck in "shutdown in progress".
+        resetTopLevelSlackRequests();
         shuttingDown = false;
         setExtStatus(ctx, "reconnecting");
       },
@@ -3462,7 +3471,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     shuttingDown = false;
-    slackRequests = createAbortableOperationTracker();
+    resetTopLevelSlackRequests();
     remoteControlState = { currentCommand: null, queuedCommand: null };
     resetPendingRemoteControlAcks();
     suppressAutoDrainUntil = 0;
