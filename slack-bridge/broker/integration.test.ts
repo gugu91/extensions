@@ -474,6 +474,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(result.assignedBacklogCount).toBe(0);
     expect(result.pendingBacklogCount).toBe(0);
     expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(0);
     expect(await client2.pollInbox()).toHaveLength(0);
     expect(await client.pollInbox()).toHaveLength(0);
 
