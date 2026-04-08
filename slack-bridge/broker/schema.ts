@@ -1188,6 +1188,33 @@ export class BrokerDB implements BrokerDBInterface {
     });
   }
 
+  recoverPendingTargetedBacklog(agentId: string): number {
+    const agent = this.getAgentRowById(agentId);
+    if (!agent || agent.disconnected_at) {
+      return 0;
+    }
+
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT id
+           FROM unrouted_backlog
+          WHERE status = 'pending'
+            AND preferred_agent_id = ?
+          ORDER BY created_at ASC`,
+      )
+      .all(agentId) as Array<{ id: number }>;
+
+    let recoveredCount = 0;
+    for (const row of rows) {
+      if (this.assignBacklogEntry(row.id, agentId)) {
+        recoveredCount += 1;
+      }
+    }
+
+    return recoveredCount;
+  }
+
   dropBacklogEntry(id: number, reason: string): BacklogEntry | null {
     const db = this.getDb();
     const now = new Date().toISOString();
