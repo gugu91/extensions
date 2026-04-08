@@ -60,7 +60,7 @@ importers:
         version: 7.15.0
 
   slack-bridge:
-    devDependencies:
+    dependencies:
       "@sinclair/typebox":
         specifier: ^0.34.49
         version: 0.34.49
