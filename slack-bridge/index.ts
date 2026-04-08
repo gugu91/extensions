@@ -132,6 +132,7 @@ import {
 } from "./follower-delivery.js";
 import {
   extractTaskAssignmentsFromMessage,
+  normalizeTrackedTaskAssignments,
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
 } from "./task-assignments.js";
@@ -745,7 +746,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function summarizeTrackedAssignmentStatus(
-    status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed",
+    status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed" | "issue_closed",
     prNumber: number | null,
     branch: string | null,
   ): { summary: string; tone: ActivityLogTone } {
@@ -764,6 +765,11 @@ export default function (pi: ExtensionAPI) {
         return {
           summary: `PR #${prNumber ?? "?"} closed without merge`,
           tone: "warning",
+        };
+      case "issue_closed":
+        return {
+          summary: "issue closed",
+          tone: "success",
         };
       case "branch_pushed":
         return {
@@ -1949,7 +1955,22 @@ export default function (pi: ExtensionAPI) {
     };
     const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
 
-    const trackedAssignments = db.listTaskAssignments();
+    const rawTrackedAssignments = db.listTaskAssignments();
+    const trackedAssignmentSourceIds = [
+      ...new Set(
+        rawTrackedAssignments
+          .map((assignment) => assignment.sourceMessageId)
+          .filter((messageId): messageId is number => messageId != null),
+      ),
+    ];
+    const trackedAssignments = normalizeTrackedTaskAssignments(
+      rawTrackedAssignments,
+      new Map(
+        db
+          .getMessagesByIds(trackedAssignmentSourceIds)
+          .map((message) => [message.id, message.body]),
+      ),
+    );
     let projectedAssignments: ResolvedTaskAssignment[] = [];
     if (trackedAssignments.length > 0) {
       const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());

@@ -70,7 +70,8 @@ export type TaskAssignmentStatus =
   | "branch_pushed"
   | "pr_open"
   | "pr_merged"
-  | "pr_closed";
+  | "pr_closed"
+  | "issue_closed";
 
 export interface TaskAssignmentInfo {
   id: number;

@@ -181,6 +181,8 @@ function formatTaskStatusShort(
       return `#${assignment.issueNumber} PR #${assignment.prNumber ?? "?"} merged`;
     case "pr_closed":
       return `#${assignment.issueNumber} PR #${assignment.prNumber ?? "?"} closed`;
+    case "issue_closed":
+      return `#${assignment.issueNumber} issue closed`;
     case "branch_pushed":
       return `#${assignment.issueNumber} pushed ${assignment.branch ?? "branch"}`;
     case "assigned":
@@ -221,12 +223,15 @@ export function buildBrokerControlPlaneDashboardSnapshot(
   input: BuildBrokerControlPlaneDashboardSnapshotInput,
 ): BrokerControlPlaneDashboardSnapshot {
   const homedir = input.homedir ?? process.env.HOME ?? "";
+  const visibleAssignments = input.assignments.filter(
+    (assignment) => assignment.status !== "issue_closed",
+  );
   const assignmentsByAgent = new Map<
     string,
     Array<Pick<ResolvedTaskAssignment, "issueNumber" | "status" | "prNumber" | "branch">>
   >();
 
-  for (const assignment of input.assignments) {
+  for (const assignment of visibleAssignments) {
     const bucket = assignmentsByAgent.get(assignment.agentId);
     const summaryAssignment = {
       issueNumber: assignment.issueNumber,
@@ -285,7 +290,7 @@ export function buildBrokerControlPlaneDashboardSnapshot(
     };
   });
 
-  const sortedAssignments = [...input.assignments].sort(
+  const sortedAssignments = [...visibleAssignments].sort(
     (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
   );
   const activeTasks = sortedAssignments
@@ -323,12 +328,14 @@ export function buildBrokerControlPlaneDashboardSnapshot(
     maintenanceAnomalies: input.maintenance?.anomalies ?? [],
     anomalies: input.evaluation.anomalies,
     taskCounts: {
-      assigned: input.assignments.filter((assignment) => assignment.status === "assigned").length,
-      branchPushed: input.assignments.filter((assignment) => assignment.status === "branch_pushed")
+      assigned: visibleAssignments.filter((assignment) => assignment.status === "assigned").length,
+      branchPushed: visibleAssignments.filter((assignment) => assignment.status === "branch_pushed")
         .length,
-      openPrs: input.assignments.filter((assignment) => assignment.status === "pr_open").length,
-      mergedPrs: input.assignments.filter((assignment) => assignment.status === "pr_merged").length,
-      closedPrs: input.assignments.filter((assignment) => assignment.status === "pr_closed").length,
+      openPrs: visibleAssignments.filter((assignment) => assignment.status === "pr_open").length,
+      mergedPrs: visibleAssignments.filter((assignment) => assignment.status === "pr_merged")
+        .length,
+      closedPrs: visibleAssignments.filter((assignment) => assignment.status === "pr_closed")
+        .length,
     },
     activeTasks,
     recentOutcomes,

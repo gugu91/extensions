@@ -23,17 +23,30 @@ export interface PullRequestSnapshot {
   headRefName: string;
 }
 
+export interface IssueSnapshot {
+  number: number;
+  state: string;
+}
+
 export interface ResolvedTaskAssignment extends TaskAssignmentInfo {
   nextStatus: TaskAssignmentStatus;
   nextPrNumber: number | null;
   branchAheadCount: number;
+  issueState: "OPEN" | "CLOSED" | null;
 }
 
 const WORKTREE_BRANCH_REGEX = /\bgit\s+worktree\s+add\b[^\n]*?\s-b\s+([^\s`"',;]+)/i;
 const CHECKOUT_BRANCH_REGEX = /\bgit\s+(?:checkout|switch)\s+-[cb]\s+([^\s`"',;]+)/i;
-const EXPLICIT_BRANCH_REGEX =
-  /\bbranch(?:\s+(?:to\s+work\s+on|name))?\s*[:=]?\s*[`"']?([A-Za-z0-9._/-]+)\b/i;
-const TASK_REFERENCE_REGEX = /\b(?:(issue|pr)\s*)?#(\d+)\b/gi;
+const EXPLICIT_BRANCH_LABEL_REGEX =
+  /\bbranch(?:\s+to\s+work\s+on|\s+name)?\s*:\s*[`"']?([A-Za-z0-9._/-]+)\b/i;
+const ISSUE_PR_LINE_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\/pr\s*:\s*#(\d+)\b/gi;
+const ISSUE_LINE_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\s*:\s*#(\d+)\b/gi;
+const ISSUE_HEADING_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?issue\s+#(\d+)\b/gi;
+const TASK_ISSUE_REGEX = /(?:^|\n)\s*(?:[-*]\s*)?task\s*:\s*[^\n#]*\bissue\s*#(\d+)\b/gi;
+const NEW_TASK_ISSUE_REGEX =
+  /(?:^|\n)\s*(?:[-*]\s*)?new(?:\s+[a-z-]+){0,3}\s+task\b[^\n#]*\bissue\s*#(\d+)\b/gi;
+const FOLLOW_UP_TASK_ISSUE_REGEX =
+  /(?:^|\n)\s*(?:[-*]\s*)?follow-up\s+task(?:\s+from)?\s+issue\s*#(\d+)\b/gi;
 
 async function runCommand(
   file: string,
@@ -69,47 +82,122 @@ async function runJsonCommand<T>(
   }
 }
 
+function normalizeMessageForTaskParsing(message: string): string {
+  return message.replace(/\r\n/g, "\n").replace(/[`*_]/g, "");
+}
+
 function parseBranch(message: string): string | null {
+  const normalized = normalizeMessageForTaskParsing(message);
   const match =
-    message.match(WORKTREE_BRANCH_REGEX) ??
-    message.match(CHECKOUT_BRANCH_REGEX) ??
-    message.match(EXPLICIT_BRANCH_REGEX);
-  const branch = match?.[1]?.trim();
+    normalized.match(WORKTREE_BRANCH_REGEX) ??
+    normalized.match(CHECKOUT_BRANCH_REGEX) ??
+    normalized.match(EXPLICIT_BRANCH_LABEL_REGEX);
+  const branch = match?.[1]?.trim().replace(/[.,;:]+$/, "");
   return branch ? branch : null;
 }
 
 function parseIssueNumbers(message: string): number[] {
-  const explicitIssueNumbers = new Set<number>();
-  const unlabeledNumbers: number[] = [];
+  const normalized = normalizeMessageForTaskParsing(message);
+  const issueNumbers = new Set<number>();
 
-  for (const match of message.matchAll(TASK_REFERENCE_REGEX)) {
-    const label = match[1]?.toLowerCase();
-    const issueNumber = Number(match[2]);
-    if (!Number.isFinite(issueNumber)) {
-      continue;
+  for (const regex of [
+    ISSUE_PR_LINE_REGEX,
+    ISSUE_LINE_REGEX,
+    ISSUE_HEADING_REGEX,
+    TASK_ISSUE_REGEX,
+    NEW_TASK_ISSUE_REGEX,
+    FOLLOW_UP_TASK_ISSUE_REGEX,
+  ]) {
+    for (const match of normalized.matchAll(regex)) {
+      const issueNumber = Number(match[1]);
+      if (Number.isFinite(issueNumber)) {
+        issueNumbers.add(issueNumber);
+      }
     }
-
-    if (label === "pr") {
-      continue;
-    }
-    if (label === "issue") {
-      explicitIssueNumbers.add(issueNumber);
-      continue;
-    }
-
-    unlabeledNumbers.push(issueNumber);
   }
 
-  if (explicitIssueNumbers.size > 0) {
-    return [...explicitIssueNumbers].sort((left, right) => left - right);
-  }
-
-  return [...new Set(unlabeledNumbers)].sort((left, right) => left - right);
+  return [...issueNumbers].sort((left, right) => left - right);
 }
 
 export function extractTaskAssignmentsFromMessage(message: string): ParsedTaskAssignment[] {
   const branch = parseBranch(message);
   return parseIssueNumbers(message).map((issueNumber) => ({ issueNumber, branch }));
+}
+
+function compareTaskAssignmentRecency(left: TaskAssignmentInfo, right: TaskAssignmentInfo): number {
+  const updatedAt = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  if (updatedAt !== 0) {
+    return updatedAt;
+  }
+  const createdAt = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  if (createdAt !== 0) {
+    return createdAt;
+  }
+  return right.id - left.id;
+}
+
+function canonicalizeTaskAssignmentFromSourceMessage(
+  assignment: TaskAssignmentInfo,
+  sourceMessagesById: ReadonlyMap<number, string>,
+): TaskAssignmentInfo | null {
+  if (assignment.sourceMessageId == null) {
+    return assignment;
+  }
+
+  const sourceMessage = sourceMessagesById.get(assignment.sourceMessageId);
+  if (!sourceMessage) {
+    return assignment;
+  }
+
+  const parsedAssignments = extractTaskAssignmentsFromMessage(sourceMessage);
+  if (parsedAssignments.length === 0) {
+    return null;
+  }
+
+  const matchingAssignment = parsedAssignments.find(
+    (candidate) => candidate.issueNumber === assignment.issueNumber,
+  );
+  if (matchingAssignment) {
+    if (matchingAssignment.branch === assignment.branch) {
+      return assignment;
+    }
+    return { ...assignment, branch: matchingAssignment.branch };
+  }
+
+  if (parsedAssignments.length === 1) {
+    const [canonicalAssignment] = parsedAssignments;
+    return {
+      ...assignment,
+      issueNumber: canonicalAssignment.issueNumber,
+      branch: canonicalAssignment.branch,
+    };
+  }
+
+  return null;
+}
+
+export function normalizeTrackedTaskAssignments(
+  assignments: TaskAssignmentInfo[],
+  sourceMessagesById: ReadonlyMap<number, string> = new Map(),
+): TaskAssignmentInfo[] {
+  const canonicalAssignments = assignments
+    .map((assignment) =>
+      canonicalizeTaskAssignmentFromSourceMessage(assignment, sourceMessagesById),
+    )
+    .filter((assignment): assignment is TaskAssignmentInfo => assignment != null)
+    .sort(compareTaskAssignmentRecency);
+
+  const visibleAssignments: TaskAssignmentInfo[] = [];
+  const seenIssueNumbers = new Set<number>();
+  for (const assignment of canonicalAssignments) {
+    if (seenIssueNumbers.has(assignment.issueNumber)) {
+      continue;
+    }
+    seenIssueNumbers.add(assignment.issueNumber);
+    visibleAssignments.push(assignment);
+  }
+
+  return visibleAssignments;
 }
 
 function normalizePullRequests(prs: PullRequestSnapshot[] | undefined): PullRequestSnapshot[] {
@@ -250,22 +338,86 @@ async function getPullRequestByNumber(
   return normalizePullRequests([pr])[0] ?? null;
 }
 
+async function getIssueByNumber(
+  issueNumber: number,
+  cwd: string,
+  runner: CommandRunner,
+): Promise<IssueSnapshot | null | undefined> {
+  const issue = await runJsonCommand<IssueSnapshot>(
+    "gh",
+    ["issue", "view", String(issueNumber), "--json", "number,state"],
+    cwd,
+    runner,
+  );
+  if (issue === undefined) {
+    return undefined;
+  }
+  if (issue && typeof issue.number === "number" && typeof issue.state === "string") {
+    return issue;
+  }
+  return null;
+}
+
+function normalizeIssueState(
+  issue: IssueSnapshot | null | undefined,
+): ResolvedTaskAssignment["issueState"] {
+  const state = issue?.state?.toUpperCase();
+  if (state === "OPEN" || state === "CLOSED") {
+    return state;
+  }
+  return null;
+}
+
+function hasTrackedPullRequestLink(
+  assignment: Pick<TaskAssignmentInfo, "status" | "prNumber">,
+  pr: PullRequestSnapshot,
+): boolean {
+  return (
+    assignment.prNumber === pr.number ||
+    assignment.status === "pr_open" ||
+    assignment.status === "pr_merged" ||
+    assignment.status === "pr_closed"
+  );
+}
+
 function resolveTaskStatus(
   assignment: TaskAssignmentInfo,
   branchAheadCount: number,
   pr: PullRequestSnapshot | null | undefined,
+  issueState: ResolvedTaskAssignment["issueState"],
 ): Pick<ResolvedTaskAssignment, "nextStatus" | "nextPrNumber"> {
-  if (pr === undefined && assignment.status.startsWith("pr_")) {
-    return { nextStatus: assignment.status, nextPrNumber: assignment.prNumber };
+  if (issueState === "CLOSED") {
+    return {
+      nextStatus: "issue_closed",
+      nextPrNumber: pr?.number ?? assignment.prNumber,
+    };
   }
-  if (pr?.mergedAt) {
-    return { nextStatus: "pr_merged", nextPrNumber: pr.number };
+  if (
+    pr === undefined &&
+    (assignment.status.startsWith("pr_") || assignment.status === "issue_closed")
+  ) {
+    return { nextStatus: assignment.status, nextPrNumber: assignment.prNumber };
   }
   if (pr?.state.toUpperCase() === "OPEN") {
     return { nextStatus: "pr_open", nextPrNumber: pr.number };
   }
+  if (pr?.mergedAt) {
+    if (hasTrackedPullRequestLink(assignment, pr)) {
+      return { nextStatus: "pr_merged", nextPrNumber: pr.number };
+    }
+    if (branchAheadCount > 0) {
+      return { nextStatus: "branch_pushed", nextPrNumber: null };
+    }
+    return { nextStatus: "assigned", nextPrNumber: null };
+  }
   if (pr) {
-    return { nextStatus: "pr_closed", nextPrNumber: pr.number };
+    if (hasTrackedPullRequestLink(assignment, pr)) {
+      return { nextStatus: "pr_closed", nextPrNumber: pr.number };
+    }
+    if (branchAheadCount > 0) {
+      return { nextStatus: "branch_pushed", nextPrNumber: null };
+    }
+    return { nextStatus: "assigned", nextPrNumber: null };
   }
   if (branchAheadCount > 0) {
     return { nextStatus: "branch_pushed", nextPrNumber: null };
@@ -291,6 +443,7 @@ export async function resolveTaskAssignments(
     number,
     Promise<PullRequestSnapshot | null | undefined>
   >();
+  const issueByNumberCache = new Map<number, Promise<IssueSnapshot | null | undefined>>();
 
   const resolveBranchProgress = (
     branch: string | null,
@@ -322,6 +475,17 @@ export async function resolveTaskAssignments(
     return promise;
   };
 
+  const resolveIssueByNumber = (issueNumber: number): Promise<IssueSnapshot | null | undefined> => {
+    const cached = issueByNumberCache.get(issueNumber);
+    if (cached) {
+      return cached;
+    }
+
+    const promise = getIssueByNumber(issueNumber, cwd, runner);
+    issueByNumberCache.set(issueNumber, promise);
+    return promise;
+  };
+
   return Promise.all(
     assignments.map(async (assignment) => {
       const { branchAheadCount, pr } = await resolveBranchProgress(assignment.branch);
@@ -329,16 +493,19 @@ export async function resolveTaskAssignments(
         pr == null && assignment.prNumber != null
           ? await resolvePullRequestByNumber(assignment.prNumber)
           : pr;
+      const issueState = normalizeIssueState(await resolveIssueByNumber(assignment.issueNumber));
       const { nextStatus, nextPrNumber } = resolveTaskStatus(
         assignment,
         branchAheadCount,
         resolvedPr,
+        issueState,
       );
       return {
         ...assignment,
         nextStatus,
         nextPrNumber,
         branchAheadCount,
+        issueState,
       };
     }),
   );
@@ -360,12 +527,22 @@ function formatTaskProgressFragment(
       return `#${assignment.issueNumber} → PR #${assignment.prNumber ?? "?"} OPEN 🔄`;
     case "pr_closed":
       return `#${assignment.issueNumber} → PR #${assignment.prNumber ?? "?"} CLOSED ⚠️`;
+    case "issue_closed":
+      return `#${assignment.issueNumber} → issue closed ✅`;
     case "branch_pushed":
       return `#${assignment.issueNumber} → commits on ${assignment.branch ?? "tracked branch"}, no PR 👀`;
     case "assigned":
     default:
       return `#${assignment.issueNumber} → no commits, no PR ⚠️`;
   }
+}
+
+function getVisibleTaskAssignmentReportEntries(
+  assignments: Array<
+    Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">
+  >,
+): Array<Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">> {
+  return assignments.filter((assignment) => assignment.status !== "issue_closed");
 }
 
 function formatAgentLabel(
@@ -394,7 +571,8 @@ export function buildTaskAssignmentReport(
   agentsById: ReadonlyMap<string, Pick<AgentInfo, "emoji" | "name">>,
   cycleStartedAt?: string,
 ): string | null {
-  if (assignments.length === 0) {
+  const visibleAssignments = getVisibleTaskAssignmentReportEntries(assignments);
+  if (visibleAssignments.length === 0) {
     return null;
   }
 
@@ -402,7 +580,7 @@ export function buildTaskAssignmentReport(
     string,
     Array<Pick<TaskAssignmentInfo, "agentId" | "issueNumber" | "branch" | "status" | "prNumber">>
   >();
-  for (const assignment of assignments) {
+  for (const assignment of visibleAssignments) {
     const bucket = grouped.get(assignment.agentId);
     if (bucket) {
       bucket.push(assignment);
