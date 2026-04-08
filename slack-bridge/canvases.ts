@@ -52,6 +52,8 @@ export interface SlackCanvasReadRequest {
 export interface SlackCanvasSectionLookupResult {
   id?: string;
   markdown?: string;
+  document_content?: SlackCanvasDocumentContent;
+  documentContent?: { type?: string; markdown?: string };
 }
 
 function normalizeOptionalString(value?: string): string | undefined {
@@ -209,16 +211,40 @@ export function buildSlackCanvasReadRequest(input: { canvasId: string }): SlackC
   return { canvas_id: canvasId };
 }
 
+function extractSlackCanvasSectionMarkdown(section: SlackCanvasSectionLookupResult): string | null {
+  return (
+    normalizeOptionalString(section.markdown) ??
+    normalizeOptionalString(section.document_content?.markdown) ??
+    normalizeOptionalString(section.documentContent?.markdown) ??
+    null
+  );
+}
+
 export function extractSlackCanvasMarkdown(
   sections: SlackCanvasSectionLookupResult[] | undefined,
 ): string {
-  const markdown = (sections ?? [])
-    .map((section) => normalizeOptionalString(section.markdown))
-    .filter((value): value is string => Boolean(value))
+  return (sections ?? [])
+    .map(extractSlackCanvasSectionMarkdown)
+    .filter((value): value is string => value != null)
     .join("\n\n")
     .trim();
+}
 
-  return markdown;
+export function getSlackCanvasReadability(sections: SlackCanvasSectionLookupResult[] | undefined): {
+  sectionCount: number;
+  readableSectionCount: number;
+  markdown: string;
+} {
+  const normalizedSections = sections ?? [];
+  const readableSectionCount = normalizedSections.filter(
+    (section) => extractSlackCanvasSectionMarkdown(section) != null,
+  ).length;
+
+  return {
+    sectionCount: normalizedSections.length,
+    readableSectionCount,
+    markdown: extractSlackCanvasMarkdown(normalizedSections),
+  };
 }
 
 export function pickSlackCanvasSectionId(
@@ -264,12 +290,34 @@ export function extractSlackChannelCanvasId(response: Record<string, unknown>): 
   if (directCanvas) return directCanvas;
 
   const canvasRecord = asRecord(properties.canvas);
-  const canvasId = asString(canvasRecord?.id) ?? asString(canvasRecord?.canvas_id);
+  const canvasId =
+    asString(canvasRecord?.id) ??
+    asString(canvasRecord?.canvas_id) ??
+    asString(canvasRecord?.file_id);
   if (canvasId) return canvasId;
 
   const channelSolutions = asRecord(properties.channel_solutions);
   const canvasIds = asStringArray(channelSolutions?.canvas_ids);
   if (canvasIds?.[0]) return canvasIds[0];
+
+  const tabs = Array.isArray(properties.tabs)
+    ? (properties.tabs as Array<Record<string, unknown>>)
+    : undefined;
+  const tabCanvasIds = [
+    ...new Set(
+      (tabs ?? [])
+        .filter((tab) => asString(tab.type) === "channel_canvas")
+        .map(
+          (tab) =>
+            asString(tab.canvas_id) ??
+            asString(tab.file_id) ??
+            asString(asRecord(tab.canvas)?.id) ??
+            asString(tab.id),
+        )
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (tabCanvasIds.length === 1) return tabCanvasIds[0];
 
   return null;
 }

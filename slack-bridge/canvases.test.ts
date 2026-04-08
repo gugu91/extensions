@@ -6,6 +6,7 @@ import {
   buildSlackCanvasSectionsLookupRequest,
   extractSlackCanvasMarkdown,
   extractSlackChannelCanvasId,
+  getSlackCanvasReadability,
   normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasSectionType,
   normalizeSlackCanvasUpdateMode,
@@ -230,8 +231,27 @@ describe("extractSlackCanvasMarkdown", () => {
     ).toBe("# Header\n\nBody text");
   });
 
+  it("supports nested document_content markdown payloads", () => {
+    expect(
+      extractSlackCanvasMarkdown([
+        { id: "s1", document_content: { type: "markdown", markdown: "# Header" } },
+        { id: "s2", documentContent: { type: "markdown", markdown: "Body text" } },
+      ]),
+    ).toBe("# Header\n\nBody text");
+  });
+
   it("returns an empty string when sections have no markdown", () => {
     expect(extractSlackCanvasMarkdown([{ id: "s1" }, { id: "s2", markdown: "   " }])).toBe("");
+  });
+});
+
+describe("getSlackCanvasReadability", () => {
+  it("reports section counts and readable markdown counts", () => {
+    expect(getSlackCanvasReadability([{ id: "s1", markdown: "# Header" }, { id: "s2" }])).toEqual({
+      sectionCount: 2,
+      readableSectionCount: 1,
+      markdown: "# Header",
+    });
   });
 });
 
@@ -282,7 +302,7 @@ describe("extractSlackChannelCanvasId", () => {
     ).toBe("F234");
   });
 
-  it("returns null when only undocumented tab metadata is present", () => {
+  it("falls back to a channel_canvas tab id when direct canvas metadata is absent", () => {
     expect(
       extractSlackChannelCanvasId({
         channel: {
@@ -291,7 +311,19 @@ describe("extractSlackChannelCanvasId", () => {
           },
         },
       }),
-    ).toBeNull();
+    ).toBe("F345");
+  });
+
+  it("supports tab file_id fallbacks when the tab id is absent", () => {
+    expect(
+      extractSlackChannelCanvasId({
+        channel: {
+          properties: {
+            tabs: [{ file_id: "F456", type: "channel_canvas" }],
+          },
+        },
+      }),
+    ).toBe("F456");
   });
 
   it("returns null when the channel has no canvas metadata", () => {

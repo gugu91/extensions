@@ -8,8 +8,8 @@ import {
   buildSlackCanvasEditRequest,
   buildSlackCanvasReadRequest,
   buildSlackCanvasSectionsLookupRequest,
-  extractSlackCanvasMarkdown,
   extractSlackChannelCanvasId,
+  getSlackCanvasReadability,
   normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
@@ -2268,9 +2268,20 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         getBotToken(),
         request as unknown as Record<string, unknown>,
       );
-      const sections = response.sections as Array<{ id?: string; markdown?: string }> | undefined;
-      const markdown = extractSlackCanvasMarkdown(sections);
-      const sectionCount = sections?.length ?? 0;
+      const sections = response.sections as
+        | Array<{
+            id?: string;
+            markdown?: string;
+            document_content?: { type: "markdown"; markdown: string };
+            documentContent?: { type?: string; markdown?: string };
+          }>
+        | undefined;
+      const { markdown, sectionCount, readableSectionCount } = getSlackCanvasReadability(sections);
+      if (sectionCount === 0 || readableSectionCount === 0) {
+        throw new Error(
+          `Slack did not return readable markdown for canvas ${target.canvasId}. This may mean the canvas is empty or that this workspace/API response does not expose canvas content through canvases.sections.lookup yet.`,
+        );
+      }
       const targetSummary = target.channelLabel
         ? `Read channel canvas ${target.canvasId} for ${target.channelLabel}.`
         : `Read canvas ${target.canvasId}.`;
@@ -2279,7 +2290,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         content: [
           {
             type: "text",
-            text: `${targetSummary}\n\n${markdown || "(empty canvas)"}`,
+            text: `${targetSummary}\n\n${markdown}`,
           },
         ],
         details: {
@@ -2287,6 +2298,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           channel: target.channelId,
           markdown,
           section_count: sectionCount,
+          readable_section_count: readableSectionCount,
           sections,
         },
       };

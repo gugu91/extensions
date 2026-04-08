@@ -930,6 +930,7 @@ describe("registerSlackTools", () => {
       channel: undefined,
       markdown: "# Results\n\n- Test A ✅\n- Test B ✅",
       section_count: 2,
+      readable_section_count: 2,
       sections: [
         { id: "temp:C:1", markdown: "# Results" },
         { id: "temp:C:2", markdown: "- Test A ✅\n- Test B ✅" },
@@ -967,7 +968,51 @@ describe("registerSlackTools", () => {
       channel: "resolved:eng",
       markdown: "Channel notes",
       section_count: 1,
+      readable_section_count: 1,
     });
+  });
+
+  it("falls back to channel canvas tabs when direct canvas properties are absent", async () => {
+    const { tools, setCanvasSectionsLookupResponse, setConversationsInfoResponse } = setup();
+    setConversationsInfoResponse({
+      ok: true,
+      channel: {
+        id: "resolved:eng",
+        properties: { tabs: [{ id: "FTAB", type: "channel_canvas" }] },
+      },
+    } as SlackResult);
+    setCanvasSectionsLookupResponse({
+      ok: true,
+      sections: [{ id: "temp:C:1", markdown: "Tabbed notes" }],
+    } as SlackResult);
+
+    const result = await tools.get("slack_canvas_read")!.execute("tool-canvas-read-3", {
+      channel: "eng",
+    });
+
+    expect(result.details).toMatchObject({
+      canvas_id: "FTAB",
+      channel: "resolved:eng",
+      markdown: "Tabbed notes",
+      section_count: 1,
+      readable_section_count: 1,
+    });
+  });
+
+  it("fails explicitly when Slack does not return readable markdown sections", async () => {
+    const { tools, setCanvasSectionsLookupResponse } = setup();
+    setCanvasSectionsLookupResponse({
+      ok: true,
+      sections: [{ id: "temp:C:1" }],
+    } as SlackResult);
+
+    await expect(
+      tools.get("slack_canvas_read")!.execute("tool-canvas-read-4", {
+        canvas_id: "F123",
+      }),
+    ).rejects.toThrow(
+      "Slack did not return readable markdown for canvas F123. This may mean the canvas is empty or that this workspace/API response does not expose canvas content through canvases.sections.lookup yet.",
+    );
   });
 
   // ─── slack_project_create ─────────────────────────────
