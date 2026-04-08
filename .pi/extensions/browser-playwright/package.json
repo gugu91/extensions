@@ -1,0 +1,30 @@
+{
+  "name": "pi-extension-browser-playwright",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test helpers.test.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.65.2",
+    "@mariozechner/pi-coding-agent": "^0.65.2",
+    "@types/node": "^22.13.1",
+    "typescript": "^5.9.3"
+  }
+}
