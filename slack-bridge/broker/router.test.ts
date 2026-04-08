@@ -274,7 +274,7 @@ describe("MessageRouter — route", () => {
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
   });
 
-  it("prefers the canonical Slack thread owner hint over a stale competing owner", () => {
+  it("prefers the canonical Slack thread owner hint over a stale competing owner for generic in-thread follow-ups", () => {
     const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
     const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
     db.agents = [hippo, cobra];
@@ -283,7 +283,7 @@ describe("MessageRouter — route", () => {
     const decision = router.route(
       makeMessage({
         threadId: "t-100",
-        text: "ok nice I set that on merge, can you read them (Hippo) and come up with next steps?",
+        text: "also check for hardcoded routes pls",
         metadata: {
           threadOwnerAgentOwner: "owner:99b0f2b5e8a7874e",
           threadOwnerAgentName: "Pixel Lime Hippo",
