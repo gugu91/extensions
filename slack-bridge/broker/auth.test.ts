@@ -35,6 +35,11 @@ describe("broker mesh auth helpers", () => {
     );
   });
 
+  it("resolveMeshSecret returns null when mesh auth is unset", () => {
+    expect(resolveMeshSecret()).toBeNull();
+    expect(resolveMeshSecret({ meshSecretPath: "   " })).toBeNull();
+  });
+
   it("resolveMeshSecret reads from a secret file when no explicit secret is provided", () => {
     const secretPath = path.join(dir, "pinet.secret");
     fs.writeFileSync(secretPath, "from-file\n", "utf-8");

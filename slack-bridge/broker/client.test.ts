@@ -206,6 +206,17 @@ describe("BrokerClient — mesh auth", () => {
     await expect(connectPromise).rejects.toThrow("Invalid mesh secret.");
     expect(client.isConnected()).toBe(false);
   });
+
+  it("surfaces a friendly error when a configured mesh secret file is missing", async () => {
+    const client = new BrokerClient({
+      ...mock.connectOpts,
+      meshSecretPath: path.join(os.tmpdir(), `missing-${Date.now()}-pinet.secret`),
+    });
+
+    await expect(client.connect()).rejects.toThrow("Configured Pinet mesh secret file not found");
+    expect(client.isConnected()).toBe(false);
+    expect(mock.received).toHaveLength(0);
+  });
 });
 
 describe("BrokerClient — register", () => {

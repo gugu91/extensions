@@ -21,6 +21,8 @@ export interface SlackBridgeSettings {
   autoFollow?: boolean;
   agentName?: string;
   agentEmoji?: string;
+  meshSecret?: string;
+  meshSecretPath?: string;
   controlPlaneCanvasEnabled?: boolean;
   controlPlaneCanvasId?: string;
   controlPlaneCanvasChannel?: string;
@@ -29,6 +31,38 @@ export interface SlackBridgeSettings {
     readOnly?: boolean;
     requireConfirmation?: string[];
     blockedTools?: string[];
+  };
+}
+
+export interface ResolvedPinetMeshAuthSettings {
+  meshSecret: string | null;
+  meshSecretPath: string | null;
+}
+
+function normalizeOptionalSetting(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+export function resolvePinetMeshAuth(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): ResolvedPinetMeshAuthSettings {
+  const settingsMeshSecret = normalizeOptionalSetting(settings.meshSecret);
+  const settingsMeshSecretPath = normalizeOptionalSetting(settings.meshSecretPath);
+  if (settingsMeshSecret || settingsMeshSecretPath) {
+    return {
+      meshSecret: settingsMeshSecret,
+      meshSecretPath: settingsMeshSecret ? null : settingsMeshSecretPath,
+    };
+  }
+
+  const envMeshSecret = normalizeOptionalSetting(env.PINET_MESH_SECRET);
+  const envMeshSecretPath = normalizeOptionalSetting(env.PINET_MESH_SECRET_PATH);
+
+  return {
+    meshSecret: envMeshSecret,
+    meshSecretPath: envMeshSecret ? null : envMeshSecretPath,
   };
 }
 

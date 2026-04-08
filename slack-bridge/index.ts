@@ -54,6 +54,7 @@ import {
   normalizePinetSkinTheme,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
+  resolvePinetMeshAuth,
   syncFollowerInboxEntries,
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
@@ -95,7 +96,6 @@ import {
   type BrokerMaintenanceResult,
 } from "./broker/maintenance.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
-import { getDefaultMeshSecretPath } from "./broker/paths.js";
 import {
   dispatchBroadcastAgentMessage,
   dispatchDirectAgentMessage,
@@ -2808,7 +2808,11 @@ export default function (pi: ExtensionAPI) {
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
     refreshSettings();
-    const broker = await startBroker();
+    const meshAuth = resolvePinetMeshAuth(settings);
+    const broker = await startBroker({
+      ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
+      ...(meshAuth.meshSecretPath ? { meshSecretPath: meshAuth.meshSecretPath } : {}),
+    });
     const adapter = new SlackAdapter({
       botToken: botToken!,
       appToken: appToken!,
@@ -3048,9 +3052,11 @@ export default function (pi: ExtensionAPI) {
     }
 
     refreshSettings();
+    const meshAuth = resolvePinetMeshAuth(settings);
     const client = new BrokerClient({
       path: DEFAULT_SOCKET_PATH,
-      meshSecretPath: getDefaultMeshSecretPath(),
+      ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
+      ...(meshAuth.meshSecretPath ? { meshSecretPath: meshAuth.meshSecretPath } : {}),
     });
 
     async function registerFollowerRuntime(): Promise<void> {
