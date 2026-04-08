@@ -40,10 +40,18 @@ npm install
 npx playwright install chromium
 ```
 
-The extension intentionally fails with these exact commands when:
+Chromium is the default engine. If you start a session with `browser: "firefox"` or
+`browser: "webkit"`, install matching browser binaries instead:
+
+```bash
+npx playwright install firefox
+npx playwright install webkit
+```
+
+The extension intentionally fails with exact engine-aware commands when:
 
 - the `playwright` package is missing
-- Chromium browser binaries are missing
+- the requested browser engine binaries are missing
 
 ## Security defaults
 
@@ -89,10 +97,12 @@ Recommended practice:
 - sessions are cleaned up on Pi shutdown
 - idle sessions are also swept automatically after `BROWSER_PLAYWRIGHT_IDLE_TIMEOUT_MS` (default: 15 minutes)
 
-Important limitation:
+Important limitations:
 
 - session state is process-local and in-memory only
 - a Pi reload or process restart drops live browser sessions
+- stored Playwright session mounting/import is not supported in #282
+- importing/exporting saved `storageState`, cookies, or localStorage for login reuse is follow-up work, not current behavior
 
 ## Artifacts
 

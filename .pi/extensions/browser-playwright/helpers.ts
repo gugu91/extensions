@@ -11,6 +11,8 @@ export type SecurityOptions = {
   allowPrivateNetwork: boolean;
 };
 
+export type SupportedBrowserEngine = "chromium" | "firefox" | "webkit";
+
 export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
@@ -57,19 +59,34 @@ export function truncateText(
   return result;
 }
 
-export function buildInstallInstructions(reason: string, includeNpmInstall = true): string {
+export function buildInstallInstructions(
+  reason: string,
+  includeNpmInstall = true,
+  browserEngine: SupportedBrowserEngine = "chromium",
+): string {
   const commands = [
     `cd ${EXTENSION_RELATIVE_DIR}`,
     ...(includeNpmInstall ? ["npm install"] : []),
-    "npx playwright install chromium",
+    `npx playwright install ${browserEngine}`,
   ];
 
   return [
     reason,
     "",
-    "Install the browser-playwright extension dependencies and Chromium browser binaries:",
+    `Install the browser-playwright extension dependencies and ${browserEngine} browser binaries:`,
     ...commands.map((command) => `  ${command}`),
   ].join("\n");
+}
+
+export function safeRequestPageId<PageLike>(
+  request: { frame(): { page(): PageLike } },
+  resolvePageId: (page: PageLike) => string | null | undefined,
+): string | null {
+  try {
+    return resolvePageId(request.frame().page()) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeUrl(input: string): URL {

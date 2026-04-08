@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assessUrl,
   buildInstallInstructions,
+  safeRequestPageId,
   sanitizeLabel,
   truncateText,
   type SecurityOptions,
@@ -67,6 +68,43 @@ test("buildInstallInstructions includes npm install only when requested", () => 
   const browserOnly = buildInstallInstructions("missing", false);
   assert.doesNotMatch(browserOnly, /npm install/);
   assert.match(browserOnly, /npx playwright install chromium/);
+});
+
+test("buildInstallInstructions is browser-engine aware", () => {
+  const firefox = buildInstallInstructions("missing firefox", false, "firefox");
+  assert.match(firefox, /firefox browser binaries/);
+  assert.match(firefox, /npx playwright install firefox/);
+});
+
+test("safeRequestPageId resolves page IDs for frame-backed requests", () => {
+  const page = { id: "page-object" };
+  const result = safeRequestPageId(
+    {
+      frame() {
+        return {
+          page() {
+            return page;
+          },
+        };
+      },
+    },
+    (currentPage) => (currentPage === page ? "page-1" : null),
+  );
+
+  assert.equal(result, "page-1");
+});
+
+test("safeRequestPageId returns null for service-worker-style requests without a page", () => {
+  const result = safeRequestPageId(
+    {
+      frame() {
+        throw new Error("Service Worker requests do not have an associated frame");
+      },
+    },
+    () => "page-1",
+  );
+
+  assert.equal(result, null);
 });
 
 test("sanitizeLabel keeps filenames safe and stable", () => {

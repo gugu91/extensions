@@ -9,8 +9,10 @@ import {
   buildInstallInstructions,
   envFlag,
   parseIntegerEnv,
+  safeRequestPageId,
   sanitizeLabel,
   truncateText,
+  type SupportedBrowserEngine,
 } from "./helpers.ts";
 import type {
   Browser,
@@ -25,7 +27,7 @@ import type {
 
 type PlaywrightModule = typeof import("playwright");
 
-type BrowserEngine = "chromium" | "firefox" | "webkit";
+type BrowserEngine = SupportedBrowserEngine;
 
 type WaitUntil = "load" | "domcontentloaded" | "networkidle" | "commit";
 
@@ -106,7 +108,7 @@ function asErrorMessage(error: unknown): string {
   return String(error);
 }
 
-async function loadPlaywright(): Promise<PlaywrightModule> {
+async function loadPlaywright(browserEngine: BrowserEngine): Promise<PlaywrightModule> {
   try {
     return await import("playwright");
   } catch (error) {
@@ -114,6 +116,7 @@ async function loadPlaywright(): Promise<PlaywrightModule> {
       buildInstallInstructions(
         "Playwright is not installed for `.pi/extensions/browser-playwright`.",
         true,
+        browserEngine,
       ),
       { cause: error instanceof Error ? error : undefined },
     );
@@ -537,8 +540,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       await cleanupExpiredSessions();
       await ensureArtifactsDir();
 
-      const playwright = await loadPlaywright();
       const browserEngine = (params.browser ?? "chromium") as BrowserEngine;
+      const playwright = await loadPlaywright(browserEngine);
       const browserType = playwright[browserEngine] as BrowserType;
       const headless = params.headless ?? true;
 
@@ -551,6 +554,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             buildInstallInstructions(
               `Playwright is installed but ${browserEngine} browser binaries are missing.`,
               false,
+              browserEngine,
             ),
           );
         }
@@ -590,7 +594,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
           session.networkSummary.total_requests += 1;
           const decision = assessUrl(request.url(), getSecurityOptions());
           if (!decision.allowed) {
-            const pageId = session.pageIds.get(request.frame().page() as Page) ?? null;
+            const pageId = safeRequestPageId(request, (page) => session.pageIds.get(page) ?? null);
             recordBlockedRequest(session, {
               timestamp: nowIso(),
               page_id: pageId,
