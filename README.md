@@ -216,4 +216,4 @@ Entries are sourced from the relevant PR, Pinet, and PiComms trail rather than
 
 ## License
 
-Private — not published to npm.
+MIT. See [`LICENSE`](LICENSE).

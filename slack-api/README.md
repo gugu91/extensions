@@ -32,3 +32,7 @@ slack-api chat.postMessage --token xoxb-... --input '{"channel":"C123","text":"h
 - Method names use Slack's dot notation (`chat.postMessage`, `conversations.list`, etc.)
 - `--param` values are auto-parsed: `true`/`false` → boolean, digits → number, `{}`/`[]` → JSON
 - `--token` is passed to the `WebClient` constructor; method arguments come from `--input` / `--param`
+
+## License
+
+MIT. See [`LICENSE`](./LICENSE).
