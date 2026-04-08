@@ -173,6 +173,181 @@ describe("slack-bridge top-level shutdown", () => {
     expect(setStatus).toHaveBeenCalledTimes(2);
   });
 
+  it("restores top-level Slack tools after an in-process broker reload", async () => {
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const tools = new Map<string, ToolDefinition>();
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn((definition: ToolDefinition) => {
+        tools.set(definition.name, definition);
+      }),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/conversations.create")) {
+        return new Response(
+          JSON.stringify({ ok: true, channel: { id: "C123", name: "reload-test" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+
+    const brokerRuntimes: Array<{
+      db: BrokerDB;
+      server: {
+        setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        onAgentMessage: ReturnType<typeof vi.fn>;
+        onAgentStatusChange: ReturnType<typeof vi.fn>;
+      };
+      stop: ReturnType<typeof vi.fn>;
+    }> = [];
+    let resolveReloadStarted: (() => void) | null = null;
+    const reloadStarted = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("Broker reload did not start"));
+      }, 1_000);
+      resolveReloadStarted = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const server = {
+        setAgentRegistrationResolver: vi.fn(),
+        onAgentMessage: vi.fn(),
+        onAgentStatusChange: vi.fn(),
+      };
+      const stop = vi.fn(async () => {
+        db.close();
+      });
+      brokerRuntimes.push({ db, server, stop });
+      if (brokerRuntimes.length === 2) {
+        resolveReloadStarted?.();
+      }
+      return {
+        db,
+        server,
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters: [],
+        addAdapter: vi.fn(),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+    const createChannel = tools.get("slack_create_channel");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+    expect(createChannel).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+
+    expect(brokerRuntimes).toHaveLength(1);
+    brokerRuntimes[0]!.db.registerAgent("sender", "Sender", "📤", 202);
+    brokerRuntimes[0]!.db.queueMessage("broker-leaf", {
+      source: "agent",
+      threadId: "a2a:sender:broker-leaf",
+      channel: "",
+      userId: "sender",
+      text: "/reload",
+      timestamp: "123.456",
+      metadata: { a2a: true, kind: "pinet_control", command: "reload" },
+    });
+
+    const onAgentMessage = brokerRuntimes[0]!.server.onAgentMessage.mock.calls[0]?.[0] as
+      | ((targetAgentId: string) => void)
+      | undefined;
+    expect(onAgentMessage).toBeDefined();
+    if (!onAgentMessage) {
+      throw new Error("Expected broker agent-message handler to be registered");
+    }
+
+    onAgentMessage("broker-leaf");
+    await reloadStarted;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const response = await createChannel!.execute("tool-call-2", { name: "reload-test" });
+
+    expect(response).toMatchObject({
+      details: { id: "C123", name: "reload-test" },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://slack.com/api/conversations.create");
+
+    await sessionShutdown?.({}, ctx);
+    expect(notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Operation rejected: shutdown in progress"),
+      "error",
+    );
+  });
+
   it("does not auto-follow into the mesh for headless ephemeral subagent sessions", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
