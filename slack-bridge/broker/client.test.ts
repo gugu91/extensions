@@ -13,6 +13,7 @@ import {
   computeReconnectDelay,
 } from "./client.js";
 import type { BrokerConnectOpts } from "./client.js";
+import { RPC_METHOD_NOT_FOUND } from "./types.js";
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -216,6 +217,27 @@ describe("BrokerClient — mesh auth", () => {
     await expect(client.connect()).rejects.toThrow("Configured Pinet mesh secret file not found");
     expect(client.isConnected()).toBe(false);
     expect(mock.received).toHaveLength(0);
+  });
+
+  it("surfaces a compatibility error when the broker does not support auth", async () => {
+    const client = new BrokerClient({ ...mock.connectOpts, meshSecret: "shared-secret" });
+    const connectPromise = client.connect();
+
+    await waitFor(() => mock.received.length === 1);
+    const authReq = JSON.parse(mock.received[0]) as { id: number; method: string };
+
+    expect(authReq.method).toBe("auth");
+    mock.respondError(
+      mock.connections[0],
+      authReq.id,
+      RPC_METHOD_NOT_FOUND,
+      "Unknown method: auth",
+    );
+
+    await expect(connectPromise).rejects.toThrow(
+      "Broker does not support Pinet mesh auth (`auth`). Upgrade the broker or disable follower mesh auth when connecting to older/no-auth brokers.",
+    );
+    expect(client.isConnected()).toBe(false);
   });
 });
 
