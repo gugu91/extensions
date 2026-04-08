@@ -464,6 +464,32 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(inbox).toHaveLength(1);
     expect(inbox[0].message.body).toBe("Hold for receiver only");
     expect(inbox[0].message.threadId).toBe(`a2a:${sender.agentId}:${reg2.agentId}`);
+    await client2.ackMessages([inbox[0].inboxId]);
+
+    result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:30.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(0);
+    expect(await client2.pollInbox()).toHaveLength(0);
+    expect(await client.pollInbox()).toHaveLength(0);
+
+    await client2.unregister();
+    expect(db.purgeDisconnectedAgents(0)).toContain(reg2.agentId);
+
+    result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:40.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(0);
     expect(await client.pollInbox()).toHaveLength(0);
 
     client2.disconnect();

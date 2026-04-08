@@ -1782,15 +1782,28 @@ export class BrokerDB implements BrokerDBInterface {
   markDelivered(inboxIds: number[], agentId?: string): void {
     if (inboxIds.length === 0) return;
     const db = this.getDb();
+    const lookup = db.prepare("SELECT message_id, agent_id FROM inbox WHERE id = ?");
+
     if (agentId) {
       const stmt = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ? AND agent_id = ?");
       for (const id of inboxIds) {
-        stmt.run(id, agentId);
+        const result = stmt.run(id, agentId);
+        if (Number(result.changes ?? 0) === 0) continue;
+        const row = lookup.get(id) as { message_id: number; agent_id: string } | undefined;
+        if (row) {
+          this.completeTargetedBacklogAssignment(row.message_id, row.agent_id);
+        }
       }
-    } else {
-      const stmt = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
-      for (const id of inboxIds) {
-        stmt.run(id);
+      return;
+    }
+
+    const stmt = db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?");
+    for (const id of inboxIds) {
+      const result = stmt.run(id);
+      if (Number(result.changes ?? 0) === 0) continue;
+      const row = lookup.get(id) as { message_id: number; agent_id: string } | undefined;
+      if (row) {
+        this.completeTargetedBacklogAssignment(row.message_id, row.agent_id);
       }
     }
   }
@@ -1798,8 +1811,24 @@ export class BrokerDB implements BrokerDBInterface {
   /** Mark all undelivered inbox rows for a given message+agent as delivered. */
   markDeliveredByMessageId(messageId: number, agentId: string): void {
     const db = this.getDb();
+    const result = db
+      .prepare(
+        "UPDATE inbox SET delivered = 1 WHERE message_id = ? AND agent_id = ? AND delivered = 0",
+      )
+      .run(messageId, agentId);
+    if (Number(result.changes ?? 0) > 0) {
+      this.completeTargetedBacklogAssignment(messageId, agentId);
+    }
+  }
+
+  private completeTargetedBacklogAssignment(messageId: number, agentId: string): void {
+    const db = this.getDb();
     db.prepare(
-      "UPDATE inbox SET delivered = 1 WHERE message_id = ? AND agent_id = ? AND delivered = 0",
+      `DELETE FROM unrouted_backlog
+       WHERE message_id = ?
+         AND status = 'assigned'
+         AND preferred_agent_id IS NOT NULL
+         AND assigned_agent_id = ?`,
     ).run(messageId, agentId);
   }
 
