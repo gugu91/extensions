@@ -35,4 +35,4 @@ slack-api chat.postMessage --token xoxb-... --input '{"channel":"C123","text":"h
 
 ## License
 
-MIT. See the repo root `LICENSE` file.
+MIT. See [`LICENSE`](./LICENSE).

@@ -20,6 +20,7 @@
   },
   "files": [
     "README.md",
+    "LICENSE",
     "config.example.json",
     "neon_socks_tunnel.py",
     "python/",

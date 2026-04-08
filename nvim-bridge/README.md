@@ -146,4 +146,4 @@ pnpm check
 
 ## License
 
-MIT. See the repo root `LICENSE` file.
+MIT. See [`LICENSE`](./LICENSE).

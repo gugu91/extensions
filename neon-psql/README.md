@@ -117,4 +117,4 @@ See `config.example.json`.
 
 ## License
 
-MIT. See the repo root `LICENSE` file.
+MIT. See [`LICENSE`](./LICENSE).

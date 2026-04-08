@@ -296,4 +296,4 @@ Requires `appId` and `appConfigToken` in settings (or `SLACK_APP_ID` / `SLACK_AP
 
 ## License
 
-MIT. See the repo root `LICENSE` file.
+MIT. See [`LICENSE`](./LICENSE).
