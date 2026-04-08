@@ -16,7 +16,8 @@ Pinet v0.1.1 is a targeted patch release for `@gugu910/pi-slack-bridge`. The rel
 
 ### Release highlights
 
-- Hardened Pinet coordination with local shared-secret mesh auth, structured control messages, reconnect refresh, and headless-subagent isolation.
+- Hardened Pinet coordination with configurable shared-secret mesh auth, structured control messages, reconnect refresh, and headless-subagent isolation.
+- Documented the v0.1.1 mesh-auth behavior now visible on `main`: optional auth when unset, `meshSecret` / `meshSecretPath` settings and `PINET_MESH_SECRET` / `PINET_MESH_SECRET_PATH` env fallbacks, friendly missing-secret-file failures for configured followers, and explicit older/no-auth broker compatibility errors with no silent downgrade.
 - Added the Pinet Home tab dashboard, an end-user README refresh, and broker routing fixes such as stable-ID thread binding.
 - Fixed targeted backlog recovery so stale targeted A2A backlog no longer remains stranded after purge and maintenance.
 - Included Slack bridge package surface updates that shipped in the same cut, including `slack_project_create` and channel canvas dedup.
@@ -31,6 +32,8 @@ Pinet v0.1.1 is a targeted patch release for `@gugu910/pi-slack-bridge`. The rel
 - [#258](https://github.com/gugu91/extensions/pull/258) — feat: add slack_project_create tool
 - [#268](https://github.com/gugu91/extensions/pull/268) — fix: thread binding uses stable IDs first, fuzzy name as fallback
 - [#272](https://github.com/gugu91/extensions/pull/272) — fix: drop stale targeted backlog after purge
+- [#289](https://github.com/gugu91/extensions/pull/289) — fix: make Pinet mesh secret config-driven and optional
+- [#292](https://github.com/gugu91/extensions/pull/292) — fix: clarify Pinet auth method mismatch
 
 ## [0.1.0] - 2026-04-02
 
