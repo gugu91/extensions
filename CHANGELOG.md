@@ -2,6 +2,23 @@
 
 All notable changes to this repository are documented in this file.
 
+## [0.1.3] - 2026-04-08
+
+Pinet v0.1.3 is a narrow follow-up patch for `@gugu910/pi-slack-bridge` after `0.1.2` was published with real Slack identifiers in the package README settings example. Because published npm tarballs are immutable, this release corrects the npm-visible package surface with scrubbed example placeholders while leaving the runtime behavior unchanged.
+
+### Version verification
+
+- `pi-extensions` — `0.1.3` (private repo package)
+- `@gugu910/pi-slack-bridge` — `0.1.3`
+- `@gugu910/pi-nvim-bridge` — `0.1.0` (unchanged)
+- `@gugu910/pi-neon-psql` — `0.1.0` (unchanged)
+- `@gugu910/pi-slack-api` — `0.2.0` (unchanged)
+
+### Release highlights
+
+- Scrubs the npm-facing `slack-bridge/README.md` settings example so `allowedUsers` and `defaultChannel` use obviously fake placeholders instead of real Slack identifiers.
+- Keeps the publish surface otherwise aligned with `0.1.2`; this is a release-docs correction patch before the next publish.
+
 ## [0.1.2] - 2026-04-08
 
 Pinet v0.1.2 is a refreshed patch release for `@gugu910/pi-slack-bridge` cut from current `main`. The earlier `0.1.1` repo prep never shipped to npm, so this release supersedes that unpublished cut while keeping the release surface intentionally focused: the Slack bridge package bumps to `0.1.2`, the private monorepo package moves to `0.1.2` for repo-level version tracking, and the other workspace packages stay at their current versions.

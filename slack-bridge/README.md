@@ -121,8 +121,8 @@ Behavior and precedence:
   "slack-bridge": {
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
-    "allowedUsers": ["U09GWL270LA"],
-    "defaultChannel": "C0APL58LB1R",
+    "allowedUsers": ["U_EXAMPLE_MEMBER_ID"],
+    "defaultChannel": "C_EXAMPLE_CHANNEL_ID",
     "logChannel": "#pinet-logs",
     "logLevel": "actions",
     "autoFollow": true,
