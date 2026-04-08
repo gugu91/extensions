@@ -22,6 +22,7 @@ export interface ThreadInfo {
   source: string;
   channel: string;
   ownerAgent: string | null;
+  ownerBinding?: "explicit" | null;
   createdAt: string;
   updatedAt: string;
 }

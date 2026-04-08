@@ -419,6 +419,36 @@ describe("MessageRouter — route", () => {
 
     expect(decision).toEqual({ action: "deliver", agentId: "hippo" });
     expect(db.threads.get("t-100")?.ownerAgent).toBe("hippo");
+    expect(db.threads.get("t-100")?.ownerBinding).toBe("explicit");
+  });
+
+  it("keeps an explicitly retargeted thread on the new owner for later generic follow-ups", () => {
+    const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
+    const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
+    db.agents = [hippo, cobra];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "cobra" }));
+
+    const retarget = router.route(
+      makeMessage({ threadId: "t-100", text: "Pixel Lime Hippo please take over this thread" }),
+    );
+    expect(retarget).toEqual({ action: "deliver", agentId: "hippo" });
+
+    const genericFollowUp = router.route(
+      makeMessage({
+        threadId: "t-100",
+        text: "also check for hardcoded routes pls",
+        metadata: {
+          threadOwnerAgentOwner: "owner:stable-cobra",
+          threadOwnerAgentName: "Aurora Pearl Cobra",
+        },
+      }),
+    );
+
+    expect(genericFollowUp).toEqual({ action: "deliver", agentId: "hippo" });
+    expect(db.threads.get("t-100")).toMatchObject({
+      ownerAgent: "hippo",
+      ownerBinding: "explicit",
+    });
   });
 
   it("falls back to unrouted when thread owner is gone", () => {

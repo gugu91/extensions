@@ -173,6 +173,32 @@ function resolveAgentFromThreadOwnerHint(
   return findBestAgentMention(hintedName, buildAgentMentionCandidates(agents, false));
 }
 
+function resolveRoutableThreadOwner(
+  db: BrokerDBInterface,
+  threadOwnerAgentId: string | null,
+  now = new Date().toISOString(),
+): AgentInfo | null {
+  if (!threadOwnerAgentId) return null;
+
+  const owner = db.getAgentById(threadOwnerAgentId);
+  if (owner && isRoutableOwner(owner, now)) {
+    return owner;
+  }
+
+  if (!owner) {
+    const reconnectedOwner = db.getAgentByStableId(threadOwnerAgentId);
+    if (
+      reconnectedOwner &&
+      reconnectedOwner.id !== threadOwnerAgentId &&
+      isRoutableOwner(reconnectedOwner, now)
+    ) {
+      return reconnectedOwner;
+    }
+  }
+
+  return null;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -217,6 +243,7 @@ export class MessageRouter {
         if (explicitDirective.kind === "retarget") {
           this.db.updateThread(msg.threadId, {
             ownerAgent: explicitDirective.agent.id,
+            ownerBinding: "explicit",
             channel: msg.channel,
             source: msg.source,
           });
@@ -226,6 +253,25 @@ export class MessageRouter {
     }
 
     if (thread) {
+      if (thread.ownerBinding === "explicit") {
+        const explicitOwner = resolveRoutableThreadOwner(this.db, thread.ownerAgent);
+        if (explicitOwner) {
+          if (thread.ownerAgent !== explicitOwner.id) {
+            this.db.updateThread(msg.threadId, { ownerAgent: explicitOwner.id });
+          }
+          return { action: "deliver", agentId: explicitOwner.id };
+        }
+
+        if (thread.ownerAgent !== null) {
+          this.db.updateThread(msg.threadId, { ownerAgent: null });
+        }
+
+        // Explicit takeovers stay authoritative for the thread. If that owner is
+        // unavailable later, require another explicit retarget instead of snapping
+        // back to a stale historical Slack owner hint.
+        return { action: "unrouted" };
+      }
+
       const hintedOwner = resolveAgentFromThreadOwnerHint(msg.metadata, agents);
       if (hintedOwner && isRoutableOwner(hintedOwner)) {
         if (thread.ownerAgent !== hintedOwner.id) {
@@ -235,21 +281,11 @@ export class MessageRouter {
       }
 
       if (thread.ownerAgent) {
-        const owner = this.db.getAgentById(thread.ownerAgent);
-
-        // stableId fallback: look up the former owner (possibly disconnected)
-        // to recover its stableId, then find a currently connected agent that
-        // registered with the same stableId. This covers the edge case where
-        // the DB was partially cleaned and the reconnected agent got a new UUID.
-        if (!owner) {
-          const formerOwner = this.db.getAgentByStableId(thread.ownerAgent);
-          if (formerOwner && formerOwner.id !== thread.ownerAgent && isRoutableOwner(formerOwner)) {
-            this.db.updateThread(msg.threadId, { ownerAgent: formerOwner.id });
-            return { action: "deliver", agentId: formerOwner.id };
+        const owner = resolveRoutableThreadOwner(this.db, thread.ownerAgent);
+        if (owner) {
+          if (thread.ownerAgent !== owner.id) {
+            this.db.updateThread(msg.threadId, { ownerAgent: owner.id });
           }
-        }
-
-        if (owner && isRoutableOwner(owner)) {
           return { action: "deliver", agentId: owner.id };
         }
 
@@ -268,10 +304,8 @@ export class MessageRouter {
         }
 
         const claimedThread = this.db.getThread(msg.threadId);
-        const claimedOwner = claimedThread?.ownerAgent
-          ? this.db.getAgentById(claimedThread.ownerAgent)
-          : null;
-        if (claimedOwner && isRoutableOwner(claimedOwner)) {
+        const claimedOwner = resolveRoutableThreadOwner(this.db, claimedThread?.ownerAgent ?? null);
+        if (claimedOwner) {
           return { action: "deliver", agentId: claimedOwner.id };
         }
       }
@@ -296,10 +330,8 @@ export class MessageRouter {
       }
 
       const claimedThread = this.db.getThread(msg.threadId);
-      const claimedOwner = claimedThread?.ownerAgent
-        ? this.db.getAgentById(claimedThread.ownerAgent)
-        : null;
-      if (claimedOwner && isRoutableOwner(claimedOwner)) {
+      const claimedOwner = resolveRoutableThreadOwner(this.db, claimedThread?.ownerAgent ?? null);
+      if (claimedOwner) {
         return { action: "deliver", agentId: claimedOwner.id };
       }
     }
