@@ -17,6 +17,7 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
   repairedThreadClaims = 0;
   repairedAgentIds: string[] = [];
   requeuedAgents: string[] = [];
+  targetedBacklogRepair = { repairedAssignedCount: 0, droppedCount: 0 };
   methodCalls: string[] = [];
 
   pruneStaleAgents(_staleAfterMs: number): string[] {
@@ -40,6 +41,11 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
   requeueUndeliveredMessages(agentId: string): number {
     this.requeuedAgents.push(agentId);
     return 0;
+  }
+
+  repairTargetedBacklog(): { repairedAssignedCount: number; droppedCount: number } {
+    this.methodCalls.push("backlog");
+    return { ...this.targetedBacklogRepair };
   }
 
   getPendingBacklog(limit = 50): BacklogEntry[] {
@@ -278,7 +284,7 @@ describe("runBrokerMaintenancePass", () => {
       now: Date.parse("2026-04-01T00:00:10.000Z"),
     });
 
-    expect(db.methodCalls.slice(0, 3)).toEqual(["prune", "purge", "repair"]);
+    expect(db.methodCalls.slice(0, 4)).toEqual(["prune", "purge", "repair", "backlog"]);
   });
 
   it("surfaces stale-agent and orphaned-thread repair activity", () => {
@@ -293,6 +299,18 @@ describe("runBrokerMaintenancePass", () => {
 
     expect(result.anomalies).toContain("reaped 1 stale agent");
     expect(result.anomalies).toContain("released 2 orphaned thread claims");
+  });
+
+  it("surfaces targeted backlog repair activity", () => {
+    db.targetedBacklogRepair = { repairedAssignedCount: 1, droppedCount: 2 };
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.anomalies).toContain("repaired 1 orphaned targeted backlog assignment");
+    expect(result.anomalies).toContain("dropped 2 irrecoverable targeted backlog rows");
   });
 
   it("reports overloaded workers", () => {

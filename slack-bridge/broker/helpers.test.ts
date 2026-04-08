@@ -22,6 +22,31 @@ function cleanup(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+function getBacklogRows(db: BrokerDB): Array<{
+  id: number;
+  thread_id: string;
+  status: string;
+  preferred_agent_id: string | null;
+  assigned_agent_id: string | null;
+  reason: string;
+}> {
+  const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+  return sqlite
+    .prepare(
+      `SELECT id, thread_id, status, preferred_agent_id, assigned_agent_id, reason
+       FROM unrouted_backlog
+       ORDER BY id ASC`,
+    )
+    .all() as Array<{
+    id: number;
+    thread_id: string;
+    status: string;
+    preferred_agent_id: string | null;
+    assigned_agent_id: string | null;
+    reason: string;
+  }>;
+}
+
 /**
  * JSON-RPC client over TCP for testing.
  */
@@ -1196,6 +1221,136 @@ describe("BrokerDB", () => {
     expect(db.getInbox("gone")).toHaveLength(0);
     expect(db.getPendingBacklog().map((entry) => entry.threadId)).toContain("t-gone-maint");
     expect(db.getThread("t-gone-maint")?.ownerAgent).toBeNull();
+  });
+
+  it("maintenance drops irrecoverable targeted a2a backlog rows across one stale thread", () => {
+    db.registerAgent("sender", "Sender", "📤", 1);
+    db.registerAgent("target", "Target", "📥", 2);
+    db.registerAgent("idle-1", "Idle One", "🪨", 3);
+    db.registerAgent("idle-2", "Idle Two", "🪨", 4);
+    db.createThread("a2a:sender:target", "agent", "", "sender");
+
+    for (const body of ["first follow-up", "second follow-up", "third follow-up"]) {
+      db.insertMessage("a2a:sender:target", "agent", "inbound", "sender", body, ["target"], {
+        senderAgent: "Sender",
+        a2a: true,
+      });
+    }
+
+    db.unregisterAgent("target");
+    expect(db.getPendingBacklog()).toHaveLength(3);
+    expect(db.purgeDisconnectedAgents(0)).toContain("target");
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(3);
+    expect(db.getInbox("idle-1")).toHaveLength(0);
+    expect(db.getInbox("idle-2")).toHaveLength(0);
+    expect(getBacklogRows(db).map((row) => row.status)).toEqual(["dropped", "dropped", "dropped"]);
+    expect(getBacklogRows(db).map((row) => row.reason)).toEqual([
+      "preferred_agent_missing",
+      "preferred_agent_missing",
+      "preferred_agent_missing",
+    ]);
+  });
+
+  it("maintenance repairs orphaned targeted backlog assignments while the intended recipient is still recoverable", () => {
+    db.registerAgent("sender", "Sender", "📤", 1);
+    db.registerAgent("target", "Target", "📥", 2);
+    db.createThread("a2a:sender:target", "agent", "", "sender");
+    db.insertMessage(
+      "a2a:sender:target",
+      "agent",
+      "inbound",
+      "sender",
+      "hold for target",
+      ["target"],
+      {
+        senderAgent: "Sender",
+        a2a: true,
+      },
+    );
+
+    expect(db.requeueUndeliveredMessages("target")).toBe(1);
+    const [backlog] = db.getPendingBacklog();
+    expect(db.assignBacklogEntry(backlog.id, "target")?.status).toBe("assigned");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare("DELETE FROM inbox WHERE message_id = ? AND agent_id = ?")
+      .run(backlog.messageId, "target");
+    db.disconnectAgent("target", 60_000);
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.anomalies).toContain("repaired 1 orphaned targeted backlog assignment");
+    expect(db.getBacklogCount("dropped")).toBe(0);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0].id).toBe(backlog.id);
+    expect(getBacklogRows(db)[0]).toMatchObject({
+      id: backlog.id,
+      status: "pending",
+      preferred_agent_id: "target",
+      assigned_agent_id: null,
+      reason: "agent_disconnected",
+    });
+  });
+
+  it("maintenance drops orphaned targeted backlog assignments when the intended recipient is irrecoverably gone", () => {
+    db.registerAgent("sender", "Sender", "📤", 1);
+    db.registerAgent("target", "Target", "📥", 2);
+    db.createThread("a2a:sender:target", "agent", "", "sender");
+    db.insertMessage(
+      "a2a:sender:target",
+      "agent",
+      "inbound",
+      "sender",
+      "stuck forever",
+      ["target"],
+      {
+        senderAgent: "Sender",
+        a2a: true,
+      },
+    );
+
+    expect(db.requeueUndeliveredMessages("target")).toBe(1);
+    const [backlog] = db.getPendingBacklog();
+    expect(db.assignBacklogEntry(backlog.id, "target")?.status).toBe("assigned");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare("DELETE FROM inbox WHERE message_id = ? AND agent_id = ?")
+      .run(backlog.messageId, "target");
+    sqlite.prepare("DELETE FROM agents WHERE id = ?").run("target");
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.anomalies).toContain("dropped 1 irrecoverable targeted backlog row");
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(1);
+    expect(getBacklogRows(db)[0]).toMatchObject({
+      id: backlog.id,
+      status: "dropped",
+      preferred_agent_id: "target",
+      assigned_agent_id: null,
+      reason: "preferred_agent_missing",
+    });
   });
 
   it("createThread and getThread", () => {

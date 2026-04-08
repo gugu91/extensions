@@ -1188,6 +1188,65 @@ export class BrokerDB implements BrokerDBInterface {
     });
   }
 
+  repairTargetedBacklog(): { repairedAssignedCount: number; droppedCount: number } {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    return this.withTransaction(() => {
+      const repairedAssignedCount = Number(
+        db
+          .prepare(
+            `UPDATE unrouted_backlog
+             SET status = 'pending',
+                 assigned_agent_id = NULL,
+                 updated_at = ?
+             WHERE status = 'assigned'
+               AND preferred_agent_id IS NOT NULL
+               AND EXISTS (
+                 SELECT 1 FROM agents a WHERE a.id = unrouted_backlog.preferred_agent_id
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM inbox i
+                 WHERE i.message_id = unrouted_backlog.message_id
+                   AND i.agent_id = unrouted_backlog.assigned_agent_id
+                   AND i.delivered = 0
+               )`,
+          )
+          .run(now).changes ?? 0,
+      );
+
+      const droppedCount = Number(
+        db
+          .prepare(
+            `UPDATE unrouted_backlog
+             SET status = 'dropped',
+                 assigned_agent_id = NULL,
+                 reason = 'preferred_agent_missing',
+                 updated_at = ?
+             WHERE preferred_agent_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM agents a WHERE a.id = unrouted_backlog.preferred_agent_id
+               )
+               AND (
+                 status = 'pending'
+                 OR (
+                   status = 'assigned'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM inbox i
+                     WHERE i.message_id = unrouted_backlog.message_id
+                       AND i.agent_id = unrouted_backlog.assigned_agent_id
+                       AND i.delivered = 0
+                   )
+                 )
+               )`,
+          )
+          .run(now).changes ?? 0,
+      );
+
+      return { repairedAssignedCount, droppedCount };
+    });
+  }
+
   requeueUndeliveredMessages(agentId: string, reason = "agent_disconnected"): number {
     return this.withTransaction(() => this.requeueUndeliveredMessagesInternal(agentId, reason));
   }
