@@ -500,6 +500,20 @@ describe("Pinet control helpers", () => {
     ).toBeNull();
   });
 
+  it("starts the first control command immediately and marks it safe to ack", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: null, queuedCommand: null }, "reload"),
+    ).toMatchObject({
+      currentCommand: "reload",
+      queuedCommand: null,
+      accepted: true,
+      shouldStartNow: true,
+      status: "start",
+      scheduledCommand: "reload",
+      ackDisposition: "immediate",
+    });
+  });
+
   it("queues a retry reload while reload is already running", () => {
     expect(
       queuePinetRemoteControl({ currentCommand: "reload", queuedCommand: null }, "reload"),
@@ -509,6 +523,8 @@ describe("Pinet control helpers", () => {
       accepted: true,
       shouldStartNow: false,
       status: "queued",
+      scheduledCommand: "reload",
+      ackDisposition: "on_start",
     });
   });
 
@@ -521,6 +537,8 @@ describe("Pinet control helpers", () => {
       accepted: true,
       shouldStartNow: false,
       status: "queued",
+      scheduledCommand: "exit",
+      ackDisposition: "on_start",
     });
   });
 
@@ -533,6 +551,22 @@ describe("Pinet control helpers", () => {
       accepted: true,
       shouldStartNow: false,
       status: "covered",
+      scheduledCommand: "exit",
+      ackDisposition: "immediate",
+    });
+  });
+
+  it("marks duplicate queued commands as deferred until the queued command starts", () => {
+    expect(
+      queuePinetRemoteControl({ currentCommand: "reload", queuedCommand: "reload" }, "reload"),
+    ).toMatchObject({
+      currentCommand: "reload",
+      queuedCommand: "reload",
+      accepted: true,
+      shouldStartNow: false,
+      status: "covered",
+      scheduledCommand: "reload",
+      ackDisposition: "on_start",
     });
   });
 

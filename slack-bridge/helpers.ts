@@ -164,6 +164,8 @@ export interface PinetRemoteControlRequestResult extends PinetRemoteControlState
   accepted: boolean;
   shouldStartNow: boolean;
   status: "start" | "queued" | "covered";
+  scheduledCommand: PinetControlCommand;
+  ackDisposition: "immediate" | "on_start";
 }
 
 export function parsePinetControlCommand(value: unknown): PinetControlCommand | null {
@@ -181,6 +183,8 @@ export function queuePinetRemoteControl(
       accepted: true,
       shouldStartNow: true,
       status: "start",
+      scheduledCommand: command,
+      ackDisposition: "immediate",
     };
   }
 
@@ -191,6 +195,8 @@ export function queuePinetRemoteControl(
       accepted: true,
       shouldStartNow: false,
       status: "covered",
+      scheduledCommand: state.currentCommand,
+      ackDisposition: "immediate",
     };
   }
 
@@ -199,12 +205,16 @@ export function queuePinetRemoteControl(
       ? "exit"
       : (state.queuedCommand ?? command);
 
+  const status = queuedCommand === state.queuedCommand ? "covered" : "queued";
+
   return {
     currentCommand: state.currentCommand,
     queuedCommand,
     accepted: true,
     shouldStartNow: false,
-    status: queuedCommand === state.queuedCommand ? "covered" : "queued",
+    status,
+    scheduledCommand: queuedCommand,
+    ackDisposition: "on_start",
   };
 }
 
