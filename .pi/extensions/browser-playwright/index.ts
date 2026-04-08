@@ -11,9 +11,11 @@ import {
   parseIntegerEnv,
   safeRequestPageId,
   sanitizeLabel,
+  STORAGE_STATE_RELATIVE_DIR,
   truncateText,
   type SupportedBrowserEngine,
 } from "./helpers.ts";
+import { loadStoredStorageState, type StorageStateSummary } from "./storage-state.ts";
 import type {
   Browser,
   BrowserContext,
@@ -28,6 +30,7 @@ import type {
 type PlaywrightModule = typeof import("playwright");
 
 type BrowserEngine = SupportedBrowserEngine;
+type BrowserNewContextOptions = Exclude<Parameters<Browser["newContext"]>[0], undefined>;
 
 type WaitUntil = "load" | "domcontentloaded" | "networkidle" | "commit";
 
@@ -83,10 +86,12 @@ type BrowserSession = {
   consoleEntries: ConsoleEntry[];
   blockedRequests: BlockedRequestEntry[];
   networkSummary: NetworkSummary;
+  mountedStorageState: StorageStateSummary | null;
 };
 
 const EXTENSION_DIR = fileURLToPath(new URL(".", import.meta.url));
-const ARTIFACT_ROOT = resolve(EXTENSION_DIR, "../../artifacts/browser-playwright");
+const WORKSPACE_ROOT = resolve(EXTENSION_DIR, "../../..");
+const ARTIFACT_ROOT = resolve(WORKSPACE_ROOT, ".pi/artifacts/browser-playwright");
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 20_000;
@@ -106,6 +111,10 @@ function nowIso(): string {
 function asErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function relativeFromWorkspace(absolutePath: string): string {
+  return relative(WORKSPACE_ROOT, absolutePath);
 }
 
 async function loadPlaywright(browserEngine: BrowserEngine): Promise<PlaywrightModule> {
@@ -531,6 +540,12 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       url: Type.Optional(Type.String({ description: "Optional initial URL to open." })),
       viewport_width: Type.Optional(Type.Number({ description: "Viewport width in pixels." })),
       viewport_height: Type.Optional(Type.Number({ description: "Viewport height in pixels." })),
+      storage_state_name: Type.Optional(
+        Type.String({
+          description:
+            "Optional saved storage state name to import from `.pi/state/browser-playwright/<name>.json`.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) {
@@ -544,6 +559,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       const playwright = await loadPlaywright(browserEngine);
       const browserType = playwright[browserEngine] as BrowserType;
       const headless = params.headless ?? true;
+      const loadedStorageState = params.storage_state_name
+        ? await loadStoredStorageState(params.storage_state_name, { workspaceRoot: WORKSPACE_ROOT })
+        : null;
 
       let browser: Browser | null = null;
       try {
@@ -562,12 +580,18 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       }
 
       try {
-        const context = await browser.newContext({
+        const contextOptions: BrowserNewContextOptions = {
           viewport:
             params.viewport_width && params.viewport_height
               ? { width: params.viewport_width, height: params.viewport_height }
               : { width: 1280, height: 800 },
-        });
+        };
+        if (loadedStorageState) {
+          contextOptions.storageState =
+            loadedStorageState.storageState as BrowserNewContextOptions["storageState"];
+        }
+
+        const context = await browser.newContext(contextOptions);
 
         const session: BrowserSession = {
           id: `browser_${randomUUID()}`,
@@ -587,6 +611,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             blocked_requests: 0,
             failed_requests: 0,
           },
+          mountedStorageState: loadedStorageState?.summary ?? null,
         };
 
         await context.route("**/*", async (route: Route) => {
@@ -647,7 +672,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
                   created_at: session.createdAt,
                   active_page_id: activePage?.id ?? null,
                   pages,
-                  artifact_dir: relative(resolve(EXTENSION_DIR, "../../.."), ARTIFACT_ROOT),
+                  artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
+                  storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
+                  mounted_storage_state: session.mountedStorageState,
                   safety: {
                     allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
                     allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
@@ -665,7 +692,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             created_at: session.createdAt,
             active_page_id: activePage?.id ?? null,
             pages,
-            artifact_dir: relative(resolve(EXTENSION_DIR, "../../.."), ARTIFACT_ROOT),
+            artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
+            storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
+            mounted_storage_state: session.mountedStorageState,
             safety: {
               allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
               allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
@@ -703,6 +732,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         active_page_id: session.activePageId,
         page_count: pages.length,
         pages,
+        mounted_storage_state: session.mountedStorageState,
+        storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
         network_summary: session.networkSummary,
         recent_console: session.consoleEntries,
         blocked_requests: session.blockedRequests,
@@ -1151,7 +1182,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       });
       touchPage(pageRecord);
 
-      const relativePath = relative(resolve(EXTENSION_DIR, "../../.."), absolutePath);
+      const relativePath = relativeFromWorkspace(absolutePath);
       const result = {
         session_id: session.id,
         page_id: pageRecord.id,

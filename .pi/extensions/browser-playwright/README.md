@@ -96,13 +96,44 @@ Recommended practice:
 - `browser_close` can close a tab or the entire session
 - sessions are cleaned up on Pi shutdown
 - idle sessions are also swept automatically after `BROWSER_PLAYWRIGHT_IDLE_TIMEOUT_MS` (default: 15 minutes)
+- saved login state reuse is **explicit opt-in only** via Playwright `storageState` JSON import
 
 Important limitations:
 
-- session state is process-local and in-memory only
-- a Pi reload or process restart drops live browser sessions
-- stored Playwright session mounting/import is not supported in #282
-- importing/exporting saved `storageState`, cookies, or localStorage for login reuse is follow-up work, not current behavior
+- live browser sessions are still process-local and in-memory only
+- a Pi reload or process restart still drops live browser sessions
+- only explicit Playwright `storageState` JSON reuse is supported — not arbitrary browser-profile mounting
+- storage state is never auto-saved on close, reload, or shutdown
+
+## Stored browser state
+
+Saved Playwright login/session state is supported in a deliberately narrow, safety-first way.
+
+How it works:
+
+- place a trusted Playwright `storageState` JSON file under `.pi/state/browser-playwright/`
+- reuse it explicitly by passing `storage_state_name` to `browser_session_start`
+- names are sanitized to `<name>.json`
+- raw cookies / localStorage values are **not** echoed in tool output
+
+Current scope:
+
+- explicit **import/reuse** is supported
+- built-in export/save is intentionally **not** provided in this first safety-focused version
+- browser state is never auto-saved on close, reload, or shutdown
+
+Guardrails:
+
+- no arbitrary absolute host paths
+- no directory traversal inputs
+- no symlink escapes for saved state files or the saved-state root
+- no automatic persistence of auth state
+
+Treat `.pi/state/browser-playwright/` as secret-bearing auth material:
+
+- do not commit it
+- do not share it casually
+- delete saved state files when they are no longer needed
 
 ## Artifacts
 
@@ -193,7 +224,23 @@ Tool: `browser_wait_for`
 
 Tool: `browser_screenshot`
 
-### 3. Trusted local app after explicit opt-in
+### 3. Reuse a trusted saved `storageState` JSON file
+
+Place a trusted Playwright `storageState` JSON file at:
+
+- `.pi/state/browser-playwright/github-login.json`
+
+Then start a new session that reuses that saved state:
+
+```json
+{ "storage_state_name": "github-login" }
+```
+
+Tool: `browser_session_start`
+
+This is explicit opt-in only. The extension does not auto-save state, and tool output does not print raw cookies or localStorage values.
+
+### 4. Trusted local app after explicit opt-in
 
 First opt in:
 
