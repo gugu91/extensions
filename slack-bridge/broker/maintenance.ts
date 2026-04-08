@@ -9,11 +9,17 @@ export interface ThreadRepairResult {
   releasedAgentIds: string[];
 }
 
+export interface TargetedBacklogRepairResult {
+  repairedAssignedCount: number;
+  droppedCount: number;
+}
+
 export interface BrokerMaintenanceDB {
   pruneStaleAgents(staleAfterMs: number): string[];
   purgeDisconnectedAgents(graceMs?: number): string[];
   repairThreadOwnership(): ThreadRepairResult;
   requeueUndeliveredMessages(agentId: string, reason?: string): number;
+  repairTargetedBacklog(): TargetedBacklogRepairResult;
   getPendingBacklog(limit?: number): BacklogEntry[];
   getBacklogCount(status?: BacklogEntry["status"]): number;
   getAgents(): AgentInfo[];
@@ -81,6 +87,7 @@ export function runBrokerMaintenancePass(
     db.requeueUndeliveredMessages(agentId, "agent_disconnected");
   }
   const repairedThreadClaims = repaired.releasedClaimCount;
+  const targetedBacklogRepair = db.repairTargetedBacklog();
   const brokerAgentId = options.brokerAgentId;
 
   const agents = db
@@ -140,6 +147,16 @@ export function runBrokerMaintenancePass(
   if (repairedThreadClaims > 0) {
     anomalies.push(
       `released ${repairedThreadClaims} orphaned thread claim${repairedThreadClaims === 1 ? "" : "s"}`,
+    );
+  }
+  if (targetedBacklogRepair.repairedAssignedCount > 0) {
+    anomalies.push(
+      `repaired ${targetedBacklogRepair.repairedAssignedCount} orphaned targeted backlog assignment${targetedBacklogRepair.repairedAssignedCount === 1 ? "" : "s"}`,
+    );
+  }
+  if (targetedBacklogRepair.droppedCount > 0) {
+    anomalies.push(
+      `dropped ${targetedBacklogRepair.droppedCount} irrecoverable targeted backlog row${targetedBacklogRepair.droppedCount === 1 ? "" : "s"}`,
     );
   }
   if (pendingBacklogCount > 0 && agentLoads.length === 0) {

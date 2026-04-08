@@ -464,6 +464,54 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(inbox).toHaveLength(1);
     expect(inbox[0].message.body).toBe("Hold for receiver only");
     expect(inbox[0].message.threadId).toBe(`a2a:${sender.agentId}:${reg2.agentId}`);
+    await client2.ackMessages([inbox[0].inboxId]);
+
+    result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:30.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(await client2.pollInbox()).toHaveLength(0);
+    expect(await client.pollInbox()).toHaveLength(0);
+
+    client2.disconnect();
+  });
+
+  it("requeued a2a work drops after purge when the intended recipient is irrecoverably gone", async () => {
+    await client.register("sender-agent", "📤", undefined, "host:session:/tmp/sender-rebind");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    const receiverStableId = "host:session:/tmp/receiver-rebind";
+    const reg2 = await client2.register("receiver-agent", "📥", undefined, receiverStableId);
+
+    const messageId = await client.sendAgentMessage("receiver-agent", "Still for the same worker");
+    expect(messageId).toBeGreaterThan(0);
+    await waitFor(() => db.getInbox(reg2.agentId).length === 1);
+
+    await client2.unregister();
+    expect(db.purgeDisconnectedAgents(0)).toContain(reg2.agentId);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+
+    const reg3 = await client2.register("receiver-agent", "📥", undefined, receiverStableId);
+    expect(reg3.agentId).not.toBe(reg2.agentId);
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:20.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(result.anomalies).toContain("dropped 1 irrecoverable targeted backlog row");
+    expect(db.getPendingBacklog()).toHaveLength(0);
+    expect(db.getBacklogCount("dropped")).toBe(1);
+    expect(await client2.pollInbox()).toHaveLength(0);
     expect(await client.pollInbox()).toHaveLength(0);
 
     client2.disconnect();
