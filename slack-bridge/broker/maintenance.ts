@@ -104,10 +104,22 @@ export function runBrokerMaintenancePass(
 
   const nudgedAgentIds = new Set<string>();
   let assignedBacklogCount = 0;
+  let reboundBrokerBacklogCount = 0;
   const resetAssignedBacklogCount = repairedAssignments.resetToPendingCount;
   let droppedBacklogCount = repairedAssignments.droppedCount;
 
   for (const backlog of db.getPendingBacklog(options.backlogLimit ?? 50)) {
+    if (brokerAgentId && backlog.preferredAgentId === brokerAgentId) {
+      const assigned = db.assignBacklogEntry(backlog.id, brokerAgentId);
+      if (!assigned) {
+        continue;
+      }
+
+      assignedBacklogCount += 1;
+      reboundBrokerBacklogCount += 1;
+      continue;
+    }
+
     const preferredAgent = backlog.preferredAgentId
       ? (agents.find((agent) => agent.id === backlog.preferredAgentId) ?? null)
       : null;
@@ -158,6 +170,11 @@ export function runBrokerMaintenancePass(
   if (repairedThreadClaims > 0) {
     anomalies.push(
       `released ${repairedThreadClaims} orphaned thread claim${repairedThreadClaims === 1 ? "" : "s"}`,
+    );
+  }
+  if (reboundBrokerBacklogCount > 0) {
+    anomalies.push(
+      `rebound ${reboundBrokerBacklogCount} broker-targeted backlog item${reboundBrokerBacklogCount === 1 ? "" : "s"} to the live broker`,
     );
   }
   if (resetAssignedBacklogCount > 0) {

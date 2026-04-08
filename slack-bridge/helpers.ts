@@ -164,6 +164,8 @@ export interface PinetRemoteControlRequestResult extends PinetRemoteControlState
   accepted: boolean;
   shouldStartNow: boolean;
   status: "start" | "queued" | "covered";
+  scheduledCommand: PinetControlCommand;
+  ackDisposition: "immediate" | "on_start";
 }
 
 export function parsePinetControlCommand(value: unknown): PinetControlCommand | null {
@@ -181,6 +183,8 @@ export function queuePinetRemoteControl(
       accepted: true,
       shouldStartNow: true,
       status: "start",
+      scheduledCommand: command,
+      ackDisposition: "immediate",
     };
   }
 
@@ -191,6 +195,8 @@ export function queuePinetRemoteControl(
       accepted: true,
       shouldStartNow: false,
       status: "covered",
+      scheduledCommand: state.currentCommand,
+      ackDisposition: "immediate",
     };
   }
 
@@ -199,12 +205,16 @@ export function queuePinetRemoteControl(
       ? "exit"
       : (state.queuedCommand ?? command);
 
+  const status = queuedCommand === state.queuedCommand ? "covered" : "queued";
+
   return {
     currentCommand: state.currentCommand,
     queuedCommand,
     accepted: true,
     shouldStartNow: false,
-    status: queuedCommand === state.queuedCommand ? "covered" : "queued",
+    status,
+    scheduledCommand: queuedCommand,
+    ackDisposition: "on_start",
   };
 }
 
@@ -1512,6 +1522,22 @@ export interface FollowerInboxSyncResult {
   changed: boolean;
 }
 
+export interface BrokerInboxControlEntry {
+  inboxId: number;
+  command: PinetControlCommand;
+}
+
+export interface BrokerInboxSkinEntry {
+  inboxId: number;
+  update: { theme: string; name: string; emoji: string; personality: string };
+}
+
+export interface BrokerInboxSyncResult {
+  controlEntries: BrokerInboxControlEntry[];
+  skinEntries: BrokerInboxSkinEntry[];
+  inboxMessages: InboxMessage[];
+}
+
 export function isDirectMessageChannel(channel: string): boolean {
   return /^D[A-Z0-9]+$/.test(channel);
 }
@@ -1574,6 +1600,57 @@ export function syncFollowerInboxEntries(
     threadUpdates,
     lastDmChannel: nextLastDmChannel,
     changed,
+  };
+}
+
+export function syncBrokerInboxEntries(entries: FollowerInboxEntry[]): BrokerInboxSyncResult {
+  const controlEntries: BrokerInboxControlEntry[] = [];
+  const skinEntries: BrokerInboxSkinEntry[] = [];
+  const inboxMessages: InboxMessage[] = [];
+
+  for (const entry of entries) {
+    const meta = entry.message.metadata ?? {};
+    const threadTs = entry.message.threadId ?? "";
+    const sender = entry.message.sender ?? "";
+    const body = entry.message.body ?? "";
+    const createdAt = entry.message.createdAt ?? "";
+    const inboxId = entry.inboxId;
+
+    const control = extractPinetControlCommand({
+      threadId: threadTs,
+      body,
+      metadata: meta,
+    });
+    if (control && inboxId != null) {
+      controlEntries.push({ inboxId, command: control });
+      continue;
+    }
+
+    const skinUpdate = extractPinetSkinUpdate({
+      threadId: threadTs,
+      body,
+      metadata: meta,
+    });
+    if (skinUpdate && inboxId != null) {
+      skinEntries.push({ inboxId, update: skinUpdate });
+      continue;
+    }
+
+    inboxMessages.push({
+      channel: "",
+      threadTs,
+      userId: sender,
+      text: body,
+      timestamp: createdAt,
+      brokerInboxId: inboxId,
+      metadata: meta,
+    });
+  }
+
+  return {
+    controlEntries,
+    skinEntries,
+    inboxMessages,
   };
 }
 

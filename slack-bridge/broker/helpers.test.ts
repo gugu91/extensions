@@ -1316,6 +1316,40 @@ describe("BrokerDB", () => {
     });
   });
 
+  it("maintenance rebinds broker-targeted backlog to the live broker", () => {
+    db.registerAgent("broker", "Broker", "🦔", 1, { role: "broker" });
+    db.registerAgent("sender", "Sender", "📤", 2);
+    db.createThread("a2a:sender:broker", "agent", "", "sender");
+    db.queueMessage("broker", {
+      source: "agent",
+      threadId: "a2a:sender:broker",
+      channel: "",
+      userId: "sender",
+      text: "recover this broker-targeted report",
+      timestamp: "100.200",
+    });
+
+    expect(db.getInbox("broker")).toHaveLength(1);
+    expect(db.requeueUndeliveredMessages("broker")).toBe(1);
+    expect(db.getPendingBacklog()).toHaveLength(1);
+    expect(db.getPendingBacklog()[0]?.preferredAgentId).toBe("broker");
+
+    const result = runBrokerMaintenancePass(db, {
+      brokerAgentId: "broker",
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    const reboundBacklog = db.getBacklogCount("assigned");
+
+    expect(result.pendingBacklogCount).toBe(0);
+    expect(result.assignedBacklogCount).toBe(1);
+    expect(result.anomalies).toContain("rebound 1 broker-targeted backlog item to the live broker");
+    expect(reboundBacklog).toBe(1);
+    expect(db.getInbox("broker")).toHaveLength(1);
+    expect(db.getInbox("broker")[0]?.message.body).toBe("recover this broker-targeted report");
+  });
+
   it("createThread and getThread", () => {
     const thread = db.createThread("t1", "slack", "#general", "a1");
     expect(thread.threadId).toBe("t1");

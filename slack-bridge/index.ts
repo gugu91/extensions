@@ -55,6 +55,7 @@ import {
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   syncFollowerInboxEntries,
+  syncBrokerInboxEntries,
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
   getFollowerOwnedThreadClaims,
@@ -1653,7 +1654,7 @@ export default function (pi: ExtensionAPI) {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
   }
 
-  function syncBrokerDbInbox(agentId: string, db: BrokerDB): void {
+  function syncBrokerDbInbox(agentId: string, db: BrokerDB, ctx: ExtensionContext): void {
     const pending = db
       .getInbox(agentId)
       .filter((item) => !isBrokerInboxIdTracked(brokerDeliveryState, item.entry.id));
@@ -1661,28 +1662,69 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    queueBrokerInboxIds(
-      brokerDeliveryState,
-      pending.map((item) => item.entry.id),
+    const synced = syncBrokerInboxEntries(
+      pending.map((item) => ({
+        inboxId: item.entry.id,
+        message: {
+          threadId: item.message.threadId,
+          sender:
+            typeof item.message.metadata?.senderAgent === "string"
+              ? item.message.metadata.senderAgent
+              : item.message.sender,
+          body: item.message.body,
+          createdAt: item.message.createdAt,
+          metadata: item.message.metadata,
+        },
+      })),
     );
 
-    for (const item of pending) {
-      const meta = item.message.metadata ?? {};
-      const senderName =
-        typeof meta.senderAgent === "string" ? meta.senderAgent : item.message.sender;
-      inbox.push({
-        channel: "",
-        threadTs: item.message.threadId,
-        userId: senderName,
-        text: item.message.body,
-        timestamp: item.message.createdAt,
-        brokerInboxId: item.entry.id,
-        metadata: meta,
-      });
+    const handledInboxIds = new Set<number>();
+    const commandsToStart: PinetControlCommand[] = [];
+    for (const entry of synced.controlEntries) {
+      try {
+        const queued = requestRemoteControl(entry.command, ctx);
+        if (queued.ackDisposition === "immediate") {
+          handledInboxIds.add(entry.inboxId);
+        } else {
+          deferBrokerControlAck(queued.scheduledCommand, entry.inboxId);
+        }
+        if (queued.shouldStartNow) {
+          commandsToStart.push(entry.command);
+        }
+      } catch (err) {
+        ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
+      }
     }
 
+    for (const entry of synced.skinEntries) {
+      activeSkinTheme = entry.update.theme;
+      applyLocalAgentIdentity(entry.update.name, entry.update.emoji, entry.update.personality);
+      handledInboxIds.add(entry.inboxId);
+    }
+
+    if (handledInboxIds.size > 0) {
+      db.markDelivered([...handledInboxIds], agentId);
+    }
+
+    for (const command of commandsToStart) {
+      runRemoteControl(command, ctx);
+    }
+
+    if (synced.inboxMessages.length === 0) {
+      return;
+    }
+
+    queueBrokerInboxIds(
+      brokerDeliveryState,
+      synced.inboxMessages.flatMap((message) =>
+        message.brokerInboxId != null ? [message.brokerInboxId] : [],
+      ),
+    );
+
+    inbox.push(...synced.inboxMessages);
+
     updateBadge();
-    maybeDrainInboxIfIdle(extCtx ?? undefined);
+    maybeDrainInboxIfIdle(ctx);
   }
 
   function startBrokerHeartbeat(): void {
@@ -1716,6 +1758,7 @@ export default function (pi: ExtensionAPI) {
         staleAfterMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
         busyAssignmentAgeMs: DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
       });
+      syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
       lastBrokerMaintenance = result;
 
       const signature = result.anomalies.join("|");
@@ -1810,7 +1853,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const deliveries = (activeBroker.db as BrokerDB).deliverDueScheduledWakeups();
       if (deliveries.length > 0 && activeSelfId) {
-        syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB);
+        syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
       }
     } catch (err) {
       ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(err)}`, "error");
@@ -2346,6 +2389,47 @@ export default function (pi: ExtensionAPI) {
     currentCommand: null,
     queuedCommand: null,
   };
+  const pendingBrokerControlInboxIds: Record<PinetControlCommand, Set<number>> = {
+    reload: new Set<number>(),
+    exit: new Set<number>(),
+  };
+  const pendingFollowerControlInboxIds: Record<PinetControlCommand, Set<number>> = {
+    reload: new Set<number>(),
+    exit: new Set<number>(),
+  };
+
+  function resetPendingRemoteControlAcks(): void {
+    pendingBrokerControlInboxIds.reload.clear();
+    pendingBrokerControlInboxIds.exit.clear();
+    pendingFollowerControlInboxIds.reload.clear();
+    pendingFollowerControlInboxIds.exit.clear();
+  }
+
+  function deferBrokerControlAck(command: PinetControlCommand, inboxId: number): void {
+    pendingBrokerControlInboxIds[command].add(inboxId);
+    queueBrokerInboxIds(brokerDeliveryState, [inboxId]);
+  }
+
+  function deferFollowerControlAck(command: PinetControlCommand, inboxId: number): void {
+    pendingFollowerControlInboxIds[command].add(inboxId);
+    queueFollowerInboxIds(followerDeliveryState, [inboxId]);
+  }
+
+  function flushDeferredRemoteControlAcks(command: PinetControlCommand): void {
+    const brokerIds = [...pendingBrokerControlInboxIds[command]];
+    if (brokerIds.length > 0 && activeBroker && activeSelfId) {
+      activeBroker.db.markDelivered(brokerIds, activeSelfId);
+      markBrokerInboxIdsHandled(brokerDeliveryState, brokerIds);
+      pendingBrokerControlInboxIds[command].clear();
+    }
+
+    const followerIds = [...pendingFollowerControlInboxIds[command]];
+    if (followerIds.length > 0) {
+      markFollowerInboxIdsDelivered(followerDeliveryState, followerIds);
+      pendingFollowerControlInboxIds[command].clear();
+      void flushDeliveredFollowerAcks();
+    }
+  }
 
   async function stopPinetRuntime(
     ctx: ExtensionContext,
@@ -2444,6 +2528,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function runRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): void {
+    flushDeferredRemoteControlAcks(command);
+
     const controlCtx = ctx as PinetRuntimeControlContext;
     if (!(ctx.isIdle?.() ?? true)) {
       try {
@@ -2484,25 +2570,26 @@ export default function (pi: ExtensionAPI) {
     })();
   }
 
-  function requestRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): boolean {
+  function requestRemoteControl(
+    command: PinetControlCommand,
+    ctx: ExtensionContext,
+  ): ReturnType<typeof queuePinetRemoteControl> {
     const queued = queuePinetRemoteControl(remoteControlState, command);
     remoteControlState = {
       currentCommand: queued.currentCommand,
       queuedCommand: queued.queuedCommand,
     };
 
-    if (queued.shouldStartNow) {
-      runRemoteControl(command, ctx);
-      return true;
-    }
-
     if (queued.status === "queued") {
       ctx.ui.notify(`Pinet remote control queued: /${queued.queuedCommand ?? command}`, "warning");
-    } else {
-      const scheduled = queued.queuedCommand ?? queued.currentCommand ?? command;
-      ctx.ui.notify(`Pinet remote control already scheduled — keeping /${scheduled}`, "warning");
+    } else if (!queued.shouldStartNow) {
+      ctx.ui.notify(
+        `Pinet remote control already scheduled — keeping /${queued.scheduledCommand}`,
+        "warning",
+      );
     }
-    return queued.accepted;
+
+    return queued;
   }
 
   pi.registerTool({
@@ -2911,32 +2998,14 @@ export default function (pi: ExtensionAPI) {
       activeBroker = broker;
       activeRouter = router;
       activeSelfId = selfId;
-      syncBrokerDbInbox(selfId, broker.db);
+      syncBrokerDbInbox(selfId, broker.db, ctx);
 
       // When a worker sends a pinet_message targeting the broker, the socket server writes to the
       // DB inbox but the broker only reads its in-memory inbox. Sync the durable inbox into memory
       // without acknowledging the row until the broker has actually consumed it.
-      broker.server.onAgentMessage((targetAgentId, brokerMsg, meta) => {
+      broker.server.onAgentMessage((targetAgentId) => {
         if (targetAgentId !== selfId) return;
-
-        const control = extractPinetControlCommand({
-          threadId: brokerMsg.threadId,
-          body: brokerMsg.body,
-          metadata: meta,
-        });
-        if (control) {
-          try {
-            const accepted = requestRemoteControl(control, ctx);
-            if (accepted) {
-              broker.db.markDeliveredByMessageId(brokerMsg.id, selfId);
-            }
-          } catch (err) {
-            ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
-          }
-          return;
-        }
-
-        syncBrokerDbInbox(selfId, broker.db);
+        syncBrokerDbInbox(selfId, broker.db, ctx);
       });
       broker.server.onAgentStatusChange((changedAgentId, status) => {
         if (status === "idle") {
@@ -3149,14 +3218,24 @@ export default function (pi: ExtensionAPI) {
             }
 
             if (controlEntries.length > 0) {
-              const acceptedIds: number[] = [];
+              const immediateAckIds: number[] = [];
+              const commandsToStart: PinetControlCommand[] = [];
               for (const entry of controlEntries) {
-                if (requestRemoteControl(entry.command, ctx)) {
-                  acceptedIds.push(entry.inboxId);
+                const queued = requestRemoteControl(entry.command, ctx);
+                if (queued.ackDisposition === "immediate") {
+                  immediateAckIds.push(entry.inboxId);
+                } else {
+                  deferFollowerControlAck(queued.scheduledCommand, entry.inboxId);
+                }
+                if (queued.shouldStartNow) {
+                  commandsToStart.push(entry.command);
                 }
               }
-              if (acceptedIds.length > 0) {
-                await client.ackMessages(acceptedIds);
+              if (immediateAckIds.length > 0) {
+                await client.ackMessages(immediateAckIds);
+              }
+              for (const command of commandsToStart) {
+                runRemoteControl(command, ctx);
               }
               return;
             }
@@ -3347,6 +3426,7 @@ export default function (pi: ExtensionAPI) {
     shuttingDown = false;
     slackRequests = createAbortableOperationTracker();
     remoteControlState = { currentCommand: null, queuedCommand: null };
+    resetPendingRemoteControlAcks();
     suppressAutoDrainUntil = 0;
     terminalInputUnsubscribe?.();
     terminalInputUnsubscribe = null;
@@ -3629,6 +3709,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     remoteControlState = { currentCommand: null, queuedCommand: null };
+    resetPendingRemoteControlAcks();
     terminalInputUnsubscribe?.();
     terminalInputUnsubscribe = null;
     suppressAutoDrainUntil = 0;
