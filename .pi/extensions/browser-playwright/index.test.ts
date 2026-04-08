@@ -208,3 +208,33 @@ test("browser_session_start loads an explicit storageState file and browser_stor
     assert.deepEqual(browser.context?.storageStateCalls, [{ path: path.join(workspaceRoot, exportPath) }]);
   });
 });
+
+test("browser_storage_state_export defaults to the workspace-local storage-state artifact directory", async () => {
+  await withRegisteredExtension(async ({ workspaceRoot, tools, browser }) => {
+    const startTool = tools.get("browser_session_start");
+    const exportTool = tools.get("browser_storage_state_export");
+
+    assert.ok(startTool);
+    assert.ok(exportTool);
+
+    const startResult = await startTool.execute("tool-start", { headless: true });
+    const sessionId = startResult.details.session_id;
+    assert.equal(typeof sessionId, "string");
+
+    const exportResult = await exportTool.execute("tool-export", {
+      session_id: sessionId,
+    });
+
+    const relativeExportPath = String(exportResult.details.storage_state_path);
+    assert.match(
+      relativeExportPath,
+      /^\.pi\/artifacts\/browser-playwright\/storage-state\/.*-browser_[a-f0-9-]+-storage-state\.json$/,
+    );
+    assert.doesNotMatch(exportResult.content[0]?.text ?? "", /cookies|origins/);
+
+    const absoluteExportPath = path.join(workspaceRoot, relativeExportPath);
+    const exportedRaw = await fs.readFile(absoluteExportPath, "utf8");
+    assert.deepEqual(JSON.parse(exportedRaw), { cookies: [], origins: [] });
+    assert.deepEqual(browser.context?.storageStateCalls, [{ path: absoluteExportPath }]);
+  });
+});
