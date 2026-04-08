@@ -114,3 +114,7 @@ By default the extension resolves `psql` in this order:
 If your installation lives elsewhere, set `neon-psql.psqlBin` in settings.
 
 See `config.example.json`.
+
+## License
+
+MIT. See the repo root `LICENSE` file.

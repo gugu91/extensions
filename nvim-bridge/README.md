@@ -143,3 +143,7 @@ pnpm check
 
 - Lua files are intentionally ignored by Prettier and formatted with StyLua.
 - A local ambient type declaration is provided in `types/pi-coding-agent.d.ts` so `tsc` can run without requiring external SDK types.
+
+## License
+
+MIT. See the repo root `LICENSE` file.

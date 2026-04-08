@@ -293,3 +293,7 @@ Requires `appId` and `appConfigToken` in settings (or `SLACK_APP_ID` / `SLACK_AP
 - **Hybrid inbox** — queue when busy, auto-drain when idle
 - **Reactions** — 👀 as a lightweight "thinking" indicator
 - **Thread persistence** — thread state survives `/reload`
+
+## License
+
+MIT. See the repo root `LICENSE` file.
