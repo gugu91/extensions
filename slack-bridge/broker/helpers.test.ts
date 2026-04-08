@@ -1483,6 +1483,28 @@ describe("BrokerDB", () => {
     expect(db.getInbox("a2")).toHaveLength(1);
   });
 
+  it("markDelivered clears assigned targeted backlog after the intended recipient acks it", () => {
+    db.registerAgent("sender", "Sender", "📤", 1);
+    db.registerAgent("target", "Target", "📥", 2);
+    db.createThread("a2a:sender:target", "agent", "", "sender");
+    db.insertMessage("a2a:sender:target", "agent", "inbound", "sender", "complete me", ["target"], {
+      senderAgent: "Sender",
+      a2a: true,
+    });
+
+    expect(db.requeueUndeliveredMessages("target")).toBe(1);
+    const [backlog] = db.getPendingBacklog();
+    expect(db.assignBacklogEntry(backlog.id, "target")?.status).toBe("assigned");
+
+    const inbox = db.getInbox("target");
+    expect(inbox).toHaveLength(1);
+
+    db.markDelivered([inbox[0].entry.id], "target");
+
+    expect(db.getInbox("target")).toHaveLength(0);
+    expect(getBacklogRows(db)).toEqual([]);
+  });
+
   it("insertMessage with metadata round-trips JSON", () => {
     db.registerAgent("a1", "Agent", "🔵", 1);
     db.createThread("t1", "slack", "#general", "a1");
