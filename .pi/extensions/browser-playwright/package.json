@@ -7,7 +7,7 @@
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types --test helpers.test.ts"
+    "test": "node --experimental-strip-types --test *.test.ts"
   },
   "pi": {
     "extensions": [

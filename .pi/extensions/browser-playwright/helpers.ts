@@ -1,3 +1,6 @@
+import { lstat, readFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+
 export type UrlDecision =
   | { allowed: true }
   | {
@@ -13,7 +16,13 @@ export type SecurityOptions = {
 
 export type SupportedBrowserEngine = "chromium" | "firefox" | "webkit";
 
+export type ResolvedWorkspacePath = {
+  absolutePath: string;
+  relativePath: string;
+};
+
 export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
+export const STORAGE_STATE_RELATIVE_DIR = ".pi/artifacts/browser-playwright/storage-state";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
 
@@ -87,6 +96,185 @@ export function safeRequestPageId<PageLike>(
   } catch {
     return null;
   }
+}
+
+function looksLikeWindowsAbsolutePath(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value);
+}
+
+function normalizeWorkspaceRelativePath(input: string, fieldName: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${fieldName} must not be empty.`);
+  }
+  if (isAbsolute(trimmed) || looksLikeWindowsAbsolutePath(trimmed)) {
+    throw new Error(`${fieldName} must be workspace-relative. Absolute paths are not allowed.`);
+  }
+
+  const normalized = trimmed.replace(/\\/g, "/");
+  if (normalized.split("/").some((segment) => segment === "..")) {
+    throw new Error(`${fieldName} must not contain traversal segments.`);
+  }
+
+  return trimmed;
+}
+
+function assertJsonFilePath(input: string, fieldName: string): void {
+  if (!input.toLowerCase().endsWith(".json")) {
+    throw new Error(`${fieldName} must point to a .json file.`);
+  }
+}
+
+function isWithinWorkspace(workspaceRoot: string, targetPath: string): boolean {
+  const rel = relative(workspaceRoot, targetPath);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+function resolveWorkspacePath(
+  workspaceRoot: string,
+  candidate: string,
+  fieldName: string,
+): ResolvedWorkspacePath {
+  const resolvedWorkspaceRoot = resolve(workspaceRoot);
+  const absolutePath = resolve(resolvedWorkspaceRoot, candidate);
+  if (!isWithinWorkspace(resolvedWorkspaceRoot, absolutePath)) {
+    throw new Error(`${fieldName} must stay within the current workspace.`);
+  }
+
+  return {
+    absolutePath,
+    relativePath: relative(resolvedWorkspaceRoot, absolutePath),
+  };
+}
+
+async function assertNoSymlinkSegments(
+  workspaceRoot: string,
+  targetPath: string,
+  fieldName: string,
+): Promise<void> {
+  const resolvedWorkspaceRoot = resolve(workspaceRoot);
+  const resolvedTargetPath = resolve(targetPath);
+  const rel = relative(resolvedWorkspaceRoot, resolvedTargetPath);
+  if (rel === "") {
+    return;
+  }
+
+  let current = resolvedWorkspaceRoot;
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    current = resolve(current, segment);
+    try {
+      const stats = await lstat(current);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`${fieldName} cannot use symlinks.`);
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
+  }
+}
+
+async function assertValidStorageStateJson(
+  absolutePath: string,
+  fieldName: string,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readFile(absolutePath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new Error(`${fieldName} not found: ${absolutePath}`);
+    }
+    throw error;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${fieldName} must contain valid JSON object data.`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must contain valid JSON object data.`);
+  }
+}
+
+export function buildDefaultStorageStatePath(sessionId: string, now = new Date()): string {
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  return `${STORAGE_STATE_RELATIVE_DIR}/${timestamp}-${sanitizeLabel(`${sessionId}-storage-state`)}.json`;
+}
+
+export async function resolveStorageStateImportPath(
+  workspaceRoot: string,
+  storageStatePath: string,
+): Promise<ResolvedWorkspacePath> {
+  const fieldName = "storage_state_path";
+  const candidate = normalizeWorkspaceRelativePath(storageStatePath, fieldName);
+  assertJsonFilePath(candidate, fieldName);
+
+  const resolved = resolveWorkspacePath(workspaceRoot, candidate, fieldName);
+  await assertNoSymlinkSegments(workspaceRoot, resolved.absolutePath, fieldName);
+
+  let stats;
+  try {
+    stats = await lstat(resolved.absolutePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new Error(`${fieldName} not found: ${candidate}`);
+    }
+    throw error;
+  }
+
+  if (stats.isSymbolicLink()) {
+    throw new Error(`${fieldName} cannot use symlinks.`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`${fieldName} must point to a regular file.`);
+  }
+
+  await assertValidStorageStateJson(resolved.absolutePath, fieldName);
+  return resolved;
+}
+
+export async function resolveStorageStateExportPath(
+  workspaceRoot: string,
+  storageStatePath: string | undefined,
+  sessionId: string,
+  now = new Date(),
+): Promise<ResolvedWorkspacePath> {
+  const fieldName = "storage_state_path";
+  const candidate =
+    storageStatePath && storageStatePath.trim().length > 0
+      ? normalizeWorkspaceRelativePath(storageStatePath, fieldName)
+      : buildDefaultStorageStatePath(sessionId, now);
+
+  assertJsonFilePath(candidate, fieldName);
+
+  const resolved = resolveWorkspacePath(workspaceRoot, candidate, fieldName);
+  await assertNoSymlinkSegments(workspaceRoot, dirname(resolved.absolutePath), fieldName);
+
+  try {
+    const stats = await lstat(resolved.absolutePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`${fieldName} cannot use symlinks.`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`${fieldName} must point to a regular file.`);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  return resolved;
 }
 
 function normalizeUrl(input: string): URL {

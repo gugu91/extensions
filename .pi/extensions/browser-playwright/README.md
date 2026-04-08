@@ -99,10 +99,25 @@ Recommended practice:
 
 Important limitations:
 
-- session state is process-local and in-memory only
-- a Pi reload or process restart drops live browser sessions
-- stored Playwright session mounting/import is not supported in #282
-- importing/exporting saved `storageState`, cookies, or localStorage for login reuse is follow-up work, not current behavior
+- live browser sessions are still process-local and in-memory only
+- a Pi reload or process restart still drops live browser sessions
+- authenticated state is persisted only when you explicitly import or export a Playwright `storageState` JSON file
+- the extension does **not** auto-save cookies, localStorage, or login state on close, reload, or shutdown
+
+## Explicit `storageState` reuse
+
+Supported now:
+
+- start a new session with an explicit workspace-relative `storage_state_path`
+- export the current session's Playwright `storageState` JSON for later reuse
+
+Security model:
+
+- persistence is explicit opt-in only
+- paths must stay inside the current workspace
+- absolute paths, traversal (`..`), and symlink escapes are rejected
+- tool output returns metadata only, never raw cookies/auth state
+- the existing localhost/private-network navigation restrictions are unchanged
 
 ## Artifacts
 
@@ -113,6 +128,7 @@ Screenshots are written under:
 Current screenshot layout:
 
 - `.pi/artifacts/browser-playwright/<session_id>/<timestamp>-<label>.png`
+- `.pi/artifacts/browser-playwright/storage-state/<timestamp>-<session_id>-storage-state.json` for default explicit `storageState` exports
 
 `browser_screenshot` returns structured metadata including:
 
@@ -136,8 +152,9 @@ Required tools provided:
 8. `browser_press`
 9. `browser_wait_for`
 10. `browser_screenshot`
-11. `browser_tabs`
-12. `browser_close`
+11. `browser_storage_state_export`
+12. `browser_tabs`
+13. `browser_close`
 
 ## Usage flows
 
@@ -211,6 +228,33 @@ Tool: `browser_navigate`
 
 Without the env opt-in, that navigation is blocked.
 
+### 4. Explicitly export login state and reuse it later
+
+Export after an authenticated flow:
+
+```json
+{ "session_id": "<session_id>", "storage_state_path": ".pi/state/github-login.json" }
+```
+
+Tool: `browser_storage_state_export`
+
+Start a later session with the saved state:
+
+```json
+{
+  "browser": "chromium",
+  "storage_state_path": ".pi/state/github-login.json"
+}
+```
+
+Tool: `browser_session_start`
+
+Notes:
+
+- `storage_state_path` must be a workspace-relative `.json` file
+- if you omit `storage_state_path` on export, the extension writes under `.pi/artifacts/browser-playwright/storage-state/`
+- the extension never auto-saves login state for you
+
 ## Notes for agents
 
 - start with `browser_session_start`
@@ -219,3 +263,5 @@ Without the env opt-in, that navigation is blocked.
 - use `browser_snapshot` before interacting when you need a quick page map
 - use `browser_extract` for selector-specific text/attribute reads
 - close sessions you no longer need with `browser_close`
+- use `browser_storage_state_export` only for explicit user-approved persistence workflows
+- never assume login state is auto-saved; it must be exported explicitly and re-imported explicitly

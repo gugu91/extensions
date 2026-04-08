@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   assessUrl,
+  buildDefaultStorageStatePath,
   buildInstallInstructions,
+  resolveStorageStateExportPath,
+  resolveStorageStateImportPath,
   safeRequestPageId,
   sanitizeLabel,
+  STORAGE_STATE_RELATIVE_DIR,
   truncateText,
   type SecurityOptions,
 } from "./helpers.ts";
@@ -13,6 +20,15 @@ const lockedDown: SecurityOptions = {
   allowLocalhost: false,
   allowPrivateNetwork: false,
 };
+
+async function withTempWorkspace<T>(run: (workspaceRoot: string) => Promise<T>): Promise<T> {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "browser-playwright-helpers-"));
+  try {
+    return await run(workspaceRoot);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+}
 
 test("assessUrl allows public https URLs", () => {
   assert.deepEqual(assessUrl("https://example.com", lockedDown), { allowed: true });
@@ -117,4 +133,127 @@ test("truncateText trims oversized content and marks truncation", () => {
   const result = truncateText(input, 20, 3);
   assert.match(result, /truncated/);
   assert.doesNotMatch(result, /line-9/);
+});
+
+test("resolveStorageStateImportPath accepts a workspace-local JSON file", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const relativePath = ".pi/state/auth.json";
+    const absolutePath = path.join(workspaceRoot, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, JSON.stringify({ cookies: [], origins: [] }), "utf8");
+
+    const resolved = await resolveStorageStateImportPath(workspaceRoot, relativePath);
+    assert.equal(resolved.relativePath, relativePath);
+    assert.equal(resolved.absolutePath, absolutePath);
+  });
+});
+
+test("resolveStorageStateImportPath rejects absolute paths and traversal", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    await assert.rejects(
+      resolveStorageStateImportPath(workspaceRoot, path.join(workspaceRoot, "auth.json")),
+      /workspace-relative/,
+    );
+    await assert.rejects(
+      resolveStorageStateImportPath(workspaceRoot, "../auth.json"),
+      /traversal segments/,
+    );
+  });
+});
+
+test("resolveStorageStateImportPath rejects invalid JSON content", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const relativePath = ".pi/state/auth.json";
+    const absolutePath = path.join(workspaceRoot, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, "[]", "utf8");
+
+    await assert.rejects(
+      resolveStorageStateImportPath(workspaceRoot, relativePath),
+      /valid JSON object data/,
+    );
+  });
+});
+
+test("resolveStorageStateImportPath rejects symlink escapes", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("symlink test is not reliable on Windows runners");
+    return;
+  }
+
+  await withTempWorkspace(async (workspaceRoot) => {
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "browser-playwright-outside-"));
+    try {
+      const outsideFile = path.join(outsideRoot, "auth.json");
+      await fs.writeFile(outsideFile, JSON.stringify({ cookies: [], origins: [] }), "utf8");
+      const symlinkDir = path.join(workspaceRoot, ".pi", "linked-state");
+      await fs.mkdir(path.dirname(symlinkDir), { recursive: true });
+      await fs.symlink(outsideRoot, symlinkDir);
+
+      await assert.rejects(
+        resolveStorageStateImportPath(workspaceRoot, ".pi/linked-state/auth.json"),
+        /symlinks/,
+      );
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test("buildDefaultStorageStatePath keeps exports under the storage-state artifact directory", () => {
+  const built = buildDefaultStorageStatePath("browser_test", new Date("2026-04-08T12:34:56.789Z"));
+  assert.match(built, new RegExp(`^${STORAGE_STATE_RELATIVE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`));
+  assert.match(built, /browser_test-storage-state\.json$/);
+});
+
+test("resolveStorageStateExportPath defaults to a workspace-local artifact path", async () => {
+  await withTempWorkspace(async (workspaceRoot) => {
+    const resolved = await resolveStorageStateExportPath(
+      workspaceRoot,
+      undefined,
+      "browser_test",
+      new Date("2026-04-08T12:34:56.789Z"),
+    );
+
+    assert.equal(
+      resolved.relativePath,
+      `${STORAGE_STATE_RELATIVE_DIR}/2026-04-08T12-34-56-789Z-browser_test-storage-state.json`,
+    );
+    assert.equal(
+      resolved.absolutePath,
+      path.join(
+        workspaceRoot,
+        STORAGE_STATE_RELATIVE_DIR,
+        "2026-04-08T12-34-56-789Z-browser_test-storage-state.json",
+      ),
+    );
+  });
+});
+
+test("resolveStorageStateExportPath rejects symlink parents and traversal", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("symlink test is not reliable on Windows runners");
+    return;
+  }
+
+  await withTempWorkspace(async (workspaceRoot) => {
+    await assert.rejects(
+      resolveStorageStateExportPath(workspaceRoot, "../auth.json", "browser_test"),
+      /traversal segments/,
+    );
+
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "browser-playwright-export-outside-"));
+    try {
+      const symlinkDir = path.join(workspaceRoot, ".pi", "export-link");
+      await fs.mkdir(path.dirname(symlinkDir), { recursive: true });
+      await fs.symlink(outsideRoot, symlinkDir);
+
+      await assert.rejects(
+        resolveStorageStateExportPath(workspaceRoot, ".pi/export-link/auth.json", "browser_test"),
+        /symlinks/,
+      );
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
 });
