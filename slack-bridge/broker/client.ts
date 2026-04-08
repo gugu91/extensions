@@ -1,6 +1,7 @@
 import * as net from "node:net";
 import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
+import { RPC_METHOD_NOT_FOUND } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -87,9 +88,47 @@ export function computeReconnectDelay(attempt: number, random = Math.random()): 
 // ─── Pending request tracker ─────────────────────────────
 
 interface PendingRequest {
+  method: string;
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface BrokerRpcRequestError extends Error {
+  code?: number;
+  data?: unknown;
+  method?: string;
+}
+
+function createRpcRequestError(
+  method: string,
+  error: { code: number; message: string; data?: unknown },
+): BrokerRpcRequestError {
+  const err = new Error(error.message) as BrokerRpcRequestError;
+  err.name = "BrokerRpcRequestError";
+  err.code = error.code;
+  err.data = error.data;
+  err.method = method;
+  return err;
+}
+
+function isRpcMethodNotFoundError(err: unknown, method: string): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  const rpcErr = err as BrokerRpcRequestError;
+  if (rpcErr.method !== method) {
+    return false;
+  }
+
+  return rpcErr.code === RPC_METHOD_NOT_FOUND || err.message === `Unknown method: ${method}`;
+}
+
+function getMeshAuthCompatibilityError(): Error {
+  return new Error(
+    "Broker does not support Pinet mesh auth (`auth`). Upgrade the broker or disable follower mesh auth when connecting to older/no-auth brokers.",
+  );
 }
 
 interface RegistrationSnapshot {
@@ -249,7 +288,15 @@ export class BrokerClient {
     if (!meshSecret) {
       return;
     }
-    await this.request("auth", { secret: meshSecret });
+
+    try {
+      await this.request("auth", { secret: meshSecret });
+    } catch (err) {
+      if (isRpcMethodNotFoundError(err, "auth")) {
+        throw getMeshAuthCompatibilityError();
+      }
+      throw err;
+    }
   }
 
   // ─── Registration ────────────────────────────────────
@@ -441,7 +488,7 @@ export class BrokerClient {
         reject(new Error(`Request timed out: ${method}`));
       }, REQUEST_TIMEOUT_MS);
 
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { method, resolve, reject, timer });
 
       const line = JSON.stringify(msg) + "\n";
       this.socket!.write(line, "utf-8", (err) => {
@@ -479,7 +526,7 @@ export class BrokerClient {
     this.pending.delete(msg.id);
 
     if (msg.error) {
-      entry.reject(new Error(msg.error.message));
+      entry.reject(createRpcRequestError(entry.method, msg.error));
     } else {
       entry.resolve(msg.result);
     }
