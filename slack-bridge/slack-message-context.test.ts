@@ -78,6 +78,21 @@ describe("slack message context extraction", () => {
     );
   });
 
+  it("keeps richer context when it only contains a short base-text word", () => {
+    const evt = {
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Please review the rollout checklist" },
+        },
+      ],
+    } satisfies Record<string, unknown>;
+
+    expect(extractSlackMessageContextLines(evt, "review")).toEqual([
+      "Please review the rollout checklist",
+    ]);
+  });
+
   it("dedupes repeated context lines and limits the attached snippet count", () => {
     const evt = {
       blocks: [

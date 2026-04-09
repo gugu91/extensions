@@ -165,10 +165,7 @@ function dedupeContextLines(baseText: string, lines: string[]): string[] {
   for (const line of lines) {
     const normalized = normalizeWhitespace(line).toLowerCase();
     if (!normalized) continue;
-    if (
-      baseNormalized &&
-      (baseNormalized.includes(normalized) || normalized.includes(baseNormalized))
-    ) {
+    if (baseNormalized && normalized === baseNormalized) {
       continue;
     }
     if (seen.has(normalized)) continue;
