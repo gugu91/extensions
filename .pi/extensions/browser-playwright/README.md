@@ -1,6 +1,6 @@
 # browser-playwright
 
-A project-local Pi extension that gives agents reusable host-side browser access through Playwright.
+A Pi extension for reusable host-side browser access through Playwright, with a local-development-friendly setup for repo-local use or a global symlink install.
 
 It is designed for real browsing and lightweight web interaction, not just test automation:
 
@@ -8,18 +8,25 @@ It is designed for real browsing and lightweight web interaction, not just test 
 - navigate public sites
 - snapshot and extract page content
 - click, fill, press, wait, inspect tabs, and capture screenshots
-- keep screenshots and artifacts inside the workspace
-- block localhost and private/internal network targets by default
+- keep screenshots, artifacts, and saved browser state inside the active workspace
+- allow localhost by default for local app testing while still blocking broader private/internal network targets by default
 
 ## Location
 
-This extension lives at:
+Source location in this repo:
 
 - `.pi/extensions/browser-playwright/`
 
-Pi auto-discovers extensions from `.pi/extensions/`, so this extension becomes available after reload.
+Pi can load it either:
+
+- directly from this repo's `.pi/extensions/` directory, or
+- from a global symlink such as `~/.pi/extensions/browser-playwright`
+
+Workspace artifacts and saved browser state follow the **active Pi working directory**, not the extension install path, so a global symlink still keeps browser artifacts under the project you are currently working in.
 
 ## Enable in this workspace
+
+### Repo-local usage
 
 From the repo root:
 
@@ -30,6 +37,24 @@ pi
 
 Or start a fresh Pi session in the repo after the files exist.
 
+### Global symlink usage
+
+A convenient local-dev setup is:
+
+```bash
+mkdir -p ~/.pi/extensions
+ln -s ~/src/gugu910/extensions/.pi/extensions/browser-playwright ~/.pi/extensions/browser-playwright
+```
+
+If `~/.pi/extensions/browser-playwright` already exists, inspect it first instead of overwriting it blindly.
+
+Then reload Pi:
+
+```bash
+pi
+/reload
+```
+
 ## Install Playwright
 
 If the extension has not been installed yet, install its local dependencies from the extension directory:
@@ -37,10 +62,17 @@ If the extension has not been installed yet, install its local dependencies from
 ```bash
 cd .pi/extensions/browser-playwright
 npm install
+```
+
+For the default `chromium` engine, the extension now **prefers a host Chrome/Chromium executable automatically** when one is available. In the common local-dev case, that means no extra Playwright browser download is required.
+
+If no compatible host Chrome/Chromium is available, install Playwright Chromium explicitly:
+
+```bash
 npx playwright install chromium
 ```
 
-Chromium is the default engine. If you start a session with `browser: "firefox"` or
+If you start a session with `browser: "firefox"` or
 `browser: "webkit"`, install matching browser binaries instead:
 
 ```bash
@@ -51,46 +83,51 @@ npx playwright install webkit
 The extension intentionally fails with exact engine-aware commands when:
 
 - the `playwright` package is missing
-- the requested browser engine binaries are missing
+- no compatible host Chrome/Chromium is found and the requested Playwright browser binaries are missing
+- the requested `firefox` / `webkit` browser engine binaries are missing
 
 ## Security defaults
 
-The extension is safe by default.
+The extension now favors the common local-dev path while keeping broader network guardrails in place.
 
 Allowed by default:
 
 - `http://...`
 - `https://...`
 - public internet targets
-
-Blocked by default:
-
 - `localhost`
 - `127.0.0.1`
 - `::1`
+
+Blocked by default:
+
 - private IPv4 ranges like `10.x`, `172.16-31.x`, `192.168.x`
 - link-local / internal ranges when detectable
 - obvious internal hostnames like `*.local`, `*.internal`, `host.docker.internal`, and single-label internal names
 - non-HTTP(S) protocols
 
-Opt-in overrides for trusted development workflows:
+Environment controls:
 
 ```bash
-export BROWSER_ALLOW_LOCALHOST=true
+# optional hardening: turn localhost back off
+export BROWSER_ALLOW_LOCALHOST=false
+
+# optional trusted-network override
 export BROWSER_ALLOW_PRIVATE_NETWORK=true
 ```
 
 Recommended practice:
 
-- keep both flags unset for public-web browsing
-- enable them only for a trusted local app or private-network target
-- unset them again after that workflow
+- leave localhost enabled when you are actively testing a trusted local app
+- keep broader private-network access off unless you explicitly need it
+- if you want the old stricter behavior, set `BROWSER_ALLOW_LOCALHOST=false`
 
 ## Session model
 
 - sessions are stored in memory and keyed by `session_id`
 - each session owns one Playwright browser + one browser context
 - each session can contain multiple tabs/pages keyed by `page_id`
+- artifacts and saved browser state stay rooted in the active workspace (`process.cwd()`), which keeps global symlink installs project-local in practice
 - `browser_navigate` can reuse the active tab or open a new one
 - `browser_tabs` lists pages and can switch the active page
 - `browser_close` can close a tab or the entire session
@@ -240,15 +277,9 @@ Tool: `browser_session_start`
 
 This is explicit opt-in only. The extension does not auto-save state, and tool output does not print raw cookies or localStorage values.
 
-### 4. Trusted local app after explicit opt-in
+### 4. Trusted local app on localhost
 
-First opt in:
-
-```bash
-export BROWSER_ALLOW_LOCALHOST=true
-```
-
-Then navigate:
+Localhost is allowed by default, so you can navigate directly:
 
 ```json
 { "session_id": "<session_id>", "url": "http://localhost:3000" }
@@ -256,7 +287,11 @@ Then navigate:
 
 Tool: `browser_navigate`
 
-Without the env opt-in, that navigation is blocked.
+If you want the older stricter behavior for a session, set:
+
+```bash
+export BROWSER_ALLOW_LOCALHOST=false
+```
 
 ## Notes for agents
 

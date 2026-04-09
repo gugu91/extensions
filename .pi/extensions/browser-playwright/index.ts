@@ -7,8 +7,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   assessUrl,
   buildInstallInstructions,
-  envFlag,
+  findPreferredChromiumExecutable,
   parseIntegerEnv,
+  resolveSecurityOptions,
   safeRequestPageId,
   sanitizeLabel,
   STORAGE_STATE_RELATIVE_DIR,
@@ -72,6 +73,11 @@ type BrowserPageRecord = {
   lastActivityAt: string;
 };
 
+type BrowserBinaryInfo = {
+  source: "playwright" | "env" | "path" | "system";
+  executable_path: string | null;
+};
+
 type BrowserSession = {
   id: string;
   browserEngine: BrowserEngine;
@@ -87,10 +93,11 @@ type BrowserSession = {
   blockedRequests: BlockedRequestEntry[];
   networkSummary: NetworkSummary;
   mountedStorageState: StorageStateSummary | null;
+  browserBinary: BrowserBinaryInfo;
 };
 
-const EXTENSION_DIR = fileURLToPath(new URL(".", import.meta.url));
-const WORKSPACE_ROOT = resolve(EXTENSION_DIR, "../../..");
+const INSTALL_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
+const WORKSPACE_ROOT = resolve(process.cwd());
 const ARTIFACT_ROOT = resolve(WORKSPACE_ROOT, ".pi/artifacts/browser-playwright");
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -126,6 +133,7 @@ async function loadPlaywright(browserEngine: BrowserEngine): Promise<PlaywrightM
         "Playwright is not installed for `.pi/extensions/browser-playwright`.",
         true,
         browserEngine,
+        INSTALL_ROOT,
       ),
       { cause: error instanceof Error ? error : undefined },
     );
@@ -156,10 +164,76 @@ function normalizeWaitUntil(value: string | undefined): WaitUntil {
 }
 
 function getSecurityOptions(): { allowLocalhost: boolean; allowPrivateNetwork: boolean } {
-  return {
-    allowLocalhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
-    allowPrivateNetwork: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
-  };
+  return resolveSecurityOptions();
+}
+
+async function launchBrowser(
+  browserType: BrowserType,
+  browserEngine: BrowserEngine,
+  headless: boolean,
+): Promise<{ browser: Browser; browserBinary: BrowserBinaryInfo }> {
+  const preferredChromiumExecutable =
+    browserEngine === "chromium" ? await findPreferredChromiumExecutable() : null;
+  let preferredLaunchError: unknown = null;
+
+  if (preferredChromiumExecutable) {
+    try {
+      const browser = await browserType.launch({
+        headless,
+        executablePath: preferredChromiumExecutable.path,
+      });
+      return {
+        browser,
+        browserBinary: {
+          source: preferredChromiumExecutable.source,
+          executable_path: preferredChromiumExecutable.path,
+        },
+      };
+    } catch (error) {
+      preferredLaunchError = error;
+    }
+  }
+
+  try {
+    const browser = await browserType.launch({ headless });
+    return {
+      browser,
+      browserBinary: {
+        source: "playwright",
+        executable_path: null,
+      },
+    };
+  } catch (error) {
+    if (isMissingBrowserExecutableError(error)) {
+      const installInstructions = buildInstallInstructions(
+        `Playwright is installed but ${browserEngine} browser binaries are missing.`,
+        false,
+        browserEngine,
+        INSTALL_ROOT,
+      );
+      if (preferredChromiumExecutable && preferredLaunchError) {
+        throw new Error(
+          [
+            installInstructions,
+            "",
+            `A preferred host Chromium executable was found at \`${preferredChromiumExecutable.path}\` but Playwright could not launch it: ${asErrorMessage(preferredLaunchError)}`,
+          ].join("\n"),
+        );
+      }
+      throw new Error(installInstructions);
+    }
+
+    if (preferredChromiumExecutable && preferredLaunchError) {
+      throw new Error(
+        [
+          `Failed to launch the preferred host Chromium executable at \`${preferredChromiumExecutable.path}\`: ${asErrorMessage(preferredLaunchError)}`,
+          `Playwright fallback launch also failed: ${asErrorMessage(error)}`,
+        ].join("\n\n"),
+      );
+    }
+
+    throw error;
+  }
 }
 
 function recordConsoleEntry(session: BrowserSession, entry: ConsoleEntry): void {
@@ -563,21 +637,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         ? await loadStoredStorageState(params.storage_state_name, { workspaceRoot: WORKSPACE_ROOT })
         : null;
 
-      let browser: Browser | null = null;
-      try {
-        browser = await browserType.launch({ headless });
-      } catch (error) {
-        if (isMissingBrowserExecutableError(error)) {
-          throw new Error(
-            buildInstallInstructions(
-              `Playwright is installed but ${browserEngine} browser binaries are missing.`,
-              false,
-              browserEngine,
-            ),
-          );
-        }
-        throw error;
-      }
+      const { browser, browserBinary } = await launchBrowser(browserType, browserEngine, headless);
 
       try {
         const contextOptions: BrowserNewContextOptions = {
@@ -612,6 +672,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             failed_requests: 0,
           },
           mountedStorageState: loadedStorageState?.summary ?? null,
+          browserBinary,
         };
 
         await context.route("**/*", async (route: Route) => {
@@ -675,10 +736,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
                   artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
                   storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
                   mounted_storage_state: session.mountedStorageState,
-                  safety: {
-                    allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
-                    allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
-                  },
+                  browser_binary: session.browserBinary,
+                  safety: getSecurityOptions(),
                 },
                 null,
                 2,
@@ -695,10 +754,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
             storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
             mounted_storage_state: session.mountedStorageState,
-            safety: {
-              allow_localhost: envFlag("BROWSER_ALLOW_LOCALHOST"),
-              allow_private_network: envFlag("BROWSER_ALLOW_PRIVATE_NETWORK"),
-            },
+            browser_binary: session.browserBinary,
+            safety: getSecurityOptions(),
           },
         };
       } catch (error) {
@@ -733,6 +790,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         page_count: pages.length,
         pages,
         mounted_storage_state: session.mountedStorageState,
+        browser_binary: session.browserBinary,
         storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
         network_summary: session.networkSummary,
         recent_console: session.consoleEntries,
