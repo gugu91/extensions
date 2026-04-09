@@ -2,19 +2,38 @@ import os
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
+LOCAL_TUNNEL_HOSTS = {"127.0.0.1", "localhost"}
+
+
+def _is_local_tunnel_host(host):
+    return isinstance(host, str) and host.strip().lower() in LOCAL_TUNNEL_HOSTS
+
+
+def _dsn_uses_local_tunnel(dsn, tunnel_port):
+    if not isinstance(dsn, str) or not tunnel_port:
+        return False
+
+    try:
+        parts = urlsplit(dsn)
+    except ValueError:
+        return False
+
+    return _is_local_tunnel_host(parts.hostname) and parts.port is not None and str(parts.port) == tunnel_port
+
+
 def _uses_local_tunnel(args, kwargs):
     tunnel_port = os.getenv("NEON_TUNNEL_PORT", "")
+    if not tunnel_port:
+        return False
+
     host = kwargs.get("host")
     port = kwargs.get("port")
     dsn = kwargs.get("dsn") if isinstance(kwargs.get("dsn"), str) else (args[0] if args and isinstance(args[0], str) else None)
 
-    if isinstance(host, str) and host in {"127.0.0.1", "localhost"}:
+    if _is_local_tunnel_host(host) and port is not None and str(port) == tunnel_port:
         return True
-    if tunnel_port and str(port) == tunnel_port:
-        return True
-    if isinstance(dsn, str) and ("@127.0.0.1:" in dsn or "@localhost:" in dsn):
-        return True
-    return False
+
+    return _dsn_uses_local_tunnel(dsn, tunnel_port)
 
 
 def _extract_options_from_dsn(dsn):
