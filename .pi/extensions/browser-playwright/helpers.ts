@@ -1,3 +1,7 @@
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { delimiter, join } from "node:path";
+
 export type UrlDecision =
   | { allowed: true }
   | {
@@ -18,12 +22,31 @@ export interface PlaywrightStorageStateLike {
   origins: unknown[];
 }
 
+export interface ChromiumExecutableCandidate {
+  path: string;
+  source: "env" | "path" | "system";
+}
+
+interface ChromiumExecutableLookupOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  accessImpl?: typeof access;
+}
+
 export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
 export const STORAGE_STATE_RELATIVE_DIR = ".pi/state/browser-playwright";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
 
 const STORAGE_STATE_NAME_MAX_CHARS = 80;
+const CHROMIUM_PATH_NAMES_POSIX = [
+  "google-chrome",
+  "google-chrome-stable",
+  "chromium",
+  "chromium-browser",
+  "chrome",
+] as const;
+const CHROMIUM_PATH_NAMES_WINDOWS = ["chrome.exe", "chromium.exe"] as const;
 
 export function parseIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -32,9 +55,20 @@ export function parseIntegerEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function envFlag(name: string): boolean {
-  const raw = process.env[name];
+function envFlagFrom(env: NodeJS.ProcessEnv, name: string): boolean {
+  const raw = env[name];
   return raw != null && /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+export function envFlag(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return envFlagFrom(env, name);
+}
+
+export function resolveSecurityOptions(env: NodeJS.ProcessEnv = process.env): SecurityOptions {
+  return {
+    allowLocalhost: envFlagFrom(env, "BROWSER_ALLOW_LOCALHOST"),
+    allowPrivateNetwork: envFlagFrom(env, "BROWSER_ALLOW_PRIVATE_NETWORK"),
+  };
 }
 
 export function sanitizeLabel(value: string | undefined): string {
@@ -84,19 +118,146 @@ export function buildInstallInstructions(
   reason: string,
   includeNpmInstall = true,
   browserEngine: SupportedBrowserEngine = "chromium",
+  extensionDir = EXTENSION_RELATIVE_DIR,
 ): string {
-  const commands = [
-    `cd ${EXTENSION_RELATIVE_DIR}`,
-    ...(includeNpmInstall ? ["npm install"] : []),
-    `npx playwright install ${browserEngine}`,
-  ];
+  const commands = [`cd \"${extensionDir}\"`, ...(includeNpmInstall ? ["npm install"] : [])];
+  if (browserEngine === "chromium") {
+    commands.push("npx playwright install chromium");
+  } else {
+    commands.push(`npx playwright install ${browserEngine}`);
+  }
+
+  const browserInstallHeading =
+    browserEngine === "chromium"
+      ? [
+          "The extension prefers a host Chrome/Chromium executable when one is available.",
+          "If no compatible host browser is found, install Playwright Chromium:",
+        ]
+      : [`Install the browser-playwright extension dependencies and ${browserEngine} browser binaries:`];
 
   return [
     reason,
     "",
-    `Install the browser-playwright extension dependencies and ${browserEngine} browser binaries:`,
+    ...browserInstallHeading,
     ...commands.map((command) => `  ${command}`),
+    "",
+    "If you've symlinked the extension into `~/.pi/extensions`, run the same commands from that symlink path or the source directory.",
   ].join("\n");
+}
+
+function pathEntries(rawPath: string | undefined): string[] {
+  if (!rawPath) return [];
+  return rawPath
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function chromiumExecutableCandidates(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): ChromiumExecutableCandidate[] {
+  const candidates: ChromiumExecutableCandidate[] = [];
+  const seen = new Set<string>();
+  const push = (candidate: ChromiumExecutableCandidate | null) => {
+    if (!candidate) return;
+    const normalized = candidate.path.trim();
+    if (normalized.length === 0 || seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push({ ...candidate, path: normalized });
+  };
+
+  const configuredPath = env.BROWSER_PLAYWRIGHT_EXECUTABLE_PATH?.trim();
+  push(
+    configuredPath
+      ? {
+          path: configuredPath,
+          source: "env",
+        }
+      : null,
+  );
+
+  const pathNames =
+    platform === "win32" ? CHROMIUM_PATH_NAMES_WINDOWS : CHROMIUM_PATH_NAMES_POSIX;
+  for (const entry of pathEntries(env.PATH)) {
+    for (const executableName of pathNames) {
+      push({
+        path: join(entry, executableName),
+        source: "path",
+      });
+    }
+  }
+
+  const home = env.HOME ?? "";
+  const localAppData = env.LOCALAPPDATA ?? "";
+  const programFiles = env.ProgramFiles ?? env.PROGRAMFILES ?? "";
+  const programFilesX86 = env["ProgramFiles(x86)"] ?? env.PROGRAMFILES_X86 ?? "";
+
+  if (platform === "darwin") {
+    for (const candidatePath of [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      home ? join(home, "Applications/Google Chrome.app/Contents/MacOS/Google Chrome") : "",
+      home
+        ? join(home, "Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+        : "",
+      home ? join(home, "Applications/Chromium.app/Contents/MacOS/Chromium") : "",
+    ]) {
+      push(candidatePath ? { path: candidatePath, source: "system" } : null);
+    }
+  }
+
+  if (platform === "linux") {
+    for (const candidatePath of [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/snap/bin/chromium",
+    ]) {
+      push({ path: candidatePath, source: "system" });
+    }
+  }
+
+  if (platform === "win32") {
+    for (const candidatePath of [
+      localAppData ? join(localAppData, "Google", "Chrome", "Application", "chrome.exe") : "",
+      programFiles ? join(programFiles, "Google", "Chrome", "Application", "chrome.exe") : "",
+      programFilesX86
+        ? join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
+        : "",
+      programFiles ? join(programFiles, "Chromium", "Application", "chrome.exe") : "",
+      programFilesX86
+        ? join(programFilesX86, "Chromium", "Application", "chrome.exe")
+        : "",
+    ]) {
+      push(candidatePath ? { path: candidatePath, source: "system" } : null);
+    }
+  }
+
+  return candidates;
+}
+
+export async function findPreferredChromiumExecutable(
+  options: ChromiumExecutableLookupOptions = {},
+): Promise<ChromiumExecutableCandidate | null> {
+  const {
+    env = process.env,
+    platform = process.platform,
+    accessImpl = access,
+  } = options;
+
+  for (const candidate of chromiumExecutableCandidates(env, platform)) {
+    try {
+      await accessImpl(candidate.path, constants.X_OK);
+      return candidate;
+    } catch {
+      // try the next candidate
+    }
+  }
+
+  return null;
 }
 
 export function safeRequestPageId<PageLike>(
@@ -185,6 +346,26 @@ function isPrivateIpv6(hostname: string): boolean {
     normalized === "::" ||
     normalized === "0:0:0:0:0:0:0:0"
   );
+}
+
+export function isLocalhostUrl(input: string): boolean {
+  const url = normalizeUrl(input);
+  const hostname = url.hostname;
+  return isLocalhostName(hostname) || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+export function resolveNavigationSecurityOptions(
+  input: string,
+  options: SecurityOptions,
+): SecurityOptions {
+  return isLocalhostUrl(input) ? { ...options, allowLocalhost: true } : options;
+}
+
+export function resolveRouteSecurityOptions(
+  options: SecurityOptions,
+  context: { trustedLocalhostPage: boolean },
+): SecurityOptions {
+  return context.trustedLocalhostPage ? { ...options, allowLocalhost: true } : options;
 }
 
 export function assessUrl(input: string, options: SecurityOptions): UrlDecision {
