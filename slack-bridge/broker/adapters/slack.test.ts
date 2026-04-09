@@ -310,6 +310,46 @@ describe("classifyMessage", () => {
     }
   });
 
+  it("preserves extra visible message context for canvas-style mentions", () => {
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "<@U_BOT> Alice mentioned you in a comment",
+      channel: "C1",
+      channel_type: "channel",
+      ts: "1.1",
+      blocks: [
+        {
+          type: "rich_text",
+          elements: [
+            {
+              type: "rich_text_quote",
+              elements: [{ type: "text", text: "Can you update the rollout checklist?" }],
+            },
+          ],
+        },
+        {
+          type: "context",
+          elements: [{ type: "plain_text", text: "Canvas: Launch plan > Rollout" }],
+        },
+      ],
+    };
+    const result = classifyMessage(evt, botId, emptyTracked);
+    expect(result.relevant).toBe(true);
+    if (result.relevant) {
+      expect(result.isChannelMention).toBe(true);
+      expect(result.text).toBe(
+        [
+          "Alice mentioned you in a comment",
+          "",
+          "Slack message context:",
+          "- Can you update the rollout checklist?",
+          "- Canvas: Launch plan > Rollout",
+        ].join("\n"),
+      );
+    }
+  });
+
   it("does not strip mention in tracked threads", () => {
     const tracked = new Set(["1.1"]);
     const evt = {
