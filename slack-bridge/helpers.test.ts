@@ -1830,7 +1830,7 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.anomalies).toContain("Busy Fox idle with assigned work (1 inbox, 1 threads)");
   });
 
-  it("detects stuck agents: working with no activity for > threshold", () => {
+  it("detects stuck agents when quiet activity crosses the threshold under queue pressure", () => {
     const now = Date.parse("2026-04-01T00:10:00.000Z");
     const result = evaluateRalphLoopCycle(
       [
@@ -1843,7 +1843,7 @@ describe("evaluateRalphLoopCycle", () => {
           lastSeen: "2026-04-01T00:09:55.000Z",
           lastHeartbeat: "2026-04-01T00:09:55.000Z",
           lastActivity: "2026-04-01T00:03:00.000Z", // 7 min ago
-          pendingInboxCount: 0,
+          pendingInboxCount: 1,
           ownedThreadCount: 1,
         },
         {
@@ -1868,9 +1868,133 @@ describe("evaluateRalphLoopCycle", () => {
     );
 
     expect(result.stuckAgentIds).toEqual(["stuck-worker"]);
-    expect(result.anomalies.some((a) => a.includes("Stuck Wolf appears stuck"))).toBe(true);
+    expect(result.anomalies).toContain(
+      "Stuck Wolf appears stuck (working with no activity beyond 5m threshold)",
+    );
     // Active Fox should NOT be flagged as stuck
     expect(result.stuckAgentIds).not.toContain("active-worker");
+  });
+
+  it("does not flag healthy quiet workers as stuck when there is no queue pressure", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🐗",
+          name: "Quiet Boar",
+          id: "quiet-worker",
+          status: "working",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          lastActivity: "2026-04-01T00:03:00.000Z", // 7 min ago
+          pendingInboxCount: 0,
+          ownedThreadCount: 1,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:10:00.000Z"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+        pendingBacklogCount: 0,
+      },
+    );
+
+    expect(result.stuckAgentIds).toEqual([]);
+    expect(result.anomalies).toEqual([]);
+  });
+
+  it("does not treat unrelated global backlog as pressure on a quiet claimed worker", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🐗",
+          name: "Quiet Boar",
+          id: "quiet-worker",
+          status: "working",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          lastActivity: "2026-04-01T00:03:00.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 1,
+        },
+        {
+          emoji: "🦉",
+          name: "Ready Owl",
+          id: "ready-worker",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 0,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:10:00.000Z"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+        pendingBacklogCount: 2,
+      },
+    );
+
+    expect(result.stuckAgentIds).toEqual([]);
+    expect(result.idleDrainAgentIds).toEqual(["ready-worker"]);
+    expect(result.anomalies).toContain("pending backlog (2) with 1 idle worker");
+    expect(result.anomalies).not.toContain(
+      "Quiet Boar appears stuck (working with no activity beyond 5m threshold)",
+    );
+  });
+
+  it("keeps the stuck anomaly text stable across repeated quiet-pressure cycles", () => {
+    const cycle1 = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🐺",
+          name: "Stuck Wolf",
+          id: "stuck-worker",
+          status: "working",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          lastActivity: "2026-04-01T00:03:00.000Z",
+          pendingInboxCount: 1,
+          ownedThreadCount: 1,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:10:00.000Z"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+    const cycle2 = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🐺",
+          name: "Stuck Wolf",
+          id: "stuck-worker",
+          status: "working",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:10:55.000Z",
+          lastHeartbeat: "2026-04-01T00:10:55.000Z",
+          lastActivity: "2026-04-01T00:03:00.000Z",
+          pendingInboxCount: 1,
+          ownedThreadCount: 1,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:11:00.000Z"),
+        stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(cycle1.anomalies).toEqual(cycle2.anomalies);
   });
 
   it("does not flag idle agents as stuck", () => {
