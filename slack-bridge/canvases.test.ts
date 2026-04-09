@@ -3,7 +3,9 @@ import {
   buildSlackCanvasCreateRequest,
   buildSlackCanvasEditRequest,
   buildSlackCanvasSectionsLookupRequest,
+  extractSlackCanvasCommentsPage,
   extractSlackChannelCanvasId,
+  normalizeSlackCanvasCommentsLimit,
   normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasSectionType,
   normalizeSlackCanvasUpdateMode,
@@ -56,6 +58,29 @@ describe("normalizeSlackCanvasSectionType", () => {
   it("rejects unsupported section types", () => {
     expect(() => normalizeSlackCanvasSectionType("paragraph")).toThrow(
       "Unsupported canvas section type. Use 'h1', 'h2', 'h3', or 'any_header'.",
+    );
+  });
+});
+
+describe("normalizeSlackCanvasCommentsLimit", () => {
+  it("defaults to 20", () => {
+    expect(normalizeSlackCanvasCommentsLimit()).toBe(20);
+  });
+
+  it("accepts bounded integer limits", () => {
+    expect(normalizeSlackCanvasCommentsLimit(1)).toBe(1);
+    expect(normalizeSlackCanvasCommentsLimit(200)).toBe(200);
+  });
+
+  it("rejects invalid limits", () => {
+    expect(() => normalizeSlackCanvasCommentsLimit(0)).toThrow(
+      "Canvas comment reads require limit to be an integer between 1 and 200.",
+    );
+    expect(() => normalizeSlackCanvasCommentsLimit(201)).toThrow(
+      "Canvas comment reads require limit to be an integer between 1 and 200.",
+    );
+    expect(() => normalizeSlackCanvasCommentsLimit(1.5)).toThrow(
+      "Canvas comment reads require limit to be an integer between 1 and 200.",
     );
   });
 });
@@ -225,6 +250,63 @@ describe("pickSlackCanvasSectionId", () => {
     expect(() => pickSlackCanvasSectionId([{ id: "temp:C:1" }], 2)).toThrow(
       "Canvas section lookup matched 1 sections; section_index 2 is out of range.",
     );
+  });
+});
+
+describe("extractSlackCanvasCommentsPage", () => {
+  it("extracts canvas comment pages from files.info responses", () => {
+    expect(
+      extractSlackCanvasCommentsPage({
+        file: {
+          id: "F123",
+          title: "Launch plan",
+          permalink: "https://example.slack.com/docs/T/F123",
+          comments_count: 3,
+        },
+        comments: [
+          { id: "Fc1", user: "U123", comment: "First comment", created: 1715000000 },
+          { id: 2, user: "U234", text: "Second comment", ts: "1715000100" },
+        ],
+        paging: { page: 1, pages: 2, total: 3 },
+        response_metadata: { next_cursor: "cursor-2" },
+      }),
+    ).toEqual({
+      canvasId: "F123",
+      title: "Launch plan",
+      permalink: "https://example.slack.com/docs/T/F123",
+      commentsCount: 3,
+      returnedCount: 2,
+      page: 1,
+      pages: 2,
+      nextCursor: "cursor-2",
+      comments: [
+        { id: "Fc1", userId: "U123", createdTs: "1715000000", text: "First comment" },
+        { id: "2", userId: "U234", createdTs: "1715000100", text: "Second comment" },
+      ],
+    });
+  });
+
+  it("falls back to the requested canvas id and placeholder text when Slack omits fields", () => {
+    expect(
+      extractSlackCanvasCommentsPage(
+        {
+          file: {},
+          comments: [{ id: "Fc1", user: "U123" }],
+        },
+        "F999",
+      ),
+    ).toEqual({
+      canvasId: "F999",
+      commentsCount: 1,
+      returnedCount: 1,
+      comments: [
+        {
+          id: "Fc1",
+          userId: "U123",
+          text: "(no comment text exposed by Slack)",
+        },
+      ],
+    });
   });
 });
 

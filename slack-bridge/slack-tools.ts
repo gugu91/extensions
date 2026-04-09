@@ -7,7 +7,9 @@ import {
   buildSlackCanvasCreateRequest,
   buildSlackCanvasEditRequest,
   buildSlackCanvasSectionsLookupRequest,
+  extractSlackCanvasCommentsPage,
   extractSlackChannelCanvasId,
+  normalizeSlackCanvasCommentsLimit,
   normalizeSlackCanvasCreateKind,
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
@@ -111,6 +113,47 @@ function getSlackCanvasSummary(markdown?: string): string {
   return `${collapsed.slice(0, 77)}...`;
 }
 
+function normalizeOptionalSlackCursor(cursor?: string): string | undefined {
+  const trimmed = cursor?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function buildSlackCanvasCommentsSummaryText(input: {
+  canvasId: string;
+  title?: string;
+  commentsCount: number;
+  returnedCount: number;
+  nextCursor?: string;
+  comments: Array<{
+    userName?: string;
+    userId?: string;
+    createdTs?: string;
+    text: string;
+  }>;
+}): string {
+  const label = input.title ? `${input.title} (${input.canvasId})` : input.canvasId;
+  const lines = [
+    `Canvas comments for ${label}`,
+    `Returned ${input.returnedCount} of ${input.commentsCount} comment(s).`,
+  ];
+
+  if (input.comments.length === 0) {
+    lines.push("(no comments)");
+  } else {
+    for (const comment of input.comments) {
+      const author = comment.userName ?? comment.userId ?? "unknown";
+      const created = comment.createdTs ?? "unknown-ts";
+      lines.push(`[${created}] ${author}: ${comment.text}`);
+    }
+  }
+
+  if (input.nextCursor) {
+    lines.push(`More comments are available. Re-run with cursor=${input.nextCursor}.`);
+  }
+
+  return lines.join("\n");
+}
+
 function isSlackMethodError(err: unknown, method: string, ...codes: string[]): boolean {
   if (!(err instanceof Error)) {
     return false;
@@ -207,6 +250,28 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       channelId,
       channelLabel: channelInput,
     };
+  }
+
+  async function assertCanvasCommentsTargetIsCanvas(canvasId: string): Promise<void> {
+    try {
+      await slack("canvases.sections.lookup", getBotToken(), {
+        canvas_id: canvasId,
+        criteria: { section_types: ["any_header"] },
+      });
+    } catch (err) {
+      if (isSlackMethodError(err, "canvases.sections.lookup", "canvas_deleted")) {
+        throw new Error(`Canvas ${canvasId} is no longer available.`);
+      }
+      if (isSlackMethodError(err, "canvases.sections.lookup", "access_denied")) {
+        throw new Error(`Canvas ${canvasId} is not accessible with the current bot token.`);
+      }
+      if (isSlackMethodError(err, "canvases.sections.lookup", "canvas_not_found")) {
+        throw new Error(
+          `Canvas ${canvasId} is unavailable, inaccessible, or not a canvas. This tool only reads comments for Slack canvases.`,
+        );
+      }
+      throw err;
+    }
   }
 
   async function resolveSlackTargetChannel(
@@ -2042,6 +2107,124 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
         details: { count: messages.length, channel: channelId },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_canvas_comments_read",
+    label: "Slack Canvas Comments Read",
+    description:
+      "Read comments attached to a Slack canvas after validating the target with Slack's canvas APIs.",
+    promptSnippet:
+      "Inspect comments attached to a Slack canvas in read-only mode. This tool validates canvas targets before using files.info, and it does not inspect generic Slack files.",
+    parameters: Type.Object({
+      canvas_id: Type.Optional(
+        Type.String({
+          description:
+            "Canvas ID to inspect. The ID is validated as a canvas before comments are read.",
+        }),
+      ),
+      channel: Type.Optional(
+        Type.String({ description: "Channel name or ID whose channel canvas should be inspected" }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Max comments to return per call (default 20, max 200)" }),
+      ),
+      cursor: Type.Optional(
+        Type.String({
+          description: "Pagination cursor returned by a previous canvas comment read",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_canvas_comments_read",
+        undefined,
+        `canvas_id=${params.canvas_id ?? ""} | channel=${params.channel ?? ""} | limit=${params.limit ?? 20} | cursor=${params.cursor ?? ""}`,
+      );
+
+      const target = await resolveCanvasTarget(params.canvas_id, params.channel);
+      const limit = normalizeSlackCanvasCommentsLimit(params.limit);
+      const cursor = normalizeOptionalSlackCursor(params.cursor);
+
+      await assertCanvasCommentsTargetIsCanvas(target.canvasId);
+
+      let response: SlackResult;
+      try {
+        response = await slack("files.info", getBotToken(), {
+          file: target.canvasId,
+          limit,
+          ...(cursor ? { cursor } : {}),
+        });
+      } catch (err) {
+        if (
+          isSlackMethodError(
+            err,
+            "files.info",
+            "channel_canvas_deleted",
+            "file_deleted",
+            "file_not_found",
+          )
+        ) {
+          throw new Error(`Canvas ${target.canvasId} is no longer available.`);
+        }
+        if (isSlackMethodError(err, "files.info", "access_denied")) {
+          throw new Error(
+            `Canvas ${target.canvasId} is not accessible with the current bot token.`,
+          );
+        }
+        throw err;
+      }
+
+      const page = extractSlackCanvasCommentsPage(
+        response as unknown as Record<string, unknown>,
+        target.canvasId,
+      );
+      if (page.canvasId !== target.canvasId) {
+        throw new Error(
+          `Slack files.info returned comments for ${page.canvasId}, but canvas comment inspection requested ${target.canvasId}.`,
+        );
+      }
+      const comments = await Promise.all(
+        page.comments.map(async (comment) => ({
+          ...comment,
+          ...(comment.userId ? { userName: await resolveUser(comment.userId) } : {}),
+        })),
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: buildSlackCanvasCommentsSummaryText({
+              canvasId: page.canvasId,
+              title: page.title,
+              commentsCount: page.commentsCount,
+              returnedCount: page.returnedCount,
+              nextCursor: page.nextCursor,
+              comments,
+            }),
+          },
+        ],
+        details: {
+          canvas_id: page.canvasId,
+          channel: target.channelId,
+          title: page.title,
+          permalink: page.permalink,
+          comments_count: page.commentsCount,
+          returned_count: page.returnedCount,
+          ...(page.page ? { page: page.page } : {}),
+          ...(page.pages ? { pages: page.pages } : {}),
+          ...(page.nextCursor ? { next_cursor: page.nextCursor } : {}),
+          comments: comments.map((comment) => ({
+            id: comment.id,
+            user_id: comment.userId,
+            user_name: comment.userName,
+            created_ts: comment.createdTs,
+            text: comment.text,
+          })),
+        },
       };
     },
   });
