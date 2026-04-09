@@ -66,8 +66,7 @@ export function envFlag(name: string, env: NodeJS.ProcessEnv = process.env): boo
 
 export function resolveSecurityOptions(env: NodeJS.ProcessEnv = process.env): SecurityOptions {
   return {
-    allowLocalhost:
-      env.BROWSER_ALLOW_LOCALHOST == null ? true : envFlagFrom(env, "BROWSER_ALLOW_LOCALHOST"),
+    allowLocalhost: envFlagFrom(env, "BROWSER_ALLOW_LOCALHOST"),
     allowPrivateNetwork: envFlagFrom(env, "BROWSER_ALLOW_PRIVATE_NETWORK"),
   };
 }
@@ -347,6 +346,26 @@ function isPrivateIpv6(hostname: string): boolean {
     normalized === "::" ||
     normalized === "0:0:0:0:0:0:0:0"
   );
+}
+
+export function isLocalhostUrl(input: string): boolean {
+  const url = normalizeUrl(input);
+  const hostname = url.hostname;
+  return isLocalhostName(hostname) || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+export function resolveNavigationSecurityOptions(
+  input: string,
+  options: SecurityOptions,
+): SecurityOptions {
+  return isLocalhostUrl(input) ? { ...options, allowLocalhost: true } : options;
+}
+
+export function resolveRouteSecurityOptions(
+  options: SecurityOptions,
+  context: { trustedLocalhostPage: boolean },
+): SecurityOptions {
+  return context.trustedLocalhostPage ? { ...options, allowLocalhost: true } : options;
 }
 
 export function assessUrl(input: string, options: SecurityOptions): UrlDecision {

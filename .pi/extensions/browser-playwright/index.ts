@@ -8,7 +8,10 @@ import {
   assessUrl,
   buildInstallInstructions,
   findPreferredChromiumExecutable,
+  isLocalhostUrl,
   parseIntegerEnv,
+  resolveNavigationSecurityOptions,
+  resolveRouteSecurityOptions,
   resolveSecurityOptions,
   safeRequestPageId,
   sanitizeLabel,
@@ -71,6 +74,7 @@ type BrowserPageRecord = {
   page: Page;
   createdAt: string;
   lastActivityAt: string;
+  trustedLocalhostMode: boolean;
 };
 
 type BrowserBinaryInfo = {
@@ -165,6 +169,14 @@ function normalizeWaitUntil(value: string | undefined): WaitUntil {
 
 function getSecurityOptions(): { allowLocalhost: boolean; allowPrivateNetwork: boolean } {
   return resolveSecurityOptions();
+}
+
+function isTrustedLocalhostTarget(url: string): boolean {
+  try {
+    return isLocalhostUrl(url);
+  } catch {
+    return false;
+  }
 }
 
 async function launchBrowser(
@@ -321,6 +333,7 @@ async function registerPage(session: BrowserSession, page: Page): Promise<Browse
     page,
     createdAt: nowIso(),
     lastActivityAt: nowIso(),
+    trustedLocalhostMode: false,
   };
 
   session.pageIds.set(page, pageRecord.id);
@@ -348,6 +361,7 @@ async function registerPage(session: BrowserSession, page: Page): Promise<Browse
 
   page.on("framenavigated", (frame) => {
     if (frame === page.mainFrame()) {
+      pageRecord.trustedLocalhostMode = isTrustedLocalhostTarget(frame.url());
       touchPage(pageRecord);
       touchSession(session);
       session.activePageId = pageRecord.id;
@@ -423,10 +437,15 @@ async function gotoWithSafety(
   waitUntil: WaitUntil,
   timeoutMs: number,
 ): Promise<void> {
-  const decision = assessUrl(url, getSecurityOptions());
+  const baseSecurityOptions = getSecurityOptions();
+  const navigationSecurityOptions = resolveNavigationSecurityOptions(url, baseSecurityOptions);
+  const trustedLocalhostMode = isTrustedLocalhostTarget(url);
+  const decision = assessUrl(url, navigationSecurityOptions);
   if (!decision.allowed) {
     throw new Error([decision.reason, decision.hint].filter(Boolean).join("\n"));
   }
+
+  pageRecord.trustedLocalhostMode = trustedLocalhostMode;
 
   try {
     await pageRecord.page.goto(url, { waitUntil, timeout: timeoutMs });
@@ -434,6 +453,7 @@ async function gotoWithSafety(
     touchPage(pageRecord);
     touchSession(session);
   } catch (error) {
+    pageRecord.trustedLocalhostMode = false;
     const blocked = maybeLastBlockedRequest(session, url);
     if (blocked) {
       throw new Error(blocked.reason);
@@ -678,9 +698,15 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         await context.route("**/*", async (route: Route) => {
           const request: Request = route.request();
           session.networkSummary.total_requests += 1;
-          const decision = assessUrl(request.url(), getSecurityOptions());
+          const pageId = safeRequestPageId(request, (page) => session.pageIds.get(page) ?? null);
+          const pageRecord = pageId ? session.pages.get(pageId) ?? null : null;
+          const decision = assessUrl(
+            request.url(),
+            resolveRouteSecurityOptions(getSecurityOptions(), {
+              trustedLocalhostPage: pageRecord?.trustedLocalhostMode ?? false,
+            }),
+          );
           if (!decision.allowed) {
-            const pageId = safeRequestPageId(request, (page) => session.pageIds.get(page) ?? null);
             recordBlockedRequest(session, {
               timestamp: nowIso(),
               page_id: pageId,
@@ -737,7 +763,11 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
                   storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
                   mounted_storage_state: session.mountedStorageState,
                   browser_binary: session.browserBinary,
-                  safety: getSecurityOptions(),
+                  safety: {
+                    ...getSecurityOptions(),
+                    localhost_direct_navigation: true,
+                    localhost_subrequests_require_trusted_page: true,
+                  },
                 },
                 null,
                 2,
@@ -755,7 +785,11 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
             storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
             mounted_storage_state: session.mountedStorageState,
             browser_binary: session.browserBinary,
-            safety: getSecurityOptions(),
+            safety: {
+              ...getSecurityOptions(),
+              localhost_direct_navigation: true,
+              localhost_subrequests_require_trusted_page: true,
+            },
           },
         };
       } catch (error) {

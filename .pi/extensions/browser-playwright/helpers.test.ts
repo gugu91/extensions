@@ -5,7 +5,10 @@ import {
   buildInstallInstructions,
   buildStorageStateFileName,
   findPreferredChromiumExecutable,
+  isLocalhostUrl,
   isPlaywrightStorageState,
+  resolveNavigationSecurityOptions,
+  resolveRouteSecurityOptions,
   resolveSecurityOptions,
   safeRequestPageId,
   sanitizeLabel,
@@ -19,24 +22,57 @@ const lockedDown: SecurityOptions = {
   allowPrivateNetwork: false,
 };
 
-test("resolveSecurityOptions allows localhost by default while keeping private networks blocked", () => {
+test("resolveSecurityOptions keeps localhost and private networks blocked by default at the route layer", () => {
   assert.deepEqual(resolveSecurityOptions({}), {
-    allowLocalhost: true,
+    allowLocalhost: false,
     allowPrivateNetwork: false,
   });
 });
 
-test("resolveSecurityOptions respects explicit localhost opt-out", () => {
+test("resolveSecurityOptions respects explicit env opt-ins", () => {
   assert.deepEqual(
     resolveSecurityOptions({
-      BROWSER_ALLOW_LOCALHOST: "false",
+      BROWSER_ALLOW_LOCALHOST: "true",
       BROWSER_ALLOW_PRIVATE_NETWORK: "true",
     }),
     {
-      allowLocalhost: false,
+      allowLocalhost: true,
       allowPrivateNetwork: true,
     },
   );
+});
+
+test("isLocalhostUrl recognizes direct localhost development targets", () => {
+  assert.equal(isLocalhostUrl("http://localhost:3000"), true);
+  assert.equal(isLocalhostUrl("http://127.0.0.1:3000"), true);
+  assert.equal(isLocalhostUrl("https://example.com"), false);
+});
+
+test("resolveNavigationSecurityOptions allows direct localhost navigations by default", () => {
+  const result = assessUrl(
+    "http://localhost:3000",
+    resolveNavigationSecurityOptions("http://localhost:3000", resolveSecurityOptions({})),
+  );
+  assert.deepEqual(result, { allowed: true });
+});
+
+test("resolveRouteSecurityOptions keeps localhost subrequests blocked for non-localhost pages", () => {
+  const result = assessUrl(
+    "http://localhost:3000/api",
+    resolveRouteSecurityOptions(resolveSecurityOptions({}), { trustedLocalhostPage: false }),
+  );
+  assert.equal(result.allowed, false);
+  if (!result.allowed) {
+    assert.match(result.reason, /Blocked localhost URL/);
+  }
+});
+
+test("resolveRouteSecurityOptions allows localhost subrequests for explicitly trusted localhost pages", () => {
+  const result = assessUrl(
+    "http://localhost:3000/api",
+    resolveRouteSecurityOptions(resolveSecurityOptions({}), { trustedLocalhostPage: true }),
+  );
+  assert.deepEqual(result, { allowed: true });
 });
 
 test("assessUrl allows public https URLs", () => {

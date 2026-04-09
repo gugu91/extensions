@@ -9,7 +9,7 @@ It is designed for real browsing and lightweight web interaction, not just test 
 - snapshot and extract page content
 - click, fill, press, wait, inspect tabs, and capture screenshots
 - keep screenshots, artifacts, and saved browser state inside the active workspace
-- allow localhost by default for local app testing while still blocking broader private/internal network targets by default
+- allow **direct localhost local-dev navigations** by default while still blocking broader private/internal network targets — and keeping arbitrary public-page localhost subrequests blocked by default
 
 ## Location
 
@@ -88,19 +88,18 @@ The extension intentionally fails with exact engine-aware commands when:
 
 ## Security defaults
 
-The extension now favors the common local-dev path while keeping broader network guardrails in place.
+The extension now favors the common local-dev path while keeping the routed-request guardrails narrow.
 
 Allowed by default:
 
 - `http://...`
 - `https://...`
 - public internet targets
-- `localhost`
-- `127.0.0.1`
-- `::1`
+- **direct top-level navigation** to `localhost`, `127.0.0.1`, and `::1` for trusted local-app testing
 
 Blocked by default:
 
+- localhost subrequests from arbitrary non-localhost pages
 - private IPv4 ranges like `10.x`, `172.16-31.x`, `192.168.x`
 - link-local / internal ranges when detectable
 - obvious internal hostnames like `*.local`, `*.internal`, `host.docker.internal`, and single-label internal names
@@ -109,8 +108,8 @@ Blocked by default:
 Environment controls:
 
 ```bash
-# optional hardening: turn localhost back off
-export BROWSER_ALLOW_LOCALHOST=false
+# optional broader localhost override for advanced workflows
+export BROWSER_ALLOW_LOCALHOST=true
 
 # optional trusted-network override
 export BROWSER_ALLOW_PRIVATE_NETWORK=true
@@ -118,9 +117,9 @@ export BROWSER_ALLOW_PRIVATE_NETWORK=true
 
 Recommended practice:
 
-- leave localhost enabled when you are actively testing a trusted local app
+- use direct `browser_navigate` / initial session URLs for trusted localhost apps
 - keep broader private-network access off unless you explicitly need it
-- if you want the old stricter behavior, set `BROWSER_ALLOW_LOCALHOST=false`
+- leave arbitrary public-page localhost subrequests blocked unless you have consciously opted into a wider localhost policy
 
 ## Session model
 
@@ -279,7 +278,7 @@ This is explicit opt-in only. The extension does not auto-save state, and tool o
 
 ### 4. Trusted local app on localhost
 
-Localhost is allowed by default, so you can navigate directly:
+Direct localhost navigation is allowed by default, so you can navigate directly:
 
 ```json
 { "session_id": "<session_id>", "url": "http://localhost:3000" }
@@ -287,10 +286,12 @@ Localhost is allowed by default, so you can navigate directly:
 
 Tool: `browser_navigate`
 
-If you want the older stricter behavior for a session, set:
+That trusted-localhost allowance is scoped to the page you explicitly navigate to localhost. A random public page does **not** get localhost subrequest access by default.
+
+If you want a broader localhost override for an advanced workflow, set:
 
 ```bash
-export BROWSER_ALLOW_LOCALHOST=false
+export BROWSER_ALLOW_LOCALHOST=true
 ```
 
 ## Notes for agents
