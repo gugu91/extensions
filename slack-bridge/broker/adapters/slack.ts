@@ -6,6 +6,7 @@ import {
   isUserAllowed,
   stripBotMention,
 } from "../../helpers.js";
+import { buildSlackInboundMessageText } from "../../slack-message-context.js";
 import {
   buildReactionTriggerMessage,
   normalizeReactionName,
@@ -192,7 +193,7 @@ export function classifyMessage(
     threadTs: effectiveTs,
     channel,
     userId: user,
-    text: cleanText,
+    text: buildSlackInboundMessageText(cleanText, evt),
     isDM,
     isChannelMention,
     messageTs: (evt.ts as string) ?? effectiveTs,

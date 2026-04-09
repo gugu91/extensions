@@ -84,6 +84,7 @@ import {
   deliverTrackedSlackFollowUpMessage,
   type PendingSlackToolPolicyTurn,
 } from "./slack-turn-guardrails.js";
+import { buildSlackInboundMessageText } from "./slack-message-context.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import {
   buildReactionPromptGuidelines,
@@ -1399,13 +1400,14 @@ export default function (pi: ExtensionAPI) {
 
     // Strip <@BOT_ID> from text for channel mentions
     const cleanText = isChannelMention ? stripBotMention(text, botUserId!) : text;
+    const enrichedText = buildSlackInboundMessageText(cleanText, evt);
     const confirmationResult = consumeConfirmationReply(effectiveTs, cleanText);
     const messageText =
       confirmationResult === null
-        ? cleanText
+        ? enrichedText
         : confirmationResult.approved
-          ? `${cleanText}\n\n✅ User approved security confirmation request in this thread.`
-          : `${cleanText}\n\n❌ User denied security confirmation request in this thread.`;
+          ? `${enrichedText}\n\n✅ User approved security confirmation request in this thread.`
+          : `${enrichedText}\n\n❌ User denied security confirmation request in this thread.`;
 
     const name = await resolveUser(user);
     if (shuttingDown) return;
