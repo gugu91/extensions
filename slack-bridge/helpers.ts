@@ -1086,15 +1086,25 @@ export function evaluateRalphLoopCycle(
       continue;
     }
 
-    // Stuck detection: agent reports "working" but no activity for > threshold
+    // Stuck detection: agent reports "working" and stale activity long past the threshold,
+    // but heartbeats alone only prove liveness, not lack of progress. Quiet workers can stay
+    // healthy with a claimed thread and fresh heartbeats while doing non-chatty work, so only
+    // escalate when there is actual queue pressure.
     if (workload.status === "working" && display.health === "healthy") {
       const lastActivityMs = parseIsoMs(workload.lastActivity);
       const activityAgeMs = lastActivityMs == null ? null : Math.max(0, nowMs - lastActivityMs);
-      if (activityAgeMs != null && activityAgeMs >= stuckWorkingThresholdMs) {
+      const hasFreshHeartbeat = display.heartbeatAgeMs != null;
+      const hasQueuePressure =
+        workload.pendingInboxCount > 0 || (pendingBacklogCount > 0 && hasAssignedWork);
+      if (
+        activityAgeMs != null &&
+        activityAgeMs >= stuckWorkingThresholdMs &&
+        (hasQueuePressure || !hasFreshHeartbeat)
+      ) {
         stuckAgentIds.push(workload.id);
-        const ageMinutes = Math.round(activityAgeMs / 60_000);
+        const thresholdMinutes = Math.max(1, Math.round(stuckWorkingThresholdMs / 60_000));
         anomalies.push(
-          `${workload.name} appears stuck (working with no activity for ${ageMinutes}m)`,
+          `${workload.name} appears stuck (working with no activity beyond ${thresholdMinutes}m threshold)`,
         );
         continue;
       }
