@@ -133,6 +133,7 @@ export async function runRalphLoopCycle(
   const cycleStartMs = Date.now();
   try {
     deps.runMaintenance(ctx);
+    const lastMaintenance = deps.getLastMaintenance();
 
     const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
 
@@ -179,7 +180,9 @@ export async function runRalphLoopCycle(
       state.nudges.set(workload.id, now);
     }
 
-    const ghostRewrite = rewriteRalphLoopGhostAnomalies(evaluation, state.reportedGhosts);
+    const ghostRewrite = rewriteRalphLoopGhostAnomalies(evaluation, state.reportedGhosts, {
+      suppressedGhostIds: lastMaintenance?.reapedAgentIds ?? [],
+    });
     state.reportedGhosts.clear();
     for (const ghostId of ghostRewrite.nextReportedGhostIds) {
       state.reportedGhosts.add(ghostId);
@@ -188,7 +191,8 @@ export async function runRalphLoopCycle(
     const visibleEvaluation = ghostRewrite.evaluation;
     const visibleSignature = buildRalphLoopAnomalySignature(visibleEvaluation);
     const nonGhostSignature = ghostRewrite.nonGhostAnomalies.join("|");
-    const hasOutstandingAnomalies = evaluation.anomalies.length > 0;
+    const hasOutstandingAnomalies =
+      visibleEvaluation.ghostAgentIds.length > 0 || visibleEvaluation.anomalies.length > 0;
     const ralphNotifications = buildRalphLoopCycleNotifications(visibleEvaluation, cycleStartedAt);
     const followUpPrompt =
       ghostRewrite.newGhostIds.length === 0 &&
@@ -433,7 +437,7 @@ export async function runRalphLoopCycle(
       workloads,
       evaluation: visibleEvaluation,
       evaluationOptions,
-      maintenance: deps.getLastMaintenance(),
+      maintenance: lastMaintenance,
       assignments: projectedAssignments,
       recentCycles: recentRalphCycles,
       cycleStartedAt,

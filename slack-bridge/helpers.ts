@@ -1149,15 +1149,26 @@ export function evaluateRalphLoopCycle(
   };
 }
 
+export interface RalphLoopGhostAnomalyRewriteOptions {
+  suppressedGhostIds?: Iterable<string>;
+}
+
 export function rewriteRalphLoopGhostAnomalies(
   evaluation: RalphLoopEvaluationResult,
   previousGhostIds: Iterable<string> = [],
+  options: RalphLoopGhostAnomalyRewriteOptions = {},
 ): RalphLoopGhostAnomalyRewriteResult {
   const priorGhostIds = new Set(previousGhostIds);
-  const nextReportedGhostIds = [...evaluation.ghostAgentIds];
-  const newGhostIds = evaluation.ghostAgentIds.filter((id) => !priorGhostIds.has(id));
+  const suppressedGhostIds = new Set(options.suppressedGhostIds ?? []);
   const currentGhostIds = new Set(evaluation.ghostAgentIds);
-  const clearedGhostIds = [...priorGhostIds].filter((id) => !currentGhostIds.has(id));
+  const visibleGhostIds = evaluation.ghostAgentIds.filter((id) => !suppressedGhostIds.has(id));
+  const retainedSuppressedGhostIds = [...priorGhostIds].filter(
+    (id) => suppressedGhostIds.has(id) && currentGhostIds.has(id),
+  );
+  const nextReportedGhostIds = [...new Set([...visibleGhostIds, ...retainedSuppressedGhostIds])];
+  const newGhostIds = visibleGhostIds.filter((id) => !priorGhostIds.has(id));
+  const currentReportedGhostIds = new Set(nextReportedGhostIds);
+  const clearedGhostIds = [...priorGhostIds].filter((id) => !currentReportedGhostIds.has(id));
   const nonGhostAnomalies = evaluation.anomalies.filter(
     (anomaly) => !anomaly.startsWith("ghost agents detected:"),
   );
@@ -1173,6 +1184,7 @@ export function rewriteRalphLoopGhostAnomalies(
   return {
     evaluation: {
       ...evaluation,
+      ghostAgentIds: visibleGhostIds,
       anomalies,
     },
     nonGhostAnomalies,

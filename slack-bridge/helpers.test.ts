@@ -2099,6 +2099,40 @@ describe("rewriteRalphLoopGhostAnomalies", () => {
     expect(cycle4.evaluation.anomalies).toEqual(["ghost agents cleared from registry: ghost-1"]);
     expect(cycle4.clearedGhostIds).toEqual(["ghost-1"]);
   });
+
+  it("suppresses freshly reaped ghost ids until they survive a later cycle", () => {
+    const cycle1 = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation(["ghost-1", "ghost-2"], ["ghost agents detected: ghost-1, ghost-2"]),
+      [],
+      { suppressedGhostIds: ["ghost-1"] },
+    );
+
+    expect(cycle1.evaluation.ghostAgentIds).toEqual(["ghost-2"]);
+    expect(cycle1.evaluation.anomalies).toEqual(["NEW ghost agents detected: ghost-2"]);
+    expect(cycle1.nextReportedGhostIds).toEqual(["ghost-2"]);
+
+    const cycle2 = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation(["ghost-1", "ghost-2"], ["ghost agents detected: ghost-1, ghost-2"]),
+      cycle1.nextReportedGhostIds,
+    );
+
+    expect(cycle2.evaluation.ghostAgentIds).toEqual(["ghost-1", "ghost-2"]);
+    expect(cycle2.evaluation.anomalies).toEqual(["NEW ghost agents detected: ghost-1"]);
+    expect(cycle2.nextReportedGhostIds).toEqual(["ghost-1", "ghost-2"]);
+  });
+
+  it("does not clear or re-announce a previously reported ghost when it is temporarily suppressed", () => {
+    const cycle = rewriteRalphLoopGhostAnomalies(
+      buildEvaluation(["ghost-1"], ["ghost agents detected: ghost-1"]),
+      ["ghost-1"],
+      { suppressedGhostIds: ["ghost-1"] },
+    );
+
+    expect(cycle.evaluation.ghostAgentIds).toEqual([]);
+    expect(cycle.evaluation.anomalies).toEqual([]);
+    expect(cycle.clearedGhostIds).toEqual([]);
+    expect(cycle.nextReportedGhostIds).toEqual(["ghost-1"]);
+  });
 });
 
 describe("buildRalphLoopNudgeMessage", () => {
