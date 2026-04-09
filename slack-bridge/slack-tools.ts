@@ -252,6 +252,28 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     };
   }
 
+  async function assertCanvasCommentsTargetIsCanvas(canvasId: string): Promise<void> {
+    try {
+      await slack("canvases.sections.lookup", getBotToken(), {
+        canvas_id: canvasId,
+        criteria: { section_types: ["any_header"] },
+      });
+    } catch (err) {
+      if (isSlackMethodError(err, "canvases.sections.lookup", "canvas_deleted")) {
+        throw new Error(`Canvas ${canvasId} is no longer available.`);
+      }
+      if (isSlackMethodError(err, "canvases.sections.lookup", "access_denied")) {
+        throw new Error(`Canvas ${canvasId} is not accessible with the current bot token.`);
+      }
+      if (isSlackMethodError(err, "canvases.sections.lookup", "canvas_not_found")) {
+        throw new Error(
+          `Canvas ${canvasId} is unavailable, inaccessible, or not a canvas. This tool only reads comments for Slack canvases.`,
+        );
+      }
+      throw err;
+    }
+  }
+
   async function resolveSlackTargetChannel(
     threadTs: string | undefined,
     channel: string | undefined,
@@ -2092,11 +2114,17 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
   pi.registerTool({
     name: "slack_canvas_comments_read",
     label: "Slack Canvas Comments Read",
-    description: "Read comments attached to a Slack canvas by canvas ID or channel canvas lookup.",
+    description:
+      "Read comments attached to a Slack canvas after validating the target with Slack's canvas APIs.",
     promptSnippet:
-      "Inspect comments attached to a Slack canvas in read-only mode. Use cursor pagination when a canvas has many comments.",
+      "Inspect comments attached to a Slack canvas in read-only mode. This tool validates canvas targets before using files.info, and it does not inspect generic Slack files.",
     parameters: Type.Object({
-      canvas_id: Type.Optional(Type.String({ description: "Canvas ID to inspect" })),
+      canvas_id: Type.Optional(
+        Type.String({
+          description:
+            "Canvas ID to inspect. The ID is validated as a canvas before comments are read.",
+        }),
+      ),
       channel: Type.Optional(
         Type.String({ description: "Channel name or ID whose channel canvas should be inspected" }),
       ),
@@ -2119,15 +2147,45 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const target = await resolveCanvasTarget(params.canvas_id, params.channel);
       const limit = normalizeSlackCanvasCommentsLimit(params.limit);
       const cursor = normalizeOptionalSlackCursor(params.cursor);
-      const response = await slack("files.info", getBotToken(), {
-        file: target.canvasId,
-        limit,
-        ...(cursor ? { cursor } : {}),
-      });
+
+      await assertCanvasCommentsTargetIsCanvas(target.canvasId);
+
+      let response: SlackResult;
+      try {
+        response = await slack("files.info", getBotToken(), {
+          file: target.canvasId,
+          limit,
+          ...(cursor ? { cursor } : {}),
+        });
+      } catch (err) {
+        if (
+          isSlackMethodError(
+            err,
+            "files.info",
+            "channel_canvas_deleted",
+            "file_deleted",
+            "file_not_found",
+          )
+        ) {
+          throw new Error(`Canvas ${target.canvasId} is no longer available.`);
+        }
+        if (isSlackMethodError(err, "files.info", "access_denied")) {
+          throw new Error(
+            `Canvas ${target.canvasId} is not accessible with the current bot token.`,
+          );
+        }
+        throw err;
+      }
+
       const page = extractSlackCanvasCommentsPage(
         response as unknown as Record<string, unknown>,
         target.canvasId,
       );
+      if (page.canvasId !== target.canvasId) {
+        throw new Error(
+          `Slack files.info returned comments for ${page.canvasId}, but canvas comment inspection requested ${target.canvasId}.`,
+        );
+      }
       const comments = await Promise.all(
         page.comments.map(async (comment) => ({
           ...comment,

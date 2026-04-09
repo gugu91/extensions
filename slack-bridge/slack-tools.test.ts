@@ -38,6 +38,10 @@ describe("registerSlackTools", () => {
       ok: true,
       channel: { id: "C_PROJ", properties: {} },
     } as SlackResult;
+    let canvasesSectionsLookupResponse: SlackResult = {
+      ok: true,
+      sections: [],
+    } as SlackResult;
     let filesInfoResponse: SlackResult = {
       ok: true,
       file: {
@@ -174,6 +178,10 @@ describe("registerSlackTools", () => {
         return conversationsInfoResponse;
       }
 
+      if (method === "canvases.sections.lookup") {
+        return canvasesSectionsLookupResponse;
+      }
+
       if (method === "files.info") {
         return filesInfoResponse;
       }
@@ -237,6 +245,9 @@ describe("registerSlackTools", () => {
       },
       setConversationsInfoResponse: (response: SlackResult) => {
         conversationsInfoResponse = response;
+      },
+      setCanvasesSectionsLookupResponse: (response: SlackResult) => {
+        canvasesSectionsLookupResponse = response;
       },
       setFilesInfoResponse: (response: SlackResult) => {
         filesInfoResponse = response;
@@ -912,7 +923,7 @@ describe("registerSlackTools", () => {
     });
   });
 
-  it("reads canvas comments by canvas id via files.info", async () => {
+  it("validates a direct canvas id before reading its comments", async () => {
     const { slack, tools, setFilesInfoResponse, setResolveUser } = setup();
     setResolveUser(async (userId) => (userId === "U123" ? "Alice" : userId));
     setFilesInfoResponse({
@@ -931,6 +942,10 @@ describe("registerSlackTools", () => {
       canvas_id: "F123",
     });
 
+    expect(slack).toHaveBeenCalledWith("canvases.sections.lookup", "xoxb-initial", {
+      canvas_id: "F123",
+      criteria: { section_types: ["any_header"] },
+    });
     expect(slack).toHaveBeenCalledWith("files.info", "xoxb-initial", {
       file: "F123",
       limit: 20,
@@ -950,7 +965,7 @@ describe("registerSlackTools", () => {
     );
   });
 
-  it("resolves a channel canvas before reading its comments", async () => {
+  it("resolves and validates a channel canvas before reading its comments", async () => {
     const { slack, tools, setConversationsInfoResponse, setFilesInfoResponse } = setup();
     setConversationsInfoResponse({
       ok: true,
@@ -978,6 +993,10 @@ describe("registerSlackTools", () => {
     expect(slack).toHaveBeenCalledWith("conversations.info", "xoxb-initial", {
       channel: "resolved:proj-alpha",
     });
+    expect(slack).toHaveBeenCalledWith("canvases.sections.lookup", "xoxb-initial", {
+      canvas_id: "F_CANVAS_1",
+      criteria: { section_types: ["any_header"] },
+    });
     expect(slack).toHaveBeenCalledWith("files.info", "xoxb-initial", {
       file: "F_CANVAS_1",
       limit: 5,
@@ -992,6 +1011,75 @@ describe("registerSlackTools", () => {
         returned_count: 0,
       }),
     );
+  });
+
+  it("rejects non-canvas file ids before calling files.info", async () => {
+    const { slack, tools } = setup();
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "canvases.sections.lookup") {
+          throw new Error("Slack canvases.sections.lookup: canvas_not_found");
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    await expect(
+      tools.get("slack_canvas_comments_read")!.execute("tool-canvas-3", {
+        canvas_id: "F_NOT_A_CANVAS",
+      }),
+    ).rejects.toThrow(
+      "Canvas F_NOT_A_CANVAS is unavailable, inaccessible, or not a canvas. This tool only reads comments for Slack canvases.",
+    );
+    expect(slack.mock.calls.some(([method]) => method === "files.info")).toBe(false);
+  });
+
+  it("surfaces inaccessible canvases clearly", async () => {
+    const { slack, tools } = setup();
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "canvases.sections.lookup") {
+          throw new Error("Slack canvases.sections.lookup: access_denied");
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    await expect(
+      tools.get("slack_canvas_comments_read")!.execute("tool-canvas-4", {
+        canvas_id: "F_PRIVATE_CANVAS",
+      }),
+    ).rejects.toThrow("Canvas F_PRIVATE_CANVAS is not accessible with the current bot token.");
+    expect(slack.mock.calls.some(([method]) => method === "files.info")).toBe(false);
+  });
+
+  it("surfaces deleted channel canvases clearly", async () => {
+    const { slack, tools, setConversationsInfoResponse } = setup();
+    setConversationsInfoResponse({
+      ok: true,
+      channel: {
+        id: "resolved:proj-alpha",
+        properties: { canvas: { id: "F_CANVAS_1" } },
+      },
+    } as SlackResult);
+
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "files.info") {
+          throw new Error("Slack files.info: channel_canvas_deleted");
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    await expect(
+      tools.get("slack_canvas_comments_read")!.execute("tool-canvas-5", {
+        channel: "proj-alpha",
+      }),
+    ).rejects.toThrow("Canvas F_CANVAS_1 is no longer available.");
   });
 
   // ─── slack_project_create ─────────────────────────────
