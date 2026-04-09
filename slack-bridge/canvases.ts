@@ -9,6 +9,25 @@ export type SlackCanvasUpdateMode = "append" | "prepend" | "replace";
 export type SlackCanvasSectionType = "h1" | "h2" | "h3" | "any_header";
 export type SlackCanvasEditOperation = "insert_at_end" | "insert_at_start" | "replace";
 
+export interface SlackCanvasCommentRecord {
+  id?: string;
+  userId?: string;
+  createdTs?: string;
+  text: string;
+}
+
+export interface SlackCanvasCommentsPage {
+  canvasId: string;
+  title?: string;
+  permalink?: string;
+  commentsCount: number;
+  returnedCount: number;
+  page?: number;
+  pages?: number;
+  comments: SlackCanvasCommentRecord[];
+  nextCursor?: string;
+}
+
 export interface SlackCanvasCreateInput {
   kind?: string;
   title?: string;
@@ -67,6 +86,20 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asStringifiedNumber(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const strings = value.map(asString).filter((item): item is string => Boolean(item));
@@ -103,6 +136,14 @@ export function normalizeSlackCanvasSectionType(type?: string): SlackCanvasSecti
     return normalized;
   }
   throw new Error("Unsupported canvas section type. Use 'h1', 'h2', 'h3', or 'any_header'.");
+}
+
+export function normalizeSlackCanvasCommentsLimit(limit?: number): number {
+  if (limit == null) return 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    throw new Error("Canvas comment reads require limit to be an integer between 1 and 200.");
+  }
+  return limit;
 }
 
 export function buildSlackCanvasCreateRequest(
@@ -246,6 +287,58 @@ export function extractSlackChannelCanvasId(response: Record<string, unknown>): 
   if (canvasIds?.[0]) return canvasIds[0];
 
   return null;
+}
+
+function extractSlackCanvasCommentText(comment: Record<string, unknown>): string {
+  return (
+    asString(comment.comment) ??
+    asString(comment.comment_text) ??
+    asString(comment.text) ??
+    asString(comment.plain_text) ??
+    "(no comment text exposed by Slack)"
+  );
+}
+
+export function extractSlackCanvasCommentsPage(
+  response: Record<string, unknown>,
+  fallbackCanvasId?: string,
+): SlackCanvasCommentsPage {
+  const file = asRecord(response.file) ?? {};
+  const comments = Array.isArray(response.comments)
+    ? (response.comments as Record<string, unknown>[])
+    : [];
+  const paging = asRecord(response.paging);
+  const responseMetadata = asRecord(response.response_metadata);
+  const canvasId = asString(file.id) ?? normalizeOptionalString(fallbackCanvasId);
+
+  if (!canvasId) {
+    throw new Error("Slack did not return a canvas/file id for this canvas comment read.");
+  }
+
+  const parsedComments: SlackCanvasCommentRecord[] = comments.map((comment) => ({
+    ...(asStringifiedNumber(comment.id) ? { id: asStringifiedNumber(comment.id) } : {}),
+    ...(asString(comment.user) ? { userId: asString(comment.user) } : {}),
+    ...(asStringifiedNumber(comment.created ?? comment.timestamp ?? comment.ts)
+      ? { createdTs: asStringifiedNumber(comment.created ?? comment.timestamp ?? comment.ts) }
+      : {}),
+    text: extractSlackCanvasCommentText(comment),
+  }));
+
+  const nextCursor = asString(responseMetadata?.next_cursor);
+  const totalFromPaging = asNumber(paging?.total);
+  const commentCount = asNumber(file.comments_count) ?? totalFromPaging ?? parsedComments.length;
+
+  return {
+    canvasId,
+    ...(asString(file.title) ? { title: asString(file.title) } : {}),
+    ...(asString(file.permalink) ? { permalink: asString(file.permalink) } : {}),
+    commentsCount: commentCount,
+    returnedCount: parsedComments.length,
+    ...(asNumber(paging?.page) ? { page: asNumber(paging?.page) } : {}),
+    ...(asNumber(paging?.pages) ? { pages: asNumber(paging?.pages) } : {}),
+    comments: parsedComments,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
 }
 
 export function extractExistingChannelCanvasId(response: Record<string, unknown>): string | null {

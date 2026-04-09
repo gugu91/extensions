@@ -49,10 +49,10 @@ These are included in the manifest, but for reference:
 app_mentions:read    assistant:write      bookmarks:read
 bookmarks:write      canvases:read        canvases:write
 channels:history     channels:read        chat:write
-files:write          groups:history       groups:read
-im:history           im:read              im:write
-pins:read            pins:write           reactions:read
-reactions:write      users:read
+files:read           files:write          groups:history
+groups:read          im:history           im:read
+im:write             pins:read            pins:write
+reactions:read       reactions:write      users:read
 ```
 
 ## Configuration
@@ -170,30 +170,31 @@ Messages queue while the agent is busy. When the agent finishes, it automaticall
 
 ### Available tools
 
-| Tool                   | Description                                                    |
-| ---------------------- | -------------------------------------------------------------- |
-| `slack_send`           | Reply in a Slack assistant thread                              |
-| `slack_react`          | Add an emoji reaction to a message                             |
-| `slack_read`           | Read messages from a thread                                    |
-| `slack_inbox`          | Check pending incoming messages                                |
-| `slack_upload`         | Upload files, snippets, or diffs into Slack                    |
-| `slack_schedule`       | Schedule a message for later delivery                          |
-| `slack_post_channel`   | Post to a channel (by name or ID)                              |
-| `slack_read_channel`   | Read channel history or a thread in a channel                  |
-| `slack_create_channel` | Create a new Slack channel                                     |
-| `slack_project_create` | Create a project channel + RFC canvas + bot invite in one call |
-| `slack_pin`            | Pin or unpin a message                                         |
-| `slack_bookmark`       | Add, list, or remove channel bookmarks                         |
-| `slack_export`         | Export a thread as markdown, plain text, or JSON               |
-| `slack_presence`       | Check if users are active, away, or in DND                     |
-| `slack_canvas_create`  | Create a standalone or channel canvas                          |
-| `slack_canvas_update`  | Append, prepend, or replace canvas content                     |
-| `slack_blocks_build`   | Build Block Kit message templates                              |
-| `slack_modal_build`    | Build Slack modal templates                                    |
-| `slack_modal_open`     | Open a modal from a trigger interaction                        |
-| `slack_modal_push`     | Push a new step onto a modal stack                             |
-| `slack_modal_update`   | Update an existing open modal                                  |
-| `slack_confirm_action` | Request user confirmation before a dangerous action            |
+| Tool                         | Description                                                              |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `slack_send`                 | Reply in a Slack assistant thread                                        |
+| `slack_react`                | Add an emoji reaction to a message                                       |
+| `slack_read`                 | Read messages from a thread                                              |
+| `slack_inbox`                | Check pending incoming messages                                          |
+| `slack_upload`               | Upload files, snippets, or diffs into Slack                              |
+| `slack_schedule`             | Schedule a message for later delivery                                    |
+| `slack_post_channel`         | Post to a channel (by name or ID)                                        |
+| `slack_read_channel`         | Read channel history or a thread in a channel                            |
+| `slack_create_channel`       | Create a new Slack channel                                               |
+| `slack_project_create`       | Create a project channel + RFC canvas + bot invite in one call           |
+| `slack_pin`                  | Pin or unpin a message                                                   |
+| `slack_bookmark`             | Add, list, or remove channel bookmarks                                   |
+| `slack_export`               | Export a thread as markdown, plain text, or JSON                         |
+| `slack_presence`             | Check if users are active, away, or in DND                               |
+| `slack_canvas_comments_read` | Read comments attached to a canvas by canvas ID or channel canvas lookup |
+| `slack_canvas_create`        | Create a standalone or channel canvas                                    |
+| `slack_canvas_update`        | Append, prepend, or replace canvas content                               |
+| `slack_blocks_build`         | Build Block Kit message templates                                        |
+| `slack_modal_build`          | Build Slack modal templates                                              |
+| `slack_modal_open`           | Open a modal from a trigger interaction                                  |
+| `slack_modal_push`           | Push a new step onto a modal stack                                       |
+| `slack_modal_update`         | Update an existing open modal                                            |
+| `slack_confirm_action`       | Request user confirmation before a dangerous action                      |
 
 ### Slash commands
 

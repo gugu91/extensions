@@ -34,6 +34,20 @@ describe("registerSlackTools", () => {
       members: [],
       response_metadata: { next_cursor: "" },
     } as SlackResult;
+    let conversationsInfoResponse: SlackResult = {
+      ok: true,
+      channel: { id: "C_PROJ", properties: {} },
+    } as SlackResult;
+    let filesInfoResponse: SlackResult = {
+      ok: true,
+      file: {
+        id: "F_CANVAS",
+        title: "Canvas",
+        comments_count: 0,
+      },
+      comments: [],
+      response_metadata: { next_cursor: "" },
+    } as SlackResult;
     const presenceResponses = new Map<string, SlackResult>();
     const dndResponses = new Map<string, SlackResult>();
 
@@ -157,10 +171,11 @@ describe("registerSlackTools", () => {
       }
 
       if (method === "conversations.info") {
-        return {
-          ok: true,
-          channel: { id: body?.channel ?? "C_PROJ", properties: {} },
-        } as unknown as SlackResult;
+        return conversationsInfoResponse;
+      }
+
+      if (method === "files.info") {
+        return filesInfoResponse;
       }
 
       return {
@@ -219,6 +234,12 @@ describe("registerSlackTools", () => {
       },
       setUsersListResponse: (response: SlackResult) => {
         usersListResponse = response;
+      },
+      setConversationsInfoResponse: (response: SlackResult) => {
+        conversationsInfoResponse = response;
+      },
+      setFilesInfoResponse: (response: SlackResult) => {
+        filesInfoResponse = response;
       },
       setPresenceResponse: (userId: string, response: SlackResult) => {
         presenceResponses.set(userId, response);
@@ -889,6 +910,88 @@ describe("registerSlackTools", () => {
         },
       ],
     });
+  });
+
+  it("reads canvas comments by canvas id via files.info", async () => {
+    const { slack, tools, setFilesInfoResponse, setResolveUser } = setup();
+    setResolveUser(async (userId) => (userId === "U123" ? "Alice" : userId));
+    setFilesInfoResponse({
+      ok: true,
+      file: {
+        id: "F123",
+        title: "Launch plan",
+        permalink: "https://example.slack.com/docs/T/F123",
+        comments_count: 2,
+      },
+      comments: [{ id: "Fc1", user: "U123", comment: "Please update rollout" }],
+      response_metadata: { next_cursor: "cursor-2" },
+    } as SlackResult);
+
+    const result = await tools.get("slack_canvas_comments_read")!.execute("tool-canvas-1", {
+      canvas_id: "F123",
+    });
+
+    expect(slack).toHaveBeenCalledWith("files.info", "xoxb-initial", {
+      file: "F123",
+      limit: 20,
+    });
+    expect(result.content?.[0]?.text).toContain("Canvas comments for Launch plan (F123)");
+    expect(result.content?.[0]?.text).toContain("Alice: Please update rollout");
+    expect(result.content?.[0]?.text).toContain("cursor=cursor-2");
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        canvas_id: "F123",
+        title: "Launch plan",
+        permalink: "https://example.slack.com/docs/T/F123",
+        comments_count: 2,
+        returned_count: 1,
+        next_cursor: "cursor-2",
+      }),
+    );
+  });
+
+  it("resolves a channel canvas before reading its comments", async () => {
+    const { slack, tools, setConversationsInfoResponse, setFilesInfoResponse } = setup();
+    setConversationsInfoResponse({
+      ok: true,
+      channel: {
+        id: "resolved:proj-alpha",
+        properties: { canvas: { id: "F_CANVAS_1" } },
+      },
+    } as SlackResult);
+    setFilesInfoResponse({
+      ok: true,
+      file: {
+        id: "F_CANVAS_1",
+        title: "Project canvas",
+        comments_count: 0,
+      },
+      comments: [],
+      response_metadata: { next_cursor: "" },
+    } as SlackResult);
+
+    const result = await tools.get("slack_canvas_comments_read")!.execute("tool-canvas-2", {
+      channel: "proj-alpha",
+      limit: 5,
+    });
+
+    expect(slack).toHaveBeenCalledWith("conversations.info", "xoxb-initial", {
+      channel: "resolved:proj-alpha",
+    });
+    expect(slack).toHaveBeenCalledWith("files.info", "xoxb-initial", {
+      file: "F_CANVAS_1",
+      limit: 5,
+    });
+    expect(result.content?.[0]?.text).toContain("Returned 0 of 0 comment(s).");
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        canvas_id: "F_CANVAS_1",
+        channel: "resolved:proj-alpha",
+        title: "Project canvas",
+        comments_count: 0,
+        returned_count: 0,
+      }),
+    );
   });
 
   // ─── slack_project_create ─────────────────────────────
