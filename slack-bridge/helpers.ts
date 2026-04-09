@@ -1032,6 +1032,13 @@ export interface RalphLoopGhostAnomalyRewriteResult {
   nextReportedGhostIds: string[];
 }
 
+function hasRalphLoopStuckWorkPressure(
+  workload: Pick<RalphLoopAgentWorkload, "pendingInboxCount">,
+  pendingBacklogCount: number,
+): boolean {
+  return workload.pendingInboxCount > 0 || pendingBacklogCount > 0;
+}
+
 export function evaluateRalphLoopCycle(
   workloads: RalphLoopAgentWorkload[],
   options: RalphLoopEvaluationOptions = {},
@@ -1086,11 +1093,15 @@ export function evaluateRalphLoopCycle(
       continue;
     }
 
-    // Stuck detection: agent reports "working" but no activity for > threshold
+    // Stuck detection: agent reports "working" but no activity for > threshold.
+    // Healthy quiet workers can legitimately spend long stretches with no broker-visible
+    // activity while still heartbeating normally, so only escalate when there is fresh
+    // work pressure (worker inbox growth or unrouted backlog pressure).
     if (workload.status === "working" && display.health === "healthy") {
       const lastActivityMs = parseIsoMs(workload.lastActivity);
       const activityAgeMs = lastActivityMs == null ? null : Math.max(0, nowMs - lastActivityMs);
-      if (activityAgeMs != null && activityAgeMs >= stuckWorkingThresholdMs) {
+      const hasWorkPressure = hasRalphLoopStuckWorkPressure(workload, pendingBacklogCount);
+      if (activityAgeMs != null && activityAgeMs >= stuckWorkingThresholdMs && hasWorkPressure) {
         stuckAgentIds.push(workload.id);
         const ageMinutes = Math.round(activityAgeMs / 60_000);
         anomalies.push(
