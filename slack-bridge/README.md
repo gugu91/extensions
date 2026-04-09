@@ -137,11 +137,17 @@ Behavior and precedence:
 }
 ```
 
+Slack access is now **default-deny** unless you configure one of these explicitly:
+
+- `allowedUsers` / `SLACK_ALLOWED_USERS` — allow only specific Slack user IDs
+- `allowAllWorkspaceUsers: true` / `SLACK_ALLOW_ALL_WORKSPACE_USERS=true` — explicit workspace-wide opt-in
+
 | Key                            | Required | Description                                                                                             |
 | ------------------------------ | -------- | ------------------------------------------------------------------------------------------------------- |
 | `botToken`                     | **yes**  | Bot User OAuth Token (`xoxb-...`)                                                                       |
 | `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)                                                            |
-| `allowedUsers`                 | no       | Slack user IDs that can interact (all users if unset)                                                   |
+| `allowedUsers`                 | no       | Slack user IDs that can interact; when unset, access is denied unless `allowAllWorkspaceUsers` is true  |
+| `allowAllWorkspaceUsers`       | no       | Explicit opt-in for workspace-wide Slack access when you do not want a user allowlist                   |
 | `defaultChannel`               | no       | Default channel for `slack_post_channel`                                                                |
 | `logChannel`                   | no       | Channel for broker activity logs                                                                        |
 | `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                       |
@@ -254,7 +260,7 @@ Or set `"autoFollow": true` in settings to auto-connect when a broker is running
 
 ## Security
 
-- **User allowlist**: Set `allowedUsers` to restrict who can interact with Pinet
+- **User access**: Slack access is default-deny. Set `allowedUsers` for a narrow allowlist, or `allowAllWorkspaceUsers: true` only if you explicitly want workspace-wide access
 - **Tool guardrails**: Use `security.requireConfirmation` and `security.blockedTools` to control tool access
 - **Mesh authentication**: Optional. Configure `meshSecret` or `meshSecretPath` (or `PINET_MESH_SECRET` / `PINET_MESH_SECRET_PATH`) to require a shared secret; leave them unset to disable shared-secret auth. Configured followers fail closed on missing secret files or older/no-auth brokers rather than silently downgrading.
 

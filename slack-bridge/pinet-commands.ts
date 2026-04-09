@@ -1,5 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { generateAgentName, agentOwnsThread } from "./helpers.js";
+import {
+  generateAgentName,
+  agentOwnsThread,
+  describeSlackUserAccess,
+  resolveAllowAllWorkspaceUsers,
+  type SlackBridgeSettings,
+} from "./helpers.js";
 import { formatRecentActivityLogEntries, type SlackActivityLogger } from "./activity-log.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -21,11 +27,7 @@ export interface PinetCommandsDeps {
   allowedUsers: () => Set<string> | null;
   inboxLength: () => number;
   activityLogger: () => SlackActivityLogger;
-  settings: () => {
-    defaultChannel?: string;
-    logChannel?: string;
-    logLevel?: string;
-  };
+  settings: () => SlackBridgeSettings;
   lastBrokerMaintenance: () => {
     pendingBacklogCount: number;
     assignedBacklogCount: number;
@@ -238,10 +240,13 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
         agentOwnsThread(t.owner, deps.agentName(), deps.agentAliases(), deps.agentOwnerToken()),
       ).length;
       const users = deps.allowedUsers();
-      const allowlistInfo = users
-        ? `Allowed users: ${[...users].join(", ")}`
-        : "Allowed users: all (no allowlist set)";
       const s = deps.settings();
+      const allowlistInfo = describeSlackUserAccess(users, {
+        allowAllWorkspaceUsers: resolveAllowAllWorkspaceUsers(
+          s,
+          process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
+        ),
+      });
       const defaultChInfo = s.defaultChannel
         ? `Default channel: ${s.defaultChannel}`
         : "Default channel: none";

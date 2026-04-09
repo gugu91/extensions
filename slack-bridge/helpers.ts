@@ -12,6 +12,7 @@ export interface SlackBridgeSettings {
   appId?: string;
   appConfigToken?: string;
   allowedUsers?: string[];
+  allowAllWorkspaceUsers?: boolean;
   defaultChannel?: string;
   logChannel?: string;
   logLevel?: "errors" | "actions" | "verbose";
@@ -79,19 +80,73 @@ export function loadSettings(settingsPath?: string): SlackBridgeSettings {
 
 // ─── Allowlist ───────────────────────────────────────────
 
-export function buildAllowlist(settings: SlackBridgeSettings, envVar?: string): Set<string> | null {
-  if (settings.allowedUsers && settings.allowedUsers.length > 0) {
-    return new Set(settings.allowedUsers);
+function parseBooleanOptIn(value?: string | null): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+export function resolveAllowAllWorkspaceUsers(
+  settings: SlackBridgeSettings,
+  envVar = process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
+): boolean {
+  if (typeof settings.allowAllWorkspaceUsers === "boolean") {
+    return settings.allowAllWorkspaceUsers;
   }
-  if (envVar) {
-    return new Set(
-      envVar
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean),
-    );
+  return parseBooleanOptIn(envVar);
+}
+
+export function buildAllowlist(
+  settings: SlackBridgeSettings,
+  envVar?: string,
+  allowAllEnvVar = process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
+): Set<string> | null {
+  const configuredUsers = settings.allowedUsers?.map((id) => id.trim()).filter(Boolean) ?? [];
+  if (configuredUsers.length > 0) {
+    return new Set(configuredUsers);
   }
-  return null;
+
+  const envUsers =
+    envVar
+      ?.split(",")
+      .map((id) => id.trim())
+      .filter(Boolean) ?? [];
+  if (envUsers.length > 0) {
+    return new Set(envUsers);
+  }
+
+  if (resolveAllowAllWorkspaceUsers(settings, allowAllEnvVar)) {
+    return null;
+  }
+
+  return new Set();
+}
+
+export function describeSlackUserAccess(
+  allowlist: Set<string> | null,
+  options: { allowAllWorkspaceUsers?: boolean } = {},
+): string {
+  if (allowlist === null) {
+    return options.allowAllWorkspaceUsers
+      ? "Allowed users: all (explicit allow-all enabled)"
+      : "Allowed users: all";
+  }
+
+  if (allowlist.size > 0) {
+    return `Allowed users: ${[...allowlist].join(", ")}`;
+  }
+
+  return "Allowed users: none (default deny; set allowedUsers or allowAllWorkspaceUsers: true)";
+}
+
+export function getSlackUserAccessWarning(allowlist: Set<string> | null): string | null {
+  if (allowlist === null || allowlist.size > 0) {
+    return null;
+  }
+
+  return [
+    "Slack access is default-deny because no allowedUsers are configured.",
+    "Set slack-bridge.allowedUsers or explicit allowAllWorkspaceUsers: true to accept Slack users.",
+  ].join(" ");
 }
 
 export function isUserAllowed(allowlist: Set<string> | null, userId: string): boolean {

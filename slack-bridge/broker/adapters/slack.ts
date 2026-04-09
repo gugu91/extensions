@@ -31,6 +31,7 @@ export interface SlackAdapterConfig {
   botToken: string;
   appToken: string;
   allowedUsers?: string[];
+  allowAllWorkspaceUsers?: boolean;
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   /** Check whether a thread_ts belongs to a known thread in the broker DB. */
@@ -245,7 +246,14 @@ export class SlackAdapter implements MessageAdapter {
 
   constructor(config: SlackAdapterConfig) {
     this.config = config;
-    this.allowlist = buildAllowlist({ allowedUsers: config.allowedUsers }, undefined);
+    this.allowlist = buildAllowlist(
+      {
+        allowedUsers: config.allowedUsers,
+        allowAllWorkspaceUsers: config.allowAllWorkspaceUsers,
+      },
+      undefined,
+      undefined,
+    );
     this.reactionCommands = resolveReactionCommands(config.reactionCommands);
   }
 
