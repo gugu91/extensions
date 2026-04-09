@@ -159,6 +159,12 @@ export interface BrokerDBInterface {
   getAgentByStableId(stableId: string): AgentInfo | null;
   getAgents(): AgentInfo[];
   getChannelAssignment(channel: string): ChannelAssignment | null;
+  /**
+   * Slack user access policy for inbound routing.
+   * - `null` => explicit allow-all
+   * - non-empty Set => explicit allowlist
+   * - empty Set => default-deny / allow nobody
+   */
   getAllowedUsers(): Set<string> | null;
 
   createThread(thread: ThreadInfo): void;

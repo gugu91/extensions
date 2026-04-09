@@ -2979,6 +2979,7 @@ export default function (pi: ExtensionAPI) {
     let selfId: string | null = null;
 
     try {
+      broker.db.setAllowedUsers(allowedUsers);
       const router = new MessageRouter(broker.db);
       activeSkinTheme =
         broker.db.getSetting<string>(PINET_SKIN_SETTING_KEY) ?? DEFAULT_PINET_SKIN_THEME;

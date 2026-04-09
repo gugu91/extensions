@@ -362,7 +362,17 @@ describe("MessageRouter — route", () => {
     expect(decision).toEqual({ action: "reject", reason: "User not in allowlist" });
   });
 
-  it("allows all users when allowlist is null", () => {
+  it("rejects all users by default when the allowlist is empty", () => {
+    db.allowedUsers = new Set();
+    db.agents = [makeAgent({ id: "a1", name: "Bot1" })];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "a1" }));
+
+    const decision = router.route(makeMessage({ userId: "U001" }));
+
+    expect(decision).toEqual({ action: "reject", reason: "User not in allowlist" });
+  });
+
+  it("allows all users only when allowlist is explicitly null", () => {
     db.allowedUsers = null;
     db.agents = [makeAgent({ id: "a1", name: "Bot1" })];
     db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "a1" }));
