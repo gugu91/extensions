@@ -1904,13 +1904,13 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.anomalies).toEqual([]);
   });
 
-  it("still flags quiet workers when backlog pressure exists on their claimed work", () => {
+  it("does not treat unrelated global backlog as pressure on a quiet claimed worker", () => {
     const result = evaluateRalphLoopCycle(
       [
         {
-          emoji: "🦌",
-          name: "Busy Deer",
-          id: "busy-worker",
+          emoji: "🐗",
+          name: "Quiet Boar",
+          id: "quiet-worker",
           status: "working",
           metadata: { role: "worker" },
           lastSeen: "2026-04-01T00:09:55.000Z",
@@ -1918,6 +1918,17 @@ describe("evaluateRalphLoopCycle", () => {
           lastActivity: "2026-04-01T00:03:00.000Z",
           pendingInboxCount: 0,
           ownedThreadCount: 1,
+        },
+        {
+          emoji: "🦉",
+          name: "Ready Owl",
+          id: "ready-worker",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:09:55.000Z",
+          lastHeartbeat: "2026-04-01T00:09:55.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 0,
         },
       ],
       {
@@ -1929,9 +1940,11 @@ describe("evaluateRalphLoopCycle", () => {
       },
     );
 
-    expect(result.stuckAgentIds).toEqual(["busy-worker"]);
-    expect(result.anomalies).toContain(
-      "Busy Deer appears stuck (working with no activity beyond 5m threshold)",
+    expect(result.stuckAgentIds).toEqual([]);
+    expect(result.idleDrainAgentIds).toEqual(["ready-worker"]);
+    expect(result.anomalies).toContain("pending backlog (2) with 1 idle worker");
+    expect(result.anomalies).not.toContain(
+      "Quiet Boar appears stuck (working with no activity beyond 5m threshold)",
     );
   });
 
