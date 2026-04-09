@@ -79,6 +79,11 @@ import {
   type SecurityGuardrails,
 } from "./guardrails.js";
 import { evaluateSlackOriginCoreToolPolicy } from "./core-tool-guardrails.js";
+import {
+  consumePendingSlackToolPolicyTurn,
+  deliverTrackedSlackFollowUpMessage,
+  type PendingSlackToolPolicyTurn,
+} from "./slack-turn-guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import {
   buildReactionPromptGuidelines,
@@ -602,12 +607,6 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Inbox queue ────────────────────────────────────
 
-  interface PendingSlackToolPolicyTurn {
-    prompt: string;
-    threadTs: string | undefined;
-    threadCount: number;
-  }
-
   const inbox: InboxMessage[] = [];
   const brokerDeliveryState = createBrokerDeliveryState();
   const AUTO_DRAIN_INTERRUPT_SUPPRESSION_MS = 1_500;
@@ -618,22 +617,6 @@ export default function (pi: ExtensionAPI) {
   const pendingSlackToolPolicyTurns: PendingSlackToolPolicyTurn[] = [];
   let nextSlackToolPolicyTurn: PendingSlackToolPolicyTurn | null = null;
   let activeSlackToolPolicyTurn: PendingSlackToolPolicyTurn | null = null;
-
-  function rememberPendingSlackToolPolicyTurn(prompt: string, messages: InboxMessage[]): void {
-    const threadIds = [...new Set(messages.map((message) => message.threadTs).filter(Boolean))];
-    pendingSlackToolPolicyTurns.push({
-      prompt,
-      threadTs: threadIds.length === 1 ? threadIds[0] : undefined,
-      threadCount: threadIds.length,
-    });
-  }
-
-  function consumePendingSlackToolPolicyTurn(text: string): PendingSlackToolPolicyTurn | null {
-    const index = pendingSlackToolPolicyTurns.findIndex((entry) => entry.prompt === text);
-    if (index < 0) return null;
-    const [entry] = pendingSlackToolPolicyTurns.splice(index, 1);
-    return entry ?? null;
-  }
 
   function updateBadge(): void {
     if (!extCtx?.hasUI) return;
@@ -3777,8 +3760,14 @@ export default function (pi: ExtensionAPI) {
       prompt = securityPrompt + "\n\n" + prompt;
     }
 
-    if (deliverFollowUpMessage(prompt)) {
-      rememberPendingSlackToolPolicyTurn(prompt, pending);
+    if (
+      deliverTrackedSlackFollowUpMessage({
+        queue: pendingSlackToolPolicyTurns,
+        prompt,
+        messages: pending,
+        deliver: deliverFollowUpMessage,
+      })
+    ) {
       if (brokerInboxIds.length > 0) {
         if (brokerRole === "follower") {
           markFollowerInboxIdsDelivered(followerDeliveryState, brokerInboxIds);
@@ -3804,7 +3793,10 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    nextSlackToolPolicyTurn = consumePendingSlackToolPolicyTurn(event.text);
+    nextSlackToolPolicyTurn = consumePendingSlackToolPolicyTurn(
+      pendingSlackToolPolicyTurns,
+      event.text,
+    );
   });
 
   pi.on("turn_start", async () => {
