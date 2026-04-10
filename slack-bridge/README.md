@@ -123,6 +123,7 @@ Behavior and precedence:
   "slack-bridge": {
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
+    "runtimeMode": "single",
     "allowedUsers": ["U_EXAMPLE_MEMBER_ID"],
     "defaultChannel": "C_EXAMPLE_CHANNEL_ID",
     "logChannel": "#pinet-logs",
@@ -147,7 +148,9 @@ Behavior and precedence:
 | `defaultChannel`               | no       | Default channel for `slack_post_channel`                                                                           |
 | `logChannel`                   | no       | Channel for broker activity logs                                                                                   |
 | `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                                  |
-| `autoFollow`                   | no       | Auto-connect as follower when broker is running                                                                    |
+| `runtimeMode`                  | no       | Explicit startup mode: `"off"`, `"single"`, `"broker"`, or `"follower"`                                            |
+| `autoConnect`                  | no       | Legacy compatibility alias for `runtimeMode: "single"`                                                             |
+| `autoFollow`                   | no       | Legacy compatibility alias for follower startup when a broker socket exists                                        |
 | `meshSecret`                   | no       | Optional inline Pinet shared secret; overrides `meshSecretPath` and env fallbacks                                  |
 | `meshSecretPath`               | no       | Optional path to a shared-secret file; broker creates it if missing, followers require an existing file            |
 | `suggestedPrompts`             | no       | Prompts shown when a user opens a new conversation                                                                 |
@@ -215,6 +218,25 @@ Messages queue while the agent is busy. When the agent finishes, it automaticall
 | `/pinet-logs`   | Show recent broker activity log entries             |
 | `/slack-logs`   | Show recent Slack bridge log entries                |
 
+## Runtime modes
+
+`slack-bridge` now treats runtime mode as an explicit concept:
+
+| Mode       | Meaning                                                                                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`      | Slack bridge is loaded, but no active coordination runtime is started.                                                                                                   |
+| `single`   | One local Pi session owns Slack ingress and local thread/inbox ownership only. No broker DB/socket/client, no RALPH/control plane, no mesh auth, no multi-agent surface. |
+| `broker`   | The session runs the broker coordination runtime.                                                                                                                        |
+| `follower` | The session connects to an existing broker as a worker runtime.                                                                                                          |
+
+Startup selection:
+
+- `runtimeMode` is the explicit startup selector.
+- `autoConnect` is a legacy compatibility alias for `runtimeMode: "single"`.
+- `autoFollow` is a legacy compatibility alias for `runtimeMode: "follower"` when a broker socket is available.
+- explicit `runtimeMode` wins over the legacy flags.
+- `/pinet-start` and `/pinet-follow` still switch the live session into broker/follower runtimes explicitly.
+
 ## Pinet (Multi-Agent Mode)
 
 Pinet supports a broker/follower architecture for coordinating multiple pi agents over Slack.
@@ -233,7 +255,7 @@ Pinet supports a broker/follower architecture for coordinating multiple pi agent
 /pinet-follow
 ```
 
-Or set `"autoFollow": true` in settings to auto-connect when a broker is running.
+Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": true`) to auto-connect when a broker is running.
 
 ### Multi-agent tools
 

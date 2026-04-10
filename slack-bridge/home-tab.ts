@@ -1,4 +1,5 @@
 import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
 export type SlackBlock = Record<string, unknown>;
 
@@ -22,7 +23,7 @@ export interface StandalonePinetHomeTabInput {
   agentName: string;
   agentEmoji: string;
   connected: boolean;
-  mode: "broker" | "worker" | "standalone";
+  mode: SlackBridgeRuntimeMode;
   activeThreads: number;
   pendingInbox: number;
   currentBranch?: string | null;
@@ -258,7 +259,7 @@ export function renderBrokerControlPlaneHomeTabView(
 export function renderStandalonePinetHomeTabView(
   input: StandalonePinetHomeTabInput,
 ): SlackHomeView {
-  const modeLabel = input.mode === "standalone" ? "direct" : input.mode;
+  const modeLabel = input.mode;
   const branch = asNonEmptyString(input.currentBranch) ?? "unknown";
   const defaultChannel = asNonEmptyString(input.defaultChannel) ?? "not configured";
 
@@ -289,7 +290,7 @@ export function renderStandalonePinetHomeTabView(
         text: [
           "• Open the *Messages* tab and start a conversation with Pinet.",
           "• Mention Pinet in a channel to continue work in-thread.",
-          "• Start broker mode to expose the full control-plane dashboard here on the Home tab.",
+          '• Use `runtimeMode: "single"` for local Slack-only mode, or `/pinet-start` and `/pinet-follow` for mesh runtimes.',
         ].join("\n"),
       }),
     ],

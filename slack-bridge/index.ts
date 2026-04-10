@@ -168,6 +168,10 @@ import {
   renderBrokerControlPlaneHomeTabView,
   renderStandalonePinetHomeTabView,
 } from "./home-tab.js";
+import {
+  type SlackBridgeRuntimeMode,
+  resolveSlackBridgeStartupRuntimeMode,
+} from "./runtime-mode.js";
 
 // Settings and helpers imported from ./helpers.js
 
@@ -1030,7 +1034,7 @@ export default function (pi: ExtensionAPI) {
       });
 
       ws.addEventListener("close", () => {
-        if (!shuttingDown) scheduleReconnect(ctx);
+        if (!shuttingDown && currentRuntimeMode === "single") scheduleReconnect(ctx);
       });
 
       ws.addEventListener("error", () => {
@@ -1649,6 +1653,7 @@ export default function (pi: ExtensionAPI) {
 
   // Forward-declared — assigned in the Commands section below.
   let pinetEnabled = false;
+  let currentRuntimeMode: SlackBridgeRuntimeMode = "off";
   let brokerRole: "broker" | "follower" | null = null;
   let pinetRegistrationBlocked = false;
   let activeBroker: Broker | null = null;
@@ -2096,9 +2101,15 @@ export default function (pi: ExtensionAPI) {
       view: renderStandalonePinetHomeTabView({
         agentName,
         agentEmoji,
-        connected: activeBroker != null || ws?.readyState === WebSocket.OPEN,
-        mode:
-          brokerRole === "broker" ? "broker" : brokerRole === "follower" ? "worker" : "standalone",
+        connected:
+          currentRuntimeMode === "broker"
+            ? activeBroker != null
+            : currentRuntimeMode === "follower"
+              ? brokerClient != null
+              : currentRuntimeMode === "single"
+                ? ws?.readyState === WebSocket.OPEN
+                : false,
+        mode: currentRuntimeMode,
         activeThreads: threads.size,
         pendingInbox: inbox.length,
         currentBranch,
@@ -2468,6 +2479,46 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function transitionToRuntimeMode(
+    ctx: ExtensionContext,
+    mode: SlackBridgeRuntimeMode,
+  ): Promise<void> {
+    if (currentRuntimeMode === mode) {
+      if (mode === "off") {
+        setExtStatus(ctx, "off");
+      }
+      return;
+    }
+
+    if (currentRuntimeMode !== "off") {
+      await stopPinetRuntime(ctx, { releaseIdentity: true });
+      // Runtime transitions keep the extension alive in-process, so restore a
+      // fresh top-level Slack request tracker after tearing the prior runtime down.
+      resetTopLevelSlackRequests();
+      shuttingDown = false;
+    }
+
+    if (mode === "off") {
+      currentRuntimeMode = "off";
+      setExtStatus(ctx, "off");
+      return;
+    }
+
+    if (mode === "single") {
+      currentRuntimeMode = "single";
+      setExtStatus(ctx, "reconnecting");
+      await connectSocketMode(ctx);
+      return;
+    }
+
+    if (mode === "broker") {
+      await connectAsBroker(ctx);
+      return;
+    }
+
+    await connectAsFollower(ctx);
+  }
+
   async function stopPinetRuntime(
     ctx: ExtensionContext,
     options: { releaseIdentity: boolean },
@@ -2531,6 +2582,7 @@ export default function (pi: ExtensionAPI) {
     activityLogger.clearPending();
     brokerRole = null;
     pinetEnabled = false;
+    currentRuntimeMode = "off";
     setExtStatus(ctx, "off");
   }
 
@@ -3098,6 +3150,7 @@ export default function (pi: ExtensionAPI) {
       activeSelfId = selfId;
       brokerRole = "broker";
       pinetEnabled = true;
+      currentRuntimeMode = "broker";
 
       resetBrokerDeliveryState(brokerDeliveryState);
       const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
@@ -3192,6 +3245,15 @@ export default function (pi: ExtensionAPI) {
   registerPinetCommands(pi, {
     pinetEnabled: () => pinetEnabled,
     pinetRegistrationBlocked: () => pinetRegistrationBlocked,
+    runtimeMode: () => currentRuntimeMode,
+    runtimeConnected: () =>
+      currentRuntimeMode === "broker"
+        ? activeBroker != null
+        : currentRuntimeMode === "follower"
+          ? brokerClient != null
+          : currentRuntimeMode === "single"
+            ? ws?.readyState === WebSocket.OPEN
+            : false,
     brokerRole: () => brokerRole,
     agentName: () => agentName,
     agentEmoji: () => agentEmoji,
@@ -3216,8 +3278,8 @@ export default function (pi: ExtensionAPI) {
     lastBrokerControlPlaneHomeTabRefreshAt: () => lastBrokerControlPlaneHomeTabRefreshAt,
     lastBrokerControlPlaneHomeTabError: () => lastBrokerControlPlaneHomeTabError,
     getPinetRegistrationBlockReason,
-    connectAsBroker,
-    connectAsFollower,
+    connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
+    connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
     disconnectFollower,
     sendPinetAgentMessage,
     signalAgentFree,
@@ -3496,6 +3558,7 @@ export default function (pi: ExtensionAPI) {
       brokerClient = brokerClientRef;
       brokerRole = "follower";
       pinetEnabled = true;
+      currentRuntimeMode = "follower";
       startPolling();
       setExtStatus(ctx, "ok");
     } catch (err) {
@@ -3535,6 +3598,7 @@ export default function (pi: ExtensionAPI) {
     followerAckPromise = null;
     brokerRole = null;
     pinetEnabled = false;
+    currentRuntimeMode = "off";
     setExtStatus(ctx, "off");
 
     return { unregisterError };
@@ -3653,21 +3717,28 @@ export default function (pi: ExtensionAPI) {
 
     if (pinetRegistrationBlocked) {
       console.log("[slack-bridge] detected local subagent context; skipping Pinet registration");
+      currentRuntimeMode = "off";
       setExtStatus(ctx, "off");
       return;
     }
 
-    // Auto-follow: if enabled and broker socket exists, connect as follower
-    if (settings.autoFollow && fs.existsSync(DEFAULT_SOCKET_PATH)) {
-      try {
-        await connectAsFollower(ctx);
-        console.log(`[slack-bridge] autoFollow: connected as follower`);
-      } catch (err) {
-        console.error(`[slack-bridge] autoFollow failed: ${msg(err)}`);
-        setExtStatus(ctx, "off");
+    refreshSettings();
+    const startupMode = resolveSlackBridgeStartupRuntimeMode(settings, {
+      brokerSocketExists: fs.existsSync(DEFAULT_SOCKET_PATH),
+    });
+
+    try {
+      await transitionToRuntimeMode(ctx, startupMode);
+      if (startupMode === "single") {
+        console.log("[slack-bridge] runtime mode: single");
+      } else if (startupMode === "follower") {
+        console.log("[slack-bridge] runtime mode: follower");
+      } else if (startupMode === "broker") {
+        console.log("[slack-bridge] runtime mode: broker");
       }
-    } else {
-      // Use /pinet-start or /pinet-follow to connect
+    } catch (err) {
+      console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(err)}`);
+      currentRuntimeMode = "off";
       setExtStatus(ctx, "off");
     }
   });

@@ -95,7 +95,7 @@ describe("renderStandalonePinetHomeTabView", () => {
       agentName: "Cosmic Crane",
       agentEmoji: "🦩",
       connected: true,
-      mode: "standalone",
+      mode: "single",
       activeThreads: 3,
       pendingInbox: 1,
       currentBranch: "feat/home-tab",
@@ -106,6 +106,7 @@ describe("renderStandalonePinetHomeTabView", () => {
     expect(JSON.stringify(view)).toContain("Cosmic Crane");
     expect(JSON.stringify(view)).toContain("feat/home-tab");
     expect(JSON.stringify(view)).toContain("full control-plane dashboard");
+    expect(JSON.stringify(view)).toContain("single");
   });
 });
 

@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { generateAgentName, agentOwnsThread } from "./helpers.js";
 import { formatRecentActivityLogEntries, type SlackActivityLogger } from "./activity-log.js";
+import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -8,6 +9,8 @@ export interface PinetCommandsDeps {
   // State accessors
   pinetEnabled: () => boolean;
   pinetRegistrationBlocked: () => boolean;
+  runtimeMode: () => SlackBridgeRuntimeMode;
+  runtimeConnected: () => boolean;
   brokerRole: () => "broker" | "follower" | null;
   agentName: () => string;
   agentEmoji: () => string;
@@ -71,8 +74,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
         ctx.ui.notify(deps.getPinetRegistrationBlockReason(), "warning");
         return;
       }
-      if (deps.pinetEnabled()) {
-        ctx.ui.notify(`Pinet already running (${deps.brokerRole()})`, "info");
+      if (deps.runtimeMode() === "broker") {
+        ctx.ui.notify("Pinet already running (broker)", "info");
         return;
       }
       deps.setExtCtx(ctx);
@@ -93,8 +96,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
         ctx.ui.notify(deps.getPinetRegistrationBlockReason(), "warning");
         return;
       }
-      if (deps.pinetEnabled()) {
-        ctx.ui.notify(`Pinet already running (${deps.brokerRole()})`, "info");
+      if (deps.runtimeMode() === "follower") {
+        ctx.ui.notify("Pinet already running (follower)", "info");
         return;
       }
       deps.setExtCtx(ctx);
@@ -112,8 +115,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
   pi.registerCommand("pinet-unfollow", {
     description: "Disconnect from the Pinet broker and keep working locally",
     handler: async (_args, ctx) => {
-      if (!deps.pinetEnabled() || deps.brokerRole() == null) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
+      if (deps.runtimeMode() !== "follower" || deps.brokerRole() == null) {
+        ctx.ui.notify("Pinet is not running as a follower.", "info");
         return;
       }
 
@@ -181,7 +184,10 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
     description: "Mark this Pinet agent idle/free for new work",
     handler: async (_args, ctx) => {
       if (!deps.pinetEnabled()) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
+        ctx.ui.notify(
+          "Pinet mesh runtime is not active. Use /pinet-start or /pinet-follow.",
+          "info",
+        );
         return;
       }
 
@@ -206,7 +212,10 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
     description: "Regenerate the mesh naming/personality skin from a theme",
     handler: async (args, ctx) => {
       if (!deps.pinetEnabled() || deps.brokerRole() == null) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
+        ctx.ui.notify(
+          "Pinet mesh runtime is not active. Use /pinet-start or /pinet-follow.",
+          "info",
+        );
         return;
       }
       if (deps.brokerRole() !== "broker") {
@@ -229,11 +238,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
   pi.registerCommand("pinet-status", {
     description: "Show Pinet status",
     handler: async (_args, ctx) => {
-      if (!deps.pinetEnabled()) {
-        ctx.ui.notify("Pinet not running. Use /pinet-start or /pinet-follow.", "info");
-        return;
-      }
-      const mode = deps.brokerRole() === "broker" ? "broker" : "follower";
+      const mode = deps.runtimeMode();
       const ownedCount = [...deps.threads().values()].filter((t) =>
         agentOwnsThread(t.owner, deps.agentName(), deps.agentAliases(), deps.agentOwnerToken()),
       ).length;
@@ -286,7 +291,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
           `Mode: ${mode}`,
           `Agent: ${deps.agentEmoji()} ${deps.agentName()}`,
           `Bot: ${deps.botUserId() ?? "unknown"}`,
-          `Connection: ${mode}`,
+          `Connection: ${deps.runtimeConnected() ? "connected" : "disconnected"}`,
           `Skin: ${deps.activeSkinTheme() ?? "(legacy/manual)"}`,
           ...(deps.agentPersonality() ? [`Persona: ${deps.agentPersonality()}`] : []),
           `Threads: ${deps.threads().size} (${ownedCount} owned by ${deps.agentName()})`,
@@ -331,7 +336,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       if (!newName) {
         const fresh = generateAgentName(
           undefined,
-          deps.brokerRole() === "broker" ? "broker" : "worker",
+          deps.runtimeMode() === "broker" ? "broker" : "worker",
         );
         deps.applyLocalAgentIdentity(fresh.name, fresh.emoji, deps.agentPersonality());
       } else {
