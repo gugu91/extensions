@@ -8,6 +8,7 @@ import {
   SlackAdapter,
   RECONNECT_DELAY_MS,
 } from "./slack.js";
+import { SlackSocketModeClient } from "../../slack-access.js";
 import type { OutboundMessage } from "./types.js";
 
 async function waitForAssertion(assertion: () => void, attempts = 50): Promise<void> {
@@ -726,6 +727,19 @@ describe("SlackAdapter", () => {
       )
       .mockResolvedValue(undefined);
 
+    const client = new SlackSocketModeClient({
+      slack: vi.fn(async () => ({})),
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      dedup: new Set<string>(),
+      onMessage: (event) =>
+        (
+          adapter as unknown as {
+            onMessage: (input: Record<string, unknown>) => Promise<void>;
+          }
+        ).onMessage(event),
+    });
+
     const firstFrame = JSON.stringify({
       envelope_id: "env-1",
       type: "events_api",
@@ -758,12 +772,12 @@ describe("SlackAdapter", () => {
     });
 
     await (
-      adapter as unknown as {
+      client as unknown as {
         handleFrame: (raw: string) => Promise<void>;
       }
     ).handleFrame(firstFrame);
     await (
-      adapter as unknown as {
+      client as unknown as {
         handleFrame: (raw: string) => Promise<void>;
       }
     ).handleFrame(secondFrame);
@@ -786,31 +800,56 @@ describe("SlackAdapter", () => {
       "resolveUser",
     ).mockResolvedValue("Will");
 
-    await (
-      adapter as unknown as {
-        onBlockActions: (payload: Record<string, unknown>) => Promise<void>;
-      }
-    ).onBlockActions({
-      type: "block_actions",
-      trigger_id: "trigger-1",
-      user: { id: "U123" },
-      channel: { id: "C123" },
-      container: {
-        channel_id: "C123",
-        message_ts: "123.456",
-        thread_ts: "123.000",
-      },
-      actions: [
-        {
-          action_id: "review.approve",
-          block_id: "review-actions",
-          type: "button",
-          text: { type: "plain_text", text: "Approve" },
-          value: '{"decision":"approve"}',
-          action_ts: "123.789",
-        },
-      ],
+    const client = new SlackSocketModeClient({
+      slack: vi.fn(async () => ({})),
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      onInteractive: (event) =>
+        (
+          adapter as unknown as {
+            emitInteractiveInbound: (input: {
+              channel: string;
+              threadTs: string;
+              userId: string;
+              text: string;
+              timestamp: string;
+              metadata: Record<string, unknown>;
+            }) => Promise<void>;
+          }
+        ).emitInteractiveInbound(event),
     });
+
+    await (
+      client as unknown as {
+        handleFrame: (raw: string) => Promise<void>;
+      }
+    ).handleFrame(
+      JSON.stringify({
+        envelope_id: "env-1",
+        type: "interactive",
+        payload: {
+          type: "block_actions",
+          trigger_id: "trigger-1",
+          user: { id: "U123" },
+          channel: { id: "C123" },
+          container: {
+            channel_id: "C123",
+            message_ts: "123.456",
+            thread_ts: "123.000",
+          },
+          actions: [
+            {
+              action_id: "review.approve",
+              block_id: "review-actions",
+              type: "button",
+              text: { type: "plain_text", text: "Approve" },
+              value: '{"decision":"approve"}',
+              action_ts: "123.789",
+            },
+          ],
+        },
+      }),
+    );
 
     expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123");
     expect(handler).toHaveBeenCalledWith({
@@ -865,32 +904,57 @@ describe("SlackAdapter", () => {
       "resolveUser",
     ).mockResolvedValue("Will");
 
+    const client = new SlackSocketModeClient({
+      slack: vi.fn(async () => ({})),
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      onInteractive: (event) =>
+        (
+          adapter as unknown as {
+            emitInteractiveInbound: (input: {
+              channel: string;
+              threadTs: string;
+              userId: string;
+              text: string;
+              timestamp: string;
+              metadata: Record<string, unknown>;
+            }) => Promise<void>;
+          }
+        ).emitInteractiveInbound(event),
+    });
+
     await (
-      adapter as unknown as {
-        onViewSubmission: (payload: Record<string, unknown>) => Promise<void>;
+      client as unknown as {
+        handleFrame: (raw: string) => Promise<void>;
       }
-    ).onViewSubmission({
-      type: "view_submission",
-      trigger_id: "trigger-1",
-      user: { id: "U123" },
-      view: {
-        id: "V123",
-        callback_id: "deploy.confirm",
-        title: { type: "plain_text", text: "Deploy approval" },
-        private_metadata:
-          '{"workflow":"deploy","__piSlackModalContext":{"threadTs":"123.000","channel":"C123"}}',
-        state: {
-          values: {
-            confirm_phrase: {
-              confirm_phrase: {
-                type: "plain_text_input",
-                value: "CONFIRM",
+    ).handleFrame(
+      JSON.stringify({
+        envelope_id: "env-1",
+        type: "interactive",
+        payload: {
+          type: "view_submission",
+          trigger_id: "trigger-1",
+          user: { id: "U123" },
+          view: {
+            id: "V123",
+            callback_id: "deploy.confirm",
+            title: { type: "plain_text", text: "Deploy approval" },
+            private_metadata:
+              '{"workflow":"deploy","__piSlackModalContext":{"threadTs":"123.000","channel":"C123"}}',
+            state: {
+              values: {
+                confirm_phrase: {
+                  confirm_phrase: {
+                    type: "plain_text_input",
+                    value: "CONFIRM",
+                  },
+                },
               },
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123");
     expect(handler).toHaveBeenCalledWith({

@@ -13,8 +13,6 @@ import {
   type RalphLoopEvaluationResult,
   type RalphLoopEvaluationOptions,
   loadSettings as loadSettingsFromFile,
-  buildAllowlist,
-  isUserAllowed as checkUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
   buildPinetSkinAssignment,
@@ -29,8 +27,6 @@ import {
   type PinetControlCommand,
   type PinetRemoteControlState,
   formatAgentList,
-  stripBotMention,
-  isChannelId,
   callSlackAPI,
   createAbortableOperationTracker,
   isAbortError,
@@ -84,7 +80,6 @@ import {
   deliverTrackedSlackFollowUpMessage,
   type PendingSlackToolPolicyTurn,
 } from "./slack-turn-guardrails.js";
-import { buildSlackInboundMessageText } from "./slack-message-context.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import {
   buildReactionPromptGuidelines,
@@ -96,7 +91,7 @@ import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
-import { MessageRouter, extractPiAgentThreadOwnerHint } from "./broker/router.js";
+import { MessageRouter } from "./broker/router.js";
 import {
   DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS,
   DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
@@ -119,15 +114,24 @@ import {
   stopRalphLoop,
 } from "./ralph-loop.js";
 import {
-  extractSlackInteractivePayloadFromEnvelope,
-  normalizeSlackBlockActionPayload,
-  normalizeSlackViewSubmissionPayload,
-} from "./slack-block-kit.js";
-import {
-  extractSlackSocketDedupKey,
+  addSlackReaction,
+  buildSlackUserAllowlist,
+  classifyMessage,
+  clearSlackThreadStatus,
+  fetchSlackMessageByTs as fetchSlackMessageByTsFromSlack,
+  isSlackUserAllowed,
+  removeSlackReaction,
+  resolveSlackChannelId,
+  resolveSlackThreadOwnerHint,
+  resolveSlackUserName,
+  setSlackSuggestedPrompts,
+  SlackSocketModeClient,
   SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
-} from "./slack-socket-dedup.js";
+  type ParsedAppHomeOpened,
+  type ParsedThreadContextChanged,
+  type ParsedThreadStarted,
+} from "./slack-access.js";
 import {
   createFollowerDeliveryState,
   drainFollowerAckBatches,
@@ -207,11 +211,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   // allowedUsers: settings.json takes priority, env var as fallback
-  let allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
+  let allowedUsers = buildSlackUserAllowlist(
+    settings.allowedUsers,
+    process.env.SLACK_ALLOWED_USERS,
+  );
   let reactionCommands = resolveReactionCommands(settings.reactionCommands);
 
   function isUserAllowed(userId: string): boolean {
-    return checkUserAllowed(allowedUsers, userId);
+    return isSlackUserAllowed(allowedUsers, userId);
   }
 
   const initialIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, process.cwd());
@@ -340,7 +347,7 @@ export default function (pi: ExtensionAPI) {
     settings = loadSettingsFromFile();
     botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
     appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
-    allowedUsers = buildAllowlist(settings, process.env.SLACK_ALLOWED_USERS);
+    allowedUsers = buildSlackUserAllowlist(settings.allowedUsers, process.env.SLACK_ALLOWED_USERS);
     guardrails = settings.security ?? {};
     reactionCommands = resolveReactionCommands(settings.reactionCommands);
     securityPrompt = buildSecurityPrompt(guardrails);
@@ -512,8 +519,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   let botUserId: string | null = null;
-  let ws: WebSocket | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let singleRuntimeSlackSocket: SlackSocketModeClient | null = null;
   let shuttingDown = false;
 
   const threads = new Map<string, ThreadInfo>();
@@ -670,60 +676,47 @@ export default function (pi: ExtensionAPI) {
   // ─── Helpers ─────────────────────────────────────────
 
   async function addReaction(channel: string, ts: string, emoji: string): Promise<void> {
-    try {
-      await slack("reactions.add", botToken!, { channel, timestamp: ts, name: emoji });
-    } catch {
-      /* already_reacted or non-critical */
-    }
+    await addSlackReaction({
+      slack,
+      token: botToken!,
+      channel,
+      timestamp: ts,
+      emoji,
+    });
   }
 
   async function removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
-    try {
-      await slack("reactions.remove", botToken!, { channel, timestamp: ts, name: emoji });
-    } catch {
-      /* not_reacted or non-critical */
-    }
+    await removeSlackReaction({
+      slack,
+      token: botToken!,
+      channel,
+      timestamp: ts,
+      emoji,
+    });
   }
 
   async function resolveUser(userId: string): Promise<string> {
-    const cached = userNames.get(userId);
-    if (cached) return cached;
-    try {
-      const res = await slack("users.info", botToken!, { user: userId });
-      if (shuttingDown) return userId;
-      const u = res.user as { real_name?: string; name?: string };
-      const name = u.real_name ?? u.name ?? userId;
-      userNames.set(userId, name);
+    const hadCachedUser = userNames.get(userId) != null;
+    const name = await resolveSlackUserName({
+      slack,
+      token: botToken!,
+      userId,
+      cache: userNames,
+      shouldUseResult: () => !shuttingDown,
+    });
+    if (!hadCachedUser && userNames.get(userId) != null) {
       persistState();
-      return name;
-    } catch {
-      return userId;
     }
+    return name;
   }
 
   async function resolveChannel(nameOrId: string): Promise<string> {
-    if (isChannelId(nameOrId)) return nameOrId;
-    const name = nameOrId.replace(/^#/, "");
-    const cached = channelCache.get(name);
-    if (cached) return cached;
-
-    let cursor: string | undefined;
-    do {
-      const body: Record<string, unknown> = {
-        types: "public_channel,private_channel",
-        limit: 200,
-      };
-      if (cursor) body.cursor = cursor;
-      const res = await slack("conversations.list", botToken!, body);
-      const channels = res.channels as { id: string; name: string }[];
-      for (const ch of channels) {
-        channelCache.set(ch.name, ch.id);
-      }
-      if (channelCache.has(name)) return channelCache.get(name)!;
-      cursor = (res.response_metadata as { next_cursor?: string })?.next_cursor || undefined;
-    } while (cursor);
-
-    throw new Error(`Channel "${name}" not found.`);
+    return resolveSlackChannelId({
+      slack,
+      token: botToken!,
+      nameOrId,
+      cache: channelCache,
+    });
   }
 
   const activityLogger = new SlackActivityLogger({
@@ -823,15 +816,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
-    try {
-      await slack("assistant.threads.setStatus", botToken!, {
-        channel_id: channelId,
-        thread_ts: threadTs,
-        status: "",
-      });
-    } catch {
-      /* non-critical */
-    }
+    await clearSlackThreadStatus({
+      slack,
+      token: botToken!,
+      channelId,
+      threadTs,
+    });
   }
 
   async function setSuggestedPrompts(channelId: string, threadTs: string): Promise<void> {
@@ -840,15 +830,13 @@ export default function (pi: ExtensionAPI) {
       { title: "Help", message: `${agentName}, I need help with something in the codebase` },
       { title: "Review", message: `${agentName}, summarise the recent changes` },
     ];
-    try {
-      await slack("assistant.threads.setSuggestedPrompts", botToken!, {
-        channel_id: channelId,
-        thread_ts: threadTs,
-        prompts,
-      });
-    } catch {
-      /* non-critical */
-    }
+    await setSlackSuggestedPrompts({
+      slack,
+      token: botToken!,
+      channelId,
+      threadTs,
+      prompts,
+    });
   }
 
   function formatConfirmationAction(action: string): string {
@@ -988,34 +976,14 @@ export default function (pi: ExtensionAPI) {
   // next incoming message once it sees the winner's metadata.
 
   async function resolveThreadOwner(channel: string, threadTs: string): Promise<string | null> {
-    try {
-      const res = await slack("conversations.replies", botToken!, {
-        channel,
-        ts: threadTs,
-        limit: 50,
-        include_all_metadata: true,
-      });
-      const msgs = (res.messages as Record<string, unknown>[]) ?? [];
-      for (const m of msgs) {
-        if (!m.bot_id) continue;
-        const meta = m.metadata as
-          | {
-              event_type?: string;
-              event_payload?: { agent?: string; agent_owner?: string };
-            }
-          | undefined;
-        if (meta?.event_type !== "pi_agent_msg") continue;
-        if (typeof meta.event_payload?.agent_owner === "string" && meta.event_payload.agent_owner) {
-          return meta.event_payload.agent_owner;
-        }
-        if (meta.event_payload?.agent) {
-          return meta.event_payload.agent;
-        }
-      }
-    } catch {
-      // If we can't check, allow the message through rather than blocking
-    }
-    return null;
+    const hint = await resolveSlackThreadOwnerHint({
+      slack,
+      token: botToken!,
+      channel,
+      threadTs,
+      limit: 50,
+    });
+    return hint?.agentOwner ?? hint?.agentName ?? null;
   }
 
   // ─── Socket Mode (native WebSocket) ─────────────────
@@ -1023,128 +991,61 @@ export default function (pi: ExtensionAPI) {
   async function connectSocketMode(ctx: ExtensionContext): Promise<void> {
     if (shuttingDown) return;
 
-    try {
-      const res = await slack("apps.connections.open", appToken!);
-      ws = new WebSocket(res.url as string);
-
-      ws.addEventListener("open", () => setExtStatus(ctx, "ok"));
-
-      ws.addEventListener("message", (event) => {
-        void handleFrame(String(event.data), ctx);
-      });
-
-      ws.addEventListener("close", () => {
-        if (!shuttingDown && currentRuntimeMode === "single") scheduleReconnect(ctx);
-      });
-
-      ws.addEventListener("error", () => {
-        /* close fires after */
-      });
-    } catch (err) {
-      if (!isAbortError(err)) {
-        console.error(`[slack-bridge] Socket Mode: ${msg(err)}`);
-      }
-      scheduleReconnect(ctx);
-    }
-  }
-
-  async function handleFrame(raw: string, ctx: ExtensionContext): Promise<void> {
-    if (shuttingDown) return;
-
-    let dedupKey: string | null = null;
-
-    try {
-      const data = JSON.parse(raw) as Record<string, unknown>;
-
-      // ack every envelope
-      if (data.envelope_id) {
-        ws?.send(JSON.stringify({ envelope_id: data.envelope_id }));
-      }
-
-      dedupKey = extractSlackSocketDedupKey(data);
-      if (dedupKey) {
-        if (processedSlackSocketDeliveries.has(dedupKey)) {
-          return;
+    singleRuntimeSlackSocket = new SlackSocketModeClient({
+      slack,
+      botToken: botToken!,
+      appToken: appToken!,
+      resolveBotUserIdOnConnect: false,
+      dedup: processedSlackSocketDeliveries,
+      abortAndWait: () => slackRequests.abortAndWait(),
+      onOpen: () => setExtStatus(ctx, "ok"),
+      onReconnectScheduled: () => {
+        if (!shuttingDown && currentRuntimeMode === "single") {
+          setExtStatus(ctx, "reconnecting");
         }
-        processedSlackSocketDeliveries.add(dedupKey);
-      }
-
-      if (data.type === "disconnect") {
-        scheduleReconnect(ctx);
-        return;
-      }
-
-      const interactivePayload = extractSlackInteractivePayloadFromEnvelope(data);
-      if (interactivePayload) {
-        if (interactivePayload.type === "block_actions") {
-          await onBlockActions(interactivePayload, ctx);
-        } else if (interactivePayload.type === "view_submission") {
-          await onViewSubmission(interactivePayload, ctx);
+      },
+      onError: (err) => {
+        if (!isAbortError(err)) {
+          console.error(`[slack-bridge] Slack access: ${msg(err)}`);
         }
-        return;
-      }
-
-      if (data.type !== "events_api") return;
-
-      const evt = (data.payload as { event: Record<string, unknown> }).event;
-
-      switch (evt.type) {
-        case "assistant_thread_started":
-          await onThreadStarted(evt);
-          break;
-        case "assistant_thread_context_changed":
-          onContextChanged(evt);
-          break;
-        case "app_home_opened":
-          await onAppHomeOpened(evt, ctx);
-          break;
-        case "message":
-          if (!evt.subtype && !evt.bot_id) await onMessage(evt, ctx);
-          break;
-        case "reaction_added":
-          await onReactionAdded(evt, ctx);
-          break;
-        case "member_joined_channel":
-          if ((evt.user as string) === botUserId) {
-            const ch = evt.channel as string;
-            ctx.ui.notify(`Pinet added to channel ${ch}`, "info");
-            inbox.push({
-              channel: ch,
-              threadTs: "",
-              userId: "system",
-              text: `Pinet was added to channel <#${ch}>. You can now post messages there.`,
-              timestamp: String(Date.now() / 1000),
-            });
-            updateBadge();
-            maybeDrainInboxIfIdle(ctx);
-          }
-          break;
-      }
-    } catch {
-      if (dedupKey) {
-        processedSlackSocketDeliveries.delete(dedupKey);
-      }
-      /* malformed frame */
-    }
+      },
+      onThreadStarted: (event) => onThreadStarted(event),
+      onThreadContextChanged: (event) => onContextChanged(event),
+      onAppHomeOpened: (event) => onAppHomeOpened(event, ctx),
+      onMessage: (event) => onMessage(event, ctx),
+      onReactionAdded: (event) => onReactionAdded(event, ctx),
+      onMemberJoinedChannel: async ({ channel, isSelf }) => {
+        if (!isSelf) return;
+        ctx.ui.notify(`Pinet added to channel ${channel}`, "info");
+        inbox.push({
+          channel,
+          threadTs: "",
+          userId: "system",
+          text: `Pinet was added to channel <#${channel}>. You can now post messages there.`,
+          timestamp: String(Date.now() / 1000),
+        });
+        updateBadge();
+        maybeDrainInboxIfIdle(ctx);
+      },
+      onInteractive: (event) => queueInteractiveInboxEvent(event, ctx),
+    });
+    await singleRuntimeSlackSocket.connect();
+    botUserId = singleRuntimeSlackSocket?.getBotUserId() ?? botUserId;
   }
 
   // ─── Assistant events ───────────────────────────────
 
-  async function onThreadStarted(evt: Record<string, unknown>): Promise<void> {
+  async function onThreadStarted(event: ParsedThreadStarted): Promise<void> {
     if (shuttingDown) return;
 
-    const t = evt.assistant_thread as Record<string, unknown>;
-    if (!t) return;
-
     const info: ThreadInfo = {
-      channelId: t.channel_id as string,
-      threadTs: t.thread_ts as string,
-      userId: t.user_id as string,
+      channelId: event.channelId,
+      threadTs: event.threadTs,
+      userId: event.userId,
     };
 
-    const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
-    if (ctx?.channel_id) {
-      info.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
+    if (event.context) {
+      info.context = event.context;
     }
 
     threads.set(info.threadTs, info);
@@ -1154,54 +1055,32 @@ export default function (pi: ExtensionAPI) {
     await setSuggestedPrompts(info.channelId, info.threadTs);
   }
 
-  function onContextChanged(evt: Record<string, unknown>): void {
+  function onContextChanged(event: ParsedThreadContextChanged): void {
     if (shuttingDown) return;
 
-    const t = evt.assistant_thread as Record<string, unknown>;
-    if (!t) return;
+    const existing = threads.get(event.threadTs);
+    if (!existing || !event.context) return;
 
-    const existing = threads.get(t.thread_ts as string);
-    if (!existing) return;
-
-    const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
-    if (ctx?.channel_id) {
-      existing.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
-      persistState();
-    }
+    existing.context = event.context;
+    persistState();
   }
 
-  async function onAppHomeOpened(
-    evt: Record<string, unknown>,
-    ctx: ExtensionContext,
-  ): Promise<void> {
+  async function onAppHomeOpened(event: ParsedAppHomeOpened, ctx: ExtensionContext): Promise<void> {
     if (shuttingDown) return;
 
-    const userId = typeof evt.user === "string" && evt.user.length > 0 ? evt.user : null;
-    const tab = typeof evt.tab === "string" && evt.tab.length > 0 ? evt.tab : "home";
-    if (!userId || tab !== "home") {
-      return;
-    }
-
-    await publishCurrentPinetHomeTabSafely(userId, ctx);
+    await publishCurrentPinetHomeTabSafely(event.userId, ctx);
   }
 
   async function fetchSlackMessageByTs(
     channel: string,
     messageTs: string,
   ): Promise<Record<string, unknown> | null> {
-    try {
-      const response = await slack("conversations.history", botToken!, {
-        channel,
-        oldest: messageTs,
-        latest: messageTs,
-        inclusive: true,
-        limit: 1,
-      });
-      const messages = (response.messages as Record<string, unknown>[]) ?? [];
-      return messages.find((message) => message.ts === messageTs) ?? messages[0] ?? null;
-    } catch {
-      return null;
-    }
+    return fetchSlackMessageByTsFromSlack({
+      slack,
+      token: botToken!,
+      channel,
+      messageTs,
+    });
   }
 
   async function onReactionAdded(
@@ -1338,104 +1217,84 @@ export default function (pi: ExtensionAPI) {
   async function onMessage(evt: Record<string, unknown>, ctx: ExtensionContext): Promise<void> {
     if (shuttingDown) return;
 
-    const text = (evt.text as string) ?? "";
-    const user = evt.user as string;
-    const threadTs = evt.thread_ts as string | undefined;
-    const channel = evt.channel as string;
-    const channelType = evt.channel_type as string | undefined;
+    const classified = classifyMessage(evt, botUserId, new Set(threads.keys()));
+    if (!classified.relevant) return;
 
-    const isTracked = !!threadTs && threads.has(threadTs);
-    const isDM = channelType === "im";
-    const isMention = botUserId != null && text.includes(`<@${botUserId}>`);
+    const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs } = classified;
 
-    if (!isTracked && !isDM && !isMention) return;
-
-    const effectiveTs = threadTs ?? (evt.ts as string);
-
-    // track if new (needed for ownership check below)
-    if (!threads.has(effectiveTs)) {
-      threads.set(effectiveTs, { channelId: channel, threadTs: effectiveTs, userId: user });
+    if (!threads.has(threadTs)) {
+      threads.set(threadTs, { channelId: channel, threadTs, userId });
     }
 
-    // ── Thread ownership check (before allowlist so only the owning agent rejects) ──
-    const localOwner = threads.get(effectiveTs)?.owner;
+    const localOwner = threads.get(threadTs)?.owner;
     if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
       return;
     }
     if (localOwner) {
-      const thread = threads.get(effectiveTs);
+      const thread = threads.get(threadTs);
       if (thread) {
         normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
       }
     }
 
-    if (!localOwner && !unclaimedThreads.has(effectiveTs)) {
-      const remoteOwner = await resolveThreadOwner(channel, effectiveTs);
+    if (!localOwner && !unclaimedThreads.has(threadTs)) {
+      const remoteOwner = await resolveThreadOwner(channel, threadTs);
       if (shuttingDown) return;
       if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
-        const t = threads.get(effectiveTs);
-        if (t) t.owner = remoteOwner; // cache so we skip instantly next time
+        const thread = threads.get(threadTs);
+        if (thread) thread.owner = remoteOwner;
         return;
       }
       if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
-        const t = threads.get(effectiveTs);
-        if (t) t.owner = agentOwnerToken;
+        const thread = threads.get(threadTs);
+        if (thread) thread.owner = agentOwnerToken;
       }
       if (!remoteOwner) {
-        unclaimedThreads.add(effectiveTs); // negative cache: no owner found yet
+        unclaimedThreads.add(threadTs);
       }
     }
 
-    // ── User allowlist check ──
-    if (!isUserAllowed(user)) {
+    if (!isUserAllowed(userId)) {
       await slack("chat.postMessage", botToken!, {
         channel,
-        thread_ts: effectiveTs,
+        thread_ts: threadTs,
         text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
       });
       return;
     }
 
-    if (isDM) lastDmChannel = channel;
+    if (isDM) {
+      lastDmChannel = channel;
+    }
     persistState();
 
-    // Determine if this is a new channel mention (not DM, not already tracked)
-    const isChannelMention = isMention && !isDM && !isTracked;
-
-    // Strip <@BOT_ID> from text for channel mentions
-    const cleanText = isChannelMention ? stripBotMention(text, botUserId!) : text;
-    const enrichedText = buildSlackInboundMessageText(cleanText, evt);
-    const confirmationResult = consumeConfirmationReply(effectiveTs, cleanText);
+    const confirmationResult = consumeConfirmationReply(threadTs, text);
     const messageText =
       confirmationResult === null
-        ? enrichedText
+        ? text
         : confirmationResult.approved
-          ? `${enrichedText}\n\n✅ User approved security confirmation request in this thread.`
-          : `${enrichedText}\n\n❌ User denied security confirmation request in this thread.`;
+          ? `${text}\n\n✅ User approved security confirmation request in this thread.`
+          : `${text}\n\n❌ User denied security confirmation request in this thread.`;
 
-    const name = await resolveUser(user);
+    const name = await resolveUser(userId);
     if (shuttingDown) return;
-    ctx.ui.notify(`${name}: ${cleanText.slice(0, 100)}`, "info");
+    ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
 
-    // React with 👀 to acknowledge (no chat lock)
-    const messageTs = (evt.ts as string) ?? effectiveTs;
     void addReaction(channel, messageTs, "eyes");
-    const pending = pendingEyes.get(effectiveTs) ?? [];
+    const pending = pendingEyes.get(threadTs) ?? [];
     pending.push({ channel, messageTs });
-    pendingEyes.set(effectiveTs, pending);
+    pendingEyes.set(threadTs, pending);
 
-    // Queue in inbox
     inbox.push({
       channel,
-      threadTs: effectiveTs,
-      userId: user,
+      threadTs,
+      userId,
       text: messageText,
-      timestamp: (evt.ts as string) ?? effectiveTs,
+      timestamp: messageTs,
       ...(isChannelMention && { isChannelMention: true }),
     });
     updateBadge();
 
-    // If agent is idle, trigger immediately — otherwise agent_end drains it
     maybeDrainInboxIfIdle(ctx);
   }
 
@@ -1517,52 +1376,16 @@ export default function (pi: ExtensionAPI) {
     maybeDrainInboxIfIdle(ctx);
   }
 
-  async function onBlockActions(
-    payload: Record<string, unknown>,
-    ctx: ExtensionContext,
-  ): Promise<void> {
-    if (shuttingDown) return;
-
-    const normalized = normalizeSlackBlockActionPayload(payload);
-    if (!normalized) return;
-    await queueInteractiveInboxEvent(normalized, ctx);
-  }
-
-  async function onViewSubmission(
-    payload: Record<string, unknown>,
-    ctx: ExtensionContext,
-  ): Promise<void> {
-    if (shuttingDown) return;
-
-    const normalized = normalizeSlackViewSubmissionPayload(payload);
-    if (!normalized) return;
-    await queueInteractiveInboxEvent(normalized, ctx);
-  }
-
   // ─── Reconnect / status ─────────────────────────────
-
-  function scheduleReconnect(ctx: ExtensionContext): void {
-    if (shuttingDown || reconnectTimer || currentRuntimeMode !== "single") return;
-    setExtStatus(ctx, "reconnecting");
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (shuttingDown || currentRuntimeMode !== "single") {
-        return;
-      }
-      void connectSocketMode(ctx);
-    }, 5000);
-  }
 
   async function disconnect(): Promise<void> {
     shuttingDown = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-    try {
-      ws?.close();
-    } catch {
-      /* ignore */
+    const socket = singleRuntimeSlackSocket;
+    singleRuntimeSlackSocket = null;
+    if (socket) {
+      await socket.disconnect();
+      return;
     }
-    ws = null;
     await slackRequests.abortAndWait();
   }
 
@@ -2110,7 +1933,7 @@ export default function (pi: ExtensionAPI) {
             : currentRuntimeMode === "follower"
               ? brokerClient != null
               : currentRuntimeMode === "single"
-                ? ws?.readyState === WebSocket.OPEN
+                ? (singleRuntimeSlackSocket?.isConnected() ?? false)
                 : false,
         mode: currentRuntimeMode,
         activeThreads: threads.size,
@@ -3061,30 +2884,13 @@ export default function (pi: ExtensionAPI) {
         channel: string,
         threadTs: string,
       ): Promise<{ agentOwner?: string; agentName?: string } | null> {
-        if (!channel || !threadTs) return null;
-
-        const cacheKey = `${channel}:${threadTs}`;
-        const cached = brokerThreadOwnerHintCache.get(cacheKey);
-        if (cached) {
-          return cached;
-        }
-
-        try {
-          const response = await slack("conversations.replies", botToken!, {
-            channel,
-            ts: threadTs,
-            limit: 200,
-            include_all_metadata: true,
-          });
-          const replies = (response.messages as Record<string, unknown>[]) ?? [];
-          const hint = extractPiAgentThreadOwnerHint(replies);
-          if (hint) {
-            brokerThreadOwnerHintCache.set(cacheKey, hint);
-          }
-          return hint;
-        } catch {
-          return null;
-        }
+        return resolveSlackThreadOwnerHint({
+          slack,
+          token: botToken!,
+          channel,
+          threadTs,
+          cache: brokerThreadOwnerHintCache,
+        });
       }
 
       adapter.onInbound((inMsg) => {
@@ -3255,7 +3061,7 @@ export default function (pi: ExtensionAPI) {
         : currentRuntimeMode === "follower"
           ? brokerClient != null
           : currentRuntimeMode === "single"
-            ? ws?.readyState === WebSocket.OPEN
+            ? (singleRuntimeSlackSocket?.isConnected() ?? false)
             : false,
     brokerRole: () => brokerRole,
     agentName: () => agentName,
