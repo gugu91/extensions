@@ -47,7 +47,6 @@ settings:
       - assistant_thread_started
       - assistant_thread_context_changed
       - reaction_added
-      - presence_change
       - message.channels
       - message.groups
       - message.im
