@@ -224,7 +224,7 @@ Messages queue while the agent is busy. When the agent finishes, it automaticall
 
 | Mode       | Meaning                                                                                                                                                                  |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `off`      | Slack bridge is loaded, but no active coordination runtime is started.                                                                                                   |
+| `off`      | Slack bridge is loaded, but **no Slack Socket Mode ingress** and no coordination runtime are started.                                                                    |
 | `single`   | One local Pi session owns Slack ingress and local thread/inbox ownership only. No broker DB/socket/client, no RALPH/control plane, no mesh auth, no multi-agent surface. |
 | `broker`   | The session runs the broker coordination runtime.                                                                                                                        |
 | `follower` | The session connects to an existing broker as a worker runtime.                                                                                                          |

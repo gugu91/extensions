@@ -443,6 +443,58 @@ describe("slack-bridge top-level shutdown", () => {
     };
   }
 
+  it("keeps explicit off mode free of Slack Socket Mode ingress on session start", async () => {
+    const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
+    fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ "slack-bridge": { runtimeMode: "off" } }));
+
+    const events = new Map<string, EventHandler>();
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "off-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-off-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+
+    const connectSpy = vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+
+    slackBridge(pi);
+
+    await events.get("session_start")?.({}, ctx);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(connectSpy).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(setStatus).toHaveBeenCalled();
+  });
+
   it("starts explicit single runtime mode on session start and reports it in pinet-status", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });

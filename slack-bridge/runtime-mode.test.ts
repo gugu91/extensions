@@ -62,6 +62,15 @@ describe("resolveSlackBridgeStartupRuntimeMode", () => {
     ).toBe("single");
   });
 
+  it("keeps explicit off truly off even when legacy auto flags are set", () => {
+    expect(
+      resolveSlackBridgeStartupRuntimeMode(
+        { runtimeMode: "off", autoFollow: true, autoConnect: true },
+        { brokerSocketExists: true },
+      ),
+    ).toBe("off");
+  });
+
   it("allows explicit broker mode at startup", () => {
     expect(resolveSlackBridgeStartupRuntimeMode({ runtimeMode: "broker" })).toBe("broker");
   });
