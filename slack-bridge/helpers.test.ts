@@ -130,6 +130,7 @@ describe("loadSettings", () => {
       "slack-bridge": {
         botToken: "xoxb-test",
         appToken: "xapp-test",
+        runtimeMode: "single",
         autoConnect: true,
         allowedUsers: ["U123"],
         defaultChannel: "C456",
@@ -141,6 +142,7 @@ describe("loadSettings", () => {
     const result = loadSettings(p);
     expect(result.botToken).toBe("xoxb-test");
     expect(result.appToken).toBe("xapp-test");
+    expect(result.runtimeMode).toBe("single");
     expect(result.autoConnect).toBe(true);
     expect(result.allowedUsers).toEqual(["U123"]);
     expect(result.defaultChannel).toBe("C456");

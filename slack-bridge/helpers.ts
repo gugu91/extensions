@@ -17,6 +17,7 @@ export interface SlackBridgeSettings {
   logLevel?: "errors" | "actions" | "verbose";
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
+  runtimeMode?: "off" | "single" | "broker" | "follower";
   autoConnect?: boolean;
   autoFollow?: boolean;
   agentName?: string;
