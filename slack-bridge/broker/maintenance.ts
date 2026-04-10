@@ -179,7 +179,7 @@ export function runBrokerMaintenancePass(
   }
   if (resetAssignedBacklogCount > 0) {
     anomalies.push(
-      `reset ${resetAssignedBacklogCount} orphaned targeted backlog assignment${resetAssignedBacklogCount === 1 ? "" : "s"} to pending`,
+      `reset ${resetAssignedBacklogCount} orphaned backlog assignment${resetAssignedBacklogCount === 1 ? "" : "s"} to pending`,
     );
   }
   if (droppedBacklogCount > 0) {

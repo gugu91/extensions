@@ -1265,22 +1265,33 @@ export class BrokerDB implements BrokerDBInterface {
           `SELECT id, message_id, preferred_agent_id, assigned_agent_id
            FROM unrouted_backlog
            WHERE status = 'assigned'
-             AND preferred_agent_id IS NOT NULL
              AND (
-               assigned_agent_id IS NULL
-               OR assigned_agent_id NOT IN (SELECT id FROM agents)
-               OR NOT EXISTS (
-                 SELECT 1
-                 FROM inbox
-                 WHERE inbox.message_id = unrouted_backlog.message_id
-                   AND inbox.agent_id = unrouted_backlog.assigned_agent_id
+               (
+                 preferred_agent_id IS NOT NULL
+                 AND (
+                   assigned_agent_id IS NULL
+                   OR assigned_agent_id NOT IN (SELECT id FROM agents)
+                   OR NOT EXISTS (
+                     SELECT 1
+                     FROM inbox
+                     WHERE inbox.message_id = unrouted_backlog.message_id
+                       AND inbox.agent_id = unrouted_backlog.assigned_agent_id
+                   )
+                 )
+               )
+               OR (
+                 preferred_agent_id IS NULL
+                 AND (
+                   assigned_agent_id IS NULL
+                   OR assigned_agent_id NOT IN (SELECT id FROM agents)
+                 )
                )
              )`,
         )
         .all() as Array<{
         id: number;
         message_id: number;
-        preferred_agent_id: string;
+        preferred_agent_id: string | null;
         assigned_agent_id: string | null;
       }>;
 
@@ -1318,6 +1329,11 @@ export class BrokerDB implements BrokerDBInterface {
       for (const row of rows) {
         if (row.assigned_agent_id) {
           clearStaleInbox.run(row.message_id, row.assigned_agent_id);
+        }
+
+        if (!row.preferred_agent_id) {
+          resetToPendingCount += Number(resetPending.run(now, row.id).changes ?? 0);
+          continue;
         }
 
         if (this.getAgentRowById(row.preferred_agent_id)) {
