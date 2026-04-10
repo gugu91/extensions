@@ -1246,12 +1246,74 @@ describe("BrokerDB", () => {
 
     expect(result.assignedBacklogCount).toBe(0);
     expect(result.pendingBacklogCount).toBe(1);
-    expect(result.anomalies).toContain("reset 1 orphaned targeted backlog assignment to pending");
+    expect(result.anomalies).toContain("reset 1 orphaned backlog assignment to pending");
     expect(db.getAgentById("receiver")).not.toBeNull();
     expect(repairedBacklog).toEqual({
       status: "pending",
       reason: "agent_disconnected",
       preferred_agent_id: "receiver",
+      assigned_agent_id: null,
+    });
+  });
+
+  it("maintenance resets orphaned assigned generic backlog to pending once the assignee is missing", () => {
+    db.registerAgent("worker-1", "Worker", "🤖", 1);
+
+    const backlog = db.queueUnroutedMessage(
+      {
+        source: "slack",
+        threadId: "1775638755.200989",
+        channel: "C123",
+        userId: "U123",
+        text: "recover this stranded generic backlog",
+        timestamp: "100.200",
+      },
+      "no_route",
+    );
+
+    expect(db.assignBacklogEntry(backlog.id, "worker-1")?.status).toBe("assigned");
+    expect(db.getThread("1775638755.200989")?.ownerAgent).toBe("worker-1");
+
+    const sqlite = (db as unknown as { getDb(): DatabaseSync }).getDb();
+    sqlite
+      .prepare("DELETE FROM inbox WHERE message_id = ? AND agent_id = ?")
+      .run(backlog.messageId, "worker-1");
+    sqlite.prepare("DELETE FROM agents WHERE id = ?").run("worker-1");
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    const repairedBacklog = sqlite
+      .prepare(
+        "SELECT status, reason, preferred_agent_id, assigned_agent_id FROM unrouted_backlog WHERE id = ?",
+      )
+      .get(backlog.id) as
+      | {
+          status: string;
+          reason: string;
+          preferred_agent_id: string | null;
+          assigned_agent_id: string | null;
+        }
+      | undefined;
+    const orphanedInboxCount = (
+      sqlite
+        .prepare("SELECT COUNT(*) AS count FROM inbox WHERE message_id = ? AND agent_id = ?")
+        .get(backlog.messageId, "worker-1") as { count: number }
+    ).count;
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(result.anomalies).toContain("released 1 orphaned thread claim");
+    expect(result.anomalies).toContain("reset 1 orphaned backlog assignment to pending");
+    expect(result.anomalies).toContain("pending unrouted backlog has no live workers");
+    expect(db.getThread("1775638755.200989")?.ownerAgent).toBeNull();
+    expect(orphanedInboxCount).toBe(0);
+    expect(repairedBacklog).toEqual({
+      status: "pending",
+      reason: "no_route",
+      preferred_agent_id: null,
       assigned_agent_id: null,
     });
   });

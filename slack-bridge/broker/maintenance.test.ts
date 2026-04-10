@@ -51,11 +51,16 @@ class StubMaintenanceDB implements BrokerMaintenanceDB {
     let droppedCount = 0;
 
     for (const entry of this.backlog) {
-      if (
-        entry.status !== "assigned" ||
-        !entry.preferredAgentId ||
-        this.healthyAssignedBacklogIds.has(entry.id)
-      ) {
+      if (entry.status !== "assigned" || this.healthyAssignedBacklogIds.has(entry.id)) {
+        continue;
+      }
+
+      if (!entry.preferredAgentId) {
+        if (!entry.assignedAgentId || !this.getAgentById(entry.assignedAgentId)) {
+          entry.status = "pending";
+          entry.assignedAgentId = null;
+          resetToPendingCount += 1;
+        }
         continue;
       }
 
@@ -387,7 +392,30 @@ describe("runBrokerMaintenancePass", () => {
     expect(result.pendingBacklogCount).toBe(1);
     expect(db.backlog[0].status).toBe("pending");
     expect(db.backlog[0].assignedAgentId).toBeNull();
-    expect(result.anomalies).toContain("reset 1 orphaned targeted backlog assignment to pending");
+    expect(result.anomalies).toContain("reset 1 orphaned backlog assignment to pending");
+  });
+
+  it("repairs orphaned generic assignments back to pending once the assignee is missing", () => {
+    db.backlog = [
+      makeBacklog({
+        id: 1,
+        threadId: "t-generic-assigned",
+        status: "assigned",
+        assignedAgentId: "missing-worker",
+        reason: "no_route",
+      }),
+    ];
+
+    const result = runBrokerMaintenancePass(db, {
+      staleAfterMs: 15_000,
+      now: Date.parse("2026-04-01T00:00:10.000Z"),
+    });
+
+    expect(result.assignedBacklogCount).toBe(0);
+    expect(result.pendingBacklogCount).toBe(1);
+    expect(db.backlog[0].status).toBe("pending");
+    expect(db.backlog[0].assignedAgentId).toBeNull();
+    expect(result.anomalies).toContain("reset 1 orphaned backlog assignment to pending");
   });
 
   it("drops orphaned targeted assignments once the preferred agent is gone", () => {
