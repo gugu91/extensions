@@ -1542,10 +1542,13 @@ export default function (pi: ExtensionAPI) {
   // ─── Reconnect / status ─────────────────────────────
 
   function scheduleReconnect(ctx: ExtensionContext): void {
-    if (shuttingDown || reconnectTimer) return;
+    if (shuttingDown || reconnectTimer || currentRuntimeMode !== "single") return;
     setExtStatus(ctx, "reconnecting");
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
+      if (shuttingDown || currentRuntimeMode !== "single") {
+        return;
+      }
       void connectSocketMode(ctx);
     }, 5000);
   }
@@ -3764,21 +3767,24 @@ export default function (pi: ExtensionAPI) {
     ctx?: ExtensionContext,
     options: { requirePinet?: boolean } = {},
   ): { queuedInboxCount: number; drainedQueuedInbox: boolean } {
-    if (!pinetEnabled) {
-      if (options.requirePinet) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-      }
-      return { queuedInboxCount: inbox.length, drainedQueuedInbox: false };
+    if (!pinetEnabled && options.requirePinet) {
+      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
     }
 
-    reportStatus("idle");
     const maintenanceCtx = ctx ?? extCtx ?? undefined;
-    if (brokerRole === "broker" && maintenanceCtx) {
-      runBrokerMaintenance(maintenanceCtx);
+    if (pinetEnabled) {
+      reportStatus("idle");
+      if (brokerRole === "broker" && maintenanceCtx) {
+        runBrokerMaintenance(maintenanceCtx);
+      }
     }
 
     const queuedInboxCount = inbox.length;
-    const drainedQueuedInbox = queuedInboxCount > 0 && (ctx ? maybeDrainInboxIfIdle(ctx) : false);
+    const shouldDrainQueuedInbox = pinetEnabled || currentRuntimeMode === "single";
+    const drainedQueuedInbox =
+      shouldDrainQueuedInbox && queuedInboxCount > 0 && maintenanceCtx
+        ? maybeDrainInboxIfIdle(maintenanceCtx)
+        : false;
 
     return { queuedInboxCount, drainedQueuedInbox };
   }
