@@ -680,7 +680,11 @@ export class BrokerSocketServer {
     }
 
     const channel = typeof params.channel === "string" ? params.channel : undefined;
-    const claimed = this.router.claimThread(threadId, state.agentId, channel);
+    const source =
+      typeof params.source === "string" && params.source.trim().length > 0
+        ? params.source.trim()
+        : undefined;
+    const claimed = this.router.claimThread(threadId, state.agentId, channel, source);
     return rpcOk(req.id, { claimed });
   }
 
@@ -839,7 +843,7 @@ export class BrokerSocketServer {
         const messageTs = typeof result.ts === "string" ? (result.ts as string) : null;
         const effectiveTs = threadTs ?? messageTs;
         if (effectiveTs) {
-          this.router.claimThread(effectiveTs, state.agentId);
+          this.router.claimThread(effectiveTs, state.agentId, undefined, "slack");
         }
       }
 

@@ -1703,6 +1703,7 @@ export interface FollowerThreadState {
   channelId: string;
   threadTs: string;
   userId: string;
+  source?: string;
   owner?: string;
 }
 
@@ -1710,6 +1711,7 @@ export interface FollowerInboxEntry {
   inboxId?: number;
   message: {
     threadId?: string;
+    source?: string;
     sender?: string;
     body?: string;
     createdAt?: string;
@@ -1762,18 +1764,24 @@ export function syncFollowerInboxEntries(
 
     if (threadTs && channel) {
       const existing = existingThreads.get(threadTs);
+      const source =
+        typeof entry.message.source === "string" && entry.message.source.trim().length > 0
+          ? entry.message.source.trim()
+          : existing?.source;
       const nextThread: FollowerThreadState = {
         channelId: channel,
         threadTs,
         userId: existing?.userId || sender,
         owner: existing?.owner ?? agentOwner,
+        ...(source ? { source } : {}),
       };
 
       if (
         !existing ||
         existing.channelId !== nextThread.channelId ||
         existing.userId !== nextThread.userId ||
-        existing.owner !== nextThread.owner
+        existing.owner !== nextThread.owner ||
+        existing.source !== nextThread.source
       ) {
         changed = true;
       }
@@ -1894,6 +1902,7 @@ export async function resolveFollowerThreadChannel(
         channelId,
         threadTs,
         userId: existingThread?.userId ?? "",
+        ...(existingThread?.source ? { source: existingThread.source } : {}),
         owner: existingThread?.owner,
       },
     };
@@ -1971,11 +1980,14 @@ export function normalizeOwnedThreads(
 }
 
 export function getFollowerOwnedThreadClaims(
-  threads: ReadonlyMap<string, Pick<FollowerThreadState, "threadTs" | "channelId" | "owner">>,
+  threads: ReadonlyMap<
+    string,
+    Pick<FollowerThreadState, "threadTs" | "channelId" | "source" | "owner">
+  >,
   agentName: string,
   agentAliases: Iterable<string> = [],
   ownerToken?: string,
-): Array<{ threadTs: string; channelId: string }> {
+): Array<{ threadTs: string; channelId: string; source?: string }> {
   return [...threads.values()]
     .filter(
       (thread) =>
@@ -1986,6 +1998,7 @@ export function getFollowerOwnedThreadClaims(
     .map((thread) => ({
       threadTs: thread.threadTs,
       channelId: thread.channelId,
+      ...(thread.source ? { source: thread.source } : {}),
     }));
 }
 
@@ -1996,7 +2009,7 @@ export function getFollowerOwnedThreadClaims(
  */
 export function trackBrokerInboundThread(
   threads: Map<string, FollowerThreadState>,
-  inMsg: { threadId: string; channel: string; userId?: string },
+  inMsg: { threadId: string; channel: string; userId?: string; source?: string },
   owner?: string,
 ): void {
   if (!inMsg.threadId || !inMsg.channel) return;
@@ -2005,6 +2018,7 @@ export function trackBrokerInboundThread(
       channelId: inMsg.channel,
       threadTs: inMsg.threadId,
       userId: inMsg.userId ?? "",
+      ...(inMsg.source ? { source: inMsg.source } : {}),
       owner,
     });
   }

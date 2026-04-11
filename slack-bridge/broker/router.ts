@@ -341,14 +341,15 @@ export class MessageRouter {
 
   /**
    * Claim a thread for an agent (first-responder-wins).
-   * Optionally provide a channel to set when creating a new thread.
+   * Optionally provide the transport source and channel to store when creating
+   * a new thread. Defaults to Slack for backward compatibility.
    * Returns true if the claim succeeded, false if another agent already owns it.
    *
    * Delegates to the DB layer which performs the claim atomically
    * (single SQL statement) to avoid TOCTOU races. (#125)
    */
-  claimThread(threadId: string, agentId: string, channel?: string): boolean {
-    return this.db.claimThread(threadId, agentId, "slack", channel ?? "");
+  claimThread(threadId: string, agentId: string, channel?: string, source = "slack"): boolean {
+    return this.db.claimThread(threadId, agentId, source, channel ?? "");
   }
 
   /**
