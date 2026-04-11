@@ -280,14 +280,18 @@ describe("isConfirmationApproval", () => {
 // ─── Broker role guardrails ───────────────────────────────
 
 describe("BROKER_FORBIDDEN_TOOLS", () => {
-  it("blocks the Agent tool", () => {
+  it("blocks the direct implementation tools", () => {
     expect(BROKER_FORBIDDEN_TOOLS.has("Agent")).toBe(true);
+    expect(BROKER_FORBIDDEN_TOOLS.has("edit")).toBe(true);
+    expect(BROKER_FORBIDDEN_TOOLS.has("write")).toBe(true);
   });
 });
 
 describe("isBrokerForbiddenTool", () => {
-  it("returns true for Agent tool", () => {
+  it("returns true for the direct implementation tools", () => {
     expect(isBrokerForbiddenTool("Agent")).toBe(true);
+    expect(isBrokerForbiddenTool("edit")).toBe(true);
+    expect(isBrokerForbiddenTool("write")).toBe(true);
   });
 
   it("returns false for allowed tools", () => {
@@ -305,9 +309,11 @@ describe("isBrokerForbiddenTool", () => {
 });
 
 describe("buildBrokerToolGuardrailsPrompt", () => {
-  it("mentions the Agent tool as blocked", () => {
+  it("mentions the blocked broker tools", () => {
     const prompt = buildBrokerToolGuardrailsPrompt();
     expect(prompt).toContain("Agent");
+    expect(prompt).toContain("edit");
+    expect(prompt).toContain("write");
     expect(prompt).toContain("BLOCKED");
   });
 
@@ -316,9 +322,11 @@ describe("buildBrokerToolGuardrailsPrompt", () => {
     expect(prompt).toContain("pinet_message");
   });
 
-  it("explains why the Agent tool is forbidden", () => {
+  it("explains why local subagents and file mutation tools are forbidden", () => {
     const prompt = buildBrokerToolGuardrailsPrompt();
     expect(prompt).toContain("no Slack/Pinet connectivity");
+    expect(prompt).toContain("coordination infrastructure");
+    expect(prompt).toContain("code-reviewer");
   });
 });
 

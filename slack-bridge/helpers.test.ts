@@ -1194,6 +1194,14 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(joined).toContain("pinet_message");
   });
 
+  it("treats code-reviewer as delegated worker work, not broker work", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("code-reviewer");
+    expect(joined).toContain("connected worker session");
+    expect(joined).not.toContain("run code reviews via the code-reviewer subagent");
+  });
+
   it("tells broker to never do the work as a fallback", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
