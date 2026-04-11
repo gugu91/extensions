@@ -150,8 +150,10 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
  * The broker is infrastructure — it coordinates, not codes.
  * Spawning local subagents (Agent) is forbidden because they
  * have no Slack/Pinet connectivity and can't be monitored.
+ * Direct file mutation tools are also blocked so the runtime
+ * enforces the coordination-only role even if prompt guidance drifts.
  */
-export const BROKER_FORBIDDEN_TOOLS = new Set(["Agent"]);
+export const BROKER_FORBIDDEN_TOOLS = new Set(["Agent", "edit", "write"]);
 
 /**
  * Check if a tool is forbidden for the broker role.
@@ -170,8 +172,9 @@ export function buildBrokerToolGuardrailsPrompt(): string {
   return [
     "🚫 BROKER TOOL RESTRICTION:",
     `The following tools are BLOCKED for the broker role: ${forbidden}.`,
-    "The Agent tool spawns local subagents with no Slack/Pinet connectivity — they can't be monitored, can't own threads, and can't coordinate with humans.",
-    "Use pinet_message to delegate to connected Pinet agents instead.",
+    "The Agent tool (including code-reviewer and other local subagents) spawns local workers with no Slack/Pinet connectivity — they can't be monitored, can't own threads, and can't coordinate with humans.",
+    "The edit and write tools are blocked because the broker is coordination infrastructure, not an implementation worker.",
+    "Use pinet_message to delegate coding or review work to connected Pinet agents instead.",
   ].join("\n");
 }
 
