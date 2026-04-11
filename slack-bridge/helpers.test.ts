@@ -2472,13 +2472,19 @@ describe("trackBrokerInboundThread", () => {
     const threads = new Map<string, FollowerThreadState>();
     trackBrokerInboundThread(
       threads,
-      { threadId: "1234.5678", channel: "C0APL58LB1R", userId: "U_ALICE" },
+      {
+        threadId: "1234.5678",
+        channel: "C0APL58LB1R",
+        userId: "U_ALICE",
+        source: "imessage",
+      },
       "TestAgent",
     );
     expect(threads.get("1234.5678")).toEqual({
       channelId: "C0APL58LB1R",
       threadTs: "1234.5678",
       userId: "U_ALICE",
+      source: "imessage",
       owner: "TestAgent",
     });
   });
@@ -2545,6 +2551,7 @@ describe("syncFollowerInboxEntries", () => {
           inboxId: 17,
           message: {
             threadId: "100.1",
+            source: "whatsapp",
             sender: "U_SENDER",
             body: "hello",
             createdAt: "100.1",
@@ -2561,6 +2568,7 @@ describe("syncFollowerInboxEntries", () => {
     expect(result.inboxMessages[0].brokerInboxId).toBe(17);
     expect(result.threadUpdates).toHaveLength(1);
     expect(result.threadUpdates[0].channelId).toBe("C_CHAN");
+    expect(result.threadUpdates[0].source).toBe("whatsapp");
     expect(result.changed).toBe(true);
   });
 
@@ -2807,6 +2815,25 @@ describe("getFollowerOwnedThreadClaims", () => {
 
     expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([
       { threadTs: "t-1", channelId: "C1" },
+    ]);
+  });
+
+  it("preserves thread source for owned-thread reclaim", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      [
+        "t-1",
+        {
+          threadTs: "t-1",
+          channelId: "chat:alice",
+          userId: "alice",
+          source: "imessage",
+          owner: "Sonic Gecko",
+        },
+      ],
+    ]);
+
+    expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([
+      { threadTs: "t-1", channelId: "chat:alice", source: "imessage" },
     ]);
   });
 

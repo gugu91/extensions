@@ -353,9 +353,14 @@ export class BrokerClient {
 
   // ─── Thread ownership ─────────────────────────────────
 
-  async claimThread(threadId: string, channel?: string): Promise<{ claimed: boolean }> {
+  async claimThread(
+    threadId: string,
+    channel?: string,
+    source?: string,
+  ): Promise<{ claimed: boolean }> {
     const params: Record<string, unknown> = { threadId };
     if (channel) params.channel = channel;
+    if (source) params.source = source;
     const result = (await this.request("thread.claim", params)) as { claimed: boolean };
     return result;
   }

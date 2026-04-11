@@ -657,6 +657,17 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(thread!.channel).toBe("C-TEST-123");
   });
 
+  it("thread.claim with source stores source on a new thread", async () => {
+    await client.register("imessage-claimer", "💬");
+
+    await client.claimThread("t-imessage", "chat:alice", "imessage");
+
+    const thread = db.getThread("t-imessage");
+    expect(thread).not.toBeNull();
+    expect(thread!.source).toBe("imessage");
+    expect(thread!.channel).toBe("chat:alice");
+  });
+
   it("resolveThread returns the broker channel for an existing thread", async () => {
     await client.register("resolver-agent", "🧭");
     db.createThread("t-resolve", "slack", "C-THREAD-1", null);

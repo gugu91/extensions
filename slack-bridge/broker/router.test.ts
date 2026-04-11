@@ -556,6 +556,17 @@ describe("MessageRouter — claimThread", () => {
     expect(thread?.ownerAgent).toBe("a1");
   });
 
+  it("stores the provided source when claiming a new thread", () => {
+    const claimed = router.claimThread("t-imessage", "a1", "chat:alice", "imessage");
+
+    expect(claimed).toBe(true);
+    const thread = db.threads.get("t-imessage");
+    expect(thread).toBeDefined();
+    expect(thread?.ownerAgent).toBe("a1");
+    expect(thread?.source).toBe("imessage");
+    expect(thread?.channel).toBe("chat:alice");
+  });
+
   it("allows re-claiming by the same agent", () => {
     db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "a1" }));
 

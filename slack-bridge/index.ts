@@ -514,6 +514,7 @@ export default function (pi: ExtensionAPI) {
     channelId: string;
     threadTs: string;
     userId: string;
+    source?: string;
     context?: { channelId: string; teamId: string };
     owner?: string; // agent name that claimed this thread (first-responder-wins)
   }
@@ -1042,6 +1043,7 @@ export default function (pi: ExtensionAPI) {
       channelId: event.channelId,
       threadTs: event.threadTs,
       userId: event.userId,
+      source: "slack",
     };
 
     if (event.context) {
@@ -1135,6 +1137,7 @@ export default function (pi: ExtensionAPI) {
           channelId: item.channel,
           threadTs,
           userId: (reactedMessage.user as string | undefined) ?? user,
+          source: "slack",
         });
       }
 
@@ -1223,7 +1226,7 @@ export default function (pi: ExtensionAPI) {
     const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs } = classified;
 
     if (!threads.has(threadTs)) {
-      threads.set(threadTs, { channelId: channel, threadTs, userId });
+      threads.set(threadTs, { channelId: channel, threadTs, userId, source: "slack" });
     }
 
     const localOwner = threads.get(threadTs)?.owner;
@@ -1314,6 +1317,7 @@ export default function (pi: ExtensionAPI) {
         channelId: normalized.channel,
         threadTs: normalized.threadTs,
         userId: normalized.userId,
+        source: "slack",
       });
     }
 
@@ -1441,6 +1445,7 @@ export default function (pi: ExtensionAPI) {
           channelId,
           threadTs,
           userId: "",
+          source: "slack",
           owner: agentOwnerToken,
         });
       } else {
@@ -1453,9 +1458,9 @@ export default function (pi: ExtensionAPI) {
     getBotUserId: () => botUserId,
     claimThreadOwnership: (threadTs, channelId) => {
       if (brokerRole === "broker" && activeRouter && activeSelfId) {
-        activeRouter.claimThread(threadTs, activeSelfId);
+        activeRouter.claimThread(threadTs, activeSelfId, channelId, "slack");
       } else if (brokerRole === "follower" && brokerClient?.client) {
-        void brokerClient.client.claimThread(threadTs, channelId).catch(() => {
+        void brokerClient.client.claimThread(threadTs, channelId, "slack").catch(() => {
           /* broker gone, best effort */
         });
       }
@@ -3153,7 +3158,7 @@ export default function (pi: ExtensionAPI) {
           agentOwnerToken,
         )) {
           try {
-            await client.claimThread(thread.threadTs, thread.channelId);
+            await client.claimThread(thread.threadTs, thread.channelId, thread.source ?? "slack");
           } catch {
             break;
           }
@@ -3293,6 +3298,7 @@ export default function (pi: ExtensionAPI) {
                 existing.threadTs = nextThread.threadTs;
                 existing.userId = nextThread.userId;
                 existing.owner = nextThread.owner;
+                existing.source = nextThread.source ?? existing.source;
               }
               lastDmChannel = synced.lastDmChannel;
               inbox.push(...synced.inboxMessages);
