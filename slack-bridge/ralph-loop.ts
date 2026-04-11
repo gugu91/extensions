@@ -37,6 +37,7 @@ export interface RalphLoopState {
   running: boolean;
   nudges: Map<string, number>;
   reportedGhosts: Set<string>;
+  ghostBaselineHydrated: boolean;
   nonGhostSignature: string;
   hadOutstandingAnomalies: boolean;
   followUpAt: number;
@@ -51,6 +52,7 @@ export function createRalphLoopState(): RalphLoopState {
     running: false,
     nudges: new Map(),
     reportedGhosts: new Set(),
+    ghostBaselineHydrated: false,
     nonGhostSignature: "",
     hadOutstandingAnomalies: false,
     followUpAt: 0,
@@ -68,6 +70,7 @@ export function resetRalphLoopState(state: RalphLoopState): void {
   state.running = false;
   state.nudges.clear();
   state.reportedGhosts.clear();
+  state.ghostBaselineHydrated = false;
   state.nonGhostSignature = "";
   state.hadOutstandingAnomalies = false;
   state.followUpAt = 0;
@@ -77,6 +80,25 @@ export function resetRalphLoopState(state: RalphLoopState): void {
 }
 
 // ─── Callbacks ───────────────────────────────────────────
+
+export function hydrateRalphLoopReportedGhosts(
+  state: Pick<RalphLoopState, "reportedGhosts" | "ghostBaselineHydrated">,
+  recentCycles: Array<{ ghostAgentIds: string[] }>,
+): void {
+  if (state.ghostBaselineHydrated) {
+    return;
+  }
+
+  if (state.reportedGhosts.size > 0) {
+    state.ghostBaselineHydrated = true;
+    return;
+  }
+
+  for (const ghostId of recentCycles[0]?.ghostAgentIds ?? []) {
+    state.reportedGhosts.add(ghostId);
+  }
+  state.ghostBaselineHydrated = true;
+}
 
 export interface RalphLoopDeps {
   // Broker access
@@ -132,6 +154,7 @@ export async function runRalphLoopCycle(
   const cycleStartedAt = new Date().toISOString();
   const cycleStartMs = Date.now();
   try {
+    hydrateRalphLoopReportedGhosts(state, db.getRecentRalphCycles(1));
     deps.runMaintenance(ctx);
     const lastMaintenance = deps.getLastMaintenance();
 
