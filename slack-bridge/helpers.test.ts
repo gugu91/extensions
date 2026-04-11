@@ -5,7 +5,10 @@ import * as os from "node:os";
 import {
   loadSettings,
   resolvePinetMeshAuth,
+  resolveAllowAllWorkspaceUsers,
   buildAllowlist,
+  describeSlackUserAccess,
+  getSlackUserAccessWarning,
   isUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
@@ -133,6 +136,7 @@ describe("loadSettings", () => {
         runtimeMode: "single",
         autoConnect: true,
         allowedUsers: ["U123"],
+        allowAllWorkspaceUsers: false,
         defaultChannel: "C456",
         logChannel: "#pinet-logs",
         logLevel: "verbose",
@@ -145,6 +149,7 @@ describe("loadSettings", () => {
     expect(result.runtimeMode).toBe("single");
     expect(result.autoConnect).toBe(true);
     expect(result.allowedUsers).toEqual(["U123"]);
+    expect(result.allowAllWorkspaceUsers).toBe(false);
     expect(result.defaultChannel).toBe("C456");
     expect(result.logChannel).toBe("#pinet-logs");
     expect(result.logLevel).toBe("verbose");
@@ -310,43 +315,97 @@ describe("resolvePinetMeshAuth", () => {
   });
 });
 
-// ─── buildAllowlist ───────────────────────────────────────
+// ─── Slack user access policy ────────────────────────────
 
-describe("buildAllowlist", () => {
-  it("returns null when no allowlist configured", () => {
-    expect(buildAllowlist({}, undefined)).toBeNull();
+describe("resolveAllowAllWorkspaceUsers", () => {
+  it("defaults to false when unset", () => {
+    expect(resolveAllowAllWorkspaceUsers({}, undefined)).toBe(false);
   });
 
-  it("returns null for empty allowedUsers array", () => {
-    expect(buildAllowlist({ allowedUsers: [] }, undefined)).toBeNull();
+  it("uses settings flag when present", () => {
+    expect(resolveAllowAllWorkspaceUsers({ allowAllWorkspaceUsers: true }, undefined)).toBe(true);
+    expect(resolveAllowAllWorkspaceUsers({ allowAllWorkspaceUsers: false }, "true")).toBe(false);
+  });
+
+  it("supports truthy env opt-in values", () => {
+    expect(resolveAllowAllWorkspaceUsers({}, "true")).toBe(true);
+    expect(resolveAllowAllWorkspaceUsers({}, "1")).toBe(true);
+    expect(resolveAllowAllWorkspaceUsers({}, "yes")).toBe(true);
+    expect(resolveAllowAllWorkspaceUsers({}, "on")).toBe(true);
+  });
+});
+
+describe("buildAllowlist", () => {
+  it("returns an empty set when no allowlist or explicit allow-all is configured", () => {
+    expect(buildAllowlist({}, undefined, undefined)).toEqual(new Set());
+  });
+
+  it("returns an empty set for an empty allowedUsers array", () => {
+    expect(buildAllowlist({ allowedUsers: [] }, undefined, undefined)).toEqual(new Set());
   });
 
   it("builds from settings.allowedUsers", () => {
-    const result = buildAllowlist({ allowedUsers: ["U1", "U2"] }, undefined);
+    const result = buildAllowlist({ allowedUsers: ["U1", " U2 ", ""] }, undefined);
     expect(result).toEqual(new Set(["U1", "U2"]));
   });
 
   it("settings takes priority over env var", () => {
-    const result = buildAllowlist({ allowedUsers: ["U1"] }, "U2,U3");
+    const result = buildAllowlist({ allowedUsers: ["U1"] }, "U2,U3", "true");
     expect(result).toEqual(new Set(["U1"]));
   });
 
   it("falls back to env var when settings empty", () => {
-    const result = buildAllowlist({}, "U2, U3 , U4");
+    const result = buildAllowlist({}, "U2, U3 , U4", undefined);
     expect(result).toEqual(new Set(["U2", "U3", "U4"]));
   });
 
+  it("returns null only for explicit allow-all opt-in", () => {
+    expect(buildAllowlist({ allowAllWorkspaceUsers: true }, undefined, undefined)).toBeNull();
+    expect(buildAllowlist({}, undefined, "true")).toBeNull();
+  });
+
   it("trims and filters empty entries from env var", () => {
-    const result = buildAllowlist({}, " U1 , , U2 , ");
+    const result = buildAllowlist({}, " U1 , , U2 , ", undefined);
     expect(result).toEqual(new Set(["U1", "U2"]));
+  });
+});
+
+describe("describeSlackUserAccess", () => {
+  it("describes default deny when the allowlist is empty", () => {
+    expect(describeSlackUserAccess(new Set())).toBe(
+      "Allowed users: none (default deny; set allowedUsers or allowAllWorkspaceUsers: true)",
+    );
+  });
+
+  it("describes explicit allow-all mode", () => {
+    expect(describeSlackUserAccess(null, { allowAllWorkspaceUsers: true })).toBe(
+      "Allowed users: all (explicit allow-all enabled)",
+    );
+  });
+});
+
+describe("getSlackUserAccessWarning", () => {
+  it("returns a startup warning for default deny mode", () => {
+    expect(getSlackUserAccessWarning(new Set())).toContain(
+      "Slack access is default-deny because no allowedUsers are configured.",
+    );
+  });
+
+  it("returns null when access is explicitly configured", () => {
+    expect(getSlackUserAccessWarning(new Set(["U1"]))).toBeNull();
+    expect(getSlackUserAccessWarning(null)).toBeNull();
   });
 });
 
 // ─── isUserAllowed ────────────────────────────────────────
 
 describe("isUserAllowed", () => {
-  it("allows everyone when allowlist is null", () => {
+  it("allows everyone when explicit allow-all mode is active", () => {
     expect(isUserAllowed(null, "U_ANYONE")).toBe(true);
+  });
+
+  it("rejects everyone when the allowlist is empty", () => {
+    expect(isUserAllowed(new Set(), "U_ANYONE")).toBe(false);
   });
 
   it("allows user in the set", () => {
