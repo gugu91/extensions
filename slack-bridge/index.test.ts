@@ -61,6 +61,15 @@ describe("slack-bridge top-level shutdown", () => {
     process.env.SLACK_APP_TOKEN = "xapp-test";
     testHome = fs.mkdtempSync(path.join(os.tmpdir(), "slack-bridge-test-home-"));
     process.env.HOME = testHome;
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          allowAllWorkspaceUsers: true,
+        },
+      }),
+    );
   });
 
   afterEach(() => {

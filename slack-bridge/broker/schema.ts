@@ -577,6 +577,7 @@ function runSchemaMigrations(db: DatabaseSync): void {
 export class BrokerDB implements BrokerDBInterface {
   private db: DatabaseSync | null = null;
   private readonly dbPath: string;
+  private allowedUsers: Set<string> | null = new Set();
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath ?? defaultDbPath();
@@ -1083,8 +1084,12 @@ export class BrokerDB implements BrokerDBInterface {
     return thread?.ownerAgent === agentId;
   }
 
+  setAllowedUsers(users: Iterable<string> | null): void {
+    this.allowedUsers = users === null ? null : new Set(users);
+  }
+
   getAllowedUsers(): Set<string> | null {
-    return null;
+    return this.allowedUsers === null ? null : new Set(this.allowedUsers);
   }
 
   getChannelAssignment(_channel: string): ChannelAssignment | null {

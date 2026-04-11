@@ -40,6 +40,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     dir = tmpDir();
     db = new BrokerDB(path.join(dir, "test.db"));
     db.initialize();
+    db.setAllowedUsers(null);
 
     server = new BrokerSocketServer(db, { type: "tcp", host: "127.0.0.1", port: 0 });
     await server.start();
@@ -787,6 +788,7 @@ describe("broker integration — router with real DB", () => {
   });
 
   it("routes inbound message to thread owner", () => {
+    db.setAllowedUsers(null);
     const router = new MessageRouter(db);
 
     db.registerAgent("agent-1", "Agent One", "1️⃣", process.pid);
@@ -812,6 +814,7 @@ describe("broker integration — router with real DB", () => {
   });
 
   it("routes by agent mention when no thread owner", () => {
+    db.setAllowedUsers(null);
     const router = new MessageRouter(db);
 
     db.registerAgent("code-bot", "CodeBot", "🤖", process.pid);
@@ -830,6 +833,7 @@ describe("broker integration — router with real DB", () => {
   });
 
   it("binds an existing unclaimed thread when a human directly addresses an agent", () => {
+    db.setAllowedUsers(null);
     const router = new MessageRouter(db);
 
     db.registerAgent("code-bot", "CodeBot", "🤖", process.pid);
@@ -867,6 +871,7 @@ describe("broker integration — router with real DB", () => {
   });
 
   it("returns unrouted for unknown thread with no matching agent", () => {
+    db.setAllowedUsers(null);
     const router = new MessageRouter(db);
 
     const decision = router.route({
@@ -948,7 +953,13 @@ describe("broker integration — router with real DB", () => {
     expect(fetched!.ownerAgent).toBeNull();
   });
 
-  it("getAllowedUsers returns null (unconfigured)", () => {
+  it("getAllowedUsers defaults to deny-all and supports explicit allow-all", () => {
+    expect(db.getAllowedUsers()).toEqual(new Set());
+
+    db.setAllowedUsers(["U123", "U456"]);
+    expect(db.getAllowedUsers()).toEqual(new Set(["U123", "U456"]));
+
+    db.setAllowedUsers(null);
     expect(db.getAllowedUsers()).toBeNull();
   });
 

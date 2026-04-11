@@ -13,6 +13,9 @@ import {
   type RalphLoopEvaluationResult,
   type RalphLoopEvaluationOptions,
   loadSettings as loadSettingsFromFile,
+  buildAllowlist,
+  getSlackUserAccessWarning,
+  isUserAllowed as checkUserAllowed,
   formatInboxMessages,
   formatPinetInboxMessages,
   buildPinetSkinAssignment,
@@ -50,6 +53,7 @@ import {
   normalizePinetSkinTheme,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
+  resolveAllowAllWorkspaceUsers,
   resolvePinetMeshAuth,
   syncFollowerInboxEntries,
   syncBrokerInboxEntries,
@@ -115,11 +119,9 @@ import {
 } from "./ralph-loop.js";
 import {
   addSlackReaction,
-  buildSlackUserAllowlist,
   classifyMessage,
   clearSlackThreadStatus,
   fetchSlackMessageByTs as fetchSlackMessageByTsFromSlack,
-  isSlackUserAllowed,
   removeSlackReaction,
   resolveSlackChannelId,
   resolveSlackThreadOwnerHint,
@@ -210,15 +212,32 @@ export default function (pi: ExtensionAPI) {
     return slackRequests.run((signal) => callSlackAPI(method, token, body, { signal }));
   }
 
-  // allowedUsers: settings.json takes priority, env var as fallback
-  let allowedUsers = buildSlackUserAllowlist(
-    settings.allowedUsers,
+  // allowedUsers / allowAllWorkspaceUsers: settings.json takes priority, env vars as fallback
+  let allowedUsers = buildAllowlist(
+    settings,
     process.env.SLACK_ALLOWED_USERS,
+    process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
   );
   let reactionCommands = resolveReactionCommands(settings.reactionCommands);
 
   function isUserAllowed(userId: string): boolean {
-    return isSlackUserAllowed(allowedUsers, userId);
+    return checkUserAllowed(allowedUsers, userId);
+  }
+
+  let lastSlackUserAccessWarning = "";
+
+  function maybeWarnSlackUserAccess(ctx?: ExtensionContext): void {
+    const warning = getSlackUserAccessWarning(allowedUsers);
+    if (!warning) {
+      lastSlackUserAccessWarning = "";
+      return;
+    }
+    if (warning === lastSlackUserAccessWarning) {
+      return;
+    }
+    lastSlackUserAccessWarning = warning;
+    console.warn(`[slack-bridge] ${warning}`);
+    ctx?.ui.notify(warning, "warning");
   }
 
   const initialIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, process.cwd());
@@ -347,7 +366,11 @@ export default function (pi: ExtensionAPI) {
     settings = loadSettingsFromFile();
     botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
     appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
-    allowedUsers = buildSlackUserAllowlist(settings.allowedUsers, process.env.SLACK_ALLOWED_USERS);
+    allowedUsers = buildAllowlist(
+      settings,
+      process.env.SLACK_ALLOWED_USERS,
+      process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
+    );
     guardrails = settings.security ?? {};
     reactionCommands = resolveReactionCommands(settings.reactionCommands);
     securityPrompt = buildSecurityPrompt(guardrails);
@@ -2815,6 +2838,7 @@ export default function (pi: ExtensionAPI) {
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
     refreshSettings();
+    maybeWarnSlackUserAccess(ctx);
     const meshAuth = resolvePinetMeshAuth(settings);
     const broker = await startBroker({
       ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
@@ -2824,6 +2848,10 @@ export default function (pi: ExtensionAPI) {
       botToken: botToken!,
       appToken: appToken!,
       allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
+      allowAllWorkspaceUsers: resolveAllowAllWorkspaceUsers(
+        settings,
+        process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
+      ),
       suggestedPrompts: settings.suggestedPrompts,
       reactionCommands: settings.reactionCommands,
       isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
@@ -2837,6 +2865,7 @@ export default function (pi: ExtensionAPI) {
     let selfId: string | null = null;
 
     try {
+      broker.db.setAllowedUsers(allowedUsers);
       const router = new MessageRouter(broker.db);
       activeSkinTheme =
         broker.db.getSetting<string>(PINET_SKIN_SETTING_KEY) ?? DEFAULT_PINET_SKIN_THEME;
@@ -3532,6 +3561,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     refreshSettings();
+    maybeWarnSlackUserAccess(ctx);
     const startupMode = resolveSlackBridgeStartupRuntimeMode(settings, {
       brokerSocketExists: fs.existsSync(DEFAULT_SOCKET_PATH),
     });
