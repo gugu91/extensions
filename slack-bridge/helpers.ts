@@ -2639,7 +2639,7 @@ export function buildPinetSkinAssignment(options: {
   const normalizedTheme = normalizePinetSkinTheme(options.theme) ?? DEFAULT_PINET_SKIN_THEME;
 
   if (normalizedTheme === DEFAULT_PINET_SKIN_THEME) {
-    const generated = generateAgentName(options.seed);
+    const generated = generateAgentName(options.seed, options.role);
     const personality =
       options.role === "broker"
         ? "Default whimsical broker skin. Be playful but disciplined, delegate clearly, and keep the mesh coordinated."

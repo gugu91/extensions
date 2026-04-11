@@ -1034,6 +1034,24 @@ describe("Pinet skin helpers", () => {
     expect(assignment.personality).toContain("Default whimsical worker skin");
   });
 
+  it("uses the broker naming format for the default whimsical broker skin", () => {
+    const worker = buildPinetSkinAssignment({
+      theme: "default",
+      role: "worker",
+      seed: "shared-seed",
+    });
+    const broker = buildPinetSkinAssignment({
+      theme: "default",
+      role: "broker",
+      seed: "shared-seed",
+    });
+
+    expect(broker.theme).toBe("default");
+    expect(broker.name).toBe(`The Broker ${worker.name.split(" ").at(-1)}`);
+    expect(broker.emoji).toBe(worker.emoji);
+    expect(broker.personality).toContain("Default whimsical broker skin");
+  });
+
   it("builds a custom free-form skin with role-aware identity and bounded voice guidance", () => {
     const broker = buildPinetSkinAssignment({
       theme: "night's watch from ASOIAF",
