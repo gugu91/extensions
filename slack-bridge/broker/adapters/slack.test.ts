@@ -557,6 +557,7 @@ describe("SlackAdapter", () => {
   const baseConfig = {
     botToken: "xoxb-test-token",
     appToken: "xapp-test-token",
+    allowAllWorkspaceUsers: true,
   };
 
   it("can be constructed with minimal config", () => {
@@ -1014,11 +1015,18 @@ describe("SlackAdapter — allowlist filtering", () => {
     expect(isUserAllowed(allowlist, "U_AUTHORIZED")).toBe(true);
   });
 
-  it("allows all users when no allowlist is configured", async () => {
+  it("rejects all users by default when no allowlist is configured", async () => {
     const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
-    const allowlist = buildAllowlist({}, undefined);
+    const allowlist = buildAllowlist({}, undefined, undefined);
+    expect(allowlist).toEqual(new Set());
+    expect(isUserAllowed(allowlist, "U_ANYONE")).toBe(false);
+  });
+
+  it("still supports explicit allow-all mode", async () => {
+    const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
+    const allowlist = buildAllowlist({ allowAllWorkspaceUsers: true }, undefined, undefined);
     expect(allowlist).toBeNull();
-    expect(isUserAllowed(null, "U_ANYONE")).toBe(true);
+    expect(isUserAllowed(allowlist, "U_ANYONE")).toBe(true);
   });
 });
 
@@ -1086,6 +1094,7 @@ describe("SlackAdapter — reaction triggers", () => {
     const adapter = new SlackAdapter({
       botToken: "xoxb-test",
       appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
       reactionCommands: { "👀": "review" },
       rememberKnownThread,
     });
@@ -1530,6 +1539,7 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     const adapter = new SlackAdapter({
       botToken: "xoxb-test",
       appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
     });
     const handler = vi.fn();
     adapter.onInbound(handler);

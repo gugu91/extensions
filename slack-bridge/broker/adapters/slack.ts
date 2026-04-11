@@ -1,6 +1,5 @@
 import {
   addSlackReaction,
-  buildSlackUserAllowlist,
   classifyMessage,
   clearSlackThreadStatus,
   extractAppHomeOpened,
@@ -16,7 +15,12 @@ import {
   type ParsedThreadContextChanged,
   type ParsedThreadStarted,
 } from "../../slack-access.js";
-import { createAbortableOperationTracker, callSlackAPI, isAbortError } from "../../helpers.js";
+import {
+  createAbortableOperationTracker,
+  callSlackAPI,
+  isAbortError,
+  buildAllowlist,
+} from "../../helpers.js";
 import {
   buildReactionTriggerMessage,
   normalizeReactionName,
@@ -43,6 +47,7 @@ export interface SlackAdapterConfig {
   botToken: string;
   appToken: string;
   allowedUsers?: string[];
+  allowAllWorkspaceUsers?: boolean;
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   /** Check whether a thread_ts belongs to a known thread in the broker DB. */
@@ -85,7 +90,14 @@ export class SlackAdapter implements MessageAdapter {
 
   constructor(config: SlackAdapterConfig) {
     this.config = config;
-    this.allowlist = buildSlackUserAllowlist(config.allowedUsers);
+    this.allowlist = buildAllowlist(
+      {
+        allowedUsers: config.allowedUsers,
+        allowAllWorkspaceUsers: config.allowAllWorkspaceUsers,
+      },
+      undefined,
+      undefined,
+    );
     this.reactionCommands = resolveReactionCommands(config.reactionCommands);
   }
 
