@@ -9,6 +9,7 @@ import {
   buildRalphLoopCycleNotifications,
   buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
+  filterAgentsForMeshVisibility,
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
@@ -159,15 +160,21 @@ export async function runRalphLoopCycle(
     const lastMaintenance = deps.getLastMaintenance();
 
     const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
+    const now = Date.now();
+    const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
 
-    const workloads = db.getAllAgents().map((agent) => ({
+    const workloads = filterAgentsForMeshVisibility(db.getAllAgents(), {
+      now,
+      includeGhosts: true,
+      recentDisconnectWindowMs: recentGhostWindowMs,
+    }).map((agent) => ({
       ...agent,
       pendingInboxCount: db.getPendingInboxCount(agent.id),
       ownedThreadCount: db.getOwnedThreadCount(agent.id),
     }));
     const pendingBacklogCount = db.getBacklogCount("pending");
     const evaluationOptions: RalphLoopEvaluationOptions = {
-      now: Date.now(),
+      now,
       heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -179,7 +186,6 @@ export async function runRalphLoopCycle(
     };
     const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
 
-    const now = Date.now();
     const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
     for (const workload of workloads) {
       if (!nudgeAgentIds.has(workload.id)) {

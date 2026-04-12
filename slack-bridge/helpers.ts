@@ -872,6 +872,36 @@ export function buildAgentCapabilityTags(capabilities: AgentCapabilities): strin
   return [...tags];
 }
 
+export interface MeshVisibilityOptions {
+  includeGhosts?: boolean;
+  now?: number;
+  recentDisconnectWindowMs: number;
+}
+
+export function isAgentVisibleInMesh(
+  agent: { disconnectedAt?: string | null },
+  options: MeshVisibilityOptions,
+): boolean {
+  const includeGhosts = options.includeGhosts ?? true;
+  if (!includeGhosts) {
+    return !agent.disconnectedAt;
+  }
+  if (!agent.disconnectedAt) {
+    return true;
+  }
+
+  const nowMs = options.now ?? Date.now();
+  const disconnectedMs = Date.parse(agent.disconnectedAt);
+  return !Number.isNaN(disconnectedMs) && nowMs - disconnectedMs <= options.recentDisconnectWindowMs;
+}
+
+export function filterAgentsForMeshVisibility<T extends { disconnectedAt?: string | null }>(
+  agents: T[],
+  options: MeshVisibilityOptions,
+): T[] {
+  return agents.filter((agent) => isAgentVisibleInMesh(agent, options));
+}
+
 export function buildAgentDisplayInfo(
   agent: AgentVisibilityInput,
   options: AgentVisibilityOptions = {},

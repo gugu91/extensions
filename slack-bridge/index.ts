@@ -34,6 +34,7 @@ import {
   createAbortableOperationTracker,
   isAbortError,
   buildAgentDisplayInfo,
+  filterAgentsForMeshVisibility,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -1806,14 +1807,20 @@ export default function (pi: ExtensionAPI) {
 
     const db = activeBroker.db;
     const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
-    const workloads = db.getAllAgents().map((agent) => ({
+    const nowMs = Date.now();
+    const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
+    const workloads = filterAgentsForMeshVisibility(db.getAllAgents(), {
+      now: nowMs,
+      includeGhosts: true,
+      recentDisconnectWindowMs: recentGhostWindowMs,
+    }).map((agent) => ({
       ...agent,
       pendingInboxCount: db.getPendingInboxCount(agent.id),
       ownedThreadCount: db.getOwnedThreadCount(agent.id),
     }));
     const pendingBacklogCount = db.getBacklogCount("pending");
     const evaluationOptions: RalphLoopEvaluationOptions = {
-      now: Date.now(),
+      now: nowMs,
       heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -2728,12 +2735,6 @@ export default function (pi: ExtensionAPI) {
       const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
       const nowMs = Date.now();
 
-      const isRecentDisconnected = (agent: { disconnectedAt?: string | null }): boolean => {
-        if (!agent.disconnectedAt) return true;
-        const disconnectedMs = Date.parse(agent.disconnectedAt);
-        return !Number.isNaN(disconnectedMs) && nowMs - disconnectedMs <= recentGhostWindowMs;
-      };
-
       const toDisplay = (agent: {
         emoji: string;
         name: string;
@@ -2763,36 +2764,37 @@ export default function (pi: ExtensionAPI) {
         resumableUntil?: string | null;
       }>;
       if (brokerRole === "broker" && activeBroker) {
-        rawAgents = activeBroker.db
-          .getAllAgents()
-          .filter((agent) => includeGhosts || !agent.disconnectedAt)
-          .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
-          .map((agent) => ({
-            emoji: agent.emoji,
-            name: agent.name,
-            id: agent.id,
-            pid: agent.pid,
-            status: agent.status,
-            metadata: agent.metadata,
-            lastHeartbeat: agent.lastHeartbeat,
-            disconnectedAt: agent.disconnectedAt,
-            resumableUntil: agent.resumableUntil,
-          }));
+        rawAgents = filterAgentsForMeshVisibility(activeBroker.db.getAllAgents(), {
+          now: nowMs,
+          includeGhosts,
+          recentDisconnectWindowMs: recentGhostWindowMs,
+        }).map((agent) => ({
+          emoji: agent.emoji,
+          name: agent.name,
+          id: agent.id,
+          pid: agent.pid,
+          status: agent.status,
+          metadata: agent.metadata,
+          lastHeartbeat: agent.lastHeartbeat,
+          disconnectedAt: agent.disconnectedAt,
+          resumableUntil: agent.resumableUntil,
+        }));
       } else if (brokerRole === "follower" && brokerClient) {
-        rawAgents = (await brokerClient.client.listAgents(includeGhosts))
-          .filter((agent) => includeGhosts || !agent.disconnectedAt)
-          .filter((agent) => (includeGhosts ? isRecentDisconnected(agent) : true))
-          .map((agent) => ({
-            emoji: agent.emoji,
-            name: agent.name,
-            id: agent.id,
-            pid: agent.pid,
-            status: agent.status ?? "idle",
-            metadata: agent.metadata,
-            lastHeartbeat: agent.lastHeartbeat,
-            disconnectedAt: agent.disconnectedAt,
-            resumableUntil: agent.resumableUntil,
-          }));
+        rawAgents = filterAgentsForMeshVisibility(await brokerClient.client.listAgents(includeGhosts), {
+          now: nowMs,
+          includeGhosts,
+          recentDisconnectWindowMs: recentGhostWindowMs,
+        }).map((agent) => ({
+          emoji: agent.emoji,
+          name: agent.name,
+          id: agent.id,
+          pid: agent.pid,
+          status: agent.status ?? "idle",
+          metadata: agent.metadata,
+          lastHeartbeat: agent.lastHeartbeat,
+          disconnectedAt: agent.disconnectedAt,
+          resumableUntil: agent.resumableUntil,
+        }));
       } else {
         throw new Error("Pinet is in an unexpected state.");
       }
