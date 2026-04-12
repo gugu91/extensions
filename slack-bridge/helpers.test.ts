@@ -30,6 +30,8 @@ import {
   formatAgentList,
   shortenPath,
   buildAgentDisplayInfo,
+  isAgentVisibleInMesh,
+  filterAgentsForMeshVisibility,
   rankAgentsForRouting,
   evaluateRalphLoopCycle,
   rewriteRalphLoopGhostAnomalies,
@@ -1636,6 +1638,40 @@ describe("buildAgentDisplayInfo", () => {
     expect(agent.health).toBe("ghost");
     expect(agent.ghost).toBe(true);
     expect(agent.leaseSummary).toBe("lease expired 5s ago");
+  });
+});
+
+describe("mesh visibility helpers", () => {
+  it("keeps connected agents and only recently disconnected ghosts in the visible mesh", () => {
+    const now = Date.parse("2026-01-01T00:01:00.000Z");
+    const agents = [
+      { id: "connected", disconnectedAt: null },
+      { id: "recent-ghost", disconnectedAt: "2026-01-01T00:00:40.000Z" },
+      { id: "stale-ghost", disconnectedAt: "2026-01-01T00:00:20.000Z" },
+    ];
+
+    expect(
+      filterAgentsForMeshVisibility(agents, {
+        now,
+        includeGhosts: true,
+        recentDisconnectWindowMs: 30_000,
+      }).map((agent) => agent.id),
+    ).toEqual(["connected", "recent-ghost"]);
+  });
+
+  it("can exclude ghost rows entirely when a surface wants connected agents only", () => {
+    const now = Date.parse("2026-01-01T00:01:00.000Z");
+
+    expect(
+      isAgentVisibleInMesh(
+        { disconnectedAt: "2026-01-01T00:00:50.000Z" },
+        {
+          now,
+          includeGhosts: false,
+          recentDisconnectWindowMs: 30_000,
+        },
+      ),
+    ).toBe(false);
   });
 });
 
