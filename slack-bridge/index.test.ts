@@ -1491,6 +1491,297 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("following broker"), "info");
   });
 
+  it("retries follower idle status sync after pinet_free fails once so workers do not stay stuck working", async () => {
+    vi.useFakeTimers();
+
+    const tools = new Map<string, ToolDefinition>();
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+    const sendUserMessage = vi.fn();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn((definition: ToolDefinition) => {
+        tools.set(definition.name, definition);
+      }),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage,
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let pollCount = 0;
+    let idleUpdateAttempts = 0;
+    const updateStatus = vi
+      .spyOn(BrokerClient.prototype, "updateStatus")
+      .mockImplementation(async (status: "working" | "idle") => {
+        if (status === "working") {
+          return;
+        }
+        idleUpdateAttempts += 1;
+        if (idleUpdateAttempts === 1) {
+          throw new Error("status sync failed once");
+        }
+      });
+
+    vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "register").mockResolvedValue({
+      agentId: "worker-1",
+      name: "Agent",
+      emoji: "🦙",
+      metadata: { role: "worker", capabilities: { role: "worker" } },
+    });
+    vi.spyOn(BrokerClient.prototype, "claimThread").mockResolvedValue({ claimed: true });
+    vi.spyOn(BrokerClient.prototype, "pollInbox").mockImplementation(async () => {
+      if (pollCount > 0) {
+        pollCount += 1;
+        return [];
+      }
+      pollCount += 1;
+      return [
+        {
+          inboxId: 17,
+          message: {
+            id: 17,
+            threadId: "100.1",
+            source: "slack",
+            direction: "inbound",
+            sender: "U_SENDER",
+            body: "hello from broker",
+            createdAt: "100.1",
+            metadata: { channel: "D123" },
+          },
+        },
+      ];
+    });
+    vi.spyOn(BrokerClient.prototype, "ackMessages").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "unregister").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onDisconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onReconnect").mockImplementation(() => {
+      /* mocked */
+    });
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const follow = commands.get("pinet-follow");
+    const pinetFree = tools.get("pinet_free");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(follow).toBeDefined();
+    expect(pinetFree).toBeDefined();
+
+    try {
+      await sessionStart?.({}, ctx);
+      await follow?.handler("", ctx);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => {
+        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"), {
+          deliverAs: "followUp",
+        });
+      });
+      expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
+
+      await expect(pinetFree!.execute("tool-call-1", {})).rejects.toThrow(
+        "status sync failed once",
+      );
+      expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working", "idle"]);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => {
+        expect(updateStatus.mock.calls.map(([status]) => status)).toEqual([
+          "working",
+          "idle",
+          "idle",
+        ]);
+      });
+
+      await sessionShutdown?.({}, ctx);
+      expect(setStatus).toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("following broker"), "info");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries follower idle status sync after agent_end auto-free fails once", async () => {
+    vi.useFakeTimers();
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+    const sendUserMessage = vi.fn();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage,
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let pollCount = 0;
+    let idleUpdateAttempts = 0;
+    const updateStatus = vi
+      .spyOn(BrokerClient.prototype, "updateStatus")
+      .mockImplementation(async (status: "working" | "idle") => {
+        if (status === "working") {
+          return;
+        }
+        idleUpdateAttempts += 1;
+        if (idleUpdateAttempts === 1) {
+          throw new Error("status sync failed once");
+        }
+      });
+
+    vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "register").mockResolvedValue({
+      agentId: "worker-1",
+      name: "Agent",
+      emoji: "🦙",
+      metadata: { role: "worker", capabilities: { role: "worker" } },
+    });
+    vi.spyOn(BrokerClient.prototype, "claimThread").mockResolvedValue({ claimed: true });
+    vi.spyOn(BrokerClient.prototype, "pollInbox").mockImplementation(async () => {
+      if (pollCount > 0) {
+        pollCount += 1;
+        return [];
+      }
+      pollCount += 1;
+      return [
+        {
+          inboxId: 17,
+          message: {
+            id: 17,
+            threadId: "100.1",
+            source: "slack",
+            direction: "inbound",
+            sender: "U_SENDER",
+            body: "hello from broker",
+            createdAt: "100.1",
+            metadata: { channel: "D123" },
+          },
+        },
+      ];
+    });
+    vi.spyOn(BrokerClient.prototype, "ackMessages").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "unregister").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onDisconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onReconnect").mockImplementation(() => {
+      /* mocked */
+    });
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const follow = commands.get("pinet-follow");
+    const agentEnd = events.get("agent_end");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(follow).toBeDefined();
+    expect(agentEnd).toBeDefined();
+
+    try {
+      await sessionStart?.({}, ctx);
+      await follow?.handler("", ctx);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => {
+        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"), {
+          deliverAs: "followUp",
+        });
+      });
+      expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
+
+      await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
+      expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working", "idle"]);
+      expect(notify).toHaveBeenCalledWith(
+        "Pinet auto-free failed: status sync failed once",
+        "warning",
+      );
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => {
+        expect(updateStatus.mock.calls.map(([status]) => status)).toEqual([
+          "working",
+          "idle",
+          "idle",
+        ]);
+      });
+
+      await sessionShutdown?.({}, ctx);
+      expect(setStatus).toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("following broker"), "info");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("suppresses automatic inbox drain immediately after Escape so interrupts return control", async () => {
     vi.useFakeTimers();
 

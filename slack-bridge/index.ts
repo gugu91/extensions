@@ -1526,6 +1526,10 @@ export default function (pi: ExtensionAPI) {
   let brokerScheduledWakeupRunning = false;
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
+  let desiredAgentStatus: "working" | "idle" = "idle";
+  let syncedFollowerStatus: "working" | "idle" | null = null;
+  let followerStatusSyncPromise: Promise<void> | null = null;
+  let followerStatusSyncTarget: "working" | "idle" | null = null;
 
   function getPinetRegistrationBlockReason(): string {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
@@ -2435,6 +2439,10 @@ export default function (pi: ExtensionAPI) {
         brokerClient = null;
         resetFollowerDeliveryState(followerDeliveryState);
         followerAckPromise = null;
+        syncedFollowerStatus = null;
+        followerStatusSyncPromise = null;
+        followerStatusSyncTarget = null;
+        desiredAgentStatus = "idle";
         brokerRole = null;
         pinetEnabled = false;
       }
@@ -2444,6 +2452,10 @@ export default function (pi: ExtensionAPI) {
     activityLogger.clearPending();
     brokerRole = null;
     pinetEnabled = false;
+    desiredAgentStatus = "idle";
+    syncedFollowerStatus = null;
+    followerStatusSyncPromise = null;
+    followerStatusSyncTarget = null;
     currentRuntimeMode = "off";
     setExtStatus(ctx, "off");
   }
@@ -2623,7 +2635,7 @@ export default function (pi: ExtensionAPI) {
       requireToolPolicy("pinet_free", undefined, `note=${params.note ?? ""}`);
 
       const note = typeof params.note === "string" ? params.note.trim() : "";
-      const result = signalAgentFree(undefined, { requirePinet: true });
+      const result = await signalAgentFree(undefined, { requirePinet: true });
       const inboxSuffix =
         result.queuedInboxCount > 0
           ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`
@@ -2999,6 +3011,8 @@ export default function (pi: ExtensionAPI) {
       activeSelfId = selfId;
       brokerRole = "broker";
       pinetEnabled = true;
+      desiredAgentStatus = "idle";
+      syncedFollowerStatus = null;
       currentRuntimeMode = "broker";
 
       resetBrokerDeliveryState(brokerDeliveryState);
@@ -3177,6 +3191,9 @@ export default function (pi: ExtensionAPI) {
       await client.connect();
       await registerFollowerRuntime();
 
+      desiredAgentStatus = "idle";
+      syncedFollowerStatus = "idle";
+
       const brokerClientRef: BrokerClientRef = {
         client,
         pollInterval: null,
@@ -3351,6 +3368,9 @@ export default function (pi: ExtensionAPI) {
           } catch {
             /* broker may be restarting */
           } finally {
+            void syncDesiredAgentStatus().catch(() => {
+              /* best effort */
+            });
             followerPollRunning = false;
           }
         }, 2000);
@@ -3388,8 +3408,8 @@ export default function (pi: ExtensionAPI) {
             }
           }
           await resumeThreadClaims();
-          const currentlyIdle = ctx.isIdle?.() ?? true;
-          void client.updateStatus(currentlyIdle ? "idle" : "working").catch(() => {
+          syncedFollowerStatus = "idle";
+          void syncDesiredAgentStatus().catch(() => {
             /* best effort */
           });
           startPolling();
@@ -3447,6 +3467,10 @@ export default function (pi: ExtensionAPI) {
     brokerClient = null;
     resetFollowerDeliveryState(followerDeliveryState);
     followerAckPromise = null;
+    syncedFollowerStatus = null;
+    followerStatusSyncPromise = null;
+    followerStatusSyncTarget = null;
+    desiredAgentStatus = "idle";
     brokerRole = null;
     pinetEnabled = false;
     currentRuntimeMode = "off";
@@ -3597,32 +3621,57 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Agent status reporting ──────────────────────────
 
-  function reportStatus(status: "working" | "idle"): void {
-    if (!pinetEnabled) return;
-    try {
-      if (brokerRole === "broker" && activeBroker && activeSelfId) {
-        activeBroker.db.updateAgentStatus(activeSelfId, status);
-      } else if (brokerRole === "follower" && brokerClient) {
-        brokerClient.client.updateStatus(status).catch(() => {
-          /* best effort */
-        });
+  async function syncDesiredAgentStatus(options: { force?: boolean } = {}): Promise<void> {
+    if (!pinetEnabled) {
+      return;
+    }
+
+    if (brokerRole === "broker" && activeBroker && activeSelfId) {
+      activeBroker.db.updateAgentStatus(activeSelfId, desiredAgentStatus);
+      return;
+    }
+
+    if (brokerRole === "follower" && brokerClient) {
+      if (!options.force && syncedFollowerStatus === desiredAgentStatus) {
+        return;
       }
-    } catch {
-      /* best effort */
+      if (followerStatusSyncPromise && followerStatusSyncTarget === desiredAgentStatus) {
+        await followerStatusSyncPromise;
+        return;
+      }
+
+      const targetStatus = desiredAgentStatus;
+      const request = brokerClient.client.updateStatus(targetStatus).then(() => {
+        syncedFollowerStatus = targetStatus;
+      });
+      followerStatusSyncTarget = targetStatus;
+      const inFlight = request.finally(() => {
+        if (followerStatusSyncPromise === inFlight) {
+          followerStatusSyncPromise = null;
+          followerStatusSyncTarget = null;
+        }
+      });
+      followerStatusSyncPromise = inFlight;
+      await inFlight;
     }
   }
 
-  function signalAgentFree(
+  async function reportStatus(status: "working" | "idle"): Promise<void> {
+    desiredAgentStatus = status;
+    await syncDesiredAgentStatus();
+  }
+
+  async function signalAgentFree(
     ctx?: ExtensionContext,
     options: { requirePinet?: boolean } = {},
-  ): { queuedInboxCount: number; drainedQueuedInbox: boolean } {
+  ): Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }> {
     if (!pinetEnabled && options.requirePinet) {
       throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
     }
 
     const maintenanceCtx = ctx ?? extCtx ?? undefined;
     if (pinetEnabled) {
-      reportStatus("idle");
+      await reportStatus("idle");
       if (brokerRole === "broker" && maintenanceCtx) {
         runBrokerMaintenance(maintenanceCtx);
       }
@@ -3679,7 +3728,9 @@ export default function (pi: ExtensionAPI) {
     const pending = inbox.splice(0, inbox.length);
     const brokerInboxIds = getBrokerInboxIds(pending);
     updateBadge();
-    reportStatus("working");
+    void reportStatus("working").catch(() => {
+      /* best effort */
+    });
 
     let prompt = formatInboxMessages(pending, userNames);
 
@@ -3792,7 +3843,11 @@ export default function (pi: ExtensionAPI) {
     thinking.clear();
     ralphLoopState.followUpPending = false;
 
-    signalAgentFree(ctx);
+    try {
+      await signalAgentFree(ctx);
+    } catch (err) {
+      ctx.ui.notify(`Pinet auto-free failed: ${msg(err)}`, "warning");
+    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
