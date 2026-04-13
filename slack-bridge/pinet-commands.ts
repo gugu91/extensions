@@ -51,6 +51,7 @@ export interface PinetCommandsDeps {
   getPinetRegistrationBlockReason: () => string;
   connectAsBroker: (ctx: ExtensionContext) => Promise<void>;
   connectAsFollower: (ctx: ExtensionContext) => Promise<void>;
+  reloadPinetRuntime: (ctx: ExtensionContext) => Promise<void>;
   disconnectFollower: (ctx: ExtensionContext) => Promise<{ unregisterError: string | null }>;
   sendPinetAgentMessage: (
     target: string,
@@ -70,17 +71,25 @@ export interface PinetCommandsDeps {
 
 export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps): void {
   pi.registerCommand("pinet-start", {
-    description: "Start Pinet as the broker (Slack connection + message routing)",
+    description:
+      "Start Pinet as the broker (Slack connection + message routing, or reload the active broker)",
     handler: async (_args, ctx) => {
       if (deps.pinetRegistrationBlocked()) {
         ctx.ui.notify(deps.getPinetRegistrationBlockReason(), "warning");
         return;
       }
+      deps.setExtCtx(ctx);
+
       if (deps.runtimeMode() === "broker") {
-        ctx.ui.notify("Pinet already running (broker)", "info");
+        try {
+          ctx.ui.notify("Pinet broker already running — reloading current runtime", "info");
+          await deps.reloadPinetRuntime(ctx);
+        } catch (err) {
+          ctx.ui.notify(`Pinet broker reload failed: ${errorMsg(err)}`, "error");
+          deps.setExtStatus(ctx, "error");
+        }
         return;
       }
-      deps.setExtCtx(ctx);
 
       try {
         await deps.connectAsBroker(ctx);

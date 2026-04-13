@@ -3120,6 +3120,7 @@ export default function (pi: ExtensionAPI) {
     getPinetRegistrationBlockReason,
     connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
     connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
+    reloadPinetRuntime,
     disconnectFollower,
     sendPinetAgentMessage,
     signalAgentFree,
