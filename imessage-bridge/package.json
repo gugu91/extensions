@@ -1,0 +1,25 @@
+{
+  "name": "@gugu910/pi-imessage-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "macOS/iMessage MVP readiness helpers and future adapter scaffold for pi",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu910/extensions.git",
+    "directory": "imessage-bridge"
+  },
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json"
+  },
+  "pi": {},
+  "scripts": {
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}
