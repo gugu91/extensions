@@ -60,7 +60,7 @@ export interface PinetCommandsDeps {
   signalAgentFree: (
     ctx: ExtensionContext,
     options: { requirePinet?: boolean },
-  ) => { queuedInboxCount: number; drainedQueuedInbox: boolean };
+  ) => Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }>;
   applyMeshSkin: (themeInput: string) => { theme: string; updatedAgents: string[] };
   applyLocalAgentIdentity: (name: string, emoji: string, personality: string | null) => void;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
@@ -203,7 +203,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       }
 
       try {
-        const result = deps.signalAgentFree(ctx, { requirePinet: true });
+        const result = await deps.signalAgentFree(ctx, { requirePinet: true });
         const suffix = result.drainedQueuedInbox
           ? ` Processing ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? "" : "s"} now.`
           : result.queuedInboxCount > 0
