@@ -9,23 +9,26 @@ const packageName = path.basename(packageDir);
 const distDir = path.join(packageDir, "dist");
 
 const packageConfigs = {
+  "transport-core": {
+    excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
+    excludeFiles: new Set(),
+    excludePrefixes: [],
+    vendorDirs: [],
+    importRewrites: [],
+  },
+  "imessage-bridge": {
+    excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
+    excludeFiles: new Set(),
+    excludePrefixes: [],
+    vendorDirs: [],
+    importRewrites: [],
+  },
   "slack-bridge": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
     excludeFiles: new Set(["vitest.config.ts"]),
     excludePrefixes: [],
-    vendorDirs: [
-      {
-        source: "../imessage-bridge",
-        output: "vendor/imessage-bridge",
-      },
-    ],
-    importRewrites: [
-      {
-        files: new Set(["imessage.ts"]),
-        from: "../imessage-bridge/",
-        to: "./vendor/imessage-bridge/",
-      },
-    ],
+    vendorDirs: [],
+    importRewrites: [],
   },
   "nvim-bridge": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo", "nvim"]),
@@ -138,8 +141,8 @@ async function build() {
     const transpiled = ts.transpileModule(rewritten, {
       compilerOptions: {
         target: ts.ScriptTarget.ES2022,
-        module: ts.ModuleKind.NodeNext,
-        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        module: ts.ModuleKind.ES2022,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
         verbatimModuleSyntax: true,
       },
       fileName: item.inputPath,

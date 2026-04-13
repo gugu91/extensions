@@ -1,14 +1,14 @@
 {
-  "name": "@gugu910/pi-slack-bridge",
-  "version": "0.1.3",
+  "name": "@gugu910/pi-transport-core",
+  "version": "0.0.0",
   "type": "module",
-  "description": "Slack assistant integration for pi (Pinet) — multi-agent broker, thread routing, and inbox tools",
+  "description": "Transport-neutral message contracts for pi transports",
   "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gugu91/extensions.git",
-    "directory": "slack-bridge"
+    "directory": "transport-core"
   },
   "publishConfig": {
     "access": "public"
@@ -21,27 +21,13 @@
   "files": [
     "README.md",
     "LICENSE",
-    "manifest.yaml",
     "dist/"
   ],
-  "keywords": [
-    "pi-package"
-  ],
-  "pi": {
-    "extensions": [
-      "./dist/index.js"
-    ]
-  },
+  "pi": {},
   "scripts": {
     "build": "node ../scripts/build-package.mjs",
     "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@gugu910/pi-imessage-bridge": "workspace:*",
-    "@gugu910/pi-transport-core": "workspace:*",
-    "@sinclair/typebox": "^0.34.49"
+    "typecheck": "tsc --noEmit"
   }
 }

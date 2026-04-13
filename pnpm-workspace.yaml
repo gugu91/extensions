@@ -1,4 +1,5 @@
 packages:
+  - transport-core
   - slack-bridge
   - slack-api
   - imessage-bridge

@@ -118,7 +118,7 @@ import {
   formatIMessageMvpReadiness,
   getDefaultIMessageThreadId,
   normalizeIMessageRecipient,
-} from "./imessage.js";
+} from "@gugu910/pi-imessage-bridge";
 import {
   type RalphLoopDeps,
   createRalphLoopState,

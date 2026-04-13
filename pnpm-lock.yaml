@@ -41,7 +41,11 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2(@types/node@22.19.11)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.11)(jiti@2.6.1)(yaml@2.8.2))
 
-  imessage-bridge: {}
+  imessage-bridge:
+    dependencies:
+      "@gugu910/pi-transport-core":
+        specifier: workspace:*
+        version: link:../transport-core
 
   neon-psql:
     devDependencies:
@@ -63,9 +67,17 @@ importers:
 
   slack-bridge:
     dependencies:
+      "@gugu910/pi-imessage-bridge":
+        specifier: workspace:*
+        version: link:../imessage-bridge
+      "@gugu910/pi-transport-core":
+        specifier: workspace:*
+        version: link:../transport-core
       "@sinclair/typebox":
         specifier: ^0.34.49
         version: 0.34.49
+
+  transport-core: {}
 
 packages:
   "@emnapi/core@1.9.1":

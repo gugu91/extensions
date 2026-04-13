@@ -1,3 +1,8 @@
+import type {
+  InboundMessage as IMessageAdapterInboundMessage,
+  MessageAdapter,
+  OutboundMessage as IMessageAdapterOutboundMessage,
+} from "@gugu910/pi-transport-core";
 import {
   assertIMessageSendCapability,
   sendIMessage,
@@ -5,25 +10,7 @@ import {
 } from "./send.js";
 import type { DetectIMessageMvpEnvironmentOptions, IMessageMvpEnvironment } from "./mvp.js";
 
-export interface IMessageAdapterInboundMessage {
-  source: string;
-  threadId: string;
-  channel: string;
-  userId: string;
-  text: string;
-  timestamp: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface IMessageAdapterOutboundMessage {
-  threadId: string;
-  channel: string;
-  text: string;
-  agentName?: string;
-  agentEmoji?: string;
-  agentOwnerToken?: string;
-  metadata?: Record<string, unknown>;
-}
+export type { IMessageAdapterInboundMessage, IMessageAdapterOutboundMessage };
 
 export interface IMessageAdapterOptions {
   osascriptPath?: string;
@@ -34,12 +21,8 @@ export interface IMessageAdapterOptions {
   ) => IMessageMvpEnvironment;
 }
 
-export interface IMessageAdapter {
+export interface IMessageAdapter extends MessageAdapter {
   readonly name: "imessage";
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  onInbound(handler: (msg: IMessageAdapterInboundMessage) => void): void;
-  send(msg: IMessageAdapterOutboundMessage): Promise<void>;
 }
 
 export class AppleScriptIMessageAdapter implements IMessageAdapter {

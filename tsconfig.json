@@ -8,9 +8,15 @@
     "skipLibCheck": true,
     "types": ["node"],
     "verbatimModuleSyntax": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@gugu910/pi-imessage-bridge": ["./imessage-bridge/index.ts"],
+      "@gugu910/pi-transport-core": ["./transport-core/index.ts"]
+    }
   },
   "include": [
+    "transport-core/**/*.ts",
     "imessage-bridge/**/*.ts",
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",
