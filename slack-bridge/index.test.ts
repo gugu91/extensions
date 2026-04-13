@@ -357,6 +357,245 @@ describe("slack-bridge top-level shutdown", () => {
     );
   });
 
+  it("reloads the active broker runtime when /pinet-start runs twice", async () => {
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-reload-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-broker-reload-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const brokerRuntimes: Array<{
+      db: BrokerDB;
+      server: {
+        setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        onAgentMessage: ReturnType<typeof vi.fn>;
+        onAgentStatusChange: ReturnType<typeof vi.fn>;
+      };
+      stop: ReturnType<typeof vi.fn>;
+    }> = [];
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const server = {
+        setAgentRegistrationResolver: vi.fn(),
+        onAgentMessage: vi.fn(),
+        onAgentStatusChange: vi.fn(),
+      };
+      const stop = vi.fn(async () => {
+        db.close();
+      });
+      brokerRuntimes.push({ db, server, stop });
+      return {
+        db,
+        server,
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters: [],
+        addAdapter: vi.fn(),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("", ctx);
+
+    expect(startBrokerSpy).toHaveBeenCalledTimes(2);
+    expect(brokerRuntimes).toHaveLength(2);
+    expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      "Pinet broker already running — reloading current runtime",
+      "info",
+    );
+    expect(notify).not.toHaveBeenCalledWith("Pinet already running (broker)", "info");
+
+    await sessionShutdown?.({}, ctx);
+  });
+
+  it("restores the previous broker runtime if /pinet-start reload fails", async () => {
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-reload-fail-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-broker-reload-fail-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const brokerRuntimes: Array<{
+      db: BrokerDB;
+      server: {
+        setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        onAgentMessage: ReturnType<typeof vi.fn>;
+        onAgentStatusChange: ReturnType<typeof vi.fn>;
+      };
+      stop: ReturnType<typeof vi.fn>;
+    }> = [];
+    let startAttempt = 0;
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      startAttempt += 1;
+      if (startAttempt === 2) {
+        throw new Error("refreshed start failed");
+      }
+
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const server = {
+        setAgentRegistrationResolver: vi.fn(),
+        onAgentMessage: vi.fn(),
+        onAgentStatusChange: vi.fn(),
+      };
+      const stop = vi.fn(async () => {
+        db.close();
+      });
+      brokerRuntimes.push({ db, server, stop });
+      return {
+        db,
+        server,
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters: [],
+        addAdapter: vi.fn(),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+    notify.mockClear();
+    setStatus.mockClear();
+
+    await pinetStart?.handler("", ctx);
+
+    expect(startBrokerSpy).toHaveBeenCalledTimes(3);
+    expect(brokerRuntimes).toHaveLength(2);
+    expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      "Pinet broker already running — reloading current runtime",
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      "Pinet broker reload failed: Reload failed: refreshed start failed. Restored the previous runtime.",
+      "error",
+    );
+    expect(notify).not.toHaveBeenCalledWith("Pinet already running (broker)", "info");
+    expect(setStatus).toHaveBeenCalled();
+
+    await sessionShutdown?.({}, ctx);
+    expect(brokerRuntimes[1]?.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("does not auto-follow into the mesh for headless ephemeral subagent sessions", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
