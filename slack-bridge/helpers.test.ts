@@ -59,6 +59,8 @@ import {
   resolveRuntimeAgentIdentity,
   buildAgentStableId,
   resolveAgentStableId,
+  buildBrokerStableId,
+  resolveBrokerStableId,
   isLikelyLocalSubagentContext,
   buildSlackRequest,
   createAbortableOperationTracker,
@@ -1420,6 +1422,26 @@ describe("resolveAgentStableId", () => {
   it("falls back to buildAgentStableId when no persisted stable id exists", () => {
     expect(resolveAgentStableId(undefined, "/tmp/pi/session.json", "macbook", "/repo")).toBe(
       `macbook:session:${path.resolve("/tmp/pi/session.json")}`,
+    );
+  });
+});
+
+describe("buildBrokerStableId", () => {
+  it("anchors broker stable ids to the repo checkout instead of the session file", () => {
+    expect(buildBrokerStableId("macbook", "/repo")).toBe(`macbook:broker:${path.resolve("/repo")}`);
+  });
+});
+
+describe("resolveBrokerStableId", () => {
+  it("prefers the persisted broker stable id across reloads and restarts", () => {
+    expect(resolveBrokerStableId("persisted:broker:123", "macbook", "/repo")).toBe(
+      "persisted:broker:123",
+    );
+  });
+
+  it("falls back to the repo-anchored broker stable id when none is persisted", () => {
+    expect(resolveBrokerStableId(undefined, "macbook", "/repo")).toBe(
+      `macbook:broker:${path.resolve("/repo")}`,
     );
   });
 });

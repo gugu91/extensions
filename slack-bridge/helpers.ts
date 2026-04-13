@@ -1653,6 +1653,18 @@ export function resolveAgentStableId(
   return persistedStableId || buildAgentStableId(sessionFile, host, cwd, leafId);
 }
 
+export function buildBrokerStableId(host = os.hostname(), cwd = process.cwd()): string {
+  return `${host}:broker:${path.resolve(cwd)}`;
+}
+
+export function resolveBrokerStableId(
+  persistedStableId?: string,
+  host = os.hostname(),
+  cwd = process.cwd(),
+): string {
+  return persistedStableId || buildBrokerStableId(host, cwd);
+}
+
 export interface PinetRegistrationContext {
   sessionHeader?: {
     parentSession?: string;
