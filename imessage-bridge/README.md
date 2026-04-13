@@ -1,56 +1,61 @@
 # @gugu910/pi-imessage-bridge
 
-Tiny macOS/iMessage MVP scaffold for the `extensions` repo.
+Thin macOS/iMessage **send-first** package for the `extensions` repo.
 
 ## What this slice does
 
-This package does **not** wire iMessage into the live broker yet.
+This package now covers the smallest useful live transport path:
 
-Instead, it makes the smallest useful next slice concrete:
+- adapter-local readiness checks for a local macOS iMessage MVP
+- an AppleScript-backed outbound adapter for **send-first** delivery
+- transport-local helpers that the shared broker/runtime core can call without burying iMessage logic inside `slack-bridge`
 
-- codifies the current MVP assumptions for a local-first iMessage transport
-- detects whether the current host can plausibly support that MVP
-- gives the future adapter a stable, tested home for adapter-local readiness checks
+## Current MVP shape
 
-## Current MVP assumptions
-
-A first iMessage transport in this repo is expected to be:
+The current implementation is intentionally narrow:
 
 - **macOS only**
-- **local-first**
-- **send-capable via AppleScript** through `/usr/bin/osascript`
-- **history-aware via the local Messages database** at `~/Library/Messages/chat.db`
+- **send-first**
+- **AppleScript delivery** through `/usr/bin/osascript`
+- **shared-core delivery** via the broker adapter seam
+- **local history readiness** still modeled against `~/Library/Messages/chat.db`
 
-That keeps the first slice close to the repo's local-hosted operating model and avoids inventing transport/core wiring before the shared messaging seam is ready.
+That means outbound sends can work even when the local Messages database is unavailable, while startup/readiness reporting still makes the history blocker explicit.
 
-## Why this lands before the shared messaging seam
+In the current repo bring-up path, enable the adapter with `slack-bridge.imessage.enabled: true` and start the broker runtime with `/pinet-start`.
 
-The unresolved ports/adapters work is about how a future `imessage-bridge` plugs into the shared broker/runtime core.
+## What stays in this package
 
-This package stays below that line:
+- readiness detection
+- canonical local path assumptions for the Messages database
+- AppleScript send helper + adapter-local transport code
+- stable default thread-id helper for send-first bring-up
 
-- no broker registration
-- no routing changes
-- no new runtime mode
-- no Slack/iMessage crossover logic
+## What stays out of scope
 
-It is safe to land independently because it only captures adapter-local environment assumptions.
-
-## Out of scope
-
-- inbound iMessage handling
-- AppleScript send implementation
-- chat database queries
-- shared messaging-core wiring
-- any dependency on `#366`
+- inbound iMessage sync
+- chat database query plumbing
+- generic transport UI redesign
+- WhatsApp or other transport work
+- broad Slack/Pinet separation cleanup beyond the existing broker adapter seam
 
 ## Example
 
 ```ts
-import { detectIMessageMvpEnvironment } from "@gugu910/pi-imessage-bridge";
+import {
+  createIMessageAdapter,
+  detectIMessageMvpEnvironment,
+  getDefaultIMessageThreadId,
+} from "@gugu910/pi-imessage-bridge";
 
-const environment = detectIMessageMvpEnvironment();
-if (!environment.readyForLocalMvp) {
-  console.log(environment.blockers);
+const readiness = detectIMessageMvpEnvironment();
+if (readiness.canAttemptSend) {
+  const adapter = createIMessageAdapter();
+  await adapter.connect();
+  await adapter.send({
+    threadId: getDefaultIMessageThreadId("chat:alice"),
+    channel: "chat:alice",
+    text: "hello from pi",
+  });
 }
 ```

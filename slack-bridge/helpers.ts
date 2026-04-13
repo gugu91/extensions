@@ -29,6 +29,9 @@ export interface SlackBridgeSettings {
   controlPlaneCanvasId?: string;
   controlPlaneCanvasChannel?: string;
   controlPlaneCanvasTitle?: string;
+  imessage?: {
+    enabled?: boolean;
+  };
   security?: {
     readOnly?: boolean;
     requireConfirmation?: string[];

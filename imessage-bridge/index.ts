@@ -7,4 +7,24 @@ export {
   getDefaultMessagesDbPath,
   type IMessageMvpEnvironment,
   type IMessageMvpEnvironmentBlocker,
-} from "./mvp.ts";
+} from "./mvp.js";
+export {
+  AppleScriptIMessageAdapter,
+  createIMessageAdapter,
+  type IMessageAdapter,
+  type IMessageAdapterInboundMessage,
+  type IMessageAdapterOptions,
+  type IMessageAdapterOutboundMessage,
+} from "./adapter.js";
+export {
+  assertIMessageSendCapability,
+  buildIMessageSendAppleScript,
+  getDefaultIMessageThreadId,
+  normalizeIMessageRecipient,
+  runAppleScript,
+  sendIMessage,
+  type RunAppleScript,
+  type RunAppleScriptInput,
+  type RunAppleScriptResult,
+  type SendIMessageOptions,
+} from "./send.js";

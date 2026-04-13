@@ -7,7 +7,14 @@ import type { BrokerDB } from "./schema.js";
 import { DEFAULT_SOCKET_PATH } from "./paths.js";
 import { MessageRouter } from "./router.js";
 import { dispatchDirectAgentMessage } from "./agent-messaging.js";
-import type { BrokerMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcError } from "./types.js";
+import { sendBrokerMessage } from "./message-send.js";
+import type {
+  BrokerMessage,
+  JsonRpcRequest,
+  JsonRpcResponse,
+  JsonRpcError,
+  MessageAdapter,
+} from "./types.js";
 import {
   RPC_PARSE_ERROR,
   RPC_INVALID_REQUEST,
@@ -143,6 +150,7 @@ export class BrokerSocketServer {
   private assignedPort: number | null = null;
   private agentMessageCallback: AgentMessageCallback | null = null;
   private agentStatusChangeCallback: AgentStatusChangeCallback | null = null;
+  private outboundMessageAdapters: ReadonlyArray<Pick<MessageAdapter, "name" | "send">> = [];
   private agentRegistrationResolver: AgentRegistrationResolver | null = null;
 
   constructor(
@@ -274,6 +282,12 @@ export class BrokerSocketServer {
 
   setAgentRegistrationResolver(resolver: AgentRegistrationResolver | null): void {
     this.agentRegistrationResolver = resolver;
+  }
+
+  setOutboundMessageAdapters(
+    adapters: ReadonlyArray<Pick<MessageAdapter, "name" | "send">>,
+  ): void {
+    this.outboundMessageAdapters = adapters;
   }
 
   private startPruning(): void {
@@ -435,6 +449,8 @@ export class BrokerSocketServer {
           return this.handleInboxAck(req, state);
         case "send":
           return this.handleSend(req, state);
+        case "message.send":
+          return await this.handleMessageSend(req, state);
         case "threads.list":
           return this.handleThreadsList(req, state);
         case "agents.list":
@@ -648,6 +664,61 @@ export class BrokerSocketServer {
     this.db.touchAgentActivity(state.agentId);
 
     return rpcOk(req.id, { messageId: msg.id });
+  }
+
+  private async handleMessageSend(
+    req: JsonRpcRequest,
+    state: ConnectionState,
+  ): Promise<JsonRpcResponse> {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const threadId = typeof params.threadId === "string" ? params.threadId : null;
+    const body = typeof params.body === "string" ? params.body : null;
+    const source = typeof params.source === "string" ? params.source : undefined;
+    const channel = typeof params.channel === "string" ? params.channel : undefined;
+    const agentName = typeof params.agentName === "string" ? params.agentName : undefined;
+    const agentEmoji = typeof params.agentEmoji === "string" ? params.agentEmoji : undefined;
+    const agentOwnerToken =
+      typeof params.agentOwnerToken === "string" ? params.agentOwnerToken : undefined;
+    const metadata =
+      params.metadata && typeof params.metadata === "object"
+        ? (params.metadata as Record<string, unknown>)
+        : undefined;
+
+    if (!threadId || !body) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "threadId and body are required");
+    }
+
+    const result = await sendBrokerMessage(
+      {
+        db: this.db,
+        adapters: this.outboundMessageAdapters,
+      },
+      {
+        threadId,
+        body,
+        senderAgentId: state.agentId,
+        ...(source ? { source } : {}),
+        ...(channel ? { channel } : {}),
+        ...(agentName ? { agentName } : {}),
+        ...(agentEmoji ? { agentEmoji } : {}),
+        ...(agentOwnerToken ? { agentOwnerToken } : {}),
+        ...(metadata ? { metadata } : {}),
+      },
+    );
+
+    this.db.touchAgentActivity(state.agentId);
+
+    return rpcOk(req.id, {
+      adapter: result.adapter,
+      messageId: result.message.id,
+      threadId: result.thread.threadId,
+      channel: result.thread.channel,
+      source: result.thread.source,
+    });
   }
 
   private handleThreadsList(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {

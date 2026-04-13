@@ -613,6 +613,44 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect((result.echo as Record<string, unknown>).channel).toBe("C123");
   });
 
+  it("message.send delivers through the registered transport adapter", async () => {
+    const send = async (_msg: {
+      threadId: string;
+      channel: string;
+      text: string;
+      agentName?: string;
+      agentEmoji?: string;
+      agentOwnerToken?: string;
+      metadata?: Record<string, unknown>;
+    }) => undefined;
+    const adapter = { name: "imessage", send };
+    server.setOutboundMessageAdapters([adapter]);
+
+    const reg = await client.register("imessage-sender", "💬");
+    const result = await client.sendMessage({
+      threadId: "imessage:chat:alice",
+      body: "hello from broker",
+      source: "imessage",
+      channel: "chat:alice",
+      agentName: "iSender",
+    });
+
+    expect(result).toMatchObject({
+      adapter: "imessage",
+      threadId: "imessage:chat:alice",
+      channel: "chat:alice",
+      source: "imessage",
+    });
+
+    const thread = db.getThread("imessage:chat:alice");
+    expect(thread).not.toBeNull();
+    expect(thread).toMatchObject({
+      source: "imessage",
+      channel: "chat:alice",
+      ownerAgent: reg.agentId,
+    });
+  });
+
   it("thread.claim claims ownership for the calling agent", async () => {
     await client.register("claimer-agent", "🏷️");
 
