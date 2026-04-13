@@ -45,6 +45,7 @@ import {
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
   resolveRuntimeAgentIdentity,
+  resolveBrokerStableId,
   shortenPath,
   buildIdentityReplyGuidelines,
   buildAgentPersonalityGuidelines,
@@ -245,11 +246,13 @@ export default function (pi: ExtensionAPI) {
   let agentName = initialIdentity.name;
   let agentEmoji = initialIdentity.emoji;
   let agentStableId = resolveAgentStableId(undefined, undefined, os.hostname(), process.cwd());
+  let brokerStableId = resolveBrokerStableId(undefined, os.hostname(), process.cwd());
   let agentOwnerToken = buildPinetOwnerToken(agentStableId);
   let activeSkinTheme: string | null = null;
   let agentPersonality: string | null = null;
   const agentAliases = new Set<string>();
   const PINET_SKIN_SETTING_KEY = "pinet.skinTheme";
+  const PINET_BROKER_STABLE_ID_SETTING_KEY = "pinet.brokerStableId";
 
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
@@ -312,8 +315,19 @@ export default function (pi: ExtensionAPI) {
     agentAliases: string[];
   }
 
+  function getStableIdForRole(role: "broker" | "worker"): string {
+    return role === "broker" ? brokerStableId : agentStableId;
+  }
+
+  function getIdentitySeedForRole(
+    role: "broker" | "worker",
+    sessionFile = extCtx?.sessionManager.getSessionFile() ?? undefined,
+  ): string {
+    return role === "broker" ? brokerStableId : sessionFile ?? agentStableId;
+  }
+
   function getSkinSeed(preferredSeed?: string): string {
-    return preferredSeed?.trim() || agentStableId;
+    return preferredSeed?.trim() || getStableIdForRole(brokerRole === "broker" ? "broker" : "worker");
   }
 
   function rememberAgentAlias(name: string | undefined): void {
@@ -375,8 +389,8 @@ export default function (pi: ExtensionAPI) {
     guardrails = settings.security ?? {};
     reactionCommands = resolveReactionCommands(settings.reactionCommands);
     securityPrompt = buildSecurityPrompt(guardrails);
-    const identitySeed = extCtx?.sessionManager.getSessionFile() ?? agentStableId;
     const role = brokerRole === "broker" ? "broker" : "worker";
+    const identitySeed = getIdentitySeedForRole(role);
     const skinIdentity = resolveSkinAssignment(role, identitySeed);
     if (skinIdentity) {
       agentName = skinIdentity.name;
@@ -425,7 +439,7 @@ export default function (pi: ExtensionAPI) {
     agentEmoji = snapshot.agentEmoji;
     activeSkinTheme = snapshot.activeSkinTheme;
     agentPersonality = snapshot.agentPersonality;
-    agentOwnerToken = buildPinetOwnerToken(agentStableId);
+    agentOwnerToken = buildPinetOwnerToken(getStableIdForRole(brokerRole === "broker" ? "broker" : "worker"));
     agentAliases.clear();
     for (const alias of snapshot.agentAliases) {
       if (alias && alias !== agentName) {
@@ -618,6 +632,8 @@ export default function (pi: ExtensionAPI) {
         agentName,
         agentEmoji,
         agentStableId,
+        brokerStableId,
+        lastPinetRole: brokerRole === "broker" ? "broker" : "worker",
         activeSkinTheme,
         agentPersonality,
         agentAliases: [...agentAliases],
@@ -2893,6 +2909,31 @@ export default function (pi: ExtensionAPI) {
       activeSkinTheme =
         broker.db.getSetting<string>(PINET_SKIN_SETTING_KEY) ?? DEFAULT_PINET_SKIN_THEME;
       broker.db.setSetting(PINET_SKIN_SETTING_KEY, activeSkinTheme);
+
+      const persistedBrokerStableId =
+        normalizeOptionalSetting(broker.db.getSetting<string>(PINET_BROKER_STABLE_ID_SETTING_KEY)) ??
+        broker.db
+          .getAllAgents()
+          .flatMap((agent) => {
+            const stableId = normalizeOptionalSetting(agent.stableId);
+            if (!stableId) {
+              return [];
+            }
+            if (getMeshRoleFromMetadata(agent.metadata ?? undefined, "worker") !== "broker") {
+              return [];
+            }
+            const lastSeenMs = Date.parse(agent.lastSeen);
+            const connectedAtMs = Date.parse(agent.connectedAt);
+            const recencyMs = Number.isNaN(lastSeenMs)
+              ? (Number.isNaN(connectedAtMs) ? 0 : connectedAtMs)
+              : lastSeenMs;
+            return [{ stableId, recencyMs }];
+          })
+          .sort((left, right) => right.recencyMs - left.recencyMs)[0]?.stableId ??
+        null;
+      brokerStableId = persistedBrokerStableId ?? brokerStableId;
+      broker.db.setSetting(PINET_BROKER_STABLE_ID_SETTING_KEY, brokerStableId);
+      agentOwnerToken = buildPinetOwnerToken(brokerStableId);
       broker.server.setAgentRegistrationResolver((registration) => {
         const theme = activeSkinTheme ?? DEFAULT_PINET_SKIN_THEME;
         const role = getMeshRoleFromMetadata(registration.metadata, "worker");
@@ -2911,7 +2952,7 @@ export default function (pi: ExtensionAPI) {
       const selfAssignment = buildPinetSkinAssignment({
         theme: activeSkinTheme,
         role: "broker",
-        seed: agentStableId,
+        seed: brokerStableId,
       });
       const selfAgent = broker.db.registerAgent(
         ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
@@ -2919,7 +2960,7 @@ export default function (pi: ExtensionAPI) {
         selfAssignment.emoji,
         process.pid,
         buildSkinMetadata(await getAgentMetadata("broker"), selfAssignment.personality),
-        agentStableId,
+        brokerStableId,
       );
       selfId = selfAgent.id;
       applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
@@ -3174,10 +3215,11 @@ export default function (pi: ExtensionAPI) {
         { name: agentName, emoji: agentEmoji },
         settings,
         process.env.PI_NICKNAME,
-        ctx.sessionManager.getSessionFile() ?? agentStableId,
+        getIdentitySeedForRole("worker", ctx.sessionManager.getSessionFile() ?? undefined),
         "worker",
       );
 
+      agentOwnerToken = buildPinetOwnerToken(agentStableId);
       const registration = await client.register(
         workerIdentity.name,
         workerIdentity.emoji,
@@ -3522,6 +3564,8 @@ export default function (pi: ExtensionAPI) {
       agentName?: string;
       agentEmoji?: string;
       agentStableId?: string;
+      brokerStableId?: string;
+      lastPinetRole?: "broker" | "worker";
       activeSkinTheme?: string | null;
       agentPersonality?: string | null;
       agentAliases?: string[];
@@ -3536,6 +3580,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
+      const restoredRole = savedState?.lastPinetRole === "broker" ? "broker" : "worker";
       agentStableId = resolveAgentStableId(
         savedState?.agentStableId,
         ctx.sessionManager.getSessionFile(),
@@ -3543,8 +3588,12 @@ export default function (pi: ExtensionAPI) {
         ctx.cwd,
         ctx.sessionManager.getLeafId(),
       );
-      agentOwnerToken = buildPinetOwnerToken(agentStableId);
-      const identitySeed = ctx.sessionManager.getSessionFile() ?? agentStableId;
+      brokerStableId = resolveBrokerStableId(savedState?.brokerStableId, os.hostname(), ctx.cwd);
+      agentOwnerToken = buildPinetOwnerToken(getStableIdForRole(restoredRole));
+      const identitySeed = getIdentitySeedForRole(
+        restoredRole,
+        ctx.sessionManager.getSessionFile() ?? undefined,
+      );
       activeSkinTheme = savedState?.activeSkinTheme ?? null;
       agentPersonality = savedState?.agentPersonality ?? null;
       agentAliases.clear();
@@ -3559,7 +3608,7 @@ export default function (pi: ExtensionAPI) {
         savedState?.agentEmoji,
         process.env.PI_NICKNAME,
         identitySeed,
-        brokerRole === "broker" ? "broker" : "worker",
+        restoredRole,
       );
       agentName = restoredIdentity.name;
       agentEmoji = restoredIdentity.emoji;
