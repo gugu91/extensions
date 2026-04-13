@@ -12,13 +12,14 @@ interactive browsing and screenshots.
 
 ## Extensions
 
-| Package                         | Description                                                                |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| [`slack-bridge`](slack-bridge/) | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling |
-| [`slack-api`](slack-api/)       | Typed Slack Web API client + CLI generated from OpenAPI                    |
-| [`nvim-bridge`](nvim-bridge/)   | Neovim editor context sync + PiComms persistent comments                   |
-| [`neon-psql`](neon-psql/)       | Config-driven Neon tunnel + `psql` tool                                    |
-| [`types`](types/)               | Shared ambient type declarations                                           |
+| Package                               | Description                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------- |
+| [`slack-bridge`](slack-bridge/)       | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling |
+| [`slack-api`](slack-api/)             | Typed Slack Web API client + CLI generated from OpenAPI                    |
+| [`imessage-bridge`](imessage-bridge/) | macOS/iMessage MVP readiness scaffold for a future thin adapter            |
+| [`nvim-bridge`](nvim-bridge/)         | Neovim editor context sync + PiComms persistent comments                   |
+| [`neon-psql`](neon-psql/)             | Config-driven Neon tunnel + `psql` tool                                    |
+| [`types`](types/)                     | Shared ambient type declarations                                           |
 
 ## Current state snapshot
 
@@ -135,6 +136,9 @@ extensions/
 │   ├── generated/      #   generated typed Slack Web API client
 │   ├── cli.ts          #   CLI wrapper around generated methods
 │   └── package.json    #   workspace package + pi manifest
+├── imessage-bridge/    # @gugu910/pi-imessage-bridge (MVP scaffold)
+│   ├── mvp.ts          #   local macOS/iMessage readiness helpers
+│   └── package.json    #   workspace package scaffold
 ├── nvim-bridge/        # @gugu910/pi-nvim-bridge
 │   ├── nvim/           #   Neovim Lua plugin
 │   ├── index.ts        #   extension entry point
