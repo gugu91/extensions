@@ -1129,6 +1129,124 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(setStatus).toHaveBeenCalled();
   });
 
+  it("does not reclaim restored source-less threads as slack on follow or reconnect", async () => {
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const notify = vi.fn();
+    const setStatus = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => false,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [
+          {
+            type: "custom",
+            customType: "slack-bridge-state",
+            data: {
+              agentName: "Agent",
+              agentEmoji: "🦙",
+              agentStableId: "stable-worker",
+              threads: [
+                [
+                  "t-imessage",
+                  {
+                    channelId: "chat:alice",
+                    threadTs: "t-imessage",
+                    userId: "alice",
+                    owner: "Agent",
+                  },
+                ],
+              ],
+            },
+          },
+        ],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let reconnectHandler: (() => void) | null = null;
+    const claimThread = vi.spyOn(BrokerClient.prototype, "claimThread").mockResolvedValue({
+      claimed: true,
+    });
+
+    vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+    const register = vi.spyOn(BrokerClient.prototype, "register").mockResolvedValue({
+      agentId: "worker-1",
+      name: "Agent",
+      emoji: "🦙",
+      metadata: { role: "worker", capabilities: { role: "worker" } },
+    });
+    vi.spyOn(BrokerClient.prototype, "pollInbox").mockResolvedValue([]);
+    vi.spyOn(BrokerClient.prototype, "updateStatus").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "ackMessages").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "unregister").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onDisconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onReconnect").mockImplementation((handler) => {
+      reconnectHandler = handler;
+    });
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const follow = commands.get("pinet-follow");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(follow).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await follow?.handler("", ctx);
+
+    expect(claimThread).not.toHaveBeenCalled();
+    expect(reconnectHandler).toBeTypeOf("function");
+
+    if (!reconnectHandler) {
+      throw new Error("Reconnect handler was not registered");
+    }
+
+    const runReconnect: () => void = reconnectHandler;
+    runReconnect();
+
+    await vi.waitFor(() => {
+      expect(register).toHaveBeenCalledTimes(2);
+      expect(claimThread).not.toHaveBeenCalled();
+    });
+
+    await sessionShutdown?.({}, ctx);
+    expect(setStatus).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("following broker"), "info");
+  });
+
   it("suppresses automatic inbox drain immediately after Escape so interrupts return control", async () => {
     vi.useFakeTimers();
 

@@ -892,7 +892,9 @@ export function isAgentVisibleInMesh(
 
   const nowMs = options.now ?? Date.now();
   const disconnectedMs = Date.parse(agent.disconnectedAt);
-  return !Number.isNaN(disconnectedMs) && nowMs - disconnectedMs <= options.recentDisconnectWindowMs;
+  return (
+    !Number.isNaN(disconnectedMs) && nowMs - disconnectedMs <= options.recentDisconnectWindowMs
+  );
 }
 
 export function filterAgentsForMeshVisibility<T extends { disconnectedAt?: string | null }>(
@@ -2002,6 +2004,23 @@ export function getFollowerOwnedThreadClaims(
     }));
 }
 
+export function getFollowerOwnedThreadReclaims(
+  threads: ReadonlyMap<
+    string,
+    Pick<FollowerThreadState, "threadTs" | "channelId" | "source" | "owner">
+  >,
+  agentName: string,
+  agentAliases: Iterable<string> = [],
+  ownerToken?: string,
+): Array<{ threadTs: string; channelId: string; source: string }> {
+  return getFollowerOwnedThreadClaims(threads, agentName, agentAliases, ownerToken).flatMap(
+    (thread) =>
+      thread.source
+        ? [{ threadTs: thread.threadTs, channelId: thread.channelId, source: thread.source }]
+        : [],
+  );
+}
+
 /**
  * Cache a thread from a broker inbound message in the local threads map.
  * The broker DB remains the source of truth; this is only a read-through
@@ -2013,7 +2032,9 @@ export function trackBrokerInboundThread(
   owner?: string,
 ): void {
   if (!inMsg.threadId || !inMsg.channel) return;
-  if (!threads.has(inMsg.threadId)) {
+
+  const existing = threads.get(inMsg.threadId);
+  if (!existing) {
     threads.set(inMsg.threadId, {
       channelId: inMsg.channel,
       threadTs: inMsg.threadId,
@@ -2021,6 +2042,11 @@ export function trackBrokerInboundThread(
       ...(inMsg.source ? { source: inMsg.source } : {}),
       owner,
     });
+    return;
+  }
+
+  if (!existing.source && inMsg.source) {
+    existing.source = inMsg.source;
   }
 }
 

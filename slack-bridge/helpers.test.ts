@@ -77,6 +77,7 @@ import {
   agentOwnsThread,
   normalizeOwnedThreads,
   getFollowerOwnedThreadClaims,
+  getFollowerOwnedThreadReclaims,
   normalizeThreadConfirmationState,
   isThreadConfirmationStateEmpty,
   confirmationRequestMatches,
@@ -2626,6 +2627,29 @@ describe("trackBrokerInboundThread", () => {
     expect(threads.get("1234.5678")?.owner).toBe("First");
   });
 
+  it("backfills source onto an existing cached thread without replacing ownership", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      [
+        "1234.5678",
+        { channelId: "C0APL58LB1R", threadTs: "1234.5678", userId: "U_ORIGINAL", owner: "First" },
+      ],
+    ]);
+
+    trackBrokerInboundThread(
+      threads,
+      { threadId: "1234.5678", channel: "C0APL58LB1R", userId: "U_NEW", source: "imessage" },
+      "Second",
+    );
+
+    expect(threads.get("1234.5678")).toEqual({
+      channelId: "C0APL58LB1R",
+      threadTs: "1234.5678",
+      userId: "U_ORIGINAL",
+      source: "imessage",
+      owner: "First",
+    });
+  });
+
   it("is a no-op when threadId is empty", () => {
     const threads = new Map<string, FollowerThreadState>();
     trackBrokerInboundThread(threads, { threadId: "", channel: "C123", userId: "U1" });
@@ -2955,6 +2979,26 @@ describe("getFollowerOwnedThreadClaims", () => {
 
     expect(getFollowerOwnedThreadClaims(threads, "Sonic Gecko")).toEqual([
       { threadTs: "t-1", channelId: "chat:alice", source: "imessage" },
+    ]);
+  });
+
+  it("only returns sourceful owned threads for reconnect reclaim", () => {
+    const threads = new Map<string, FollowerThreadState>([
+      ["t-1", { threadTs: "t-1", channelId: "C1", userId: "U1", owner: "Sonic Gecko" }],
+      [
+        "t-2",
+        {
+          threadTs: "t-2",
+          channelId: "chat:alice",
+          userId: "alice",
+          source: "imessage",
+          owner: "Sonic Gecko",
+        },
+      ],
+    ]);
+
+    expect(getFollowerOwnedThreadReclaims(threads, "Sonic Gecko")).toEqual([
+      { threadTs: "t-2", channelId: "chat:alice", source: "imessage" },
     ]);
   });
 

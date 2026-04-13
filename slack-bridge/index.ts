@@ -60,7 +60,7 @@ import {
   syncBrokerInboxEntries,
   resolveFollowerThreadChannel,
   getFollowerReconnectUiUpdate,
-  getFollowerOwnedThreadClaims,
+  getFollowerOwnedThreadReclaims,
   normalizeThreadConfirmationState,
   normalizeOwnedThreads,
   isThreadConfirmationStateEmpty,
@@ -1475,6 +1475,7 @@ export default function (pi: ExtensionAPI) {
       } else {
         const thread = threads.get(threadTs)!;
         if (!thread.owner) thread.owner = agentOwnerToken;
+        if (!thread.source) thread.source = "slack";
       }
       unclaimedThreads.delete(threadTs);
       persistState();
@@ -2785,11 +2786,14 @@ export default function (pi: ExtensionAPI) {
           resumableUntil: agent.resumableUntil,
         }));
       } else if (brokerRole === "follower" && brokerClient) {
-        rawAgents = filterAgentsForMeshVisibility(await brokerClient.client.listAgents(includeGhosts), {
-          now: nowMs,
-          includeGhosts,
-          recentDisconnectWindowMs: recentGhostWindowMs,
-        }).map((agent) => ({
+        rawAgents = filterAgentsForMeshVisibility(
+          await brokerClient.client.listAgents(includeGhosts),
+          {
+            now: nowMs,
+            includeGhosts,
+            recentDisconnectWindowMs: recentGhostWindowMs,
+          },
+        ).map((agent) => ({
           emoji: agent.emoji,
           name: agent.name,
           id: agent.id,
@@ -3182,14 +3186,14 @@ export default function (pi: ExtensionAPI) {
       let followerPollRunning = false;
 
       async function resumeThreadClaims(): Promise<void> {
-        for (const thread of getFollowerOwnedThreadClaims(
+        for (const thread of getFollowerOwnedThreadReclaims(
           threads,
           agentName,
           agentAliases,
           agentOwnerToken,
         )) {
           try {
-            await client.claimThread(thread.threadTs, thread.channelId, thread.source ?? "slack");
+            await client.claimThread(thread.threadTs, thread.channelId, thread.source);
           } catch {
             break;
           }
