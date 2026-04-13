@@ -351,6 +351,41 @@ export class BrokerClient {
     await this.request("send", { threadId, body: text, ...(metadata ? { metadata } : {}) });
   }
 
+  async sendMessage(input: {
+    threadId: string;
+    body: string;
+    source?: string;
+    channel?: string;
+    agentName?: string;
+    agentEmoji?: string;
+    agentOwnerToken?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{
+    adapter: string;
+    messageId: number;
+    threadId: string;
+    channel: string;
+    source: string;
+  }> {
+    const result = (await this.request("message.send", {
+      threadId: input.threadId,
+      body: input.body,
+      ...(input.source ? { source: input.source } : {}),
+      ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.agentName ? { agentName: input.agentName } : {}),
+      ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),
+      ...(input.agentOwnerToken ? { agentOwnerToken: input.agentOwnerToken } : {}),
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    })) as {
+      adapter: string;
+      messageId: number;
+      threadId: string;
+      channel: string;
+      source: string;
+    };
+    return result;
+  }
+
   // ─── Thread ownership ─────────────────────────────────
 
   async claimThread(

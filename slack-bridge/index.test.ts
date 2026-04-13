@@ -9,6 +9,7 @@ import * as brokerModule from "./broker/index.js";
 import * as maintenanceModule from "./broker/maintenance.js";
 import { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
+import * as imessageModule from "./imessage.js";
 import slackBridge from "./index.js";
 
 type ToolDefinition = {
@@ -594,6 +595,285 @@ describe("slack-bridge top-level shutdown", () => {
 
     await sessionShutdown?.({}, ctx);
     expect(brokerRuntimes[1]?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends an iMessage through the broker adapter when enabled", async () => {
+    const settingsPath = path.join(testHome, ".pi", "agent", "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        "slack-bridge": {
+          allowAllWorkspaceUsers: true,
+          imessage: { enabled: true },
+        },
+      }),
+    );
+
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const tools = new Map<string, ToolDefinition>();
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn((definition: ToolDefinition) => {
+        tools.set(definition.name, definition);
+      }),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const notify = vi.fn();
+    const setStatus = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-imessage-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const restartedDb = new BrokerDB(dbPath);
+    restartedDb.initialize();
+    const brokerStop = vi.fn(async () => {
+      restartedDb.close();
+    });
+    const adapters: Array<{ name: string; send?: (msg: unknown) => Promise<unknown> }> = [];
+    const server = {
+      setAgentRegistrationResolver: vi.fn(),
+      setOutboundMessageAdapters: vi.fn(),
+      onAgentMessage: vi.fn(),
+      onAgentStatusChange: vi.fn(),
+    };
+    const imessageSend = vi.fn(async () => undefined);
+    const imessageAdapter = {
+      name: "imessage" as const,
+      connect: vi.fn(async () => undefined),
+      disconnect: vi.fn(async () => undefined),
+      onInbound: vi.fn(),
+      send: imessageSend,
+    };
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation(() => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: restartedDb.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    vi.spyOn(brokerModule, "startBroker").mockResolvedValue({
+      db: restartedDb,
+      server,
+      lock: {
+        isLeader: () => true,
+        release: vi.fn(),
+      },
+      adapters,
+      addAdapter: vi.fn((adapter) => {
+        adapters.push(adapter as (typeof adapters)[number]);
+      }),
+      stop: brokerStop,
+    } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>);
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+    vi.spyOn(imessageModule, "detectIMessageMvpEnvironment").mockReturnValue({
+      platform: "darwin",
+      homeDir: testHome,
+      messagesDbPath: path.join(testHome, "Library", "Messages", "chat.db"),
+      osascriptPath: imessageModule.APPLESCRIPT_BINARY_PATH,
+      osascriptAvailable: true,
+      messagesDbAvailable: false,
+      canAttemptSend: true,
+      canAttemptHistoryRead: false,
+      readyForLocalMvp: false,
+      blockers: ["missing_messages_db"],
+    });
+    vi.spyOn(imessageModule, "createIMessageAdapter").mockReturnValue(imessageAdapter);
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+    const imessageSendTool = tools.get("imessage_send");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+    expect(imessageSendTool).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+
+    const result = await imessageSendTool!.execute("tool-call-1", {
+      to: "chat:alice",
+      text: "hello from pi",
+    });
+
+    expect(server.setOutboundMessageAdapters).toHaveBeenCalledWith(adapters);
+    expect(imessageAdapter.connect).toHaveBeenCalledTimes(1);
+    expect(imessageSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "imessage:chat:alice",
+        channel: "chat:alice",
+        text: "hello from pi",
+      }),
+    );
+    expect(result).toMatchObject({
+      details: {
+        threadId: "imessage:chat:alice",
+        channel: "chat:alice",
+        source: "imessage",
+        adapter: "imessage",
+      },
+    });
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("iMessage send-first mode enabled"),
+      "warning",
+    );
+
+    await sessionShutdown?.({}, ctx);
+    expect(setStatus).toHaveBeenCalled();
+  });
+
+  it("warns when iMessage is enabled but send capability is unavailable", async () => {
+    const settingsPath = path.join(testHome, ".pi", "agent", "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        "slack-bridge": {
+          allowAllWorkspaceUsers: true,
+          imessage: { enabled: true },
+        },
+      }),
+    );
+
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-imessage-warning-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const restartedDb = new BrokerDB(dbPath);
+    restartedDb.initialize();
+    const brokerStop = vi.fn(async () => {
+      restartedDb.close();
+    });
+    const server = {
+      setAgentRegistrationResolver: vi.fn(),
+      setOutboundMessageAdapters: vi.fn(),
+      onAgentMessage: vi.fn(),
+      onAgentStatusChange: vi.fn(),
+    };
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation(() => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: restartedDb.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    vi.spyOn(brokerModule, "startBroker").mockResolvedValue({
+      db: restartedDb,
+      server,
+      lock: {
+        isLeader: () => true,
+        release: vi.fn(),
+      },
+      adapters: [],
+      addAdapter: vi.fn(),
+      stop: brokerStop,
+    } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>);
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+    vi.spyOn(imessageModule, "detectIMessageMvpEnvironment").mockReturnValue({
+      platform: "linux",
+      homeDir: "/home/goose",
+      messagesDbPath: "/home/goose/Library/Messages/chat.db",
+      osascriptPath: imessageModule.APPLESCRIPT_BINARY_PATH,
+      osascriptAvailable: false,
+      messagesDbAvailable: false,
+      canAttemptSend: false,
+      canAttemptHistoryRead: false,
+      readyForLocalMvp: false,
+      blockers: ["unsupported_platform"],
+    });
+    const createAdapterSpy = vi.spyOn(imessageModule, "createIMessageAdapter");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+
+    expect(createAdapterSpy).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("iMessage adapter unavailable"),
+      "warning",
+    );
+
+    await sessionShutdown?.({}, ctx);
   });
 
   it("does not auto-follow into the mesh for headless ephemeral subagent sessions", async () => {

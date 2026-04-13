@@ -56,6 +56,19 @@ describe("detectIMessageMvpEnvironment", () => {
 });
 
 describe("formatIMessageMvpReadiness", () => {
+  it("calls out send-first readiness when only local history is unavailable", () => {
+    const lines = formatIMessageMvpReadiness(
+      detectIMessageMvpEnvironment({
+        platform: "darwin",
+        homeDir: "/Users/goose",
+        pathExists: (candidatePath) => candidatePath === APPLESCRIPT_BINARY_PATH,
+      }),
+    );
+
+    expect(lines).toContain("mvp: send-first ready; local history is unavailable");
+    expect(lines).toContain("mvp blockers: missing_messages_db");
+  });
+
   it("includes blockers in the human-readable summary", () => {
     const lines = formatIMessageMvpReadiness(
       detectIMessageMvpEnvironment({

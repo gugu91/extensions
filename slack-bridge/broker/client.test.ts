@@ -631,6 +631,70 @@ describe("BrokerClient — send", () => {
   });
 });
 
+describe("BrokerClient — message.send", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends message.send with the transport payload", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const sendPromise = client.sendMessage({
+      threadId: "imessage:chat:alice",
+      body: "hello",
+      source: "imessage",
+      channel: "chat:alice",
+      agentName: "Sender",
+    });
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: {
+        threadId: string;
+        body: string;
+        source: string;
+        channel: string;
+        agentName: string;
+      };
+    };
+    expect(req.method).toBe("message.send");
+    expect(req.params).toMatchObject({
+      threadId: "imessage:chat:alice",
+      body: "hello",
+      source: "imessage",
+      channel: "chat:alice",
+      agentName: "Sender",
+    });
+
+    mock.respondTo(mock.connections[0], req.id, {
+      adapter: "imessage",
+      messageId: 9,
+      threadId: "imessage:chat:alice",
+      channel: "chat:alice",
+      source: "imessage",
+    });
+
+    await expect(sendPromise).resolves.toEqual({
+      adapter: "imessage",
+      messageId: 9,
+      threadId: "imessage:chat:alice",
+      channel: "chat:alice",
+      source: "imessage",
+    });
+
+    client.disconnect();
+  });
+});
+
 describe("BrokerClient — listThreads / listAgents", () => {
   let mock: MockServer;
 

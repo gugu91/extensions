@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "macOS/iMessage MVP readiness helpers and future adapter scaffold for pi",
+  "description": "macOS/iMessage send-first adapter and readiness helpers for pi",
   "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
   "license": "MIT",
   "repository": {

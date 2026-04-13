@@ -13,21 +13,40 @@ const packageConfigs = {
     excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
     excludeFiles: new Set(["vitest.config.ts"]),
     excludePrefixes: [],
+    vendorDirs: [
+      {
+        source: "../imessage-bridge",
+        output: "vendor/imessage-bridge",
+      },
+    ],
+    importRewrites: [
+      {
+        files: new Set(["imessage.ts"]),
+        from: "../imessage-bridge/",
+        to: "./vendor/imessage-bridge/",
+      },
+    ],
   },
   "nvim-bridge": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo", "nvim"]),
     excludeFiles: new Set(["vitest.config.ts"]),
     excludePrefixes: [],
+    vendorDirs: [],
+    importRewrites: [],
   },
   "neon-psql": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo", "python"]),
     excludeFiles: new Set(["vitest.config.ts"]),
     excludePrefixes: [],
+    vendorDirs: [],
+    importRewrites: [],
   },
   "slack-api": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
     excludeFiles: new Set(),
     excludePrefixes: ["scripts/"],
+    vendorDirs: [],
+    importRewrites: [],
   },
 };
 
@@ -36,37 +55,44 @@ if (!config) {
   throw new Error(`Unsupported package for build-package.mjs: ${packageName}`);
 }
 
-function shouldInclude(relativePath) {
+function shouldInclude(relativePath, localConfig = config) {
   if (!relativePath.endsWith(".ts")) return false;
   if (relativePath.endsWith(".test.ts")) return false;
-  if (config.excludeFiles.has(relativePath)) return false;
-  if (config.excludePrefixes.some((prefix) => relativePath.startsWith(prefix))) return false;
+  if (localConfig.excludeFiles.has(relativePath)) return false;
+  if (localConfig.excludePrefixes.some((prefix) => relativePath.startsWith(prefix))) return false;
 
   const parts = relativePath.split(path.sep);
-  return !parts.some((part) => config.excludeDirs.has(part));
+  return !parts.some((part) => localConfig.excludeDirs.has(part));
 }
 
-function rewriteRelativeTsSpecifiers(source) {
-  return source.replace(/(["'])(\.\.?\/[^"']+)\.ts\1/g, "$1$2.js$1");
+function rewriteRelativeTsSpecifiers(source, relativePath) {
+  let rewritten = source.replace(/(["'])(\.\.?\/[^"']+)\.ts\1/g, "$1$2.js$1");
+  for (const rewrite of config.importRewrites) {
+    if (!rewrite.files.has(relativePath)) {
+      continue;
+    }
+    rewritten = rewritten.replaceAll(rewrite.from, rewrite.to);
+  }
+  return rewritten;
 }
 
-async function collectSourceFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+async function collectTsFiles(baseDir, rootDir, localConfig = config) {
+  const entries = await fs.readdir(baseDir, { withFileTypes: true });
   const files = [];
 
   for (const entry of entries) {
-    const absolutePath = path.join(dir, entry.name);
-    const relativePath = path.relative(packageDir, absolutePath);
+    const absolutePath = path.join(baseDir, entry.name);
+    const relativePath = path.relative(rootDir, absolutePath);
 
     if (entry.isDirectory()) {
-      if (config.excludeDirs.has(entry.name)) {
+      if (localConfig.excludeDirs.has(entry.name)) {
         continue;
       }
-      files.push(...(await collectSourceFiles(absolutePath)));
+      files.push(...(await collectTsFiles(absolutePath, rootDir, localConfig)));
       continue;
     }
 
-    if (shouldInclude(relativePath)) {
+    if (shouldInclude(relativePath, localConfig)) {
       files.push(relativePath);
     }
   }
@@ -77,12 +103,38 @@ async function collectSourceFiles(dir) {
 async function build() {
   await fs.rm(distDir, { recursive: true, force: true });
 
-  const sourceFiles = await collectSourceFiles(packageDir);
+  const workItems = [];
+  const sourceFiles = await collectTsFiles(packageDir, packageDir);
   for (const relativePath of sourceFiles) {
-    const inputPath = path.join(packageDir, relativePath);
-    const outputPath = path.join(distDir, relativePath.replace(/\.ts$/, ".js"));
-    const sourceText = await fs.readFile(inputPath, "utf8");
-    const rewritten = rewriteRelativeTsSpecifiers(sourceText);
+    workItems.push({
+      inputPath: path.join(packageDir, relativePath),
+      outputPath: path.join(distDir, relativePath.replace(/\.ts$/, ".js")),
+      relativePath,
+      rewriteKey: relativePath,
+    });
+  }
+
+  for (const vendor of config.vendorDirs) {
+    const vendorSourceDir = path.resolve(packageDir, vendor.source);
+    const vendorConfig = {
+      excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
+      excludeFiles: new Set(),
+      excludePrefixes: [],
+    };
+    const vendorFiles = await collectTsFiles(vendorSourceDir, vendorSourceDir, vendorConfig);
+    for (const relativePath of vendorFiles) {
+      workItems.push({
+        inputPath: path.join(vendorSourceDir, relativePath),
+        outputPath: path.join(distDir, vendor.output, relativePath.replace(/\.ts$/, ".js")),
+        relativePath,
+        rewriteKey: relativePath,
+      });
+    }
+  }
+
+  for (const item of workItems) {
+    const sourceText = await fs.readFile(item.inputPath, "utf8");
+    const rewritten = rewriteRelativeTsSpecifiers(sourceText, item.rewriteKey);
     const transpiled = ts.transpileModule(rewritten, {
       compilerOptions: {
         target: ts.ScriptTarget.ES2022,
@@ -90,7 +142,7 @@ async function build() {
         moduleResolution: ts.ModuleResolutionKind.NodeNext,
         verbatimModuleSyntax: true,
       },
-      fileName: inputPath,
+      fileName: item.inputPath,
       reportDiagnostics: true,
     });
 
@@ -108,8 +160,8 @@ async function build() {
       );
     }
 
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.writeFile(outputPath, transpiled.outputText, "utf8");
+    await fs.mkdir(path.dirname(item.outputPath), { recursive: true });
+    await fs.writeFile(item.outputPath, transpiled.outputText, "utf8");
   }
 }
 

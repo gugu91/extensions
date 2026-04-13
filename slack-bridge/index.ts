@@ -94,6 +94,7 @@ import {
 } from "./reaction-triggers.js";
 import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
+import { sendBrokerMessage } from "./broker/message-send.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
@@ -111,6 +112,13 @@ import {
 } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
+import {
+  createIMessageAdapter,
+  detectIMessageMvpEnvironment,
+  formatIMessageMvpReadiness,
+  getDefaultIMessageThreadId,
+  normalizeIMessageRecipient,
+} from "./imessage.js";
 import {
   type RalphLoopDeps,
   createRalphLoopState,
@@ -1440,6 +1448,36 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Tools ──────────────────────────────────────────
 
+  function trackOwnedThread(threadTs: string, channelId: string, source = "slack"): void {
+    if (!threads.has(threadTs)) {
+      threads.set(threadTs, {
+        channelId,
+        threadTs,
+        userId: "",
+        source,
+        owner: agentOwnerToken,
+      });
+    } else {
+      const thread = threads.get(threadTs)!;
+      if (!thread.owner) thread.owner = agentOwnerToken;
+      if (!thread.source) {
+        thread.source = source;
+      }
+    }
+    unclaimedThreads.delete(threadTs);
+    persistState();
+  }
+
+  function claimOwnedThread(threadTs: string, channelId: string, source = "slack"): void {
+    if (brokerRole === "broker" && activeRouter && activeSelfId) {
+      activeRouter.claimThread(threadTs, activeSelfId, channelId, source);
+    } else if (brokerRole === "follower" && brokerClient?.client) {
+      void brokerClient.client.claimThread(threadTs, channelId, source).catch(() => {
+        /* broker gone, best effort */
+      });
+    }
+  }
+
   registerSlackTools(pi, {
     getBotToken: () => {
       if (!botToken) {
@@ -1464,31 +1502,11 @@ export default function (pi: ExtensionAPI) {
     },
     requireToolPolicy,
     trackOutboundThread: (threadTs, channelId) => {
-      if (!threads.has(threadTs)) {
-        threads.set(threadTs, {
-          channelId,
-          threadTs,
-          userId: "",
-          source: "slack",
-          owner: agentOwnerToken,
-        });
-      } else {
-        const thread = threads.get(threadTs)!;
-        if (!thread.owner) thread.owner = agentOwnerToken;
-        if (!thread.source) thread.source = "slack";
-      }
-      unclaimedThreads.delete(threadTs);
-      persistState();
+      trackOwnedThread(threadTs, channelId, "slack");
     },
     getBotUserId: () => botUserId,
     claimThreadOwnership: (threadTs, channelId) => {
-      if (brokerRole === "broker" && activeRouter && activeSelfId) {
-        activeRouter.claimThread(threadTs, activeSelfId, channelId, "slack");
-      } else if (brokerRole === "follower" && brokerClient?.client) {
-        void brokerClient.client.claimThread(threadTs, channelId, "slack").catch(() => {
-          /* broker gone, best effort */
-        });
-      }
+      claimOwnedThread(threadTs, channelId, "slack");
     },
     clearPendingEyes: (threadTs) => {
       const pending = pendingEyes.get(threadTs);
@@ -2857,6 +2875,107 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "imessage_send",
+    label: "iMessage Send",
+    description: "Send a message through the local send-first iMessage adapter on the active broker.",
+    promptSnippet:
+      "Send a message through the local send-first iMessage adapter on the active Pinet broker. Use when a task needs a narrow macOS iMessage send path.",
+    parameters: Type.Object({
+      to: Type.String({ description: "Recipient handle, phone number, email, or local chat identifier" }),
+      text: Type.String({ description: "Message body" }),
+      thread_id: Type.Optional(
+        Type.String({
+          description:
+            "Optional transport thread id. Defaults to a stable iMessage thread id derived from the recipient.",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "imessage_send",
+        undefined,
+        `to=${params.to} | thread_id=${params.thread_id ?? ""} | text=${params.text}`,
+      );
+
+      if (!pinetEnabled) {
+        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      }
+
+      const recipient = normalizeIMessageRecipient(params.to);
+      const text = params.text.trim();
+      if (!text) {
+        throw new Error("text is required");
+      }
+      const threadId = params.thread_id?.trim() || getDefaultIMessageThreadId(recipient);
+      const metadata = { recipient };
+
+      let adapter = "imessage";
+      let messageId: number | null = null;
+
+      if (brokerRole === "broker" && activeBroker && activeSelfId) {
+        if (!activeBroker.adapters.some((candidate) => candidate.name === "imessage")) {
+          throw new Error(
+            "iMessage adapter is not enabled or not ready on the active broker. Set slack-bridge.imessage.enabled: true and restart /pinet-start.",
+          );
+        }
+
+        const result = await sendBrokerMessage(
+          {
+            db: activeBroker.db,
+            adapters: activeBroker.adapters,
+          },
+          {
+            threadId,
+            body: text,
+            senderAgentId: activeSelfId,
+            source: "imessage",
+            channel: recipient,
+            agentName,
+            agentEmoji,
+            agentOwnerToken,
+            metadata,
+          },
+        );
+        adapter = result.adapter;
+        messageId = result.message.id;
+      } else if (brokerRole === "follower" && brokerClient?.client) {
+        const result = await brokerClient.client.sendMessage({
+          threadId,
+          body: text,
+          source: "imessage",
+          channel: recipient,
+          agentName,
+          agentEmoji,
+          agentOwnerToken,
+          metadata,
+        });
+        adapter = result.adapter;
+        messageId = result.messageId;
+      } else {
+        throw new Error("Pinet is in an unexpected state.");
+      }
+
+      trackOwnedThread(threadId, recipient, "imessage");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Sent iMessage to ${recipient} (thread_id: ${threadId}).`,
+          },
+        ],
+        details: {
+          threadId,
+          channel: recipient,
+          source: "imessage",
+          adapter,
+          messageId,
+        },
+      };
+    },
+  });
+
   // ─── Commands ───────────────────────────────────────
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
@@ -3005,6 +3124,50 @@ export default function (pi: ExtensionAPI) {
       broker.addAdapter(adapter);
       await adapter.connect();
       botUserId = adapter.getBotUserId();
+
+      if (settings.imessage?.enabled) {
+        const environment = detectIMessageMvpEnvironment();
+        const readinessSummary = formatIMessageMvpReadiness(environment).join(" | ");
+
+        if (!environment.canAttemptSend) {
+          ctx.ui.notify(`iMessage adapter unavailable — ${readinessSummary}`, "warning");
+          logBrokerActivity({
+            kind: "transport_readiness",
+            level: "actions",
+            title: "iMessage adapter unavailable",
+            summary: readinessSummary,
+            tone: "warning",
+          });
+        } else {
+          try {
+            const imessageAdapter = createIMessageAdapter();
+            await imessageAdapter.connect();
+            broker.addAdapter(imessageAdapter);
+
+            if (environment.blockers.length > 0) {
+              ctx.ui.notify(`iMessage send-first mode enabled — ${readinessSummary}`, "warning");
+              logBrokerActivity({
+                kind: "transport_readiness",
+                level: "actions",
+                title: "iMessage send-first mode enabled",
+                summary: readinessSummary,
+                tone: "warning",
+              });
+            }
+          } catch (err) {
+            ctx.ui.notify(`iMessage adapter failed to start: ${msg(err)}`, "warning");
+            logBrokerActivity({
+              kind: "transport_readiness",
+              level: "errors",
+              title: "iMessage adapter failed to start",
+              summary: msg(err),
+              tone: "error",
+            });
+          }
+        }
+      }
+
+      broker.server.setOutboundMessageAdapters?.(broker.adapters);
 
       activeBroker = broker;
       activeRouter = router;

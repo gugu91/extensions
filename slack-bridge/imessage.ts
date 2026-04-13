@@ -1,0 +1,16 @@
+export {
+  APPLESCRIPT_BINARY_PATH,
+  DEFAULT_MESSAGES_DB_RELATIVE_PATH,
+  AppleScriptIMessageAdapter,
+  type DetectIMessageMvpEnvironmentOptions,
+  detectIMessageMvpEnvironment,
+  formatIMessageMvpReadiness,
+  getDefaultIMessageThreadId,
+  type IMessageAdapter,
+  type IMessageAdapterOptions,
+  type IMessageAdapterOutboundMessage,
+  type IMessageMvpEnvironment,
+  type IMessageMvpEnvironmentBlocker,
+  normalizeIMessageRecipient,
+  createIMessageAdapter,
+} from "../imessage-bridge/index.js";

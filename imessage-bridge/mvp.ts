@@ -86,6 +86,12 @@ export function formatIMessageMvpReadiness(environment: IMessageMvpEnvironment):
     return lines;
   }
 
+  if (environment.canAttemptSend && !environment.canAttemptHistoryRead) {
+    lines.push("mvp: send-first ready; local history is unavailable");
+    lines.push(`mvp blockers: ${environment.blockers.join(", ")}`);
+    return lines;
+  }
+
   if (environment.blockers.length === 0) {
     lines.push("mvp: not ready");
     return lines;
