@@ -455,7 +455,12 @@ describe("slack-bridge top-level shutdown", () => {
   it("keeps explicit off mode free of Slack Socket Mode ingress on session start", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify({ "slack-bridge": { runtimeMode: "off" } }));
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        "slack-bridge": { runtimeMode: "off", allowAllWorkspaceUsers: true },
+      }),
+    );
 
     const events = new Map<string, EventHandler>();
     const pi = {
