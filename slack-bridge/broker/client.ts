@@ -1,7 +1,7 @@
 import * as net from "node:net";
 import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
-import { RPC_METHOD_NOT_FOUND } from "./types.js";
+import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -125,6 +125,23 @@ function isRpcMethodNotFoundError(err: unknown, method: string): boolean {
   return rpcErr.code === RPC_METHOD_NOT_FOUND || err.message === `Unknown method: ${method}`;
 }
 
+function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  const rpcErr = err as BrokerRpcRequestError;
+  if (rpcErr.code === RPC_AGENT_NAME_CONFLICT) {
+    return true;
+  }
+
+  if (typeof rpcErr.data !== "object" || rpcErr.data == null) {
+    return false;
+  }
+
+  return (rpcErr.data as { code?: unknown }).code === "AGENT_NAME_CONFLICT";
+}
+
 function getMeshAuthCompatibilityError(): Error {
   return new Error(
     "Broker does not support Pinet mesh auth (`auth`). Upgrade the broker or disable follower mesh auth when connecting to older/no-auth brokers.",
@@ -182,6 +199,7 @@ export class BrokerClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private disconnectHandler: (() => void) | null = null;
   private reconnectHandler: (() => void) | null = null;
+  private reconnectFailedHandler: ((error: Error) => void) | null = null;
   private reconnectAttempt = 0;
   private registrationSnapshot: RegistrationSnapshot | null = null;
   private registeredIdentity: RegistrationResult | null = null;
@@ -496,6 +514,10 @@ export class BrokerClient {
     this.reconnectHandler = handler;
   }
 
+  onReconnectFailed(handler: (error: Error) => void): void {
+    this.reconnectFailedHandler = handler;
+  }
+
   getReconnectAttempt(): number {
     return this.reconnectAttempt;
   }
@@ -667,21 +689,29 @@ export class BrokerClient {
       }
       this.reconnectAttempt = 0;
       this.reconnectHandler?.();
-    } catch {
+    } catch (err) {
       // Re-registration failed after the socket connected. Clear the connection
       // state immediately instead of waiting for the async "close" event so the
       // client cannot stay in a broken "connected but not registered" state.
-      // Then schedule the next reconnect attempt ourselves. (#139)
+      // Then either surface a terminal reconnect failure or schedule the next
+      // retry ourselves. (#139)
+      const reconnectError = err instanceof Error ? err : new Error(String(err));
       const failedSocket = this.socket;
       this.socket = null;
       this.connected = false;
       this.buffer = "";
       this.stopHeartbeat();
       this.rejectAllPending(new Error("Socket closed"));
+      this.registeredIdentity = null;
       try {
         failedSocket?.destroy();
       } catch {
         /* ignore */
+      }
+      if (isRpcAgentNameConflictError(reconnectError)) {
+        this.reconnectAttempt = 0;
+        this.reconnectFailedHandler?.(reconnectError);
+        return;
       }
       this.scheduleReconnect();
     }

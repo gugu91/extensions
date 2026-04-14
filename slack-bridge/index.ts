@@ -3319,6 +3319,17 @@ export default function (pi: ExtensionAPI) {
     runRemoteControl,
     deliverFollowUpMessage,
     setExtStatus,
+    handleTerminalReconnectFailure: async (ctx, error) => {
+      console.error(`[slack-bridge] follower reconnect failed: ${msg(error)}`);
+      await disconnectFollower(ctx, { preserveErrorState: true }).catch(() => {
+        /* best effort */
+      });
+      setExtStatus(ctx, "error");
+      ctx.ui.notify(
+        `Pinet reconnect stopped: ${msg(error)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.`,
+        "error",
+      );
+    },
     formatError: msg,
     deliveryState: followerDeliveryState,
   });
@@ -3389,6 +3400,7 @@ export default function (pi: ExtensionAPI) {
 
   async function disconnectFollower(
     ctx: ExtensionContext,
+    options: { preserveErrorState?: boolean } = {},
   ): Promise<{ unregisterError: string | null }> {
     const result = await followerRuntime.disconnect(ctx);
     brokerClient = null;
@@ -3396,7 +3408,9 @@ export default function (pi: ExtensionAPI) {
     brokerRole = null;
     pinetEnabled = false;
     currentRuntimeMode = "off";
-    setExtStatus(ctx, "off");
+    if (!options.preserveErrorState) {
+      setExtStatus(ctx, "off");
+    }
 
     return result;
   }
