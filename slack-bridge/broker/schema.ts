@@ -962,6 +962,42 @@ export class BrokerDB implements BrokerDBInterface {
     return row ? rowToAgent(row) : null;
   }
 
+  findAgentNameConflict(
+    name: string,
+    id: string,
+    stableId?: string,
+  ): { id: string; stableId: string | null; name: string } | null {
+    const db = this.getDb();
+    const existing = stableId ? this.getAgentRowByStableId(stableId) : null;
+    const existingById = this.getAgentRowById(existing?.id ?? id);
+    const agentId = existing?.id ?? existingById?.id ?? id;
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      return null;
+    }
+
+    const row = db
+      .prepare(
+        `SELECT id, stable_id, name
+         FROM agents
+         WHERE lower(name) = lower(?) AND id != ?
+         LIMIT 1`,
+      )
+      .get(normalizedName, agentId) as
+      | { id: string; stable_id: string | null; name: string }
+      | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      stableId: row.stable_id,
+      name: row.name,
+    };
+  }
+
   private getAgentRowByStableId(stableId: string): AgentRow | null {
     const db = this.getDb();
     const row = db.prepare("SELECT * FROM agents WHERE stable_id = ?").get(stableId) as

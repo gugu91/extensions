@@ -128,6 +128,59 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     expect(agent!.pid).toBe(process.pid);
   });
 
+  it("lets the broker assign a unique name when the caller leaves the request blank", async () => {
+    server.setAgentRegistrationResolver(({ metadata }) => ({
+      name: "Shared Horizon",
+      emoji: "🧭",
+      metadata,
+    }));
+
+    const first = await client.register("", "", undefined, "host:session:/tmp/blank-1");
+    expect(first.name).toBe("Shared Horizon");
+    expect(first.emoji).toBe("🧭");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+
+    const second = await client2.register("", "", undefined, "host:session:/tmp/blank-2");
+    expect(second.name).toBe("Shared Horizon 2");
+    expect(second.emoji).toBe("🧭");
+
+    client2.disconnect();
+  });
+
+  it("rejects duplicate explicitly requested agent names with a clear retry path", async () => {
+    server.setAgentRegistrationResolver(({ metadata }) => ({
+      name: "broker-default",
+      emoji: "🧭",
+      metadata,
+    }));
+
+    const first = await client.register(
+      "Reserved Crane",
+      "🦩",
+      undefined,
+      "host:session:/tmp/name-1",
+    );
+    expect(first.name).toBe("Reserved Crane");
+    expect(first.emoji).toBe("🦩");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+
+    await expect(
+      client2.register("Reserved Crane", "🪿", undefined, "host:session:/tmp/name-2"),
+    ).rejects.toThrow(
+      'Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.',
+    );
+
+    client2.disconnect();
+  });
+
   it("agents.list returns all connected agents", async () => {
     await client.register("agent-alpha", "🅰️");
 

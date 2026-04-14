@@ -136,6 +136,7 @@ interface RegistrationSnapshot {
   emoji: string;
   metadata?: Record<string, unknown>;
   stableId?: string;
+  brokerAssignedIdentity?: boolean;
 }
 
 interface RegistrationResult {
@@ -317,6 +318,7 @@ export class BrokerClient {
       emoji,
       ...(metadata ? { metadata } : {}),
       ...(stableId ? { stableId } : {}),
+      ...(name.trim().length === 0 ? { brokerAssignedIdentity: true } : {}),
     };
     return this.performRegister(this.registrationSnapshot);
   }
@@ -634,12 +636,17 @@ export class BrokerClient {
       ...(snapshot.metadata ? { metadata: snapshot.metadata } : {}),
       ...(snapshot.stableId ? { stableId: snapshot.stableId } : {}),
     })) as RegistrationResult;
-    this.registrationSnapshot = {
-      ...snapshot,
-      name: result.name,
-      emoji: result.emoji,
-      ...(result.metadata ? { metadata: result.metadata } : {}),
-    };
+    this.registrationSnapshot = snapshot.brokerAssignedIdentity
+      ? {
+          ...snapshot,
+          ...(result.metadata ? { metadata: result.metadata } : {}),
+        }
+      : {
+          ...snapshot,
+          name: result.name,
+          emoji: result.emoji,
+          ...(result.metadata ? { metadata: result.metadata } : {}),
+        };
     this.registeredIdentity = result;
     this.startHeartbeat();
     return result;

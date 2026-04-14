@@ -22,6 +22,7 @@ import {
   RPC_INVALID_PARAMS,
   RPC_INTERNAL_ERROR,
   RPC_AUTH_REQUIRED,
+  RPC_AGENT_NAME_CONFLICT,
 } from "./types.js";
 
 export type SlackProxyFn = (
@@ -284,9 +285,7 @@ export class BrokerSocketServer {
     this.agentRegistrationResolver = resolver;
   }
 
-  setOutboundMessageAdapters(
-    adapters: ReadonlyArray<Pick<MessageAdapter, "name" | "send">>,
-  ): void {
+  setOutboundMessageAdapters(adapters: ReadonlyArray<Pick<MessageAdapter, "name" | "send">>): void {
     this.outboundMessageAdapters = adapters;
   }
 
@@ -514,8 +513,8 @@ export class BrokerSocketServer {
     socket: net.Socket,
   ): JsonRpcResponse {
     const params = req.params ?? {};
-    const name = typeof params.name === "string" ? params.name : "anonymous";
-    const emoji = typeof params.emoji === "string" ? params.emoji : "";
+    const requestedName = typeof params.name === "string" ? params.name.trim() : "";
+    const requestedEmoji = typeof params.emoji === "string" ? params.emoji : "";
     const pid = typeof params.pid === "number" ? params.pid : 0;
     const stableId = typeof params.stableId === "string" ? params.stableId : undefined;
     const metadata =
@@ -526,15 +525,38 @@ export class BrokerSocketServer {
     const candidateId = state.agentId ?? crypto.randomUUID();
     const resolved = this.agentRegistrationResolver?.({
       agentId: candidateId,
-      name,
-      emoji,
+      name: requestedName,
+      emoji: requestedEmoji,
       pid,
       stableId,
       metadata,
     });
-    const finalName = resolved?.name ?? name;
-    const finalEmoji = resolved?.emoji ?? emoji;
+    const explicitNameRequest = requestedName.length > 0;
+    const finalName = explicitNameRequest
+      ? requestedName
+      : (resolved?.name ?? requestedName) || "anonymous";
+    const finalEmoji = explicitNameRequest
+      ? requestedEmoji.trim() || resolved?.emoji?.trim() || ""
+      : (resolved?.emoji ?? requestedEmoji).trim();
     const finalMetadata = resolved?.metadata ?? metadata;
+
+    if (explicitNameRequest) {
+      const conflict = this.db.findAgentNameConflict(finalName, candidateId, stableId);
+      if (conflict) {
+        return rpcError(
+          req.id,
+          RPC_AGENT_NAME_CONFLICT,
+          `Agent name "${finalName}" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.`,
+          {
+            code: "AGENT_NAME_CONFLICT",
+            requestedName: finalName,
+            ownerAgentId: conflict.id,
+            ownerStableId: conflict.stableId,
+            retryable: true,
+          },
+        );
+      }
+    }
 
     const agent = this.db.registerAgent(
       candidateId,
