@@ -35,7 +35,6 @@ import {
   evaluateRalphLoopCycle,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
-  agentOwnsThread,
   buildPinetOwnerToken,
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
@@ -76,12 +75,7 @@ import {
   type PendingSlackToolPolicyTurn,
 } from "./slack-turn-guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
-import {
-  buildReactionPromptGuidelines,
-  buildReactionTriggerMessage,
-  normalizeReactionName,
-  resolveReactionCommands,
-} from "./reaction-triggers.js";
+import { buildReactionPromptGuidelines, resolveReactionCommands } from "./reaction-triggers.js";
 import type { Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { sendBrokerMessage } from "./broker/message-send.js";
@@ -111,7 +105,6 @@ import {
 } from "./ralph-loop.js";
 import {
   addSlackReaction,
-  classifyMessage,
   clearSlackThreadStatus,
   fetchSlackMessageByTs as fetchSlackMessageByTsFromSlack,
   removeSlackReaction,
@@ -121,9 +114,6 @@ import {
   setSlackSuggestedPrompts,
   SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
-  type ParsedAppHomeOpened,
-  type ParsedThreadContextChanged,
-  type ParsedThreadStarted,
 } from "./slack-access.js";
 import {
   createFollowerDeliveryState,
@@ -131,7 +121,11 @@ import {
   queueFollowerInboxIds,
 } from "./follower-delivery.js";
 import { createFollowerRuntime, type BrokerClientRef } from "./follower-runtime.js";
-import { createSinglePlayerRuntime } from "./single-player-runtime.js";
+import {
+  createSinglePlayerRuntime,
+  type SinglePlayerPendingAttentionEntry,
+  type SinglePlayerThreadInfo,
+} from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
 import {
   extractTaskAssignmentsFromMessage,
@@ -528,20 +522,11 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  interface ThreadInfo {
-    channelId: string;
-    threadTs: string;
-    userId: string;
-    source?: string;
-    context?: { channelId: string; teamId: string };
-    owner?: string; // agent name that claimed this thread (first-responder-wins)
-  }
-
   let botUserId: string | null = null;
 
-  const threads = new Map<string, ThreadInfo>();
+  const threads = new Map<string, SinglePlayerThreadInfo>();
   const thinking = new Set<string>();
-  const pendingEyes = new Map<string, { channel: string; messageTs: string }[]>(); // thread_ts → message ts list // thread_ts values showing "is thinking…"
+  const pendingEyes = new Map<string, SinglePlayerPendingAttentionEntry[]>(); // thread_ts → message ts list // thread_ts values showing "is thinking…"
   const userNames = new TtlCache<string, string>({ maxSize: 2000, ttlMs: 60 * 60 * 1000 });
   let lastDmChannel: string | null = null;
   const channelCache = new TtlCache<string, string>({ maxSize: 500, ttlMs: 30 * 60 * 1000 });
@@ -979,30 +964,16 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  // ─── Thread ownership ────────────────────────────────
-  //
-  // Follows a "first responder wins" model. When an agent sends its
-  // first reply to a thread via slack_send, it embeds its identity in
-  // Slack message metadata, claiming the thread. Before queuing an
-  // incoming message, we call conversations.replies to look for bot
-  // messages with agent metadata. If another agent has already replied,
-  // we skip the message.
-  //
-  // Race condition: there is a small window between the ownership check
-  // and the actual reply where two agents could both see zero bot
-  // replies and both decide to respond. The first reply to land
-  // effectively claims the thread; the losing agent backs off on the
-  // next incoming message once it sees the winner's metadata.
-
-  async function resolveThreadOwner(channel: string, threadTs: string): Promise<string | null> {
-    const hint = await resolveSlackThreadOwnerHint({
+  async function fetchSlackMessageByTs(
+    channel: string,
+    messageTs: string,
+  ): Promise<Record<string, unknown> | null> {
+    return fetchSlackMessageByTsFromSlack({
       slack,
       token: botToken!,
       channel,
-      threadTs,
-      limit: 50,
+      messageTs,
     });
-    return hint?.agentOwner ?? hint?.agentName ?? null;
   }
 
   // ─── Socket Mode (native WebSocket) ─────────────────
@@ -1016,372 +987,42 @@ export default function (pi: ExtensionAPI) {
     isSingleRuntimeActive: () => currentRuntimeMode === "single",
     setExtStatus,
     formatError: msg,
-    handleThreadStarted: (event) => onThreadStarted(event),
-    handleThreadContextChanged: (event) => onContextChanged(event),
-    handleAppHomeOpened: (event, ctx) => onAppHomeOpened(event, ctx),
-    handleMessage: (event, ctx) => onMessage(event, ctx),
-    handleReactionAdded: (event, ctx) => onReactionAdded(event, ctx),
-    handleMemberJoinedChannel: async ({ channel, isSelf }, ctx) => {
-      if (!isSelf) return;
-      ctx.ui.notify(`Pinet added to channel ${channel}`, "info");
-      inbox.push({
-        channel,
-        threadTs: "",
-        userId: "system",
-        text: `Pinet was added to channel <#${channel}>. You can now post messages there.`,
-        timestamp: String(Date.now() / 1000),
-      });
-      updateBadge();
-      maybeDrainInboxIfIdle(ctx);
+    getAgentName: () => agentName,
+    getAgentAliases: () => agentAliases,
+    getAgentOwnerToken: () => agentOwnerToken,
+    getBotUserId: () => botUserId,
+    getThreads: () => threads,
+    getPendingEyes: () => pendingEyes,
+    getUnclaimedThreads: () => unclaimedThreads,
+    pushInboxMessage: (message) => {
+      inbox.push(message);
     },
-    handleInteractive: (event, ctx) => queueInteractiveInboxEvent(event, ctx),
-  });
-
-  // ─── Assistant events ───────────────────────────────
-
-  async function onThreadStarted(event: ParsedThreadStarted): Promise<void> {
-    if (singlePlayerRuntime.isShuttingDown()) return;
-
-    const info: ThreadInfo = {
-      channelId: event.channelId,
-      threadTs: event.threadTs,
-      userId: event.userId,
-      source: "slack",
-    };
-
-    if (event.context) {
-      info.context = event.context;
-    }
-
-    threads.set(info.threadTs, info);
-    lastDmChannel = info.channelId;
-    persistState();
-
-    await setSuggestedPrompts(info.channelId, info.threadTs);
-  }
-
-  function onContextChanged(event: ParsedThreadContextChanged): void {
-    if (singlePlayerRuntime.isShuttingDown()) return;
-
-    const existing = threads.get(event.threadTs);
-    if (!existing || !event.context) return;
-
-    existing.context = event.context;
-    persistState();
-  }
-
-  async function onAppHomeOpened(event: ParsedAppHomeOpened, ctx: ExtensionContext): Promise<void> {
-    if (singlePlayerRuntime.isShuttingDown()) return;
-
-    await publishCurrentPinetHomeTabSafely(event.userId, ctx);
-  }
-
-  async function fetchSlackMessageByTs(
-    channel: string,
-    messageTs: string,
-  ): Promise<Record<string, unknown> | null> {
-    return fetchSlackMessageByTsFromSlack({
-      slack,
-      token: botToken!,
-      channel,
-      messageTs,
-    });
-  }
-
-  async function onReactionAdded(
-    evt: Record<string, unknown>,
-    ctx: ExtensionContext,
-  ): Promise<void> {
-    if (singlePlayerRuntime.isShuttingDown()) return;
-
-    const item = evt.item as { type?: string; channel?: string; ts?: string } | undefined;
-    const user = evt.user as string | undefined;
-    const rawReactionName = evt.reaction as string | undefined;
-    if (
-      !item ||
-      item.type !== "message" ||
-      !item.channel ||
-      !item.ts ||
-      !user ||
-      !rawReactionName
-    ) {
-      return;
-    }
-
-    if (user === botUserId) {
-      return;
-    }
-
-    let reactionName: string;
-    try {
-      reactionName = normalizeReactionName(rawReactionName);
-    } catch {
-      return;
-    }
-
-    const command = reactionCommands.get(reactionName);
-    if (!command || !isUserAllowed(user)) {
-      return;
-    }
-
-    try {
-      const reactedMessage = await fetchSlackMessageByTs(item.channel, item.ts);
-      if (!reactedMessage) {
-        throw new Error(`Unable to fetch reacted message ${item.ts} in channel ${item.channel}`);
-      }
-
-      const threadTs =
-        (reactedMessage.thread_ts as string | undefined) ??
-        (reactedMessage.ts as string | undefined) ??
-        item.ts;
-
-      if (!threads.has(threadTs)) {
-        threads.set(threadTs, {
-          channelId: item.channel,
-          threadTs,
-          userId: (reactedMessage.user as string | undefined) ?? user,
-          source: "slack",
+    setLastDmChannel: (channelId) => {
+      lastDmChannel = channelId;
+    },
+    persistState,
+    updateBadge,
+    maybeDrainInboxIfIdle,
+    resolveThreadChannel: resolveFollowerReplyChannel,
+    setSuggestedPrompts,
+    publishCurrentPinetHomeTab: (userId, ctx) => publishCurrentPinetHomeTabSafely(userId, ctx),
+    fetchSlackMessageByTs,
+    addReaction,
+    removeReaction,
+    resolveUser,
+    isUserAllowed,
+    getReactionCommand: (reactionName) => reactionCommands.get(reactionName),
+    consumeConfirmationReply,
+    claimOwnedThread: (threadTs, channelId, source = "slack") => {
+      if (brokerRole === "broker") {
+        brokerRuntime.claimThread(threadTs, channelId, source);
+      } else if (brokerRole === "follower" && brokerClient?.client) {
+        void brokerClient.client.claimThread(threadTs, channelId, source).catch(() => {
+          /* broker gone, best effort */
         });
       }
-
-      const localOwner = threads.get(threadTs)?.owner;
-      if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
-        return;
-      }
-      if (localOwner) {
-        const thread = threads.get(threadTs);
-        if (thread) {
-          normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
-        }
-      }
-
-      if (!localOwner && !unclaimedThreads.has(threadTs)) {
-        const remoteOwner = await resolveThreadOwner(item.channel, threadTs);
-        if (singlePlayerRuntime.isShuttingDown()) return;
-        if (
-          remoteOwner &&
-          !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)
-        ) {
-          const thread = threads.get(threadTs);
-          if (thread) thread.owner = remoteOwner;
-          return;
-        }
-        if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
-          const thread = threads.get(threadTs);
-          if (thread) thread.owner = agentOwnerToken;
-        }
-        if (!remoteOwner) {
-          unclaimedThreads.add(threadTs);
-        }
-      }
-
-      const reactorName = await resolveUser(user);
-      if (singlePlayerRuntime.isShuttingDown()) return;
-      const reactedMessageAuthorId =
-        (reactedMessage.user as string | undefined) ?? (evt.item_user as string | undefined);
-      const reactedMessageAuthor = reactedMessageAuthorId
-        ? await resolveUser(reactedMessageAuthorId)
-        : (reactedMessage.bot_id as string | undefined)
-          ? "bot"
-          : "unknown";
-      if (singlePlayerRuntime.isShuttingDown()) return;
-
-      const reactedMessageText =
-        typeof reactedMessage.text === "string" && reactedMessage.text.trim().length > 0
-          ? reactedMessage.text
-          : "(no text)";
-      const reactionMessage = buildReactionTriggerMessage({
-        reactionName,
-        command,
-        reactorName,
-        channel: item.channel,
-        threadTs,
-        messageTs: item.ts,
-        reactedMessageText,
-        reactedMessageAuthor,
-      });
-
-      ctx.ui.notify(`${reactorName} reacted with :${reactionName}:`, "info");
-      inbox.push({
-        channel: item.channel,
-        threadTs,
-        userId: user,
-        text: reactionMessage,
-        timestamp: (evt.event_ts as string) ?? item.ts,
-      });
-      persistState();
-      updateBadge();
-      await addReaction(item.channel, item.ts, "white_check_mark");
-
-      maybeDrainInboxIfIdle(ctx);
-    } catch (err) {
-      console.error(`[slack-bridge] reaction trigger failed: ${msg(err)}`);
-      await addReaction(item.channel, item.ts, "x");
-    }
-  }
-
-  async function onMessage(evt: Record<string, unknown>, ctx: ExtensionContext): Promise<void> {
-    if (singlePlayerRuntime.isShuttingDown()) return;
-
-    const classified = classifyMessage(evt, botUserId, new Set(threads.keys()));
-    if (!classified.relevant) return;
-
-    const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs } = classified;
-
-    if (!threads.has(threadTs)) {
-      threads.set(threadTs, { channelId: channel, threadTs, userId, source: "slack" });
-    }
-
-    const localOwner = threads.get(threadTs)?.owner;
-    if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
-      return;
-    }
-    if (localOwner) {
-      const thread = threads.get(threadTs);
-      if (thread) {
-        normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
-      }
-    }
-
-    if (!localOwner && !unclaimedThreads.has(threadTs)) {
-      const remoteOwner = await resolveThreadOwner(channel, threadTs);
-      if (singlePlayerRuntime.isShuttingDown()) return;
-      if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
-        const thread = threads.get(threadTs);
-        if (thread) thread.owner = remoteOwner;
-        return;
-      }
-      if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
-        const thread = threads.get(threadTs);
-        if (thread) thread.owner = agentOwnerToken;
-      }
-      if (!remoteOwner) {
-        unclaimedThreads.add(threadTs);
-      }
-    }
-
-    if (!isUserAllowed(userId)) {
-      await slack("chat.postMessage", botToken!, {
-        channel,
-        thread_ts: threadTs,
-        text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
-      });
-      return;
-    }
-
-    if (isDM) {
-      lastDmChannel = channel;
-    }
-    persistState();
-
-    const confirmationResult = consumeConfirmationReply(threadTs, text);
-    const messageText =
-      confirmationResult === null
-        ? text
-        : confirmationResult.approved
-          ? `${text}\n\n✅ User approved security confirmation request in this thread.`
-          : `${text}\n\n❌ User denied security confirmation request in this thread.`;
-
-    const name = await resolveUser(userId);
-    if (singlePlayerRuntime.isShuttingDown()) return;
-    ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
-
-    void addReaction(channel, messageTs, "eyes");
-    const pending = pendingEyes.get(threadTs) ?? [];
-    pending.push({ channel, messageTs });
-    pendingEyes.set(threadTs, pending);
-
-    inbox.push({
-      channel,
-      threadTs,
-      userId,
-      text: messageText,
-      timestamp: messageTs,
-      ...(isChannelMention && { isChannelMention: true }),
-    });
-    updateBadge();
-
-    maybeDrainInboxIfIdle(ctx);
-  }
-
-  async function queueInteractiveInboxEvent(
-    normalized: {
-      channel: string;
-      threadTs: string;
-      userId: string;
-      text: string;
-      timestamp: string;
-      metadata: Record<string, unknown>;
     },
-    ctx: ExtensionContext,
-  ): Promise<void> {
-    if (!threads.has(normalized.threadTs)) {
-      threads.set(normalized.threadTs, {
-        channelId: normalized.channel,
-        threadTs: normalized.threadTs,
-        userId: normalized.userId,
-        source: "slack",
-      });
-    }
-
-    const localOwner = threads.get(normalized.threadTs)?.owner;
-    if (localOwner && !agentOwnsThread(localOwner, agentName, agentAliases, agentOwnerToken)) {
-      return;
-    }
-    if (localOwner) {
-      const thread = threads.get(normalized.threadTs);
-      if (thread) {
-        normalizeOwnedThreads([thread], agentName, agentOwnerToken, agentAliases);
-      }
-    }
-
-    if (!localOwner && !unclaimedThreads.has(normalized.threadTs)) {
-      const remoteOwner = await resolveThreadOwner(normalized.channel, normalized.threadTs);
-      if (singlePlayerRuntime.isShuttingDown()) return;
-      if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
-        const thread = threads.get(normalized.threadTs);
-        if (thread) thread.owner = remoteOwner;
-        return;
-      }
-      if (agentOwnsThread(remoteOwner ?? undefined, agentName, agentAliases, agentOwnerToken)) {
-        const thread = threads.get(normalized.threadTs);
-        if (thread) thread.owner = agentOwnerToken;
-      }
-      if (!remoteOwner) {
-        unclaimedThreads.add(normalized.threadTs);
-      }
-    }
-
-    if (!isUserAllowed(normalized.userId)) {
-      await slack("chat.postMessage", botToken!, {
-        channel: normalized.channel,
-        thread_ts: normalized.threadTs,
-        text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
-      });
-      return;
-    }
-
-    if (normalized.channel.startsWith("D")) {
-      lastDmChannel = normalized.channel;
-    }
-    persistState();
-
-    const name = await resolveUser(normalized.userId);
-    if (singlePlayerRuntime.isShuttingDown()) return;
-    ctx.ui.notify(`${name}: ${normalized.text.slice(0, 100)}`, "info");
-
-    inbox.push({
-      channel: normalized.channel,
-      threadTs: normalized.threadTs,
-      userId: normalized.userId,
-      text: normalized.text,
-      timestamp: normalized.timestamp,
-      metadata: normalized.metadata,
-    });
-    updateBadge();
-
-    maybeDrainInboxIfIdle(ctx);
-  }
+  });
 
   // ─── Reconnect / status ─────────────────────────────
 
@@ -1408,36 +1049,6 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Tools ──────────────────────────────────────────
 
-  function trackOwnedThread(threadTs: string, channelId: string, source = "slack"): void {
-    if (!threads.has(threadTs)) {
-      threads.set(threadTs, {
-        channelId,
-        threadTs,
-        userId: "",
-        source,
-        owner: agentOwnerToken,
-      });
-    } else {
-      const thread = threads.get(threadTs)!;
-      if (!thread.owner) thread.owner = agentOwnerToken;
-      if (!thread.source) {
-        thread.source = source;
-      }
-    }
-    unclaimedThreads.delete(threadTs);
-    persistState();
-  }
-
-  function claimOwnedThread(threadTs: string, channelId: string, source = "slack"): void {
-    if (brokerRole === "broker") {
-      brokerRuntime.claimThread(threadTs, channelId, source);
-    } else if (brokerRole === "follower" && brokerClient?.client) {
-      void brokerClient.client.claimThread(threadTs, channelId, source).catch(() => {
-        /* broker gone, best effort */
-      });
-    }
-  }
-
   registerSlackTools(pi, {
     getBotToken: () => {
       if (!botToken) {
@@ -1455,21 +1066,7 @@ export default function (pi: ExtensionAPI) {
     getLastDmChannel: () => lastDmChannel,
     updateBadge,
     resolveUser,
-    threadContext: {
-      resolveThreadChannel: resolveFollowerReplyChannel,
-      noteThreadReply: (threadTs, channelId) => {
-        trackOwnedThread(threadTs, channelId, "slack");
-        claimOwnedThread(threadTs, channelId, "slack");
-      },
-      clearPendingAttention: (threadTs) => {
-        const pending = pendingEyes.get(threadTs);
-        if (!pending) return;
-        for (const entry of pending) {
-          void removeReaction(entry.channel, entry.messageTs, "eyes");
-        }
-        pendingEyes.delete(threadTs);
-      },
-    },
+    threadContext: singlePlayerRuntime.getThreadContextPort(),
     resolveChannel,
     rememberChannel: (name, channelId) => {
       channelCache.set(name, channelId);
@@ -2869,7 +2466,7 @@ export default function (pi: ExtensionAPI) {
         throw new Error("Pinet is in an unexpected state.");
       }
 
-      trackOwnedThread(threadId, recipient, "imessage");
+      singlePlayerRuntime.trackOwnedThread(threadId, recipient, "imessage");
 
       return {
         content: [
@@ -3163,7 +2760,7 @@ export default function (pi: ExtensionAPI) {
 
     // Restore persisted thread state (always restore, even before /pinet)
     interface PersistedState {
-      threads?: [string, ThreadInfo][];
+      threads?: [string, SinglePlayerThreadInfo][];
       lastDmChannel?: string | null;
       userNames?: [string, string][];
       agentName?: string;
