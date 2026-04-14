@@ -1070,6 +1070,8 @@ describe("Pinet skin helpers", () => {
     });
 
     expect(broker.theme).toBe("night's watch from ASOIAF");
+    expect(broker.name).toBe(generateAgentName("broker-a", "broker").name);
+    expect(broker.name).toMatch(/^The Broker \w+$/);
     expect(broker.name).not.toBe(worker.name);
     expect(broker.personality).toContain("night's watch from ASOIAF");
     expect(worker.personality).toContain("night's watch from ASOIAF");
