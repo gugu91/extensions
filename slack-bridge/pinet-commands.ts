@@ -11,6 +11,10 @@ import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
 // ─── Types ───────────────────────────────────────────────
 
+type PinetRuntimeControlContext = ExtensionContext & {
+  abort?: () => void;
+};
+
 export interface PinetCommandsDeps {
   // State accessors
   pinetEnabled: () => boolean;
@@ -69,6 +73,18 @@ export interface PinetCommandsDeps {
 
 // ─── Registration ────────────────────────────────────────
 
+function abortCurrentTurnBeforeBrokerReload(ctx: ExtensionContext): void {
+  if (ctx.isIdle?.() ?? true) {
+    return;
+  }
+
+  try {
+    (ctx as PinetRuntimeControlContext).abort?.();
+  } catch {
+    /* best effort */
+  }
+}
+
 export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps): void {
   pi.registerCommand("pinet-start", {
     description:
@@ -82,6 +98,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
 
       if (deps.runtimeMode() === "broker") {
         try {
+          abortCurrentTurnBeforeBrokerReload(ctx);
           ctx.ui.notify("Pinet broker already running — reloading current runtime", "info");
           await deps.reloadPinetRuntime(ctx);
         } catch (err) {
