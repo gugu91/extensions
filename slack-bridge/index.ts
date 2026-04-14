@@ -5,8 +5,6 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
-  type ConfirmationRequest,
-  type ThreadConfirmationState,
   type RalphLoopAgentWorkload,
   type RalphLoopEvaluationResult,
   type RalphLoopEvaluationOptions,
@@ -29,7 +27,6 @@ import {
   filterAgentsForMeshVisibility,
   evaluateRalphLoopCycle,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
-  DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
   buildPinetOwnerToken,
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
@@ -45,20 +42,11 @@ import {
   isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
   resolveFollowerThreadChannel,
-  normalizeThreadConfirmationState,
   normalizeOwnedThreads,
-  isThreadConfirmationStateEmpty,
-  confirmationRequestMatches,
-  consumeMatchingConfirmationRequest,
-  registerThreadConfirmationRequest,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import {
   buildSecurityPrompt,
-  isConfirmationApproval,
-  isConfirmationRejection,
-  isToolBlocked,
-  toolNeedsConfirmation,
   isBrokerForbiddenTool,
   buildBrokerToolGuardrailsPrompt,
   type SecurityGuardrails,
@@ -85,6 +73,7 @@ import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
 import { registerPinetTools } from "./pinet-tools.js";
 import { registerIMessageTools } from "./imessage-tools.js";
+import { createThreadConfirmationPolicy } from "./thread-confirmations.js";
 import {
   createIMessageAdapter,
   detectIMessageMvpEnvironment,
@@ -504,50 +493,14 @@ export default function (pi: ExtensionAPI) {
     ttlMs: SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
   });
 
-  const threadConfirmationStates = new Map<string, ThreadConfirmationState>();
-
-  function storeThreadConfirmationState(
-    threadTs: string,
-    state: ThreadConfirmationState,
-    now = Date.now(),
-  ): ThreadConfirmationState | null {
-    const normalized = normalizeThreadConfirmationState(
-      state,
-      now,
-      DEFAULT_CONFIRMATION_REQUEST_TTL_MS,
-    );
-
-    if (isThreadConfirmationStateEmpty(normalized)) {
-      threadConfirmationStates.delete(threadTs);
-      return null;
-    }
-
-    threadConfirmationStates.set(threadTs, normalized);
-    return normalized;
-  }
-
-  function sweepThreadConfirmationStates(now = Date.now()): void {
-    for (const [threadTs, state] of threadConfirmationStates) {
-      storeThreadConfirmationState(threadTs, state, now);
-    }
-  }
-
-  function getThreadConfirmationState(threadTs: string): ThreadConfirmationState {
-    sweepThreadConfirmationStates();
-
-    let state = threadConfirmationStates.get(threadTs);
-    if (!state) {
-      state = { pending: [], approved: [], rejected: [] };
-      threadConfirmationStates.set(threadTs, state);
-    }
-    return state;
-  }
-
-  function cleanupThreadConfirmationState(threadTs: string): void {
-    const state = threadConfirmationStates.get(threadTs);
-    if (!state) return;
-    storeThreadConfirmationState(threadTs, state);
-  }
+  const {
+    formatAction: formatConfirmationAction,
+    registerRequest: registerConfirmationRequest,
+    consumeReply: consumeConfirmationReply,
+    requireToolPolicy,
+  } = createThreadConfirmationPolicy({
+    getGuardrails: () => guardrails,
+  });
 
   // ─── State persistence ──────────────────────────────
 
@@ -779,127 +732,6 @@ export default function (pi: ExtensionAPI) {
       threadTs,
       prompts,
     });
-  }
-
-  function formatConfirmationAction(action: string): string {
-    return JSON.stringify(action);
-  }
-
-  function registerConfirmationRequest(
-    threadTs: string,
-    tool: string,
-    action: string,
-  ): { status: "created" | "refreshed" | "conflict"; conflict?: ConfirmationRequest } {
-    const now = Date.now();
-    const result = registerThreadConfirmationRequest(
-      getThreadConfirmationState(threadTs),
-      {
-        toolPattern: tool,
-        action,
-        requestedAt: now,
-      },
-      now,
-    );
-    storeThreadConfirmationState(threadTs, result.state, now);
-    return {
-      status: result.status,
-      conflict: result.conflict,
-    };
-  }
-
-  function consumeConfirmationReply(threadTs: string, text: string): { approved: boolean } | null {
-    sweepThreadConfirmationStates();
-    const state = threadConfirmationStates.get(threadTs);
-    if (!state || state.pending.length === 0) return null;
-
-    const trimmed = text.trim();
-    const isApproval = isConfirmationApproval(trimmed);
-    const isRejection = isConfirmationRejection(trimmed);
-    if (!isApproval && !isRejection) return null;
-
-    const request = state.pending.shift();
-    if (!request) return null;
-
-    if (isApproval) {
-      state.approved.push(request);
-      cleanupThreadConfirmationState(threadTs);
-      return { approved: true };
-    }
-
-    state.rejected.push(request);
-    cleanupThreadConfirmationState(threadTs);
-    return { approved: false };
-  }
-
-  function getConfirmationDecision(
-    threadTs: string,
-    toolName: string,
-    action: string,
-  ): boolean | null {
-    sweepThreadConfirmationStates();
-    const state = threadConfirmationStates.get(threadTs);
-    if (!state) return null;
-
-    const approved = consumeMatchingConfirmationRequest(state.approved, toolName, action);
-    if (approved) {
-      cleanupThreadConfirmationState(threadTs);
-      return true;
-    }
-
-    const rejected = consumeMatchingConfirmationRequest(state.rejected, toolName, action);
-    if (rejected) {
-      cleanupThreadConfirmationState(threadTs);
-      return false;
-    }
-
-    return null;
-  }
-
-  function requireToolPolicy(toolName: string, threadTs: string | undefined, action: string): void {
-    if (isToolBlocked(toolName, guardrails)) {
-      throw new Error(`Tool "${toolName}" is blocked by Slack security guardrails.`);
-    }
-
-    if (!toolNeedsConfirmation(toolName, guardrails)) {
-      return;
-    }
-
-    const quotedAction = formatConfirmationAction(action);
-    if (!threadTs) {
-      throw new Error(
-        `Tool "${toolName}" requires confirmation for action ${quotedAction}. Include a thread_ts and call slack_confirm_action before executing this tool.`,
-      );
-    }
-
-    const decision = getConfirmationDecision(threadTs, toolName, action);
-    if (decision === true) return;
-    if (decision === false) {
-      throw new Error(
-        `Tool "${toolName}" was denied by Slack user confirmation for action ${quotedAction}.`,
-      );
-    }
-
-    sweepThreadConfirmationStates();
-    const state = threadConfirmationStates.get(threadTs);
-    const pendingMatch =
-      state?.pending.find((request) => confirmationRequestMatches(request, toolName, action)) ??
-      null;
-    if (pendingMatch) {
-      throw new Error(
-        `Tool "${toolName}" requires confirmation for action ${quotedAction}. A matching confirmation request is already pending in thread ${threadTs}; wait for the user's approval first.`,
-      );
-    }
-
-    const pendingConflict = state?.pending[0];
-    if (pendingConflict) {
-      throw new Error(
-        `Thread ${threadTs} already has a pending confirmation for tool "${pendingConflict.toolPattern}" and action ${formatConfirmationAction(pendingConflict.action)}. Wait for a reply or expiry before requesting another action in the same thread.`,
-      );
-    }
-
-    throw new Error(
-      `Tool "${toolName}" requires confirmation for action ${quotedAction}. Call slack_confirm_action in thread ${threadTs} with tool "${toolName}" and action ${quotedAction}, then wait for the user's approval first.`,
-    );
   }
 
   async function fetchSlackMessageByTs(
