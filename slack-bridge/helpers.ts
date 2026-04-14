@@ -2808,7 +2808,9 @@ export function buildPinetSkinAssignment(options: {
   const roleFocus = pickSkinValue(PINET_SKIN_ROLE_FOCUS[options.role], options.seed, "role-focus");
   const workerCore = secondary === modifier ? primary : secondary;
   const name =
-    options.role === "broker" ? `${primary} ${title}` : `${modifier} ${workerCore} ${title}`;
+    options.role === "broker"
+      ? generateAgentName(options.seed, "broker").name
+      : `${modifier} ${workerCore} ${title}`;
 
   return {
     theme: normalizedTheme,
