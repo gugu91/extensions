@@ -3648,6 +3648,20 @@ export default function (pi: ExtensionAPI) {
         })();
       });
 
+      client.onReconnectFailed((err) => {
+        void (async () => {
+          console.error(`[slack-bridge] follower reconnect failed: ${msg(err)}`);
+          await disconnectFollower(ctx).catch(() => {
+            /* best effort */
+          });
+          setExtStatus(ctx, "error");
+          ctx.ui.notify(
+            `Pinet reconnect stopped: ${msg(err)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.`,
+            "error",
+          );
+        })();
+      });
+
       await resumeThreadClaims();
       brokerClient = brokerClientRef;
       brokerRole = "follower";
