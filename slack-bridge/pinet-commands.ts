@@ -6,7 +6,7 @@ import {
   resolveAllowAllWorkspaceUsers,
   type SlackBridgeSettings,
 } from "./helpers.js";
-import { formatRecentActivityLogEntries, type SlackActivityLogger } from "./activity-log.js";
+import { formatRecentActivityLogEntries, type LoggedActivityLogEntry } from "./activity-log.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -33,7 +33,7 @@ export interface PinetCommandsDeps {
   threads: () => Map<string, { owner?: string }>;
   allowedUsers: () => Set<string> | null;
   inboxLength: () => number;
-  activityLogger: () => SlackActivityLogger;
+  recentActivityLogEntries: (limit: number) => ReadonlyArray<LoggedActivityLogEntry>;
   settings: () => SlackBridgeSettings;
   lastBrokerMaintenance: () => {
     pendingBacklogCount: number;
@@ -344,7 +344,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
     ctx.ui.notify(
       [
         `Activity log channel: ${channelInfo}`,
-        formatRecentActivityLogEntries(deps.activityLogger().getRecentEntries(10)),
+        formatRecentActivityLogEntries(deps.recentActivityLogEntries(10)),
       ].join("\n\n"),
       s.logChannel ? "info" : "warning",
     );

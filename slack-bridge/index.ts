@@ -97,13 +97,6 @@ import {
   normalizeIMessageRecipient,
 } from "@gugu910/pi-imessage-bridge";
 import {
-  type RalphLoopDeps,
-  createRalphLoopState,
-  resetRalphLoopState,
-  startRalphLoop,
-  stopRalphLoop,
-} from "./ralph-loop.js";
-import {
   addSlackReaction,
   clearSlackThreadStatus,
   fetchSlackMessageByTs as fetchSlackMessageByTsFromSlack,
@@ -133,11 +126,7 @@ import {
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
 } from "./task-assignments.js";
-import {
-  SlackActivityLogger,
-  type ActivityLogEntry,
-  type ActivityLogTone,
-} from "./activity-log.js";
+import { SlackActivityLogger, type ActivityLogTone } from "./activity-log.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import {
   createBrokerDeliveryState,
@@ -233,28 +222,14 @@ export default function (pi: ExtensionAPI) {
     return trimmed && trimmed.length > 0 ? trimmed : null;
   }
 
-  let brokerControlPlaneCanvasRuntimeId: string | null = null;
-  let brokerControlPlaneCanvasRuntimeChannelId: string | null = null;
-  let lastBrokerControlPlaneCanvasRefreshAt: string | null = null;
-  let lastBrokerControlPlaneCanvasError: string | null = null;
-  const brokerControlPlaneHomeTabViewers = new TtlCache<string, { openedAt: string }>({
-    maxSize: 100,
-    ttlMs: 12 * 60 * 60 * 1000,
-  });
-  let lastBrokerControlPlaneHomeTabSnapshot: BrokerControlPlaneDashboardSnapshot | null = null;
-  let lastBrokerControlPlaneHomeTabRefreshAt: string | null = null;
-  let lastBrokerControlPlaneHomeTabError: string | null = null;
-
-  function isBrokerControlPlaneCanvasEnabled(): boolean {
-    return settings.controlPlaneCanvasEnabled ?? true;
-  }
-
   function getExplicitBrokerControlPlaneCanvasId(): string | null {
     return normalizeOptionalSetting(settings.controlPlaneCanvasId);
   }
 
   function getConfiguredBrokerControlPlaneCanvasId(): string | null {
-    return getExplicitBrokerControlPlaneCanvasId() ?? brokerControlPlaneCanvasRuntimeId;
+    return (
+      getExplicitBrokerControlPlaneCanvasId() ?? brokerRuntime.getControlPlaneCanvasRuntimeId()
+    );
   }
 
   function getConfiguredBrokerControlPlaneCanvasChannel(): string | null {
@@ -600,8 +575,8 @@ export default function (pi: ExtensionAPI) {
         activeSkinTheme,
         agentPersonality,
         agentAliases: [...agentAliases],
-        brokerControlPlaneCanvasId: brokerControlPlaneCanvasRuntimeId,
-        brokerControlPlaneCanvasChannelId: brokerControlPlaneCanvasRuntimeChannelId,
+        brokerControlPlaneCanvasId: brokerRuntime.getControlPlaneCanvasRuntimeId(),
+        brokerControlPlaneCanvasChannelId: brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
       });
     } catch (err) {
       console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
@@ -628,7 +603,6 @@ export default function (pi: ExtensionAPI) {
   let suppressAutoDrainUntil = 0;
   let terminalInputUnsubscribe: (() => void) | null = null;
   let extCtx: ExtensionContext | null = null; // cached for badge updates
-  let lastActivityLogFailureAt = 0;
   const pendingSlackToolPolicyTurns: PendingSlackToolPolicyTurn[] = [];
   let nextSlackToolPolicyTurn: PendingSlackToolPolicyTurn | null = null;
   let activeSlackToolPolicyTurn: PendingSlackToolPolicyTurn | null = null;
@@ -721,35 +695,6 @@ export default function (pi: ExtensionAPI) {
       nameOrId,
       cache: channelCache,
     });
-  }
-
-  const activityLogger = new SlackActivityLogger({
-    getBotToken: () => botToken,
-    getLogChannel: () => settings.logChannel,
-    getLogLevel: () => settings.logLevel,
-    getAgentName: () => agentName,
-    getAgentEmoji: () => agentEmoji,
-    resolveChannel,
-    slack,
-    onError: (error) => {
-      console.error(`[slack-bridge] activity log failed: ${msg(error)}`);
-      const now = Date.now();
-      if (!extCtx?.hasUI || now - lastActivityLogFailureAt < 60_000) {
-        return;
-      }
-      lastActivityLogFailureAt = now;
-      extCtx.ui.notify(`Pinet activity log failed: ${msg(error)}`, "warning");
-    },
-  });
-
-  function logBrokerActivity(entry: ActivityLogEntry): void {
-    if (!settings.logChannel) {
-      return;
-    }
-    if (brokerRole !== "broker" && brokerRuntime.getBroker() == null) {
-      return;
-    }
-    activityLogger.log(entry);
   }
 
   function formatTrackedAgent(agentId: string): string {
@@ -1089,7 +1034,6 @@ export default function (pi: ExtensionAPI) {
   let pinetRegistrationBlocked = false;
   let brokerClient: BrokerClientRef | null = null;
   const followerDeliveryState = createFollowerDeliveryState();
-  const ralphLoopState = createRalphLoopState();
   let desiredAgentStatus: "working" | "idle" = "idle";
 
   function getPinetRegistrationBlockReason(): string {
@@ -1208,6 +1152,40 @@ export default function (pi: ExtensionAPI) {
     },
     formatError: msg,
     deliveryState: brokerDeliveryState,
+    createActivityLogger: (onError) =>
+      new SlackActivityLogger({
+        getBotToken: () => botToken,
+        getLogChannel: () => settings.logChannel,
+        getLogLevel: () => settings.logLevel,
+        getAgentName: () => agentName,
+        getAgentEmoji: () => agentEmoji,
+        resolveChannel,
+        slack,
+        onError,
+      }),
+    formatTrackedAgent,
+    summarizeTrackedAssignmentStatus,
+    sendMaintenanceMessage: (targetAgentId, body) => {
+      sendBrokerMaintenanceMessage(targetAgentId, body);
+    },
+    trySendFollowUp: (body, onDelivered) => {
+      trySendBrokerFollowUp(body, onDelivered);
+    },
+    refreshCanvasDashboard: async (ctx, input) => {
+      await refreshBrokerControlPlaneCanvasDashboard(
+        ctx,
+        input as Parameters<typeof refreshBrokerControlPlaneCanvasDashboard>[1],
+      );
+    },
+    refreshHomeTabs: async (ctx, snapshot, refreshedAt, userIds) => {
+      await refreshBrokerControlPlaneHomeTabs(ctx, snapshot, refreshedAt, userIds);
+    },
+    buildControlPlaneDashboardSnapshot: (input) =>
+      buildBrokerControlPlaneDashboardSnapshot(
+        input as unknown as Parameters<typeof buildBrokerControlPlaneDashboardSnapshot>[0],
+      ),
+    buildCurrentDashboardSnapshot: async (openedAt) =>
+      buildCurrentBrokerControlPlaneDashboardSnapshot(openedAt),
     onMaintenanceResult: (ctx, { result, previousSignature, signature }) => {
       if (signature && signature !== previousSignature) {
         ctx.ui.notify(`Pinet broker: ${result.anomalies.join("; ")}`, "warning");
@@ -1239,7 +1217,7 @@ export default function (pi: ExtensionAPI) {
         result.repairedThreadClaims > 0;
       const shouldLogMaintenance = hasMaintenanceActions || previousSignature !== signature;
       if (shouldLogMaintenance) {
-        logBrokerActivity({
+        brokerRuntime.logActivity({
           kind: "broker_maintenance",
           level: hasMaintenanceActions ? "actions" : "verbose",
           title: signature ? "Broker maintenance anomaly" : "Broker maintenance recovery",
@@ -1264,7 +1242,7 @@ export default function (pi: ExtensionAPI) {
     },
     onMaintenanceError: (ctx, error) => {
       ctx.ui.notify(`Pinet maintenance failed: ${msg(error)}`, "error");
-      logBrokerActivity({
+      brokerRuntime.logActivity({
         kind: "broker_maintenance_error",
         level: "errors",
         title: "Broker maintenance failed",
@@ -1274,7 +1252,7 @@ export default function (pi: ExtensionAPI) {
     },
     onScheduledWakeupError: (ctx, error) => {
       ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(error)}`, "error");
-      logBrokerActivity({
+      brokerRuntime.logActivity({
         kind: "scheduled_wakeup_error",
         level: "errors",
         title: "Scheduled wake-up delivery failed",
@@ -1283,7 +1261,7 @@ export default function (pi: ExtensionAPI) {
       });
     },
     onAgentStatusChange: (_ctx, changedAgentId, status) => {
-      logBrokerActivity({
+      brokerRuntime.logActivity({
         kind: "agent_status",
         level: "verbose",
         title: status === "idle" ? "Worker available" : "Worker busy",
@@ -1304,10 +1282,6 @@ export default function (pi: ExtensionAPI) {
 
   function getActiveBrokerSelfId(): string | null {
     return brokerRuntime.getSelfId();
-  }
-
-  function runBrokerMaintenance(ctx: ExtensionContext): void {
-    brokerRuntime.runMaintenance(ctx);
   }
 
   function sendBrokerMaintenanceMessage(targetAgentId: string, body: string): void {
@@ -1344,7 +1318,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getBrokerControlPlaneHomeTabViewerIds(): string[] {
-    return [...brokerControlPlaneHomeTabViewers.entries()].map(([userId]) => userId);
+    return brokerRuntime.getHomeTabViewerIds();
   }
 
   async function buildCurrentBrokerControlPlaneDashboardSnapshot(
@@ -1437,13 +1411,13 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
     snapshot: BrokerControlPlaneDashboardSnapshot,
     refreshedAt: string,
-    userIds: string[] = getBrokerControlPlaneHomeTabViewerIds(),
+    userIds: string[] = brokerRuntime.getHomeTabViewerIds(),
   ): Promise<void> {
     if (!botToken || userIds.length === 0) {
       return;
     }
 
-    lastBrokerControlPlaneHomeTabSnapshot = snapshot;
+    brokerRuntime.setLastHomeTabSnapshot(snapshot);
     let hadError = false;
 
     for (const userId of userIds) {
@@ -1457,25 +1431,25 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         hadError = true;
         const homeTabMessage = `Pinet Home tab publish failed: ${msg(err)}`;
-        if (homeTabMessage !== lastBrokerControlPlaneHomeTabError) {
+        if (homeTabMessage !== brokerRuntime.getLastHomeTabError()) {
           ctx.ui.notify(homeTabMessage, "warning");
         }
-        lastBrokerControlPlaneHomeTabError = homeTabMessage;
+        brokerRuntime.setLastHomeTabError(homeTabMessage);
       }
     }
 
     if (!hadError) {
-      lastBrokerControlPlaneHomeTabError = null;
+      brokerRuntime.setLastHomeTabError(null);
     }
-    lastBrokerControlPlaneHomeTabRefreshAt = refreshedAt;
+    brokerRuntime.setLastHomeTabRefreshAt(refreshedAt);
   }
 
   function reportHomeTabPublishFailure(ctx: ExtensionContext, err: unknown): void {
     const homeTabMessage = `Pinet Home tab publish failed: ${msg(err)}`;
-    if (homeTabMessage !== lastBrokerControlPlaneHomeTabError) {
+    if (homeTabMessage !== brokerRuntime.getLastHomeTabError()) {
       ctx.ui.notify(homeTabMessage, "warning");
     }
-    lastBrokerControlPlaneHomeTabError = homeTabMessage;
+    brokerRuntime.setLastHomeTabError(homeTabMessage);
   }
 
   async function publishCurrentPinetHomeTab(
@@ -1488,12 +1462,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (brokerRuntime.isConnected() && brokerRole === "broker") {
-      brokerControlPlaneHomeTabViewers.set(userId, { openedAt });
-      const snapshot =
-        (await buildCurrentBrokerControlPlaneDashboardSnapshot(openedAt)) ??
-        lastBrokerControlPlaneHomeTabSnapshot;
-      if (snapshot) {
-        await refreshBrokerControlPlaneHomeTabs(ctx, snapshot, openedAt, [userId]);
+      if (await brokerRuntime.publishCurrentHomeTabSafely(userId, ctx, openedAt)) {
         return;
       }
     }
@@ -1521,7 +1490,7 @@ export default function (pi: ExtensionAPI) {
         defaultChannel: settings.defaultChannel ?? null,
       }),
     });
-    lastBrokerControlPlaneHomeTabError = null;
+    brokerRuntime.setLastHomeTabError(null);
   }
 
   async function publishCurrentPinetHomeTabSafely(
@@ -1560,8 +1529,8 @@ export default function (pi: ExtensionAPI) {
       currentBranch: string | null;
     },
   ): Promise<void> {
-    if (!botToken || !isBrokerControlPlaneCanvasEnabled()) {
-      lastBrokerControlPlaneCanvasError = null;
+    if (!botToken || !brokerRuntime.isBrokerControlPlaneCanvasEnabled()) {
+      brokerRuntime.setLastControlPlaneCanvasError(null);
       return;
     }
 
@@ -1571,10 +1540,10 @@ export default function (pi: ExtensionAPI) {
     if (!effectiveCanvasId && !channelInput) {
       const warning =
         "Pinet broker control plane canvas skipped: set slack-bridge.controlPlaneCanvasChannel, defaultChannel, or controlPlaneCanvasId.";
-      if (lastBrokerControlPlaneCanvasError !== warning) {
+      if (brokerRuntime.getLastControlPlaneCanvasError() !== warning) {
         ctx.ui.notify(warning, "warning");
       }
-      lastBrokerControlPlaneCanvasError = warning;
+      brokerRuntime.setLastControlPlaneCanvasError(warning);
       return;
     }
 
@@ -1594,12 +1563,12 @@ export default function (pi: ExtensionAPI) {
     const channelId = explicitCanvasId || !channelInput ? null : await resolveChannel(channelInput);
     const reusableRuntimeCanvasId =
       !explicitCanvasId &&
-      brokerControlPlaneCanvasRuntimeId &&
-      (!channelId || brokerControlPlaneCanvasRuntimeChannelId === channelId)
-        ? brokerControlPlaneCanvasRuntimeId
+      brokerRuntime.getControlPlaneCanvasRuntimeId() &&
+      (!channelId || brokerRuntime.getControlPlaneCanvasRuntimeChannelId() === channelId)
+        ? brokerRuntime.getControlPlaneCanvasRuntimeId()
         : null;
-    const previousRuntimeId = brokerControlPlaneCanvasRuntimeId;
-    const previousRuntimeChannelId = brokerControlPlaneCanvasRuntimeChannelId;
+    const previousRuntimeId = brokerRuntime.getControlPlaneCanvasRuntimeId();
+    const previousRuntimeChannelId = brokerRuntime.getControlPlaneCanvasRuntimeChannelId();
     const result = await refreshBrokerControlPlaneCanvas({
       slack,
       token: botToken,
@@ -1610,11 +1579,13 @@ export default function (pi: ExtensionAPI) {
     });
 
     if (!explicitCanvasId) {
-      brokerControlPlaneCanvasRuntimeId = result.canvasId;
-      brokerControlPlaneCanvasRuntimeChannelId = channelId;
+      brokerRuntime.restoreControlPlaneCanvasRuntimeState({
+        canvasId: result.canvasId,
+        channelId,
+      });
     }
-    lastBrokerControlPlaneCanvasRefreshAt = input.cycleStartedAt;
-    lastBrokerControlPlaneCanvasError = null;
+    brokerRuntime.setLastControlPlaneCanvasRefreshAt(input.cycleStartedAt);
+    brokerRuntime.setLastControlPlaneCanvasError(null);
 
     if (
       !explicitCanvasId &&
@@ -1632,57 +1603,6 @@ export default function (pi: ExtensionAPI) {
         "info",
       );
     }
-  }
-
-  function getRalphLoopDeps(): RalphLoopDeps {
-    return {
-      getBrokerDb: () => getActiveBrokerDb(),
-      getBrokerAgentId: () => getActiveBrokerSelfId(),
-      heartbeatTimerActive: () => brokerRuntime.heartbeatTimerActive(),
-      maintenanceTimerActive: () => brokerRuntime.maintenanceTimerActive(),
-      runMaintenance: (c) => runBrokerMaintenance(c),
-      sendMaintenanceMessage: (id, body) => sendBrokerMaintenanceMessage(id, body),
-      trySendFollowUp: (body, onDelivered) => trySendBrokerFollowUp(body, onDelivered),
-      logActivity: (entry) => logBrokerActivity(entry),
-      formatTrackedAgent,
-      summarizeTrackedAssignmentStatus: (status, prNumber, branch) =>
-        summarizeTrackedAssignmentStatus(
-          status as Parameters<typeof summarizeTrackedAssignmentStatus>[0],
-          prNumber,
-          branch,
-        ),
-      refreshCanvasDashboard: (c, input) =>
-        refreshBrokerControlPlaneCanvasDashboard(
-          c,
-          input as Parameters<typeof refreshBrokerControlPlaneCanvasDashboard>[1],
-        ),
-      refreshHomeTabs: (c, snapshot, at) => refreshBrokerControlPlaneHomeTabs(c, snapshot, at),
-      getLastMaintenance: () => brokerRuntime.getLastMaintenance(),
-      buildControlPlaneDashboardSnapshot: (input) =>
-        buildBrokerControlPlaneDashboardSnapshot(
-          input as unknown as Parameters<typeof buildBrokerControlPlaneDashboardSnapshot>[0],
-        ),
-      setLastHomeTabSnapshot: (s) => {
-        lastBrokerControlPlaneHomeTabSnapshot = s;
-      },
-      getLastCanvasError: () => lastBrokerControlPlaneCanvasError,
-      setLastCanvasError: (e) => {
-        lastBrokerControlPlaneCanvasError = e;
-      },
-      getLastHomeTabError: () => lastBrokerControlPlaneHomeTabError,
-      setLastHomeTabError: (e) => {
-        lastBrokerControlPlaneHomeTabError = e;
-      },
-    };
-  }
-
-  function startBrokerRalphLoop(ctx: ExtensionContext): void {
-    startRalphLoop(ctx, ralphLoopState, getRalphLoopDeps());
-  }
-
-  function stopBrokerRalphLoop(): void {
-    stopRalphLoop(ralphLoopState);
-    lastBrokerControlPlaneHomeTabSnapshot = null;
   }
 
   function prepareOutgoingPinetAgentMessage(
@@ -1747,7 +1667,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (recordedAssignments.length > 0) {
-        logBrokerActivity({
+        brokerRuntime.logActivity({
           kind: "task_assignment",
           level: "actions",
           title: recordedAssignments.length === 1 ? "Task assigned" : "Tasks assigned",
@@ -1930,16 +1850,7 @@ export default function (pi: ExtensionAPI) {
     options: { releaseIdentity: boolean },
   ): Promise<void> {
     flushPersist();
-    stopBrokerRalphLoop();
     await brokerRuntime.disconnect({ releaseIdentity: options.releaseIdentity });
-
-    lastBrokerControlPlaneCanvasRefreshAt = null;
-    lastBrokerControlPlaneCanvasError = null;
-    lastBrokerControlPlaneHomeTabSnapshot = null;
-    lastBrokerControlPlaneHomeTabRefreshAt = null;
-    lastBrokerControlPlaneHomeTabError = null;
-    brokerControlPlaneHomeTabViewers.clear();
-    resetRalphLoopState(ralphLoopState);
 
     if (brokerClient) {
       if (options.releaseIdentity) {
@@ -1958,7 +1869,6 @@ export default function (pi: ExtensionAPI) {
     }
 
     await singlePlayerRuntime.disconnect();
-    activityLogger.clearPending();
     brokerRole = null;
     pinetEnabled = false;
     desiredAgentStatus = "idle";
@@ -2510,7 +2420,7 @@ export default function (pi: ExtensionAPI) {
 
       if (!environment.canAttemptSend) {
         ctx.ui.notify(`iMessage adapter unavailable — ${readinessSummary}`, "warning");
-        logBrokerActivity({
+        brokerRuntime.logActivity({
           kind: "transport_readiness",
           level: "actions",
           title: "iMessage adapter unavailable",
@@ -2525,7 +2435,7 @@ export default function (pi: ExtensionAPI) {
 
           if (environment.blockers.length > 0) {
             ctx.ui.notify(`iMessage send-first mode enabled — ${readinessSummary}`, "warning");
-            logBrokerActivity({
+            brokerRuntime.logActivity({
               kind: "transport_readiness",
               level: "actions",
               title: "iMessage send-first mode enabled",
@@ -2535,7 +2445,7 @@ export default function (pi: ExtensionAPI) {
           }
         } catch (err) {
           ctx.ui.notify(`iMessage adapter failed to start: ${msg(err)}`, "warning");
-          logBrokerActivity({
+          brokerRuntime.logActivity({
             kind: "transport_readiness",
             level: "errors",
             title: "iMessage adapter failed to start",
@@ -2564,9 +2474,9 @@ export default function (pi: ExtensionAPI) {
       );
     }
 
-    startBrokerRalphLoop(ctx);
+    brokerRuntime.startObservability(ctx);
     setExtStatus(ctx, "ok");
-    logBrokerActivity({
+    brokerRuntime.logActivity({
       kind: "broker_started",
       level: "actions",
       title: "Broker started",
@@ -2666,17 +2576,19 @@ export default function (pi: ExtensionAPI) {
     threads: () => threads,
     allowedUsers: () => allowedUsers,
     inboxLength: () => inbox.length,
-    activityLogger: () => activityLogger,
+    recentActivityLogEntries: (limit) => brokerRuntime.getRecentActivityEntries(limit),
     settings: () => settings,
     lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
-    isBrokerControlPlaneCanvasEnabled,
-    getConfiguredBrokerControlPlaneCanvasId,
-    getConfiguredBrokerControlPlaneCanvasChannel,
-    lastBrokerControlPlaneCanvasRefreshAt: () => lastBrokerControlPlaneCanvasRefreshAt,
-    lastBrokerControlPlaneCanvasError: () => lastBrokerControlPlaneCanvasError,
+    isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
+    getConfiguredBrokerControlPlaneCanvasId: () =>
+      brokerRuntime.getConfiguredBrokerControlPlaneCanvasId(),
+    getConfiguredBrokerControlPlaneCanvasChannel: () =>
+      brokerRuntime.getConfiguredBrokerControlPlaneCanvasChannel(),
+    lastBrokerControlPlaneCanvasRefreshAt: () => brokerRuntime.getLastControlPlaneCanvasRefreshAt(),
+    lastBrokerControlPlaneCanvasError: () => brokerRuntime.getLastControlPlaneCanvasError(),
     getBrokerControlPlaneHomeTabViewerIds,
-    lastBrokerControlPlaneHomeTabRefreshAt: () => lastBrokerControlPlaneHomeTabRefreshAt,
-    lastBrokerControlPlaneHomeTabError: () => lastBrokerControlPlaneHomeTabError,
+    lastBrokerControlPlaneHomeTabRefreshAt: () => brokerRuntime.getLastHomeTabRefreshAt(),
+    lastBrokerControlPlaneHomeTabError: () => brokerRuntime.getLastHomeTabError(),
     getPinetRegistrationBlockReason,
     connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
     connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
@@ -2829,12 +2741,14 @@ export default function (pi: ExtensionAPI) {
             if (!userNames.has(k)) userNames.set(k, v);
           }
         }
-        brokerControlPlaneCanvasRuntimeId =
-          normalizeOptionalSetting(savedState.brokerControlPlaneCanvasId) ??
-          brokerControlPlaneCanvasRuntimeId;
-        brokerControlPlaneCanvasRuntimeChannelId =
-          normalizeOptionalSetting(savedState.brokerControlPlaneCanvasChannelId) ??
-          brokerControlPlaneCanvasRuntimeChannelId;
+        brokerRuntime.restoreControlPlaneCanvasRuntimeState({
+          canvasId:
+            normalizeOptionalSetting(savedState.brokerControlPlaneCanvasId) ??
+            brokerRuntime.getControlPlaneCanvasRuntimeId(),
+          channelId:
+            normalizeOptionalSetting(savedState.brokerControlPlaneCanvasChannelId) ??
+            brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
+        });
       }
       persistStateNow();
     } catch (err) {
@@ -3061,7 +2975,7 @@ export default function (pi: ExtensionAPI) {
       if (thread) await clearThreadStatus(thread.channelId, ts);
     }
     thinking.clear();
-    ralphLoopState.followUpPending = false;
+    brokerRuntime.clearFollowUpPending();
 
     try {
       await signalAgentFree(ctx);
