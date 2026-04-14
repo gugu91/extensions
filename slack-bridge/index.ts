@@ -46,13 +46,10 @@ import {
   buildAgentPersonalityGuidelines,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
-  DEFAULT_PINET_SKIN_THEME,
   normalizePinetSkinTheme,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
-  resolvePinetMeshAuth,
-  syncBrokerInboxEntries,
   resolveFollowerThreadChannel,
   normalizeThreadConfirmationState,
   normalizeOwnedThreads,
@@ -85,18 +82,11 @@ import {
   normalizeReactionName,
   resolveReactionCommands,
 } from "./reaction-triggers.js";
-import { startBroker, type Broker } from "./broker/index.js";
+import type { Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { sendBrokerMessage } from "./broker/message-send.js";
-import { SlackAdapter } from "./broker/adapters/slack.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
-import { MessageRouter } from "./broker/router.js";
-import {
-  DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS,
-  DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
-  runBrokerMaintenancePass,
-  type BrokerMaintenanceResult,
-} from "./broker/maintenance.js";
+import { type BrokerMaintenanceResult } from "./broker/maintenance.js";
 import { DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS, type BrokerClient } from "./broker/client.js";
 import {
   dispatchBroadcastAgentMessage,
@@ -142,6 +132,7 @@ import {
 } from "./follower-delivery.js";
 import { createFollowerRuntime, type BrokerClientRef } from "./follower-runtime.js";
 import { createSinglePlayerRuntime } from "./single-player-runtime.js";
+import { createBrokerRuntime } from "./broker-runtime.js";
 import {
   extractTaskAssignmentsFromMessage,
   normalizeTrackedTaskAssignments,
@@ -157,10 +148,7 @@ import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import {
   createBrokerDeliveryState,
   getBrokerInboxIds,
-  isBrokerInboxIdTracked,
-  markBrokerInboxIdsHandled,
   queueBrokerInboxIds,
-  resetBrokerDeliveryState,
 } from "./broker-delivery.js";
 import {
   buildBrokerControlPlaneDashboardSnapshot,
@@ -241,7 +229,6 @@ export default function (pi: ExtensionAPI) {
   let agentPersonality: string | null = null;
   const agentAliases = new Set<string>();
   const PINET_SKIN_SETTING_KEY = "pinet.skinTheme";
-  const PINET_BROKER_STABLE_ID_SETTING_KEY = "pinet.brokerStableId";
 
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
@@ -774,14 +761,14 @@ export default function (pi: ExtensionAPI) {
     if (!settings.logChannel) {
       return;
     }
-    if (brokerRole !== "broker" && activeBroker == null) {
+    if (brokerRole !== "broker" && brokerRuntime.getBroker() == null) {
       return;
     }
     activityLogger.log(entry);
   }
 
   function formatTrackedAgent(agentId: string): string {
-    const agent = activeBroker?.db.getAgentById(agentId);
+    const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
     if (!agent) {
       return agentId;
     }
@@ -827,7 +814,7 @@ export default function (pi: ExtensionAPI) {
     if (!threadTs) return null;
 
     const existingThread = threads.get(threadTs);
-    const brokerRef = brokerRole === "broker" ? activeBroker : null;
+    const brokerRef = brokerRole === "broker" ? brokerRuntime.getBroker() : null;
     const followerClient = brokerRole === "follower" ? brokerClient?.client : null;
     const resolveThread = brokerRef
       ? async (nextThreadTs: string) => brokerRef.db.getThread(nextThreadTs)?.channel ?? null
@@ -1442,8 +1429,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function claimOwnedThread(threadTs: string, channelId: string, source = "slack"): void {
-    if (brokerRole === "broker" && activeRouter && activeSelfId) {
-      activeRouter.claimThread(threadTs, activeSelfId, channelId, source);
+    if (brokerRole === "broker") {
+      brokerRuntime.claimThread(threadTs, channelId, source);
     } else if (brokerRole === "follower" && brokerClient?.client) {
       void brokerClient.client.claimThread(threadTs, channelId, source).catch(() => {
         /* broker gone, best effort */
@@ -1495,7 +1482,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Agent-to-agent messaging tools ──────────────────
 
   // These are registered unconditionally but only work when pinet is active.
-  // The variables they reference (pinetEnabled, brokerRole, activeBroker,
+  // The variables they reference (pinetEnabled, brokerRole, brokerRuntime,
   // brokerClient) are declared in the Commands section just below.
 
   // Forward-declared — assigned in the Commands section below.
@@ -1503,140 +1490,128 @@ export default function (pi: ExtensionAPI) {
   let currentRuntimeMode: SlackBridgeRuntimeMode = "off";
   let brokerRole: "broker" | "follower" | null = null;
   let pinetRegistrationBlocked = false;
-  let activeBroker: Broker | null = null;
   let brokerClient: BrokerClientRef | null = null;
   const followerDeliveryState = createFollowerDeliveryState();
-  let activeRouter: MessageRouter | null = null;
-  let activeSelfId: string | null = null;
-  let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let brokerMaintenanceTimer: ReturnType<typeof setInterval> | null = null;
   const ralphLoopState = createRalphLoopState();
-  let brokerScheduledWakeupTimer: ReturnType<typeof setInterval> | null = null;
-  let brokerMaintenanceRunning = false;
-  let brokerScheduledWakeupRunning = false;
-  let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
-  let lastBrokerMaintenanceSignature = "";
   let desiredAgentStatus: "working" | "idle" = "idle";
 
   function getPinetRegistrationBlockReason(): string {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
   }
 
-  function syncBrokerDbInbox(agentId: string, db: BrokerDB, ctx: ExtensionContext): void {
-    // Broker-targeted messages can fall back into pending backlog outside startup
-    // recovery (for example during disconnect/requeue paths). Rebind them before
-    // mirroring the durable inbox into memory so fresh zero-attempt residue does
-    // not wait for a separate maintenance rebound.
-    db.recoverPendingTargetedBacklog(agentId);
+  const brokerThreadOwnerHintCache = new TtlCache<
+    string,
+    { agentOwner?: string; agentName?: string }
+  >({
+    maxSize: 2000,
+    ttlMs: 60 * 1000,
+  });
 
-    const pending = db
-      .getInbox(agentId)
-      .filter((item) => !isBrokerInboxIdTracked(brokerDeliveryState, item.entry.id));
-    if (pending.length === 0) {
-      return;
-    }
+  async function resolveBrokerThreadOwnerHint(
+    channel: string,
+    threadTs: string,
+  ): Promise<{ agentOwner?: string; agentName?: string } | null> {
+    return resolveSlackThreadOwnerHint({
+      slack,
+      token: botToken!,
+      channel,
+      threadTs,
+      cache: brokerThreadOwnerHintCache,
+    });
+  }
 
-    const synced = syncBrokerInboxEntries(
-      pending.map((item) => ({
-        inboxId: item.entry.id,
-        message: {
-          threadId: item.message.threadId,
-          sender:
-            typeof item.message.metadata?.senderAgent === "string"
-              ? item.message.metadata.senderAgent
-              : item.message.sender,
-          body: item.message.body,
-          createdAt: item.message.createdAt,
-          metadata: item.message.metadata,
-        },
-      })),
-    );
-
-    const handledInboxIds = new Set<number>();
-    const commandsToStart: PinetControlCommand[] = [];
-    for (const entry of synced.controlEntries) {
+  const brokerRuntime = createBrokerRuntime({
+    getSettings: () => settings,
+    getBotToken: () => botToken!,
+    getAppToken: () => appToken!,
+    getAllowedUsers: () => allowedUsers,
+    shouldAllowAllWorkspaceUsers: () =>
+      resolveAllowAllWorkspaceUsers(settings, process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS),
+    getBrokerStableId: () => brokerStableId,
+    setBrokerStableId: (stableId) => {
+      brokerStableId = stableId;
+    },
+    getActiveSkinTheme: () => activeSkinTheme,
+    setActiveSkinTheme: (theme) => {
+      activeSkinTheme = theme;
+    },
+    setAgentOwnerToken: (ownerToken) => {
+      agentOwnerToken = ownerToken;
+    },
+    getAgentMetadata,
+    applyLocalAgentIdentity,
+    buildSkinMetadata: (metadata, personality) =>
+      buildSkinMetadata(metadata ?? undefined, personality),
+    getMeshRoleFromMetadata: (metadata, fallbackRole) =>
+      getMeshRoleFromMetadata(metadata ?? undefined, fallbackRole),
+    handleInboundMessage: async ({ message, broker, router, selfId, ctx }) => {
       try {
-        const queued = requestRemoteControl(entry.command, ctx);
-        if (queued.ackDisposition === "immediate") {
-          handledInboxIds.add(entry.inboxId);
-        } else {
-          deferBrokerControlAck(queued.scheduledCommand, entry.inboxId);
+        const ownerHint =
+          message.source === "slack" && message.threadId && message.channel
+            ? await resolveBrokerThreadOwnerHint(message.channel, message.threadId)
+            : null;
+        const routedMessage =
+          ownerHint && (ownerHint.agentOwner || ownerHint.agentName)
+            ? {
+                ...message,
+                metadata: {
+                  ...(message.metadata ?? {}),
+                  ...(ownerHint.agentOwner ? { threadOwnerAgentOwner: ownerHint.agentOwner } : {}),
+                  ...(ownerHint.agentName ? { threadOwnerAgentName: ownerHint.agentName } : {}),
+                },
+              }
+            : message;
+
+        trackBrokerInboundThread(threads, routedMessage);
+
+        const decision = router.route(routedMessage);
+
+        if (routedMessage.threadId && routedMessage.channel) {
+          broker.db.updateThread(routedMessage.threadId, {
+            source: routedMessage.source,
+            channel: routedMessage.channel,
+          });
         }
-        if (queued.shouldStartNow) {
-          commandsToStart.push(entry.command);
+
+        if (decision.action === "deliver" && decision.agentId !== selfId) {
+          broker.db.queueMessage(decision.agentId, routedMessage);
+          return;
+        }
+
+        if (decision.action === "deliver" || decision.action === "unrouted") {
+          inbox.push({
+            channel: routedMessage.channel,
+            threadTs: routedMessage.threadId,
+            userId: routedMessage.userId,
+            text: routedMessage.text,
+            timestamp: routedMessage.timestamp,
+            metadata: routedMessage.metadata ?? null,
+          });
+          updateBadge();
+          maybeDrainInboxIfIdle(ctx);
         }
       } catch (err) {
-        ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
+        console.error(`[slack-bridge] broker inbound routing failed: ${msg(err)}`);
       }
-    }
-
-    for (const entry of synced.skinEntries) {
-      activeSkinTheme = entry.update.theme;
-      applyLocalAgentIdentity(entry.update.name, entry.update.emoji, entry.update.personality);
-      handledInboxIds.add(entry.inboxId);
-    }
-
-    if (handledInboxIds.size > 0) {
-      db.markDelivered([...handledInboxIds], agentId);
-    }
-
-    for (const command of commandsToStart) {
-      runRemoteControl(command, ctx);
-    }
-
-    if (synced.inboxMessages.length === 0) {
-      return;
-    }
-
-    queueBrokerInboxIds(
-      brokerDeliveryState,
-      synced.inboxMessages.flatMap((message) =>
-        message.brokerInboxId != null ? [message.brokerInboxId] : [],
-      ),
-    );
-
-    inbox.push(...synced.inboxMessages);
-
-    updateBadge();
-    maybeDrainInboxIfIdle(ctx);
-  }
-
-  function startBrokerHeartbeat(): void {
-    stopBrokerHeartbeat();
-    if (!activeBroker || !activeSelfId) return;
-    const broker = activeBroker;
-    const selfId = activeSelfId;
-    brokerHeartbeatTimer = setInterval(() => {
-      try {
-        broker.db.heartbeatAgent(selfId);
-      } catch {
-        /* best effort */
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-    brokerHeartbeatTimer.unref?.();
-  }
-
-  function stopBrokerHeartbeat(): void {
-    if (!brokerHeartbeatTimer) return;
-    clearInterval(brokerHeartbeatTimer);
-    brokerHeartbeatTimer = null;
-  }
-
-  function runBrokerMaintenance(ctx: ExtensionContext): void {
-    if (!activeBroker || !activeSelfId || brokerMaintenanceRunning) return;
-
-    brokerMaintenanceRunning = true;
-    try {
-      const result = runBrokerMaintenancePass(activeBroker.db, {
-        brokerAgentId: activeSelfId,
-        staleAfterMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
-        busyAssignmentAgeMs: DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
-      });
-      syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
-      lastBrokerMaintenance = result;
-
-      const signature = result.anomalies.join("|");
-      const previousSignature = lastBrokerMaintenanceSignature;
+    },
+    onAppHomeOpened: async (userId, ctx) => {
+      await publishCurrentPinetHomeTabSafely(userId, ctx, new Date().toISOString());
+    },
+    pushInboxMessages: (messages) => {
+      inbox.push(...messages);
+    },
+    updateBadge,
+    maybeDrainInboxIfIdle,
+    requestRemoteControl,
+    deferControlAck: deferBrokerControlAck,
+    runRemoteControl,
+    applySkinUpdate: (update) => {
+      activeSkinTheme = update.theme;
+      applyLocalAgentIdentity(update.name, update.emoji, update.personality);
+    },
+    formatError: msg,
+    deliveryState: brokerDeliveryState,
+    onMaintenanceResult: (ctx, { result, previousSignature, signature }) => {
       if (signature && signature !== previousSignature) {
         ctx.ui.notify(`Pinet broker: ${result.anomalies.join("; ")}`, "warning");
       } else if (!signature && previousSignature) {
@@ -1689,88 +1664,68 @@ export default function (pi: ExtensionAPI) {
           tone: signature ? "warning" : "success",
         });
       }
-
-      lastBrokerMaintenanceSignature = signature;
-    } catch (err) {
-      ctx.ui.notify(`Pinet maintenance failed: ${msg(err)}`, "error");
+    },
+    onMaintenanceError: (ctx, error) => {
+      ctx.ui.notify(`Pinet maintenance failed: ${msg(error)}`, "error");
       logBrokerActivity({
         kind: "broker_maintenance_error",
         level: "errors",
         title: "Broker maintenance failed",
-        summary: msg(err),
+        summary: msg(error),
         tone: "error",
       });
-    } finally {
-      brokerMaintenanceRunning = false;
-    }
-  }
-
-  function startBrokerMaintenance(ctx: ExtensionContext): void {
-    stopBrokerMaintenance();
-    brokerMaintenanceTimer = setInterval(() => {
-      runBrokerMaintenance(ctx);
-    }, DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS);
-    brokerMaintenanceTimer.unref?.();
-    runBrokerMaintenance(ctx);
-  }
-
-  function stopBrokerMaintenance(): void {
-    if (!brokerMaintenanceTimer) return;
-    clearInterval(brokerMaintenanceTimer);
-    brokerMaintenanceTimer = null;
-  }
-
-  function runBrokerScheduledWakeups(ctx: ExtensionContext): void {
-    if (!activeBroker || brokerScheduledWakeupRunning) return;
-
-    brokerScheduledWakeupRunning = true;
-    try {
-      const deliveries = (activeBroker.db as BrokerDB).deliverDueScheduledWakeups();
-      if (deliveries.length > 0 && activeSelfId) {
-        syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
-      }
-    } catch (err) {
-      ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(err)}`, "error");
+    },
+    onScheduledWakeupError: (ctx, error) => {
+      ctx.ui.notify(`Pinet scheduled wake-ups failed: ${msg(error)}`, "error");
       logBrokerActivity({
         kind: "scheduled_wakeup_error",
         level: "errors",
         title: "Scheduled wake-up delivery failed",
-        summary: msg(err),
+        summary: msg(error),
         tone: "error",
       });
-    } finally {
-      brokerScheduledWakeupRunning = false;
-    }
+    },
+    onAgentStatusChange: (_ctx, changedAgentId, status) => {
+      logBrokerActivity({
+        kind: "agent_status",
+        level: "verbose",
+        title: status === "idle" ? "Worker available" : "Worker busy",
+        summary: `${formatTrackedAgent(changedAgentId)} marked itself ${status}.`,
+        fields: [{ label: "Agent", value: formatTrackedAgent(changedAgentId) }],
+        tone: status === "idle" ? "success" : "info",
+      });
+    },
+  });
+
+  function getActiveBroker(): Broker | null {
+    return brokerRuntime.getBroker();
   }
 
-  function startBrokerScheduledWakeups(ctx: ExtensionContext): void {
-    stopBrokerScheduledWakeups();
-    brokerScheduledWakeupTimer = setInterval(() => {
-      runBrokerScheduledWakeups(ctx);
-    }, 1000);
-    brokerScheduledWakeupTimer.unref?.();
-    runBrokerScheduledWakeups(ctx);
+  function getActiveBrokerDb(): BrokerDB | null {
+    return (getActiveBroker()?.db as BrokerDB | undefined) ?? null;
   }
 
-  function stopBrokerScheduledWakeups(): void {
-    brokerScheduledWakeupRunning = false;
-    if (!brokerScheduledWakeupTimer) return;
-    clearInterval(brokerScheduledWakeupTimer);
-    brokerScheduledWakeupTimer = null;
+  function getActiveBrokerSelfId(): string | null {
+    return brokerRuntime.getSelfId();
+  }
+
+  function runBrokerMaintenance(ctx: ExtensionContext): void {
+    brokerRuntime.runMaintenance(ctx);
   }
 
   function sendBrokerMaintenanceMessage(targetAgentId: string, body: string): void {
-    if (!activeBroker || !activeSelfId) return;
-    const db = activeBroker.db;
+    const db = getActiveBrokerDb();
+    const selfId = getActiveBrokerSelfId();
+    if (!db || !selfId) return;
     const target = db.getAgentById(targetAgentId);
     if (!target) return;
 
-    const threadId = `a2a:${activeSelfId}:${target.id}`;
+    const threadId = `a2a:${selfId}:${target.id}`;
     if (!db.getThread(threadId)) {
-      db.createThread(threadId, "agent", "", activeSelfId);
+      db.createThread(threadId, "agent", "", selfId);
     }
 
-    db.insertMessage(threadId, "agent", "outbound", activeSelfId, body, [target.id], {
+    db.insertMessage(threadId, "agent", "outbound", selfId, body, [target.id], {
       kind: "ralph_loop_nudge",
       targetAgentId,
     });
@@ -1798,11 +1753,11 @@ export default function (pi: ExtensionAPI) {
   async function buildCurrentBrokerControlPlaneDashboardSnapshot(
     cycleStartedAt: string = new Date().toISOString(),
   ): Promise<BrokerControlPlaneDashboardSnapshot | null> {
-    if (!activeBroker) {
+    const db = getActiveBrokerDb();
+    if (!db) {
       return null;
     }
 
-    const db = activeBroker.db;
     const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
     const nowMs = Date.now();
     const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
@@ -1823,9 +1778,9 @@ export default function (pi: ExtensionAPI) {
       stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
       pendingBacklogCount,
       currentBranch,
-      brokerHeartbeatActive: brokerHeartbeatTimer != null,
-      brokerMaintenanceActive: brokerMaintenanceTimer != null,
-      brokerAgentId: activeSelfId ?? undefined,
+      brokerHeartbeatActive: brokerRuntime.heartbeatTimerActive(),
+      brokerMaintenanceActive: brokerRuntime.maintenanceTimerActive(),
+      brokerAgentId: getActiveBrokerSelfId() ?? undefined,
     };
     const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
 
@@ -1871,7 +1826,7 @@ export default function (pi: ExtensionAPI) {
       workloads,
       evaluation,
       evaluationOptions,
-      maintenance: lastBrokerMaintenance,
+      maintenance: brokerRuntime.getLastMaintenance(),
       assignments: projectedAssignments,
       recentCycles: recentRalphCycles,
       cycleStartedAt,
@@ -1935,7 +1890,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (activeBroker && brokerRole === "broker") {
+    if (brokerRuntime.isConnected() && brokerRole === "broker") {
       brokerControlPlaneHomeTabViewers.set(userId, { openedAt });
       const snapshot =
         (await buildCurrentBrokerControlPlaneDashboardSnapshot(openedAt)) ??
@@ -1956,7 +1911,7 @@ export default function (pi: ExtensionAPI) {
         agentEmoji,
         connected:
           currentRuntimeMode === "broker"
-            ? activeBroker != null
+            ? brokerRuntime.isConnected()
             : currentRuntimeMode === "follower"
               ? brokerClient != null
               : currentRuntimeMode === "single"
@@ -2084,10 +2039,10 @@ export default function (pi: ExtensionAPI) {
 
   function getRalphLoopDeps(): RalphLoopDeps {
     return {
-      getBrokerDb: () => (activeBroker?.db as BrokerDB) ?? null,
-      getBrokerAgentId: () => activeSelfId,
-      heartbeatTimerActive: () => brokerHeartbeatTimer != null,
-      maintenanceTimerActive: () => brokerMaintenanceTimer != null,
+      getBrokerDb: () => getActiveBrokerDb(),
+      getBrokerAgentId: () => getActiveBrokerSelfId(),
+      heartbeatTimerActive: () => brokerRuntime.heartbeatTimerActive(),
+      maintenanceTimerActive: () => brokerRuntime.maintenanceTimerActive(),
       runMaintenance: (c) => runBrokerMaintenance(c),
       sendMaintenanceMessage: (id, body) => sendBrokerMaintenanceMessage(id, body),
       trySendFollowUp: (body, onDelivered) => trySendBrokerFollowUp(body, onDelivered),
@@ -2105,7 +2060,7 @@ export default function (pi: ExtensionAPI) {
           input as Parameters<typeof refreshBrokerControlPlaneCanvasDashboard>[1],
         ),
       refreshHomeTabs: (c, snapshot, at) => refreshBrokerControlPlaneHomeTabs(c, snapshot, at),
-      getLastMaintenance: () => lastBrokerMaintenance,
+      getLastMaintenance: () => brokerRuntime.getLastMaintenance(),
       buildControlPlaneDashboardSnapshot: (input) =>
         buildBrokerControlPlaneDashboardSnapshot(
           input as unknown as Parameters<typeof buildBrokerControlPlaneDashboardSnapshot>[0],
@@ -2167,10 +2122,10 @@ export default function (pi: ExtensionAPI) {
     const finalBody = outgoing.body;
     const finalMetadata = outgoing.metadata;
 
-    if (brokerRole === "broker" && activeBroker) {
-      const db = activeBroker.db;
-      const selfId = activeSelfId;
-      if (!selfId) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db || !selfId) {
         throw new Error("Broker agent identity is unavailable.");
       }
 
@@ -2227,7 +2182,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   function applyMeshSkin(themeInput: string): { theme: string; updatedAgents: string[] } {
-    if (brokerRole !== "broker" || !activeBroker) {
+    const db = getActiveBrokerDb();
+    const selfId = getActiveBrokerSelfId();
+    if (brokerRole !== "broker" || !db) {
       throw new Error("/pinet-skin can only run on the active broker.");
     }
 
@@ -2236,16 +2193,15 @@ export default function (pi: ExtensionAPI) {
       throw new Error("Usage: /pinet-skin <theme>");
     }
 
-    const selfId = activeSelfId;
     if (!selfId) {
       throw new Error("Broker agent identity is unavailable.");
     }
 
     activeSkinTheme = theme;
-    activeBroker.db.setSetting(PINET_SKIN_SETTING_KEY, theme);
+    db.setSetting(PINET_SKIN_SETTING_KEY, theme);
 
     const updatedAgents: string[] = [];
-    for (const agent of activeBroker.db.getAgents()) {
+    for (const agent of db.getAgents()) {
       const role =
         agent.id === selfId
           ? "broker"
@@ -2255,7 +2211,7 @@ export default function (pi: ExtensionAPI) {
         role,
         seed: agent.stableId ?? agent.id,
       });
-      const updated = activeBroker.db.updateAgentIdentity(agent.id, {
+      const updated = db.updateAgentIdentity(agent.id, {
         name: assignment.name,
         emoji: assignment.emoji,
         metadata: buildSkinMetadata(agent.metadata ?? undefined, assignment.personality),
@@ -2265,7 +2221,7 @@ export default function (pi: ExtensionAPI) {
       if (agent.id === selfId) {
         applyLocalAgentIdentity(updated.name, updated.emoji, assignment.personality);
       } else {
-        dispatchDirectAgentMessage(activeBroker.db, {
+        dispatchDirectAgentMessage(db, {
           senderAgentId: selfId,
           senderAgentName: agentName,
           target: updated.id,
@@ -2318,9 +2274,8 @@ export default function (pi: ExtensionAPI) {
 
   function flushDeferredRemoteControlAcks(command: PinetControlCommand): void {
     const brokerIds = [...pendingBrokerControlInboxIds[command]];
-    if (brokerIds.length > 0 && activeBroker && activeSelfId) {
-      activeBroker.db.markDelivered(brokerIds, activeSelfId);
-      markBrokerInboxIdsHandled(brokerDeliveryState, brokerIds);
+    if (brokerIds.length > 0 && brokerRuntime.isConnected()) {
+      brokerRuntime.markDelivered(brokerIds);
       pendingBrokerControlInboxIds[command].clear();
     }
 
@@ -2378,26 +2333,9 @@ export default function (pi: ExtensionAPI) {
     options: { releaseIdentity: boolean },
   ): Promise<void> {
     flushPersist();
-    stopBrokerHeartbeat();
-    stopBrokerMaintenance();
     stopBrokerRalphLoop();
-    stopBrokerScheduledWakeups();
+    await brokerRuntime.disconnect({ releaseIdentity: options.releaseIdentity });
 
-    if (activeBroker) {
-      try {
-        if (options.releaseIdentity && activeSelfId) {
-          activeBroker.db.unregisterAgent(activeSelfId);
-        }
-        await activeBroker.stop();
-      } catch {
-        /* best effort */
-      }
-      activeBroker = null;
-    }
-    activeRouter = null;
-    activeSelfId = null;
-    lastBrokerMaintenance = null;
-    lastBrokerMaintenanceSignature = "";
     lastBrokerControlPlaneCanvasRefreshAt = null;
     lastBrokerControlPlaneCanvasError = null;
     lastBrokerControlPlaneHomeTabSnapshot = null;
@@ -2405,7 +2343,6 @@ export default function (pi: ExtensionAPI) {
     lastBrokerControlPlaneHomeTabError = null;
     brokerControlPlaneHomeTabViewers.clear();
     resetRalphLoopState(ralphLoopState);
-    resetBrokerDeliveryState(brokerDeliveryState);
 
     if (brokerClient) {
       if (options.releaseIdentity) {
@@ -2549,14 +2486,15 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params) {
       requireToolPolicy("pinet_message", undefined, `to=${params.to} | message=${params.message}`);
 
-      if (brokerRole === "broker" && activeBroker && isBroadcastChannelTarget(params.to)) {
-        const selfId = activeSelfId;
-        if (!selfId) {
+      if (brokerRole === "broker" && isBroadcastChannelTarget(params.to)) {
+        const db = getActiveBrokerDb();
+        const selfId = getActiveBrokerSelfId();
+        if (!db || !selfId) {
           throw new Error("Broker agent identity is unavailable.");
         }
 
         const outgoing = prepareOutgoingPinetAgentMessage(params.message);
-        const result = dispatchBroadcastAgentMessage(activeBroker.db, {
+        const result = dispatchBroadcastAgentMessage(db, {
           senderAgentId: selfId,
           senderAgentName: agentName,
           channel: params.to,
@@ -2663,8 +2601,13 @@ export default function (pi: ExtensionAPI) {
 
       const fireAt = resolveScheduledWakeupFireAt({ delay: params.delay, at: params.at });
 
-      if (brokerRole === "broker" && activeBroker && activeSelfId) {
-        const wakeup = (activeBroker.db as BrokerDB).scheduleWakeup(activeSelfId, message, fireAt);
+      if (brokerRole === "broker") {
+        const db = getActiveBrokerDb();
+        const selfId = getActiveBrokerSelfId();
+        if (!db || !selfId) {
+          throw new Error("Broker agent identity is unavailable.");
+        }
+        const wakeup = db.scheduleWakeup(selfId, message, fireAt);
         return {
           content: [
             {
@@ -2755,8 +2698,12 @@ export default function (pi: ExtensionAPI) {
         disconnectedAt?: string | null;
         resumableUntil?: string | null;
       }>;
-      if (brokerRole === "broker" && activeBroker) {
-        rawAgents = filterAgentsForMeshVisibility(activeBroker.db.getAllAgents(), {
+      if (brokerRole === "broker") {
+        const db = getActiveBrokerDb();
+        if (!db) {
+          throw new Error("Broker agent identity is unavailable.");
+        }
+        rawAgents = filterAgentsForMeshVisibility(db.getAllAgents(), {
           now: nowMs,
           includeGhosts,
           recentDisconnectWindowMs: recentGhostWindowMs,
@@ -2874,8 +2821,13 @@ export default function (pi: ExtensionAPI) {
       let adapter = "imessage";
       let messageId: number | null = null;
 
-      if (brokerRole === "broker" && activeBroker && activeSelfId) {
-        if (!activeBroker.adapters.some((candidate) => candidate.name === "imessage")) {
+      if (brokerRole === "broker") {
+        const broker = getActiveBroker();
+        const selfId = getActiveBrokerSelfId();
+        if (!broker || !selfId) {
+          throw new Error("Broker agent identity is unavailable.");
+        }
+        if (!broker.adapters.some((candidate) => candidate.name === "imessage")) {
           throw new Error(
             "iMessage adapter is not enabled or not ready on the active broker. Set slack-bridge.imessage.enabled: true and restart /pinet-start.",
           );
@@ -2883,13 +2835,13 @@ export default function (pi: ExtensionAPI) {
 
         const result = await sendBrokerMessage(
           {
-            db: activeBroker.db,
-            adapters: activeBroker.adapters,
+            db: broker.db,
+            adapters: broker.adapters,
           },
           {
             threadId,
             body: text,
-            senderAgentId: activeSelfId,
+            senderAgentId: selfId,
             source: "imessage",
             channel: recipient,
             agentName,
@@ -2942,319 +2894,106 @@ export default function (pi: ExtensionAPI) {
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
     refreshSettings();
     maybeWarnSlackUserAccess(ctx);
-    const meshAuth = resolvePinetMeshAuth(settings);
-    const broker = await startBroker({
-      ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
-      ...(meshAuth.meshSecretPath ? { meshSecretPath: meshAuth.meshSecretPath } : {}),
-    });
-    const adapter = new SlackAdapter({
-      botToken: botToken!,
-      appToken: appToken!,
-      allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
-      allowAllWorkspaceUsers: resolveAllowAllWorkspaceUsers(
-        settings,
-        process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
-      ),
-      suggestedPrompts: settings.suggestedPrompts,
-      reactionCommands: settings.reactionCommands,
-      isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
-      rememberKnownThread: (threadTs: string, channelId: string) => {
-        broker.db.updateThread(threadTs, { source: "slack", channel: channelId });
-      },
-      onAppHomeOpened: async ({ userId }) => {
-        await publishCurrentPinetHomeTabSafely(userId, ctx, new Date().toISOString());
-      },
-    });
-    let selfId: string | null = null;
 
-    try {
-      broker.db.setAllowedUsers(allowedUsers);
-      const router = new MessageRouter(broker.db);
-      activeSkinTheme =
-        broker.db.getSetting<string>(PINET_SKIN_SETTING_KEY) ?? DEFAULT_PINET_SKIN_THEME;
-      broker.db.setSetting(PINET_SKIN_SETTING_KEY, activeSkinTheme);
+    const {
+      botUserId: brokerBotUserId,
+      recoveredBrokerMessages,
+      recoveredTargetedBacklogCount,
+      releasedBrokerClaims,
+    } = await brokerRuntime.connect(ctx);
+    const broker = brokerRuntime.getBroker();
+    if (!broker) {
+      throw new Error("Broker runtime failed to initialize.");
+    }
+    botUserId = brokerBotUserId;
 
-      const persistedBrokerStableId =
-        normalizeOptionalSetting(
-          broker.db.getSetting<string>(PINET_BROKER_STABLE_ID_SETTING_KEY),
-        ) ??
-        broker.db
-          .getAllAgents()
-          .flatMap((agent) => {
-            const stableId = normalizeOptionalSetting(agent.stableId);
-            if (!stableId) {
-              return [];
-            }
-            if (getMeshRoleFromMetadata(agent.metadata ?? undefined, "worker") !== "broker") {
-              return [];
-            }
-            const lastSeenMs = Date.parse(agent.lastSeen);
-            const connectedAtMs = Date.parse(agent.connectedAt);
-            const recencyMs = Number.isNaN(lastSeenMs)
-              ? Number.isNaN(connectedAtMs)
-                ? 0
-                : connectedAtMs
-              : lastSeenMs;
-            return [{ stableId, recencyMs }];
-          })
-          .sort((left, right) => right.recencyMs - left.recencyMs)[0]?.stableId ??
-        null;
-      brokerStableId = persistedBrokerStableId ?? brokerStableId;
-      broker.db.setSetting(PINET_BROKER_STABLE_ID_SETTING_KEY, brokerStableId);
-      agentOwnerToken = buildPinetOwnerToken(brokerStableId);
-      broker.server.setAgentRegistrationResolver((registration) => {
-        const theme = activeSkinTheme ?? DEFAULT_PINET_SKIN_THEME;
-        const role = getMeshRoleFromMetadata(registration.metadata, "worker");
-        const assignment = buildPinetSkinAssignment({
-          theme,
-          role,
-          seed: registration.stableId ?? registration.agentId,
+    if (settings.imessage?.enabled) {
+      const environment = detectIMessageMvpEnvironment();
+      const readinessSummary = formatIMessageMvpReadiness(environment).join(" | ");
+
+      if (!environment.canAttemptSend) {
+        ctx.ui.notify(`iMessage adapter unavailable — ${readinessSummary}`, "warning");
+        logBrokerActivity({
+          kind: "transport_readiness",
+          level: "actions",
+          title: "iMessage adapter unavailable",
+          summary: readinessSummary,
+          tone: "warning",
         });
-        return {
-          name: assignment.name,
-          emoji: assignment.emoji,
-          metadata: buildSkinMetadata(registration.metadata, assignment.personality),
-        };
-      });
+      } else {
+        try {
+          const imessageAdapter = createIMessageAdapter();
+          await imessageAdapter.connect();
+          broker.addAdapter(imessageAdapter);
 
-      const selfAssignment = buildPinetSkinAssignment({
-        theme: activeSkinTheme,
-        role: "broker",
-        seed: brokerStableId,
-      });
-      const selfAgent = broker.db.registerAgent(
-        ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
-        selfAssignment.name,
-        selfAssignment.emoji,
-        process.pid,
-        buildSkinMetadata(await getAgentMetadata("broker"), selfAssignment.personality),
-        brokerStableId,
-      );
-      selfId = selfAgent.id;
-      applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
-
-      const brokerThreadOwnerHintCache = new TtlCache<
-        string,
-        { agentOwner?: string; agentName?: string }
-      >({
-        maxSize: 2000,
-        ttlMs: 60 * 1000,
-      });
-
-      async function resolveBrokerThreadOwnerHint(
-        channel: string,
-        threadTs: string,
-      ): Promise<{ agentOwner?: string; agentName?: string } | null> {
-        return resolveSlackThreadOwnerHint({
-          slack,
-          token: botToken!,
-          channel,
-          threadTs,
-          cache: brokerThreadOwnerHintCache,
-        });
-      }
-
-      adapter.onInbound((inMsg) => {
-        void (async () => {
-          try {
-            const ownerHint =
-              inMsg.source === "slack" && inMsg.threadId && inMsg.channel
-                ? await resolveBrokerThreadOwnerHint(inMsg.channel, inMsg.threadId)
-                : null;
-            const routedMessage =
-              ownerHint && (ownerHint.agentOwner || ownerHint.agentName)
-                ? {
-                    ...inMsg,
-                    metadata: {
-                      ...(inMsg.metadata ?? {}),
-                      ...(ownerHint.agentOwner
-                        ? { threadOwnerAgentOwner: ownerHint.agentOwner }
-                        : {}),
-                      ...(ownerHint.agentName ? { threadOwnerAgentName: ownerHint.agentName } : {}),
-                    },
-                  }
-                : inMsg;
-
-            // Track thread metadata locally as a cache without claiming broker ownership.
-            trackBrokerInboundThread(threads, routedMessage);
-
-            const decision = router.route(routedMessage);
-
-            if (routedMessage.threadId && routedMessage.channel) {
-              broker.db.updateThread(routedMessage.threadId, {
-                source: routedMessage.source,
-                channel: routedMessage.channel,
-              });
-            }
-
-            if (decision.action === "deliver" && decision.agentId !== selfId) {
-              broker.db.queueMessage(decision.agentId, routedMessage);
-              return;
-            }
-
-            if (decision.action === "deliver" || decision.action === "unrouted") {
-              // Message routed to broker itself (or unrouted) — deliver to broker's own inbox.
-              inbox.push({
-                channel: routedMessage.channel,
-                threadTs: routedMessage.threadId,
-                userId: routedMessage.userId,
-                text: routedMessage.text,
-                timestamp: routedMessage.timestamp,
-                metadata: routedMessage.metadata ?? null,
-              });
-              updateBadge();
-              maybeDrainInboxIfIdle(extCtx ?? undefined);
-            }
-          } catch (err) {
-            console.error(`[slack-bridge] broker inbound routing failed: ${msg(err)}`);
-          }
-        })();
-      });
-
-      broker.addAdapter(adapter);
-      await adapter.connect();
-      botUserId = adapter.getBotUserId();
-
-      if (settings.imessage?.enabled) {
-        const environment = detectIMessageMvpEnvironment();
-        const readinessSummary = formatIMessageMvpReadiness(environment).join(" | ");
-
-        if (!environment.canAttemptSend) {
-          ctx.ui.notify(`iMessage adapter unavailable — ${readinessSummary}`, "warning");
-          logBrokerActivity({
-            kind: "transport_readiness",
-            level: "actions",
-            title: "iMessage adapter unavailable",
-            summary: readinessSummary,
-            tone: "warning",
-          });
-        } else {
-          try {
-            const imessageAdapter = createIMessageAdapter();
-            await imessageAdapter.connect();
-            broker.addAdapter(imessageAdapter);
-
-            if (environment.blockers.length > 0) {
-              ctx.ui.notify(`iMessage send-first mode enabled — ${readinessSummary}`, "warning");
-              logBrokerActivity({
-                kind: "transport_readiness",
-                level: "actions",
-                title: "iMessage send-first mode enabled",
-                summary: readinessSummary,
-                tone: "warning",
-              });
-            }
-          } catch (err) {
-            ctx.ui.notify(`iMessage adapter failed to start: ${msg(err)}`, "warning");
+          if (environment.blockers.length > 0) {
+            ctx.ui.notify(`iMessage send-first mode enabled — ${readinessSummary}`, "warning");
             logBrokerActivity({
               kind: "transport_readiness",
-              level: "errors",
-              title: "iMessage adapter failed to start",
-              summary: msg(err),
-              tone: "error",
+              level: "actions",
+              title: "iMessage send-first mode enabled",
+              summary: readinessSummary,
+              tone: "warning",
             });
           }
+        } catch (err) {
+          ctx.ui.notify(`iMessage adapter failed to start: ${msg(err)}`, "warning");
+          logBrokerActivity({
+            kind: "transport_readiness",
+            level: "errors",
+            title: "iMessage adapter failed to start",
+            summary: msg(err),
+            tone: "error",
+          });
         }
       }
-
-      broker.server.setOutboundMessageAdapters?.(broker.adapters);
-
-      activeBroker = broker;
-      activeRouter = router;
-      activeSelfId = selfId;
-      brokerRole = "broker";
-      pinetEnabled = true;
-      desiredAgentStatus = "idle";
-      currentRuntimeMode = "broker";
-
-      resetBrokerDeliveryState(brokerDeliveryState);
-      const releasedBrokerClaims = broker.db.releaseThreadClaims(selfId);
-      const recoveredTargetedBacklogCount = broker.db.recoverPendingTargetedBacklog(selfId);
-      const recoveredBrokerMessages = broker.db.getPendingInboxCount(selfId);
-      if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
-        const recoveredTargetedDetail =
-          recoveredTargetedBacklogCount > 0
-            ? ` including ${recoveredTargetedBacklogCount} recovered targeted backlog item${recoveredTargetedBacklogCount === 1 ? "" : "s"}`
-            : "";
-        ctx.ui.notify(
-          `Pinet broker recovered ${recoveredBrokerMessages} pending message${recoveredBrokerMessages === 1 ? "" : "s"}${recoveredTargetedDetail} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
-          "info",
-        );
-      }
-      syncBrokerDbInbox(selfId, broker.db, ctx);
-
-      // When a worker sends a pinet_message targeting the broker, the socket server writes to the
-      // DB inbox but the broker only reads its in-memory inbox. Sync the durable inbox into memory
-      // without acknowledging the row until the broker has actually consumed it.
-      broker.server.onAgentMessage((targetAgentId) => {
-        if (targetAgentId !== selfId) return;
-        syncBrokerDbInbox(selfId, broker.db, ctx);
-      });
-      broker.server.onAgentStatusChange((changedAgentId, status) => {
-        if (status === "idle") {
-          runBrokerMaintenance(ctx);
-        }
-
-        logBrokerActivity({
-          kind: "agent_status",
-          level: "verbose",
-          title: status === "idle" ? "Worker available" : "Worker busy",
-          summary: `${formatTrackedAgent(changedAgentId)} marked itself ${status}.`,
-          fields: [{ label: "Agent", value: formatTrackedAgent(changedAgentId) }],
-          tone: status === "idle" ? "success" : "info",
-        });
-      });
-
-      startBrokerHeartbeat();
-      startBrokerMaintenance(ctx);
-      startBrokerRalphLoop(ctx);
-      startBrokerScheduledWakeups(ctx);
-      setExtStatus(ctx, "ok");
-      logBrokerActivity({
-        kind: "broker_started",
-        level: "actions",
-        title: "Broker started",
-        summary: `${agentEmoji} ${agentName} is online and coordinating the mesh.`,
-        details:
-          recoveredBrokerMessages > 0 || releasedBrokerClaims > 0
-            ? [
-                `Recovered ${recoveredBrokerMessages} pending broker inbox item${recoveredBrokerMessages === 1 ? "" : "s"}.`,
-                ...(recoveredTargetedBacklogCount > 0
-                  ? [
-                      `Recovered ${recoveredTargetedBacklogCount} targeted backlog item${recoveredTargetedBacklogCount === 1 ? "" : "s"} during startup.`,
-                    ]
-                  : []),
-                `Released ${releasedBrokerClaims} stale broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}.`,
-              ]
-            : undefined,
-        fields: [
-          { label: "Bot", value: botUserId ?? "unknown" },
-          { label: "Log channel", value: settings.logChannel ?? "disabled" },
-          { label: "Log level", value: settings.logLevel ?? "actions" },
-        ],
-        tone: "success",
-      });
-      ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
-    } catch (err) {
-      try {
-        await adapter.disconnect();
-      } catch {
-        /* best effort */
-      }
-      try {
-        if (selfId) {
-          broker.db.unregisterAgent(selfId);
-        }
-      } catch {
-        /* best effort */
-      }
-      try {
-        await broker.stop();
-      } catch {
-        /* best effort */
-      }
-      throw err;
     }
+
+    broker.server.setOutboundMessageAdapters?.(broker.adapters);
+
+    brokerRole = "broker";
+    pinetEnabled = true;
+    desiredAgentStatus = "idle";
+    currentRuntimeMode = "broker";
+
+    if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
+      const recoveredTargetedDetail =
+        recoveredTargetedBacklogCount > 0
+          ? ` including ${recoveredTargetedBacklogCount} recovered targeted backlog item${recoveredTargetedBacklogCount === 1 ? "" : "s"}`
+          : "";
+      ctx.ui.notify(
+        `Pinet broker recovered ${recoveredBrokerMessages} pending message${recoveredBrokerMessages === 1 ? "" : "s"}${recoveredTargetedDetail} and released ${releasedBrokerClaims} broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}`,
+        "info",
+      );
+    }
+
+    startBrokerRalphLoop(ctx);
+    setExtStatus(ctx, "ok");
+    logBrokerActivity({
+      kind: "broker_started",
+      level: "actions",
+      title: "Broker started",
+      summary: `${agentEmoji} ${agentName} is online and coordinating the mesh.`,
+      details:
+        recoveredBrokerMessages > 0 || releasedBrokerClaims > 0
+          ? [
+              `Recovered ${recoveredBrokerMessages} pending broker inbox item${recoveredBrokerMessages === 1 ? "" : "s"}.`,
+              ...(recoveredTargetedBacklogCount > 0
+                ? [
+                    `Recovered ${recoveredTargetedBacklogCount} targeted backlog item${recoveredTargetedBacklogCount === 1 ? "" : "s"} during startup.`,
+                  ]
+                : []),
+              `Released ${releasedBrokerClaims} stale broker-owned thread claim${releasedBrokerClaims === 1 ? "" : "s"}.`,
+            ]
+          : undefined,
+      fields: [
+        { label: "Bot", value: botUserId ?? "unknown" },
+        { label: "Log channel", value: settings.logChannel ?? "disabled" },
+        { label: "Log level", value: settings.logLevel ?? "actions" },
+      ],
+      tone: "success",
+    });
+    ctx.ui.notify(`${agentEmoji} ${agentName} — broker started (${botUserId})`, "info");
   }
 
   const followerRuntime = createFollowerRuntime({
@@ -3312,7 +3051,7 @@ export default function (pi: ExtensionAPI) {
     runtimeMode: () => currentRuntimeMode,
     runtimeConnected: () =>
       currentRuntimeMode === "broker"
-        ? activeBroker != null
+        ? brokerRuntime.isConnected()
         : currentRuntimeMode === "follower"
           ? brokerClient != null
           : currentRuntimeMode === "single"
@@ -3332,7 +3071,7 @@ export default function (pi: ExtensionAPI) {
     inboxLength: () => inbox.length,
     activityLogger: () => activityLogger,
     settings: () => settings,
-    lastBrokerMaintenance: () => lastBrokerMaintenance,
+    lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
     isBrokerControlPlaneCanvasEnabled,
     getConfiguredBrokerControlPlaneCanvasId,
     getConfiguredBrokerControlPlaneCanvasChannel,
@@ -3541,8 +3280,13 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (brokerRole === "broker" && activeBroker && activeSelfId) {
-      activeBroker.db.updateAgentStatus(activeSelfId, desiredAgentStatus);
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db || !selfId) {
+        return;
+      }
+      db.updateAgentStatus(selfId, desiredAgentStatus);
       return;
     }
 
@@ -3568,7 +3312,7 @@ export default function (pi: ExtensionAPI) {
     if (pinetEnabled) {
       await reportStatus("idle");
       if (brokerRole === "broker" && maintenanceCtx) {
-        runBrokerMaintenance(maintenanceCtx);
+        brokerRuntime.runMaintenance(maintenanceCtx);
       }
     }
 
@@ -3631,10 +3375,9 @@ export default function (pi: ExtensionAPI) {
         if (brokerRole === "follower") {
           markFollowerInboxIdsDelivered(followerDeliveryState, brokerInboxIds);
           void flushDeliveredFollowerAcks();
-        } else if (brokerRole === "broker" && activeBroker && activeSelfId) {
+        } else if (brokerRole === "broker") {
           try {
-            activeBroker.db.markDelivered(brokerInboxIds, activeSelfId);
-            markBrokerInboxIdsHandled(brokerDeliveryState, brokerInboxIds);
+            brokerRuntime.markDelivered(brokerInboxIds);
           } catch {
             /* best effort */
           }
