@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
@@ -74,7 +73,6 @@ import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { buildReactionPromptGuidelines, resolveReactionCommands } from "./reaction-triggers.js";
 import type { Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
-import { sendBrokerMessage } from "./broker/message-send.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { type BrokerMaintenanceResult } from "./broker/maintenance.js";
 import { DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS, type BrokerClient } from "./broker/client.js";
@@ -86,12 +84,11 @@ import {
 import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
 import { registerPinetTools } from "./pinet-tools.js";
+import { registerIMessageTools } from "./imessage-tools.js";
 import {
   createIMessageAdapter,
   detectIMessageMvpEnvironment,
   formatIMessageMvpReadiness,
-  getDefaultIMessageThreadId,
-  normalizeIMessageRecipient,
 } from "@gugu910/pi-imessage-bridge";
 import {
   addSlackReaction,
@@ -2098,112 +2095,30 @@ export default function (pi: ExtensionAPI) {
     listFollowerAgents,
   });
 
-  pi.registerTool({
-    name: "imessage_send",
-    label: "iMessage Send",
-    description:
-      "Send a message through the local send-first iMessage adapter on the active broker.",
-    promptSnippet:
-      "Send a message through the local send-first iMessage adapter on the active Pinet broker. Use when a task needs a narrow macOS iMessage send path.",
-    parameters: Type.Object({
-      to: Type.String({
-        description: "Recipient handle, phone number, email, or local chat identifier",
-      }),
-      text: Type.String({ description: "Message body" }),
-      thread_id: Type.Optional(
-        Type.String({
-          description:
-            "Optional transport thread id. Defaults to a stable iMessage thread id derived from the recipient.",
-        }),
-      ),
-    }),
-    async execute(_id, params) {
-      requireToolPolicy(
-        "imessage_send",
-        undefined,
-        `to=${params.to} | thread_id=${params.thread_id ?? ""} | text=${params.text}`,
-      );
-
-      if (!pinetEnabled) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-      }
-
-      const recipient = normalizeIMessageRecipient(params.to);
-      const text = params.text.trim();
-      if (!text) {
-        throw new Error("text is required");
-      }
-      const threadId = params.thread_id?.trim() || getDefaultIMessageThreadId(recipient);
-      const metadata = { recipient };
-
-      let adapter = "imessage";
-      let messageId: number | null = null;
-
-      if (brokerRole === "broker") {
-        const broker = getActiveBroker();
-        const selfId = getActiveBrokerSelfId();
-        if (!broker || !selfId) {
-          throw new Error("Broker agent identity is unavailable.");
-        }
-        if (!broker.adapters.some((candidate) => candidate.name === "imessage")) {
-          throw new Error(
-            "iMessage adapter is not enabled or not ready on the active broker. Set slack-bridge.imessage.enabled: true and restart /pinet-start.",
-          );
-        }
-
-        const result = await sendBrokerMessage(
-          {
-            db: broker.db,
-            adapters: broker.adapters,
-          },
-          {
-            threadId,
-            body: text,
-            senderAgentId: selfId,
-            source: "imessage",
-            channel: recipient,
-            agentName,
-            agentEmoji,
-            agentOwnerToken,
-            metadata,
-          },
-        );
-        adapter = result.adapter;
-        messageId = result.message.id;
-      } else if (brokerRole === "follower" && brokerClient?.client) {
-        const result = await brokerClient.client.sendMessage({
-          threadId,
-          body: text,
-          source: "imessage",
-          channel: recipient,
-          agentName,
-          agentEmoji,
-          agentOwnerToken,
-          metadata,
-        });
-        adapter = result.adapter;
-        messageId = result.messageId;
-      } else {
+  registerIMessageTools(pi, {
+    pinetEnabled: () => pinetEnabled,
+    brokerRole: () => brokerRole,
+    requireToolPolicy,
+    getActiveBroker,
+    getActiveBrokerSelfId,
+    sendFollowerIMessage: async (input) => {
+      if (!brokerClient?.client) {
         throw new Error("Pinet is in an unexpected state.");
       }
 
-      singlePlayerRuntime.trackOwnedThread(threadId, recipient, "imessage");
-
+      const result = await brokerClient.client.sendMessage(input);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Sent iMessage to ${recipient} (thread_id: ${threadId}).`,
-          },
-        ],
-        details: {
-          threadId,
-          channel: recipient,
-          source: "imessage",
-          adapter,
-          messageId,
-        },
+        adapter: result.adapter,
+        messageId: result.messageId,
       };
+    },
+    getAgentIdentity: () => ({
+      name: agentName,
+      emoji: agentEmoji,
+      ownerToken: agentOwnerToken,
+    }),
+    trackOwnedThread: (threadId, channel, source) => {
+      singlePlayerRuntime.trackOwnedThread(threadId, channel, source);
     },
   });
 
