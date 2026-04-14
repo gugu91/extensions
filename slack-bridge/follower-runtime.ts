@@ -74,6 +74,7 @@ export interface FollowerRuntimeDeps {
   runRemoteControl: (command: PinetControlCommand, ctx: ExtensionContext) => void;
   deliverFollowUpMessage: (text: string) => boolean;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
+  handleTerminalReconnectFailure: (ctx: ExtensionContext, error: Error) => Promise<void> | void;
   formatError: (error: unknown) => string;
   deliveryState: FollowerDeliveryState;
 }
@@ -435,6 +436,16 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
             ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
           }
         })();
+      });
+
+      client.onReconnectFailed((error) => {
+        if (clientRef?.client !== client) {
+          return;
+        }
+        void deps.handleTerminalReconnectFailure(
+          ctx,
+          error instanceof Error ? error : new Error(String(error)),
+        );
       });
 
       await resumeThreadClaims();

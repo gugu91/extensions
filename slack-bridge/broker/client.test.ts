@@ -13,7 +13,7 @@ import {
   computeReconnectDelay,
 } from "./client.js";
 import type { BrokerConnectOpts } from "./client.js";
-import { RPC_METHOD_NOT_FOUND } from "./types.js";
+import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -1488,6 +1488,92 @@ describe("BrokerClient — onReconnect callback", () => {
       name: "Broker Bird",
       emoji: "🦩",
     });
+
+    client.disconnect();
+    await mock.close();
+  }, 20000);
+
+  it("stops reconnecting and surfaces a terminal error when an explicit name collides on reconnect", async () => {
+    let mock = await createMockServer();
+    const port = mock.port;
+    const client = new BrokerClient(mock.connectOpts);
+    let disconnectFired = false;
+    let reconnectFired = false;
+    let reconnectFailed: Error | null = null;
+
+    client.onDisconnect(() => {
+      disconnectFired = true;
+    });
+    client.onReconnect(() => {
+      reconnectFired = true;
+    });
+    client.onReconnectFailed((err) => {
+      reconnectFailed = err;
+    });
+
+    await client.connect();
+    const registerPromise = client.register(
+      "Reserved Crane",
+      "🦩",
+      { cwd: "/repo", branch: "main" },
+      "host:session:/tmp/reserved-crane",
+    );
+
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(registerReq.method).toBe("register");
+    expect(registerReq.params.name).toBe("Reserved Crane");
+    expect(registerReq.params.emoji).toBe("🦩");
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "reserved-crane-agent",
+      name: "Reserved Crane",
+      emoji: "🦩",
+    });
+    await registerPromise;
+
+    await mock.close();
+    await waitFor(() => disconnectFired, 2000);
+    await waitFor(() => client.getReconnectAttempt() >= 2, 5000);
+
+    mock = await createMockServer(port);
+    await waitFor(() => mock.received.length > 0, 5000);
+
+    const reRegisterReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(reRegisterReq.method).toBe("register");
+    expect(reRegisterReq.params.name).toBe("Reserved Crane");
+    expect(reRegisterReq.params.emoji).toBe("🦩");
+    expect(reRegisterReq.params.stableId).toBe("host:session:/tmp/reserved-crane");
+
+    mock.respondError(
+      mock.connections[0],
+      reRegisterReq.id,
+      RPC_AGENT_NAME_CONFLICT,
+      'Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.',
+    );
+
+    await waitFor(() => reconnectFailed !== null, 5000);
+    if (!reconnectFailed) {
+      throw new Error("Expected reconnect failure to surface");
+    }
+    const surfacedReconnectFailure = reconnectFailed as Error;
+    expect(surfacedReconnectFailure.message).toContain(
+      'Agent name "Reserved Crane" is already reserved.',
+    );
+    expect(reconnectFired).toBe(false);
+    expect(client.isConnected()).toBe(false);
+    expect(client.getReconnectAttempt()).toBe(0);
+    expect(client.getRegisteredIdentity()).toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, INITIAL_RECONNECT_DELAY_MS + 250));
+    expect(mock.received).toHaveLength(1);
 
     client.disconnect();
     await mock.close();
