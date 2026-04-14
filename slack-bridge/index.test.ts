@@ -1457,6 +1457,194 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionShutdown?.({}, ctx);
   });
 
+  it("keeps single-mode Slack thread context local after ingress moves into SinglePlayerRuntime", async () => {
+    const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
+    fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ "slack-bridge": { runtimeMode: "single", allowedUsers: ["U_SENDER"] } }),
+    );
+
+    const tools = new Map<string, ToolDefinition>();
+    const events = new Map<string, EventHandler>();
+    const FakeWebSocket = createFakeWebSocketClass();
+    const sendUserMessage = vi.fn();
+    const appendEntry = vi.fn();
+
+    const pi = {
+      appendEntry,
+      registerTool: vi.fn((definition: ToolDefinition) => {
+        tools.set(definition.name, definition);
+      }),
+      registerCommand: vi.fn(),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage,
+    } as unknown as ExtensionAPI;
+
+    const idle = false;
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => idle,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "single-thread-context-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-single-thread-context-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/apps.connections.open") {
+        return new Response(JSON.stringify({ ok: true, url: "wss://slack.example/socket" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/conversations.replies") {
+        return new Response(JSON.stringify({ ok: true, messages: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/users.info") {
+        return new Response(JSON.stringify({ ok: true, user: { real_name: "Sender" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/reactions.add") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/reactions.remove") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/chat.postMessage") {
+        return new Response(JSON.stringify({ ok: true, message: { ts: "300.1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch call: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const slackSend = tools.get("slack_send");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(slackSend).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await Promise.resolve();
+
+    const socket = FakeWebSocket.instances[0] as unknown as {
+      emitEvent: (type: string, ...args: unknown[]) => void;
+    };
+    socket.emitEvent("message", {
+      data: JSON.stringify({
+        envelope_id: "env-1",
+        type: "events_api",
+        payload: {
+          event: {
+            type: "message",
+            channel: "D123",
+            channel_type: "im",
+            user: "U_SENDER",
+            text: "hello from the first direct thread",
+            ts: "100.1",
+          },
+        },
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith("https://slack.com/api/users.info", expect.any(Object));
+    });
+
+    socket.emitEvent("message", {
+      data: JSON.stringify({
+        envelope_id: "env-2",
+        type: "events_api",
+        payload: {
+          event: {
+            type: "message",
+            channel: "D999",
+            channel_type: "im",
+            user: "U_SENDER",
+            text: "hello from a newer direct thread",
+            ts: "200.1",
+          },
+        },
+      }),
+    });
+
+    await slackSend!.execute("tool-1", {
+      thread_ts: "100.1",
+      text: "reply from the agent",
+    });
+
+    const chatPostMessageCall = fetchSpy.mock.calls.find(
+      ([input]) => String(input) === "https://slack.com/api/chat.postMessage",
+    );
+    expect(chatPostMessageCall).toBeDefined();
+    const chatPostMessageBody = JSON.parse(String(chatPostMessageCall?.[1]?.body ?? "{}")) as {
+      channel?: string;
+      metadata?: {
+        event_payload?: { agent_owner?: string };
+      };
+      thread_ts?: string;
+    };
+    expect(chatPostMessageBody.channel).toBe("D123");
+    expect(chatPostMessageBody.thread_ts).toBe("100.1");
+
+    const reactionsRemoveCall = fetchSpy.mock.calls.find(
+      ([input]) => String(input) === "https://slack.com/api/reactions.remove",
+    );
+    expect(reactionsRemoveCall).toBeDefined();
+    const reactionsRemoveBody = JSON.parse(String(reactionsRemoveCall?.[1]?.body ?? "{}")) as {
+      channel?: string;
+      name?: string;
+      timestamp?: string;
+    };
+    expect(reactionsRemoveBody).toMatchObject({
+      channel: "D123",
+      name: "eyes",
+      timestamp: "100.1",
+    });
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+
+    await sessionShutdown?.({}, ctx);
+
+    const persistedState = appendEntry.mock.calls.at(-1)?.[1] as {
+      threads?: Array<[string, { owner?: string }]>;
+    };
+    const firstThread = persistedState.threads?.find(([threadTs]) => threadTs === "100.1")?.[1];
+    expect(firstThread?.owner).toBe(chatPostMessageBody.metadata?.event_payload?.agent_owner);
+  });
+
   it("does not reschedule direct Slack reconnects after aborting a single-mode startup during broker transition", async () => {
     vi.useFakeTimers();
 
