@@ -194,9 +194,10 @@ describe("registerSlackTools", () => {
       } as SlackResult;
     });
 
-    let resolveFollowerReplyChannel: (
-      threadTs: string | undefined,
-    ) => Promise<string | null> = async () => null;
+    let resolveThreadChannel: (threadTs: string | undefined) => Promise<string | null> = async () =>
+      null;
+    const noteThreadReply = vi.fn();
+    const clearPendingAttention = vi.fn();
 
     registerSlackTools(pi, {
       getBotToken: () => botToken,
@@ -210,13 +211,14 @@ describe("registerSlackTools", () => {
       getLastDmChannel: () => null,
       updateBadge: () => {},
       resolveUser: async (userId) => resolveUser(userId),
-      resolveFollowerReplyChannel: (threadTs) => resolveFollowerReplyChannel(threadTs),
+      threadContext: {
+        resolveThreadChannel: (threadTs) => resolveThreadChannel(threadTs),
+        noteThreadReply,
+        clearPendingAttention,
+      },
       resolveChannel: async (nameOrId) => `resolved:${nameOrId}`,
       rememberChannel: () => {},
       requireToolPolicy: () => {},
-      trackOutboundThread: () => {},
-      claimThreadOwnership: () => {},
-      clearPendingEyes: () => {},
       registerConfirmationRequest: () => ({ status: "created" }),
       getBotUserId: () => "U_BOT",
     });
@@ -258,11 +260,11 @@ describe("registerSlackTools", () => {
       setDndResponse: (userId: string, response: SlackResult) => {
         dndResponses.set(userId, response);
       },
-      setResolveFollowerReplyChannel: (
-        fn: (threadTs: string | undefined) => Promise<string | null>,
-      ) => {
-        resolveFollowerReplyChannel = fn;
+      setResolveThreadChannel: (fn: (threadTs: string | undefined) => Promise<string | null>) => {
+        resolveThreadChannel = fn;
       },
+      noteThreadReply,
+      clearPendingAttention,
     };
   }
 
@@ -303,8 +305,8 @@ describe("registerSlackTools", () => {
   });
 
   it("uses read-through thread resolution for slack_read", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });
@@ -407,8 +409,8 @@ describe("registerSlackTools", () => {
   });
 
   it("adds reactions with normalized emoji names via slack_react", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });
@@ -448,8 +450,8 @@ describe("registerSlackTools", () => {
   });
 
   it("uses thread channel resolution for slack_schedule delays", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });
@@ -478,8 +480,8 @@ describe("registerSlackTools", () => {
   });
 
   it("handles already_pinned gracefully", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });
@@ -545,8 +547,8 @@ describe("registerSlackTools", () => {
   });
 
   it("lists bookmarks from the resolved thread channel", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });
@@ -582,14 +584,9 @@ describe("registerSlackTools", () => {
   });
 
   it("exports paginated thread content as markdown", async () => {
-    const {
-      slack,
-      tools,
-      setConversationsReplies,
-      setResolveFollowerReplyChannel,
-      setResolveUser,
-    } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setConversationsReplies, setResolveThreadChannel, setResolveUser } =
+      setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });
@@ -681,8 +678,9 @@ describe("registerSlackTools", () => {
   });
 
   it("includes blocks when slack_send posts a rich message", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async () => "D123");
+    const { slack, tools, setResolveThreadChannel, noteThreadReply, clearPendingAttention } =
+      setup();
+    setResolveThreadChannel(async () => "D123");
 
     await tools.get("slack_send")!.execute("tool-14", {
       thread_ts: "123.456",
@@ -706,6 +704,8 @@ describe("registerSlackTools", () => {
         ],
       }),
     );
+    expect(noteThreadReply).toHaveBeenCalledWith("123.456", "D123");
+    expect(clearPendingAttention).toHaveBeenCalledWith("123.456");
   });
 
   it("includes blocks when slack_post_channel posts a rich message", async () => {
@@ -814,8 +814,8 @@ describe("registerSlackTools", () => {
   });
 
   it("opens a modal and embeds thread context in private_metadata", async () => {
-    const { slack, tools, setResolveFollowerReplyChannel } = setup();
-    setResolveFollowerReplyChannel(async (threadTs: string | undefined) => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return "C-DB";
     });

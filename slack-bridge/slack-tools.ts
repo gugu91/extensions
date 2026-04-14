@@ -51,6 +51,12 @@ import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
 import { TtlCache } from "./ttl-cache.js";
 
+export interface SlackToolsThreadContextPort {
+  resolveThreadChannel: (threadTs: string | undefined) => Promise<string | null>;
+  noteThreadReply: (threadTs: string, channelId: string) => void;
+  clearPendingAttention: (threadTs: string) => void;
+}
+
 export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
   getDefaultChannel: () => string | undefined;
@@ -63,13 +69,10 @@ export interface RegisterSlackToolsDeps {
   getLastDmChannel: () => string | null;
   updateBadge: () => void;
   resolveUser: (userId: string) => Promise<string>;
-  resolveFollowerReplyChannel: (threadTs: string | undefined) => Promise<string | null>;
+  threadContext: SlackToolsThreadContextPort;
   resolveChannel: (nameOrId: string) => Promise<string>;
   rememberChannel: (name: string, channelId: string) => void;
   requireToolPolicy: (toolName: string, threadTs: string | undefined, action: string) => void;
-  trackOutboundThread: (threadTs: string, channelId: string) => void;
-  claimThreadOwnership: (threadTs: string, channelId: string) => void;
-  clearPendingEyes: (threadTs: string) => void;
   registerConfirmationRequest: (
     threadTs: string,
     tool: string,
@@ -211,16 +214,25 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     getLastDmChannel,
     updateBadge,
     resolveUser,
-    resolveFollowerReplyChannel,
+    threadContext,
     resolveChannel,
     rememberChannel,
     requireToolPolicy,
-    trackOutboundThread,
-    claimThreadOwnership,
-    clearPendingEyes,
     registerConfirmationRequest,
     getBotUserId,
   } = deps;
+
+  async function resolveTrackedThreadChannel(threadTs: string | undefined): Promise<string | null> {
+    return threadContext.resolveThreadChannel(threadTs);
+  }
+
+  function noteThreadReply(threadTs: string, channelId: string): void {
+    threadContext.noteThreadReply(threadTs, channelId);
+  }
+
+  function clearPendingThreadAttention(threadTs: string): void {
+    threadContext.clearPendingAttention(threadTs);
+  }
 
   async function resolveCanvasTarget(
     canvasId: string | undefined,
@@ -278,7 +290,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     threadTs: string | undefined,
     channel: string | undefined,
   ): Promise<string> {
-    const trackedThreadChannel = threadTs ? await resolveFollowerReplyChannel(threadTs) : null;
+    const trackedThreadChannel = threadTs ? await resolveTrackedThreadChannel(threadTs) : null;
     if (trackedThreadChannel) {
       return trackedThreadChannel;
     }
@@ -424,7 +436,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     threadTs: string | undefined,
     channel: string | undefined,
   ): Promise<string> {
-    const trackedThreadChannel = threadTs ? await resolveFollowerReplyChannel(threadTs) : null;
+    const trackedThreadChannel = threadTs ? await resolveTrackedThreadChannel(threadTs) : null;
     if (trackedThreadChannel) {
       return trackedThreadChannel;
     }
@@ -449,7 +461,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return null;
     }
 
-    const channel = await resolveFollowerReplyChannel(normalizedThreadTs);
+    const channel = await resolveTrackedThreadChannel(normalizedThreadTs);
     if (!channel) {
       throw new Error(
         `No active Slack thread for thread_ts ${normalizedThreadTs}. Pass a live Slack thread so modal submissions can route back correctly.`,
@@ -1097,7 +1109,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `thread_ts=${params.thread_ts ?? ""} | text=${params.text} | blocks=${summarizeSlackBlocksForPolicy(params.blocks)}`,
       );
 
-      const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? getLastDmChannel();
+      const channel = (await resolveTrackedThreadChannel(params.thread_ts)) ?? getLastDmChannel();
       if (!channel) {
         throw new Error(
           "No active Slack thread. If you know the channel and thread_ts, use slack_post_channel instead.",
@@ -1121,11 +1133,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const ts = (response.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
-      trackOutboundThread(actualTs, channel);
-      claimThreadOwnership(actualTs, channel);
+      noteThreadReply(actualTs, channel);
 
       if (params.thread_ts) {
-        clearPendingEyes(params.thread_ts);
+        clearPendingThreadAttention(params.thread_ts);
       }
 
       return {
@@ -1271,9 +1282,8 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       });
 
       if (params.thread_ts) {
-        trackOutboundThread(params.thread_ts, channelId);
-        claimThreadOwnership(params.thread_ts, channelId);
-        clearPendingEyes(params.thread_ts);
+        noteThreadReply(params.thread_ts, channelId);
+        clearPendingThreadAttention(params.thread_ts);
       }
 
       const uploadedFiles = Array.isArray(response.files)
@@ -1324,7 +1334,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `thread_ts=${params.thread_ts} | limit=${params.limit ?? 20}`,
       );
 
-      const channel = (await resolveFollowerReplyChannel(params.thread_ts)) ?? getLastDmChannel();
+      const channel = (await resolveTrackedThreadChannel(params.thread_ts)) ?? getLastDmChannel();
       if (!channel) {
         throw new Error("Unknown thread.");
       }
@@ -1693,7 +1703,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | text=${params.text} | blocks=${summarizeSlackBlocksForPolicy(params.blocks)}`,
       );
 
-      const resolvedThreadChannel = await resolveFollowerReplyChannel(params.thread_ts);
+      const resolvedThreadChannel = await resolveTrackedThreadChannel(params.thread_ts);
       const channelInput = params.channel ?? getDefaultChannel();
       let channelId = params.channel ? await resolveChannel(params.channel) : resolvedThreadChannel;
 
@@ -1721,8 +1731,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const ts = (response.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
-      trackOutboundThread(actualTs, channelId);
-      claimThreadOwnership(actualTs, channelId);
+      noteThreadReply(actualTs, channelId);
 
       const channelLabel = params.channel ?? resolvedThreadChannel ?? channelInput ?? channelId;
       return {
@@ -2435,7 +2444,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       tool: Type.String({ description: "Name of the tool that requires confirmation" }),
     }),
     async execute(_id, params) {
-      const channelId = await resolveFollowerReplyChannel(params.thread_ts);
+      const channelId = await resolveTrackedThreadChannel(params.thread_ts);
       if (!channelId) {
         throw new Error(`No active Slack thread for thread_ts: ${params.thread_ts}`);
       }
