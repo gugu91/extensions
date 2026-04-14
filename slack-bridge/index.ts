@@ -3396,11 +3396,14 @@ export default function (pi: ExtensionAPI) {
         getIdentitySeedForRole("worker", ctx.sessionManager.getSessionFile() ?? undefined),
         "worker",
       );
+      const hasExplicitIdentityRequest =
+        Boolean(settings.agentName?.trim() && settings.agentEmoji?.trim()) ||
+        Boolean(process.env.PI_NICKNAME?.trim());
 
       agentOwnerToken = buildPinetOwnerToken(agentStableId);
       const registration = await client.register(
-        workerIdentity.name,
-        workerIdentity.emoji,
+        hasExplicitIdentityRequest ? workerIdentity.name : "",
+        hasExplicitIdentityRequest ? workerIdentity.emoji : "",
         await getAgentMetadata("worker"),
         agentStableId,
       );

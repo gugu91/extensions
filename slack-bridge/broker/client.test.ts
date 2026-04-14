@@ -1416,6 +1416,82 @@ describe("BrokerClient — onReconnect callback", () => {
     client.disconnect();
     await mock.close();
   }, 20000);
+
+  it("re-requests broker-assigned identity after reconnect when the original name was blank", async () => {
+    let mock = await createMockServer();
+    const port = mock.port;
+    const client = new BrokerClient(mock.connectOpts);
+    let disconnectFired = false;
+    let reconnectFired = false;
+
+    client.onDisconnect(() => {
+      disconnectFired = true;
+    });
+    client.onReconnect(() => {
+      reconnectFired = true;
+    });
+
+    await client.connect();
+    const registerPromise = client.register(
+      "",
+      "",
+      { cwd: "/repo", branch: "main" },
+      "host:session:/tmp/broker-assigned",
+    );
+
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(registerReq.method).toBe("register");
+    expect(registerReq.params.name).toBe("");
+    expect(registerReq.params.emoji).toBe("");
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "broker-assigned-agent",
+      name: "Broker Bird",
+      emoji: "🦩",
+    });
+    await registerPromise;
+
+    await mock.close();
+    await waitFor(() => disconnectFired, 2000);
+    await waitFor(() => client.getReconnectAttempt() >= 2, 5000);
+
+    mock = await createMockServer(port);
+    await waitFor(() => mock.received.length > 0, 5000);
+
+    const reRegisterReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(reRegisterReq.method).toBe("register");
+    expect(reRegisterReq.params.name).toBe("");
+    expect(reRegisterReq.params.emoji).toBe("");
+    expect(reRegisterReq.params.stableId).toBe("host:session:/tmp/broker-assigned");
+    expect(reconnectFired).toBe(false);
+
+    mock.respondTo(mock.connections[0], reRegisterReq.id, {
+      agentId: "broker-assigned-agent",
+      name: "Broker Bird",
+      emoji: "🦩",
+    });
+
+    await waitFor(() => reconnectFired, 5000);
+    expect(reconnectFired).toBe(true);
+    expect(client.isConnected()).toBe(true);
+    expect(client.getReconnectAttempt()).toBe(0);
+    expect(client.getRegisteredIdentity()).toEqual({
+      agentId: "broker-assigned-agent",
+      name: "Broker Bird",
+      emoji: "🦩",
+    });
+
+    client.disconnect();
+    await mock.close();
+  }, 20000);
 });
 
 describe("BrokerClient — newline-delimited framing", () => {
