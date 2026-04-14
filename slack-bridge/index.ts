@@ -1468,27 +1468,27 @@ export default function (pi: ExtensionAPI) {
     getLastDmChannel: () => lastDmChannel,
     updateBadge,
     resolveUser,
-    resolveFollowerReplyChannel,
+    threadContext: {
+      resolveThreadChannel: resolveFollowerReplyChannel,
+      noteThreadReply: (threadTs, channelId) => {
+        trackOwnedThread(threadTs, channelId, "slack");
+        claimOwnedThread(threadTs, channelId, "slack");
+      },
+      clearPendingAttention: (threadTs) => {
+        const pending = pendingEyes.get(threadTs);
+        if (!pending) return;
+        for (const entry of pending) {
+          void removeReaction(entry.channel, entry.messageTs, "eyes");
+        }
+        pendingEyes.delete(threadTs);
+      },
+    },
     resolveChannel,
     rememberChannel: (name, channelId) => {
       channelCache.set(name, channelId);
     },
     requireToolPolicy,
-    trackOutboundThread: (threadTs, channelId) => {
-      trackOwnedThread(threadTs, channelId, "slack");
-    },
     getBotUserId: () => botUserId,
-    claimThreadOwnership: (threadTs, channelId) => {
-      claimOwnedThread(threadTs, channelId, "slack");
-    },
-    clearPendingEyes: (threadTs) => {
-      const pending = pendingEyes.get(threadTs);
-      if (!pending) return;
-      for (const entry of pending) {
-        void removeReaction(entry.channel, entry.messageTs, "eyes");
-      }
-      pendingEyes.delete(threadTs);
-    },
     registerConfirmationRequest,
   });
 
