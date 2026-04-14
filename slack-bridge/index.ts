@@ -29,7 +29,6 @@ import {
   formatAgentList,
   callSlackAPI,
   createAbortableOperationTracker,
-  isAbortError,
   buildAgentDisplayInfo,
   filterAgentsForMeshVisibility,
   rankAgentsForRouting,
@@ -130,7 +129,6 @@ import {
   resolveSlackThreadOwnerHint,
   resolveSlackUserName,
   setSlackSuggestedPrompts,
-  SlackSocketModeClient,
   SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
   type ParsedAppHomeOpened,
@@ -143,6 +141,7 @@ import {
   queueFollowerInboxIds,
 } from "./follower-delivery.js";
 import { createFollowerRuntime, type BrokerClientRef } from "./follower-runtime.js";
+import { createSinglePlayerRuntime } from "./single-player-runtime.js";
 import {
   extractTaskAssignmentsFromMessage,
   normalizeTrackedTaskAssignments,
@@ -552,8 +551,6 @@ export default function (pi: ExtensionAPI) {
   }
 
   let botUserId: string | null = null;
-  let singleRuntimeSlackSocket: SlackSocketModeClient | null = null;
-  let shuttingDown = false;
 
   const threads = new Map<string, ThreadInfo>();
   const thinking = new Set<string>();
@@ -737,7 +734,7 @@ export default function (pi: ExtensionAPI) {
       token: botToken!,
       userId,
       cache: userNames,
-      shouldUseResult: () => !shuttingDown,
+      shouldUseResult: () => !singlePlayerRuntime.isShuttingDown(),
     });
     if (!hadCachedUser && userNames.get(userId) != null) {
       persistState();
@@ -1023,55 +1020,40 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Socket Mode (native WebSocket) ─────────────────
 
-  async function connectSocketMode(ctx: ExtensionContext): Promise<void> {
-    if (shuttingDown) return;
-
-    singleRuntimeSlackSocket = new SlackSocketModeClient({
-      slack,
-      botToken: botToken!,
-      appToken: appToken!,
-      resolveBotUserIdOnConnect: false,
-      dedup: processedSlackSocketDeliveries,
-      abortAndWait: () => slackRequests.abortAndWait(),
-      onOpen: () => setExtStatus(ctx, "ok"),
-      onReconnectScheduled: () => {
-        if (!shuttingDown && currentRuntimeMode === "single") {
-          setExtStatus(ctx, "reconnecting");
-        }
-      },
-      onError: (err) => {
-        if (!isAbortError(err)) {
-          console.error(`[slack-bridge] Slack access: ${msg(err)}`);
-        }
-      },
-      onThreadStarted: (event) => onThreadStarted(event),
-      onThreadContextChanged: (event) => onContextChanged(event),
-      onAppHomeOpened: (event) => onAppHomeOpened(event, ctx),
-      onMessage: (event) => onMessage(event, ctx),
-      onReactionAdded: (event) => onReactionAdded(event, ctx),
-      onMemberJoinedChannel: async ({ channel, isSelf }) => {
-        if (!isSelf) return;
-        ctx.ui.notify(`Pinet added to channel ${channel}`, "info");
-        inbox.push({
-          channel,
-          threadTs: "",
-          userId: "system",
-          text: `Pinet was added to channel <#${channel}>. You can now post messages there.`,
-          timestamp: String(Date.now() / 1000),
-        });
-        updateBadge();
-        maybeDrainInboxIfIdle(ctx);
-      },
-      onInteractive: (event) => queueInteractiveInboxEvent(event, ctx),
-    });
-    await singleRuntimeSlackSocket.connect();
-    botUserId = singleRuntimeSlackSocket?.getBotUserId() ?? botUserId;
-  }
+  const singlePlayerRuntime = createSinglePlayerRuntime({
+    slack,
+    getBotToken: () => botToken!,
+    getAppToken: () => appToken!,
+    dedup: processedSlackSocketDeliveries,
+    abortSlackRequests: () => slackRequests.abortAndWait(),
+    isSingleRuntimeActive: () => currentRuntimeMode === "single",
+    setExtStatus,
+    formatError: msg,
+    handleThreadStarted: (event) => onThreadStarted(event),
+    handleThreadContextChanged: (event) => onContextChanged(event),
+    handleAppHomeOpened: (event, ctx) => onAppHomeOpened(event, ctx),
+    handleMessage: (event, ctx) => onMessage(event, ctx),
+    handleReactionAdded: (event, ctx) => onReactionAdded(event, ctx),
+    handleMemberJoinedChannel: async ({ channel, isSelf }, ctx) => {
+      if (!isSelf) return;
+      ctx.ui.notify(`Pinet added to channel ${channel}`, "info");
+      inbox.push({
+        channel,
+        threadTs: "",
+        userId: "system",
+        text: `Pinet was added to channel <#${channel}>. You can now post messages there.`,
+        timestamp: String(Date.now() / 1000),
+      });
+      updateBadge();
+      maybeDrainInboxIfIdle(ctx);
+    },
+    handleInteractive: (event, ctx) => queueInteractiveInboxEvent(event, ctx),
+  });
 
   // ─── Assistant events ───────────────────────────────
 
   async function onThreadStarted(event: ParsedThreadStarted): Promise<void> {
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
 
     const info: ThreadInfo = {
       channelId: event.channelId,
@@ -1092,7 +1074,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function onContextChanged(event: ParsedThreadContextChanged): void {
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
 
     const existing = threads.get(event.threadTs);
     if (!existing || !event.context) return;
@@ -1102,7 +1084,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function onAppHomeOpened(event: ParsedAppHomeOpened, ctx: ExtensionContext): Promise<void> {
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
 
     await publishCurrentPinetHomeTabSafely(event.userId, ctx);
   }
@@ -1123,7 +1105,7 @@ export default function (pi: ExtensionAPI) {
     evt: Record<string, unknown>,
     ctx: ExtensionContext,
   ): Promise<void> {
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
 
     const item = evt.item as { type?: string; channel?: string; ts?: string } | undefined;
     const user = evt.user as string | undefined;
@@ -1188,7 +1170,7 @@ export default function (pi: ExtensionAPI) {
 
       if (!localOwner && !unclaimedThreads.has(threadTs)) {
         const remoteOwner = await resolveThreadOwner(item.channel, threadTs);
-        if (shuttingDown) return;
+        if (singlePlayerRuntime.isShuttingDown()) return;
         if (
           remoteOwner &&
           !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)
@@ -1207,7 +1189,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const reactorName = await resolveUser(user);
-      if (shuttingDown) return;
+      if (singlePlayerRuntime.isShuttingDown()) return;
       const reactedMessageAuthorId =
         (reactedMessage.user as string | undefined) ?? (evt.item_user as string | undefined);
       const reactedMessageAuthor = reactedMessageAuthorId
@@ -1215,7 +1197,7 @@ export default function (pi: ExtensionAPI) {
         : (reactedMessage.bot_id as string | undefined)
           ? "bot"
           : "unknown";
-      if (shuttingDown) return;
+      if (singlePlayerRuntime.isShuttingDown()) return;
 
       const reactedMessageText =
         typeof reactedMessage.text === "string" && reactedMessage.text.trim().length > 0
@@ -1252,7 +1234,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function onMessage(evt: Record<string, unknown>, ctx: ExtensionContext): Promise<void> {
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
 
     const classified = classifyMessage(evt, botUserId, new Set(threads.keys()));
     if (!classified.relevant) return;
@@ -1276,7 +1258,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!localOwner && !unclaimedThreads.has(threadTs)) {
       const remoteOwner = await resolveThreadOwner(channel, threadTs);
-      if (shuttingDown) return;
+      if (singlePlayerRuntime.isShuttingDown()) return;
       if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
         const thread = threads.get(threadTs);
         if (thread) thread.owner = remoteOwner;
@@ -1314,7 +1296,7 @@ export default function (pi: ExtensionAPI) {
           : `${text}\n\n❌ User denied security confirmation request in this thread.`;
 
     const name = await resolveUser(userId);
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
     ctx.ui.notify(`${name}: ${text.slice(0, 100)}`, "info");
 
     void addReaction(channel, messageTs, "eyes");
@@ -1368,7 +1350,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!localOwner && !unclaimedThreads.has(normalized.threadTs)) {
       const remoteOwner = await resolveThreadOwner(normalized.channel, normalized.threadTs);
-      if (shuttingDown) return;
+      if (singlePlayerRuntime.isShuttingDown()) return;
       if (remoteOwner && !agentOwnsThread(remoteOwner, agentName, agentAliases, agentOwnerToken)) {
         const thread = threads.get(normalized.threadTs);
         if (thread) thread.owner = remoteOwner;
@@ -1398,7 +1380,7 @@ export default function (pi: ExtensionAPI) {
     persistState();
 
     const name = await resolveUser(normalized.userId);
-    if (shuttingDown) return;
+    if (singlePlayerRuntime.isShuttingDown()) return;
     ctx.ui.notify(`${name}: ${normalized.text.slice(0, 100)}`, "info");
 
     inbox.push({
@@ -1415,17 +1397,6 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ─── Reconnect / status ─────────────────────────────
-
-  async function disconnect(): Promise<void> {
-    shuttingDown = true;
-    const socket = singleRuntimeSlackSocket;
-    singleRuntimeSlackSocket = null;
-    if (socket) {
-      await socket.disconnect();
-      return;
-    }
-    await slackRequests.abortAndWait();
-  }
 
   function setExtStatus(
     ctx: ExtensionContext,
@@ -1989,7 +1960,7 @@ export default function (pi: ExtensionAPI) {
             : currentRuntimeMode === "follower"
               ? brokerClient != null
               : currentRuntimeMode === "single"
-                ? (singleRuntimeSlackSocket?.isConnected() ?? false)
+                ? singlePlayerRuntime.isConnected()
                 : false,
         mode: currentRuntimeMode,
         activeThreads: threads.size,
@@ -2377,7 +2348,7 @@ export default function (pi: ExtensionAPI) {
       // Runtime transitions keep the extension alive in-process, so restore a
       // fresh top-level Slack request tracker after tearing the prior runtime down.
       resetTopLevelSlackRequests();
-      shuttingDown = false;
+      singlePlayerRuntime.resetShutdownState();
     }
 
     if (mode === "off") {
@@ -2389,7 +2360,8 @@ export default function (pi: ExtensionAPI) {
     if (mode === "single") {
       currentRuntimeMode = "single";
       setExtStatus(ctx, "reconnecting");
-      await connectSocketMode(ctx);
+      await singlePlayerRuntime.connect(ctx);
+      botUserId = singlePlayerRuntime.getBotUserId() ?? botUserId;
       return;
     }
 
@@ -2451,7 +2423,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    await disconnect();
+    await singlePlayerRuntime.disconnect();
     activityLogger.clearPending();
     brokerRole = null;
     pinetEnabled = false;
@@ -2482,7 +2454,7 @@ export default function (pi: ExtensionAPI) {
         // generation. This preserves shutdown abort semantics without leaving
         // top-level Slack tools permanently stuck in "shutdown in progress".
         resetTopLevelSlackRequests();
-        shuttingDown = false;
+        singlePlayerRuntime.resetShutdownState();
         setExtStatus(ctx, "reconnecting");
       },
       startRuntime: async (role) => {
@@ -3344,7 +3316,7 @@ export default function (pi: ExtensionAPI) {
         : currentRuntimeMode === "follower"
           ? brokerClient != null
           : currentRuntimeMode === "single"
-            ? (singleRuntimeSlackSocket?.isConnected() ?? false)
+            ? singlePlayerRuntime.isConnected()
             : false,
     brokerRole: () => brokerRole,
     agentName: () => agentName,
@@ -3418,7 +3390,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Lifecycle ──────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
-    shuttingDown = false;
+    singlePlayerRuntime.resetShutdownState();
     resetTopLevelSlackRequests();
     remoteControlState = { currentCommand: null, queuedCommand: null };
     resetPendingRemoteControlAcks();
