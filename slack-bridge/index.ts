@@ -331,11 +331,13 @@ export default function (pi: ExtensionAPI) {
     role: "broker" | "worker",
     sessionFile = extCtx?.sessionManager.getSessionFile() ?? undefined,
   ): string {
-    return role === "broker" ? brokerStableId : sessionFile ?? agentStableId;
+    return role === "broker" ? brokerStableId : (sessionFile ?? agentStableId);
   }
 
   function getSkinSeed(preferredSeed?: string): string {
-    return preferredSeed?.trim() || getStableIdForRole(brokerRole === "broker" ? "broker" : "worker");
+    return (
+      preferredSeed?.trim() || getStableIdForRole(brokerRole === "broker" ? "broker" : "worker")
+    );
   }
 
   function rememberAgentAlias(name: string | undefined): void {
@@ -447,7 +449,9 @@ export default function (pi: ExtensionAPI) {
     agentEmoji = snapshot.agentEmoji;
     activeSkinTheme = snapshot.activeSkinTheme;
     agentPersonality = snapshot.agentPersonality;
-    agentOwnerToken = buildPinetOwnerToken(getStableIdForRole(brokerRole === "broker" ? "broker" : "worker"));
+    agentOwnerToken = buildPinetOwnerToken(
+      getStableIdForRole(brokerRole === "broker" ? "broker" : "worker"),
+    );
     agentAliases.clear();
     for (const alias of snapshot.agentAliases) {
       if (alias && alias !== agentName) {
@@ -2795,6 +2799,7 @@ export default function (pi: ExtensionAPI) {
         status: "working" | "idle";
         metadata: Record<string, unknown> | null;
         lastHeartbeat: string;
+        lastSeen?: string;
         disconnectedAt?: string | null;
         resumableUntil?: string | null;
       }): AgentDisplayInfo =>
@@ -2812,6 +2817,7 @@ export default function (pi: ExtensionAPI) {
         status: "working" | "idle";
         metadata: Record<string, unknown> | null;
         lastHeartbeat: string;
+        lastSeen?: string;
         disconnectedAt?: string | null;
         resumableUntil?: string | null;
       }>;
@@ -2828,6 +2834,7 @@ export default function (pi: ExtensionAPI) {
           status: agent.status,
           metadata: agent.metadata,
           lastHeartbeat: agent.lastHeartbeat,
+          lastSeen: agent.lastSeen,
           disconnectedAt: agent.disconnectedAt,
           resumableUntil: agent.resumableUntil,
         }));
@@ -2847,6 +2854,7 @@ export default function (pi: ExtensionAPI) {
           status: agent.status ?? "idle",
           metadata: agent.metadata,
           lastHeartbeat: agent.lastHeartbeat,
+          lastSeen: agent.lastSeen,
           disconnectedAt: agent.disconnectedAt,
           resumableUntil: agent.resumableUntil,
         }));
@@ -2894,11 +2902,14 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "imessage_send",
     label: "iMessage Send",
-    description: "Send a message through the local send-first iMessage adapter on the active broker.",
+    description:
+      "Send a message through the local send-first iMessage adapter on the active broker.",
     promptSnippet:
       "Send a message through the local send-first iMessage adapter on the active Pinet broker. Use when a task needs a narrow macOS iMessage send path.",
     parameters: Type.Object({
-      to: Type.String({ description: "Recipient handle, phone number, email, or local chat identifier" }),
+      to: Type.String({
+        description: "Recipient handle, phone number, email, or local chat identifier",
+      }),
       text: Type.String({ description: "Message body" }),
       thread_id: Type.Optional(
         Type.String({
@@ -3030,7 +3041,9 @@ export default function (pi: ExtensionAPI) {
       broker.db.setSetting(PINET_SKIN_SETTING_KEY, activeSkinTheme);
 
       const persistedBrokerStableId =
-        normalizeOptionalSetting(broker.db.getSetting<string>(PINET_BROKER_STABLE_ID_SETTING_KEY)) ??
+        normalizeOptionalSetting(
+          broker.db.getSetting<string>(PINET_BROKER_STABLE_ID_SETTING_KEY),
+        ) ??
         broker.db
           .getAllAgents()
           .flatMap((agent) => {
@@ -3044,7 +3057,9 @@ export default function (pi: ExtensionAPI) {
             const lastSeenMs = Date.parse(agent.lastSeen);
             const connectedAtMs = Date.parse(agent.connectedAt);
             const recencyMs = Number.isNaN(lastSeenMs)
-              ? (Number.isNaN(connectedAtMs) ? 0 : connectedAtMs)
+              ? Number.isNaN(connectedAtMs)
+                ? 0
+                : connectedAtMs
               : lastSeenMs;
             return [{ stableId, recencyMs }];
           })

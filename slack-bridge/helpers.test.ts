@@ -1747,6 +1747,28 @@ describe("buildAgentDisplayInfo", () => {
     expect(agent.ghost).toBe(true);
     expect(agent.leaseSummary).toBe("lease expired 5s ago");
   });
+
+  it("downgrades connected agents with stale heartbeats to stale when lastSeen is still fresh", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🛰️",
+        name: "Seen Bot",
+        id: "seen-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        lastSeen: "2026-01-01T00:00:18.000Z",
+        metadata: { role: "worker" },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(agent.health).toBe("stale");
+    expect(agent.ghost).toBe(false);
+  });
 });
 
 describe("mesh visibility helpers", () => {
@@ -1932,6 +1954,32 @@ describe("evaluateRalphLoopCycle", () => {
     expect(result.anomalies).toContain("broker heartbeat timer is not running");
     expect(result.anomalies).toContain("broker maintenance timer is not running");
     expect(result.anomalies.some((item) => item.includes("expected `main`"))).toBe(true);
+  });
+
+  it("does not flag connected agents as ghosts when only the heartbeat is stale but lastSeen is fresh", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🛰️",
+          name: "Seen Fox",
+          id: "seen-worker",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:01:52.000Z",
+          lastHeartbeat: "2026-04-01T00:01:40.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 0,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:02:00.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(result.ghostAgentIds).toEqual([]);
+    expect(result.anomalies).toEqual([]);
   });
 
   it("skips the broker agent id when flagging idle agents with assigned work", () => {

@@ -738,6 +738,7 @@ export interface AgentVisibilityInput {
   status: "working" | "idle";
   metadata?: Record<string, unknown> | null;
   lastHeartbeat?: string;
+  lastSeen?: string;
   disconnectedAt?: string | null;
   resumableUntil?: string | null;
   idleSince?: string | null;
@@ -916,6 +917,8 @@ export function buildAgentDisplayInfo(
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_AGENT_HEARTBEAT_INTERVAL_MS;
   const heartbeatMs = parseIsoMs(agent.lastHeartbeat);
   const heartbeatAgeMs = heartbeatMs == null ? null : Math.max(0, nowMs - heartbeatMs);
+  const lastSeenMs = parseIsoMs(agent.lastSeen);
+  const lastSeenAgeMs = lastSeenMs == null ? null : Math.max(0, nowMs - lastSeenMs);
   const computedLeaseExpiresAt =
     agent.resumableUntil ??
     (heartbeatMs == null ? null : new Date(heartbeatMs + heartbeatTimeoutMs).toISOString());
@@ -925,13 +928,15 @@ export function buildAgentDisplayInfo(
     heartbeatIntervalMs * 2,
     heartbeatTimeoutMs - heartbeatIntervalMs,
   );
+  const connectedButRecentlySeen =
+    disconnectedAtMs == null && lastSeenAgeMs != null && lastSeenAgeMs <= heartbeatTimeoutMs;
 
   let health: AgentHealth = "healthy";
   if (disconnectedAtMs != null && resumableUntilMs != null && resumableUntilMs > nowMs) {
     health = "resumable";
   } else if (
     disconnectedAtMs != null ||
-    (heartbeatAgeMs != null && heartbeatAgeMs > heartbeatTimeoutMs)
+    (heartbeatAgeMs != null && heartbeatAgeMs > heartbeatTimeoutMs && !connectedButRecentlySeen)
   ) {
     health = "ghost";
   } else if (heartbeatAgeMs != null && heartbeatAgeMs > staleThresholdMs) {
