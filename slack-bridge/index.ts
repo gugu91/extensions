@@ -115,6 +115,7 @@ import {
   type BrokerControlPlaneDashboardSnapshot,
 } from "./broker/control-plane-canvas.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
+import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -633,6 +634,27 @@ export default function (pi: ExtensionAPI) {
     getCurrentBranch: async () => (await probeGitBranch(process.cwd())) ?? null,
     getBrokerHomeTabs: () => brokerRuntime,
   });
+  const pinetAgentStatus = createPinetAgentStatus({
+    getPinetEnabled: () => pinetEnabled,
+    getBrokerRole: () => brokerRole,
+    getDesiredAgentStatus: () => desiredAgentStatus,
+    setDesiredAgentStatus: (status) => {
+      desiredAgentStatus = status;
+    },
+    getActiveBrokerDb,
+    getActiveBrokerSelfId,
+    hasFollowerClient: () => brokerClient != null,
+    syncFollowerDesiredStatus: (status, options) =>
+      followerRuntime.syncDesiredStatus(status, options),
+    runBrokerMaintenance: (ctx) => {
+      brokerRuntime.runMaintenance(ctx);
+    },
+    getInboxLength: () => inbox.length,
+    getCurrentRuntimeMode: () => currentRuntimeMode,
+    maybeDrainInboxIfIdle,
+    getExtensionContext: () => extCtx ?? undefined,
+  });
+  const { reportStatus, signalAgentFree } = pinetAgentStatus;
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -2178,57 +2200,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ─── Agent status reporting ──────────────────────────
-
-  async function syncDesiredAgentStatus(options: { force?: boolean } = {}): Promise<void> {
-    if (!pinetEnabled) {
-      return;
-    }
-
-    if (brokerRole === "broker") {
-      const db = getActiveBrokerDb();
-      const selfId = getActiveBrokerSelfId();
-      if (!db || !selfId) {
-        return;
-      }
-      db.updateAgentStatus(selfId, desiredAgentStatus);
-      return;
-    }
-
-    if (brokerRole === "follower" && brokerClient) {
-      await followerRuntime.syncDesiredStatus(desiredAgentStatus, options);
-    }
-  }
-
-  async function reportStatus(status: "working" | "idle"): Promise<void> {
-    desiredAgentStatus = status;
-    await syncDesiredAgentStatus();
-  }
-
-  async function signalAgentFree(
-    ctx?: ExtensionContext,
-    options: { requirePinet?: boolean } = {},
-  ): Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }> {
-    if (!pinetEnabled && options.requirePinet) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-    }
-
-    const maintenanceCtx = ctx ?? extCtx ?? undefined;
-    if (pinetEnabled) {
-      await reportStatus("idle");
-      if (brokerRole === "broker" && maintenanceCtx) {
-        brokerRuntime.runMaintenance(maintenanceCtx);
-      }
-    }
-
-    const queuedInboxCount = inbox.length;
-    const shouldDrainQueuedInbox = pinetEnabled || currentRuntimeMode === "single";
-    const drainedQueuedInbox =
-      shouldDrainQueuedInbox && queuedInboxCount > 0 && maintenanceCtx
-        ? maybeDrainInboxIfIdle(maintenanceCtx)
-        : false;
-
-    return { queuedInboxCount, drainedQueuedInbox };
-  }
 
   function deliverFollowUpMessage(text: string): boolean {
     try {
