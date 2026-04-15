@@ -61,7 +61,6 @@ import {
   formatIMessageMvpReadiness,
 } from "@gugu910/pi-imessage-bridge";
 import {
-  resolveSlackThreadOwnerHint,
   SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
 } from "./slack-access.js";
@@ -87,6 +86,7 @@ import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
+import { createBrokerThreadOwnerHints } from "./broker-thread-owner-hints.js";
 import { createPinetActivityFormatting } from "./pinet-activity-formatting.js";
 import { createPinetControlPlaneCanvas } from "./pinet-control-plane-canvas.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
@@ -820,26 +820,11 @@ export default function (pi: ExtensionAPI) {
     return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
   }
 
-  const brokerThreadOwnerHintCache = new TtlCache<
-    string,
-    { agentOwner?: string; agentName?: string }
-  >({
-    maxSize: 2000,
-    ttlMs: 60 * 1000,
+  const brokerThreadOwnerHints = createBrokerThreadOwnerHints({
+    slack,
+    getBotToken: () => botToken!,
   });
-
-  async function resolveBrokerThreadOwnerHint(
-    channel: string,
-    threadTs: string,
-  ): Promise<{ agentOwner?: string; agentName?: string } | null> {
-    return resolveSlackThreadOwnerHint({
-      slack,
-      token: botToken!,
-      channel,
-      threadTs,
-      cache: brokerThreadOwnerHintCache,
-    });
-  }
+  const { resolveBrokerThreadOwnerHint } = brokerThreadOwnerHints;
 
   const brokerRuntime = createBrokerRuntime({
     getSettings: () => settings,
