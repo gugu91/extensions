@@ -18,17 +18,7 @@ import {
   resolveAllowAllWorkspaceUsers,
   trackBrokerInboundThread,
 } from "./helpers.js";
-import {
-  buildSecurityPrompt,
-  isBrokerForbiddenTool,
-  type SecurityGuardrails,
-} from "./guardrails.js";
-import { evaluateSlackOriginCoreToolPolicy } from "./core-tool-guardrails.js";
-import {
-  consumePendingSlackToolPolicyTurn,
-  deliverTrackedSlackFollowUpMessage,
-  type PendingSlackToolPolicyTurn,
-} from "./slack-turn-guardrails.js";
+import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import type { Broker } from "./broker/index.js";
@@ -82,6 +72,7 @@ import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import { createPinetRemoteControl } from "./pinet-remote-control.js";
 import { createPinetMeshOps } from "./pinet-mesh-ops.js";
 import { createAgentPromptGuidance } from "./agent-prompt-guidance.js";
+import { createSlackToolPolicyRuntime } from "./slack-tool-policy-runtime.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -211,9 +202,6 @@ export default function (pi: ExtensionAPI) {
   let suppressAutoDrainUntil = 0;
   let terminalInputUnsubscribe: (() => void) | null = null;
   let extCtx: ExtensionContext | null = null; // cached for badge updates
-  const pendingSlackToolPolicyTurns: PendingSlackToolPolicyTurn[] = [];
-  let nextSlackToolPolicyTurn: PendingSlackToolPolicyTurn | null = null;
-  let activeSlackToolPolicyTurn: PendingSlackToolPolicyTurn | null = null;
 
   function updateBadge(): void {
     if (!extCtx?.hasUI) return;
@@ -1348,6 +1336,15 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  const slackToolPolicyRuntime = createSlackToolPolicyRuntime({
+    getBrokerRole: () => brokerRole,
+    getGuardrails: () => guardrails,
+    requireToolPolicy,
+    formatAction: formatConfirmationAction,
+    formatError: msg,
+    deliverFollowUpMessage,
+  });
+
   async function flushDeliveredFollowerAcks(): Promise<void> {
     if (brokerRole !== "follower" || !brokerClient?.client) return;
     await followerRuntime.flushDeliveredAcks();
@@ -1372,11 +1369,9 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (
-      deliverTrackedSlackFollowUpMessage({
-        queue: pendingSlackToolPolicyTurns,
+      slackToolPolicyRuntime.deliverTrackedSlackFollowUpMessage({
         prompt,
         messages: pending,
-        deliver: deliverFollowUpMessage,
       })
     ) {
       if (brokerInboxIds.length > 0) {
@@ -1398,50 +1393,17 @@ export default function (pi: ExtensionAPI) {
     updateBadge();
   }
 
-  pi.on("input", async (event) => {
-    if (event.source !== "extension") {
-      return;
-    }
+  pi.on("input", slackToolPolicyRuntime.onInput);
 
-    nextSlackToolPolicyTurn = consumePendingSlackToolPolicyTurn(
-      pendingSlackToolPolicyTurns,
-      event.text,
-    );
-  });
+  pi.on("turn_start", slackToolPolicyRuntime.onTurnStart);
 
-  pi.on("turn_start", async () => {
-    activeSlackToolPolicyTurn = nextSlackToolPolicyTurn;
-    nextSlackToolPolicyTurn = null;
-  });
+  pi.on("turn_end", slackToolPolicyRuntime.onTurnEnd);
 
-  pi.on("turn_end", async () => {
-    activeSlackToolPolicyTurn = null;
-  });
-
-  pi.on("agent_end", async () => {
-    activeSlackToolPolicyTurn = null;
-  });
+  pi.on("agent_end", slackToolPolicyRuntime.onAgentEnd);
 
   // Hard-block forbidden tools when broker role is active.
   // Also hard-enforce Slack-origin guardrails for core built-in tools.
-  pi.on("tool_call", async (event) => {
-    if (brokerRole === "broker" && isBrokerForbiddenTool(event.toolName)) {
-      return {
-        block: true,
-        reason: `Tool "${event.toolName}" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet_message to delegate to a connected worker instead.`,
-      };
-    }
-
-    return evaluateSlackOriginCoreToolPolicy({
-      turn: activeSlackToolPolicyTurn,
-      toolName: event.toolName,
-      input: event.input,
-      guardrails,
-      requireToolPolicy,
-      formatAction: formatConfirmationAction,
-      formatError: msg,
-    });
-  });
+  pi.on("tool_call", slackToolPolicyRuntime.onToolCall);
 
   // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
   pi.on("before_agent_start", agentPromptGuidance.beforeAgentStart);
