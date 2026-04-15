@@ -16,6 +16,8 @@ export interface PinetRemoteControlDeps {
   flushDeferredRemoteControlAcks: (command: PinetControlCommand) => void;
   reloadPinetRuntime: (ctx: ExtensionContext) => Promise<void>;
   formatError: (error: unknown) => string;
+  onReloadSuccess?: () => void;
+  onReloadError?: (error: unknown) => void;
 }
 
 export interface PinetRemoteControl {
@@ -58,6 +60,7 @@ export function createPinetRemoteControl(deps: PinetRemoteControlDeps): PinetRem
       try {
         if (command === "reload") {
           await deps.reloadPinetRuntime(ctx);
+          deps.onReloadSuccess?.();
           return;
         }
 
@@ -66,6 +69,9 @@ export function createPinetRemoteControl(deps: PinetRemoteControlDeps): PinetRem
         }
         controlCtx.shutdown();
       } catch (err) {
+        if (command === "reload") {
+          deps.onReloadError?.(err);
+        }
         ctx.ui.notify(`Pinet remote control failed: ${deps.formatError(err)}`, "error");
       } finally {
         const next = finishPinetRemoteControl(remoteControlState);
