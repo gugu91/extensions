@@ -114,11 +114,7 @@ import {
   renderBrokerControlPlaneCanvasMarkdown,
   type BrokerControlPlaneDashboardSnapshot,
 } from "./broker/control-plane-canvas.js";
-import {
-  publishSlackHomeTab,
-  renderBrokerControlPlaneHomeTabView,
-  renderStandalonePinetHomeTabView,
-} from "./home-tab.js";
+import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -593,6 +589,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Helpers ─────────────────────────────────────────
 
   let isSinglePlayerShuttingDown = () => false;
+  let isSinglePlayerConnected = () => false;
   const slackRuntimeAccess = createSlackRuntimeAccess({
     slack,
     getBotToken: () => botToken!,
@@ -620,6 +617,22 @@ export default function (pi: ExtensionAPI) {
     setSuggestedPrompts,
     fetchSlackMessageByTs,
   } = slackRuntimeAccess;
+  const pinetHomeTabs = createPinetHomeTabs({
+    slack,
+    getBotToken: () => botToken,
+    formatError: msg,
+    getAgentName: () => agentName,
+    getAgentEmoji: () => agentEmoji,
+    getBrokerRole: () => brokerRole,
+    getRuntimeMode: () => currentRuntimeMode,
+    isFollowerConnected: () => brokerClient != null,
+    isSinglePlayerConnected: () => isSinglePlayerConnected(),
+    getActiveThreads: () => threads.size,
+    getPendingInboxCount: () => inbox.length,
+    getDefaultChannel: () => settings.defaultChannel ?? null,
+    getCurrentBranch: async () => (await probeGitBranch(process.cwd())) ?? null,
+    getBrokerHomeTabs: () => brokerRuntime,
+  });
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -693,7 +706,8 @@ export default function (pi: ExtensionAPI) {
     maybeDrainInboxIfIdle,
     resolveThreadChannel: resolveFollowerReplyChannel,
     setSuggestedPrompts,
-    publishCurrentPinetHomeTab: (userId, ctx) => publishCurrentPinetHomeTabSafely(userId, ctx),
+    publishCurrentPinetHomeTab: (userId, ctx) =>
+      pinetHomeTabs.publishCurrentPinetHomeTabSafely(userId, ctx),
     fetchSlackMessageByTs,
     addReaction,
     removeReaction,
@@ -713,6 +727,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   isSinglePlayerShuttingDown = () => singlePlayerRuntime.isShuttingDown();
+  isSinglePlayerConnected = () => singlePlayerRuntime.isConnected();
 
   // ─── Reconnect / status ─────────────────────────────
 
@@ -879,7 +894,7 @@ export default function (pi: ExtensionAPI) {
       }
     },
     onAppHomeOpened: async (userId, ctx) => {
-      await publishCurrentPinetHomeTabSafely(userId, ctx, new Date().toISOString());
+      await pinetHomeTabs.publishCurrentPinetHomeTabSafely(userId, ctx, new Date().toISOString());
     },
     pushInboxMessages: (messages) => {
       inbox.push(...messages);
@@ -921,7 +936,7 @@ export default function (pi: ExtensionAPI) {
       );
     },
     refreshHomeTabs: async (ctx, snapshot, refreshedAt, userIds) => {
-      await refreshBrokerControlPlaneHomeTabs(ctx, snapshot, refreshedAt, userIds);
+      await pinetHomeTabs.refreshBrokerControlPlaneHomeTabs(ctx, snapshot, refreshedAt, userIds);
     },
     buildControlPlaneDashboardSnapshot: (input) =>
       buildBrokerControlPlaneDashboardSnapshot(
@@ -1148,104 +1163,6 @@ export default function (pi: ExtensionAPI) {
       currentBranch,
       homedir: os.homedir(),
     });
-  }
-
-  async function refreshBrokerControlPlaneHomeTabs(
-    ctx: ExtensionContext,
-    snapshot: BrokerControlPlaneDashboardSnapshot,
-    refreshedAt: string,
-    userIds: string[] = brokerRuntime.getHomeTabViewerIds(),
-  ): Promise<void> {
-    if (!botToken || userIds.length === 0) {
-      return;
-    }
-
-    brokerRuntime.setLastHomeTabSnapshot(snapshot);
-    let hadError = false;
-
-    for (const userId of userIds) {
-      try {
-        await publishSlackHomeTab({
-          slack,
-          token: botToken,
-          userId,
-          view: renderBrokerControlPlaneHomeTabView(snapshot),
-        });
-      } catch (err) {
-        hadError = true;
-        const homeTabMessage = `Pinet Home tab publish failed: ${msg(err)}`;
-        if (homeTabMessage !== brokerRuntime.getLastHomeTabError()) {
-          ctx.ui.notify(homeTabMessage, "warning");
-        }
-        brokerRuntime.setLastHomeTabError(homeTabMessage);
-      }
-    }
-
-    if (!hadError) {
-      brokerRuntime.setLastHomeTabError(null);
-    }
-    brokerRuntime.setLastHomeTabRefreshAt(refreshedAt);
-  }
-
-  function reportHomeTabPublishFailure(ctx: ExtensionContext, err: unknown): void {
-    const homeTabMessage = `Pinet Home tab publish failed: ${msg(err)}`;
-    if (homeTabMessage !== brokerRuntime.getLastHomeTabError()) {
-      ctx.ui.notify(homeTabMessage, "warning");
-    }
-    brokerRuntime.setLastHomeTabError(homeTabMessage);
-  }
-
-  async function publishCurrentPinetHomeTab(
-    userId: string,
-    ctx: ExtensionContext,
-    openedAt: string = new Date().toISOString(),
-  ): Promise<void> {
-    if (!botToken) {
-      return;
-    }
-
-    if (brokerRuntime.isConnected() && brokerRole === "broker") {
-      if (await brokerRuntime.publishCurrentHomeTabSafely(userId, ctx, openedAt)) {
-        return;
-      }
-    }
-
-    const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
-    await publishSlackHomeTab({
-      slack,
-      token: botToken,
-      userId,
-      view: renderStandalonePinetHomeTabView({
-        agentName,
-        agentEmoji,
-        connected:
-          currentRuntimeMode === "broker"
-            ? brokerRuntime.isConnected()
-            : currentRuntimeMode === "follower"
-              ? brokerClient != null
-              : currentRuntimeMode === "single"
-                ? singlePlayerRuntime.isConnected()
-                : false,
-        mode: currentRuntimeMode,
-        activeThreads: threads.size,
-        pendingInbox: inbox.length,
-        currentBranch,
-        defaultChannel: settings.defaultChannel ?? null,
-      }),
-    });
-    brokerRuntime.setLastHomeTabError(null);
-  }
-
-  async function publishCurrentPinetHomeTabSafely(
-    userId: string,
-    ctx: ExtensionContext,
-    openedAt: string = new Date().toISOString(),
-  ): Promise<void> {
-    try {
-      await publishCurrentPinetHomeTab(userId, ctx, openedAt);
-    } catch (err) {
-      reportHomeTabPublishFailure(ctx, err);
-    }
   }
 
   async function refreshBrokerControlPlaneCanvasDashboard(
