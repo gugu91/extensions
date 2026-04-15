@@ -15,7 +15,6 @@ import {
   formatInboxMessages,
   buildPinetSkinAssignment,
   buildPinetSkinPromptGuideline,
-  normalizeOutgoingPinetControlMessage,
   queuePinetRemoteControl,
   finishPinetRemoteControl,
   reloadPinetRuntimeSafely,
@@ -60,12 +59,8 @@ import type { Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { type BrokerMaintenanceResult } from "./broker/maintenance.js";
-import { DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS, type BrokerClient } from "./broker/client.js";
-import {
-  dispatchBroadcastAgentMessage,
-  dispatchDirectAgentMessage,
-  isBroadcastChannelTarget,
-} from "./broker/agent-messaging.js";
+import { DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
 import { registerPinetTools } from "./pinet-tools.js";
@@ -95,7 +90,6 @@ import {
 } from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
 import {
-  extractTaskAssignmentsFromMessage,
   normalizeTrackedTaskAssignments,
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
@@ -117,6 +111,7 @@ import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
 import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
+import { createPinetMeshOps } from "./pinet-mesh-ops.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -1119,6 +1114,27 @@ export default function (pi: ExtensionAPI) {
     return brokerRuntime.getSelfId();
   }
 
+  const pinetMeshOps = createPinetMeshOps({
+    getPinetEnabled: () => pinetEnabled,
+    getBrokerRole: () => brokerRole,
+    getActiveBrokerDb,
+    getActiveBrokerSelfId,
+    getAgentName: () => agentName,
+    getFollowerClient: () => brokerClient?.client ?? null,
+    formatTrackedAgent,
+    logActivity: (entry) => {
+      brokerRuntime.logActivity(entry);
+    },
+  });
+  const {
+    sendPinetAgentMessage,
+    sendPinetBroadcastMessage,
+    scheduleBrokerWakeup,
+    scheduleFollowerWakeup,
+    listBrokerAgents,
+    listFollowerAgents,
+  } = pinetMeshOps;
+
   function getBrokerControlPlaneHomeTabViewerIds(): string[] {
     return brokerRuntime.getHomeTabViewerIds();
   }
@@ -1307,212 +1323,6 @@ export default function (pi: ExtensionAPI) {
         "info",
       );
     }
-  }
-
-  function prepareOutgoingPinetAgentMessage(
-    body: string,
-    metadata?: Record<string, unknown>,
-  ): { body: string; metadata?: Record<string, unknown> } {
-    const control = normalizeOutgoingPinetControlMessage(body, metadata);
-    if (control) {
-      return {
-        body: control.body,
-        metadata: control.metadata,
-      };
-    }
-
-    return { body, metadata };
-  }
-
-  async function sendPinetAgentMessage(
-    targetRef: string,
-    body: string,
-    metadata?: Record<string, unknown>,
-  ): Promise<{ messageId: number; target: string }> {
-    if (!pinetEnabled) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-    }
-
-    if (isBroadcastChannelTarget(targetRef)) {
-      throw new Error(
-        "Broadcast channels are broker-only. Send the request to the broker instead.",
-      );
-    }
-
-    const outgoing = prepareOutgoingPinetAgentMessage(body, metadata);
-    const finalBody = outgoing.body;
-    const finalMetadata = outgoing.metadata;
-
-    if (brokerRole === "broker") {
-      const db = getActiveBrokerDb();
-      const selfId = getActiveBrokerSelfId();
-      if (!db || !selfId) {
-        throw new Error("Broker agent identity is unavailable.");
-      }
-
-      const result = dispatchDirectAgentMessage(db, {
-        senderAgentId: selfId,
-        senderAgentName: agentName,
-        target: targetRef,
-        body: finalBody,
-        metadata: finalMetadata,
-      });
-
-      const recordedAssignments = [] as Array<{ issueNumber: number; branch: string | null }>;
-      for (const assignment of extractTaskAssignmentsFromMessage(body)) {
-        const tracked = db.recordTaskAssignment(
-          result.target.id,
-          assignment.issueNumber,
-          assignment.branch,
-          result.threadId,
-          result.messageId,
-        );
-        recordedAssignments.push({ issueNumber: tracked.issueNumber, branch: tracked.branch });
-      }
-
-      if (recordedAssignments.length > 0) {
-        brokerRuntime.logActivity({
-          kind: "task_assignment",
-          level: "actions",
-          title: recordedAssignments.length === 1 ? "Task assigned" : "Tasks assigned",
-          summary: `Assigned ${recordedAssignments.map((assignment) => `#${assignment.issueNumber}`).join(", ")} to ${formatTrackedAgent(result.target.id)}.`,
-          details: recordedAssignments.map((assignment) =>
-            assignment.branch
-              ? `#${assignment.issueNumber} on \`${assignment.branch}\``
-              : `#${assignment.issueNumber}`,
-          ),
-          fields: [
-            { label: "Worker", value: formatTrackedAgent(result.target.id) },
-            { label: "Thread", value: result.threadId },
-            { label: "Message", value: result.messageId },
-          ],
-          tone: "info",
-        });
-      }
-
-      return { messageId: result.messageId, target: result.target.name };
-    }
-
-    if (brokerRole === "follower" && brokerClient) {
-      const client = brokerClient.client as BrokerClient;
-      const messageId = await client.sendAgentMessage(targetRef, finalBody, finalMetadata);
-      return { messageId, target: targetRef };
-    }
-
-    throw new Error("Pinet is in an unexpected state.");
-  }
-
-  function sendPinetBroadcastMessage(
-    channel: string,
-    body: string,
-  ): { channel: string; messageIds: number[]; recipients: string[] } {
-    const db = getActiveBrokerDb();
-    const selfId = getActiveBrokerSelfId();
-    if (!db || !selfId) {
-      throw new Error("Broker agent identity is unavailable.");
-    }
-
-    const outgoing = prepareOutgoingPinetAgentMessage(body);
-    const result = dispatchBroadcastAgentMessage(db, {
-      senderAgentId: selfId,
-      senderAgentName: agentName,
-      channel,
-      body: outgoing.body,
-      ...(outgoing.metadata ? { metadata: outgoing.metadata } : {}),
-    });
-
-    return {
-      channel: result.channel,
-      messageIds: result.messageIds,
-      recipients: result.targets.map((target) => target.name),
-    };
-  }
-
-  async function scheduleBrokerWakeup(
-    fireAt: string,
-    message: string,
-  ): Promise<{ id: number; fireAt: string }> {
-    const db = getActiveBrokerDb();
-    const selfId = getActiveBrokerSelfId();
-    if (!db || !selfId) {
-      throw new Error("Broker agent identity is unavailable.");
-    }
-
-    return db.scheduleWakeup(selfId, message, fireAt);
-  }
-
-  async function scheduleFollowerWakeup(
-    fireAt: string,
-    message: string,
-  ): Promise<{ id: number; fireAt: string }> {
-    if (!brokerClient) {
-      throw new Error("Pinet is in an unexpected state.");
-    }
-
-    return (brokerClient.client as BrokerClient).scheduleWakeup(fireAt, message);
-  }
-
-  function listBrokerAgents(): Array<{
-    emoji: string;
-    name: string;
-    id: string;
-    pid?: number;
-    status: "working" | "idle";
-    metadata: Record<string, unknown> | null;
-    lastHeartbeat: string;
-    lastSeen?: string;
-    disconnectedAt?: string | null;
-    resumableUntil?: string | null;
-  }> {
-    const db = getActiveBrokerDb();
-    if (!db) {
-      throw new Error("Broker agent identity is unavailable.");
-    }
-
-    return db.getAllAgents().map((agent) => ({
-      emoji: agent.emoji,
-      name: agent.name,
-      id: agent.id,
-      pid: agent.pid,
-      status: agent.status,
-      metadata: agent.metadata,
-      lastHeartbeat: agent.lastHeartbeat,
-      lastSeen: agent.lastSeen,
-      disconnectedAt: agent.disconnectedAt,
-      resumableUntil: agent.resumableUntil,
-    }));
-  }
-
-  async function listFollowerAgents(includeGhosts: boolean): Promise<
-    Array<{
-      emoji: string;
-      name: string;
-      id: string;
-      pid?: number;
-      status: "working" | "idle";
-      metadata: Record<string, unknown> | null;
-      lastHeartbeat: string;
-      lastSeen?: string;
-      disconnectedAt?: string | null;
-      resumableUntil?: string | null;
-    }>
-  > {
-    if (!brokerClient) {
-      throw new Error("Pinet is in an unexpected state.");
-    }
-
-    return (await brokerClient.client.listAgents(includeGhosts)).map((agent) => ({
-      emoji: agent.emoji,
-      name: agent.name,
-      id: agent.id,
-      pid: agent.pid,
-      status: agent.status ?? "idle",
-      metadata: agent.metadata,
-      lastHeartbeat: agent.lastHeartbeat,
-      lastSeen: agent.lastSeen,
-      disconnectedAt: agent.disconnectedAt,
-      resumableUntil: agent.resumableUntil,
-    }));
   }
 
   let remoteControlState: PinetRemoteControlState = {
