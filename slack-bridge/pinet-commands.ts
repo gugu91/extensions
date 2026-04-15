@@ -7,13 +7,8 @@ import {
   type SlackBridgeSettings,
 } from "./helpers.js";
 import { formatRecentActivityLogEntries, type LoggedActivityLogEntry } from "./activity-log.js";
+import type { PinetRuntimeControlContext } from "./pinet-remote-control.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
-
-// ─── Types ───────────────────────────────────────────────
-
-type PinetRuntimeControlContext = ExtensionContext & {
-  abort?: () => void;
-};
 
 export interface PinetCommandsDeps {
   // State accessors
