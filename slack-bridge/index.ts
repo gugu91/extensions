@@ -1,33 +1,25 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
-  getSlackUserAccessWarning,
-  isUserAllowed as checkUserAllowed,
   formatInboxMessages,
-  buildPinetSkinAssignment,
   buildPinetSkinPromptGuideline,
   reloadPinetRuntimeSafely,
   callSlackAPI,
   createAbortableOperationTracker,
   buildPinetOwnerToken,
   resolveAgentIdentity,
-  resolveRuntimeAgentIdentity,
   resolveBrokerStableId,
-  shortenPath,
-  buildIdentityReplyGuidelines,
   buildAgentPersonalityGuidelines,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
-  normalizeOwnedThreads,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import {
@@ -87,6 +79,7 @@ import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createBrokerThreadOwnerHints } from "./broker-thread-owner-hints.js";
 import { createPersistedRuntimeState } from "./persisted-runtime-state.js";
+import { createRuntimeAgentContext } from "./runtime-agent-context.js";
 import { createPinetActivityFormatting } from "./pinet-activity-formatting.js";
 import { createPinetControlPlaneCanvas } from "./pinet-control-plane-canvas.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
@@ -126,26 +119,6 @@ export default function (pi: ExtensionAPI) {
   );
   let reactionCommands = resolveReactionCommands(settings.reactionCommands);
 
-  function isUserAllowed(userId: string): boolean {
-    return checkUserAllowed(allowedUsers, userId);
-  }
-
-  let lastSlackUserAccessWarning = "";
-
-  function maybeWarnSlackUserAccess(ctx?: ExtensionContext): void {
-    const warning = getSlackUserAccessWarning(allowedUsers);
-    if (!warning) {
-      lastSlackUserAccessWarning = "";
-      return;
-    }
-    if (warning === lastSlackUserAccessWarning) {
-      return;
-    }
-    lastSlackUserAccessWarning = warning;
-    console.warn(`[slack-bridge] ${warning}`);
-    ctx?.ui.notify(warning, "warning");
-  }
-
   const initialIdentity = resolveAgentIdentity(settings, process.env.PI_NICKNAME, process.cwd());
   let agentName = initialIdentity.name;
   let agentEmoji = initialIdentity.emoji;
@@ -160,258 +133,6 @@ export default function (pi: ExtensionAPI) {
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
   let securityPrompt = buildSecurityPrompt(guardrails);
-
-  interface ReloadableRuntimeSnapshot {
-    settings: typeof settings;
-    botToken: string | undefined;
-    appToken: string | undefined;
-    allowedUsers: Set<string> | null;
-    guardrails: SecurityGuardrails;
-    reactionCommands: Map<string, { action: string; prompt: string }>;
-    securityPrompt: string;
-    agentName: string;
-    agentEmoji: string;
-    activeSkinTheme: string | null;
-    agentPersonality: string | null;
-    agentAliases: string[];
-  }
-
-  function getStableIdForRole(role: "broker" | "worker"): string {
-    return role === "broker" ? brokerStableId : agentStableId;
-  }
-
-  function getIdentitySeedForRole(
-    role: "broker" | "worker",
-    sessionFile = extCtx?.sessionManager.getSessionFile() ?? undefined,
-  ): string {
-    return role === "broker" ? brokerStableId : (sessionFile ?? agentStableId);
-  }
-
-  function getSkinSeed(preferredSeed?: string): string {
-    return (
-      preferredSeed?.trim() || getStableIdForRole(brokerRole === "broker" ? "broker" : "worker")
-    );
-  }
-
-  function rememberAgentAlias(name: string | undefined): void {
-    const trimmed = name?.trim();
-    if (!trimmed || trimmed === agentName) return;
-    agentAliases.add(trimmed);
-    while (agentAliases.size > 24) {
-      const oldest = agentAliases.values().next().value;
-      if (!oldest) break;
-      agentAliases.delete(oldest);
-    }
-  }
-
-  function resolveSkinAssignment(
-    role: "broker" | "worker",
-    seed = getSkinSeed(),
-  ): { name: string; emoji: string; personality: string } | null {
-    if (!activeSkinTheme) return null;
-    const assignment = buildPinetSkinAssignment({ theme: activeSkinTheme, role, seed });
-    return {
-      name: assignment.name,
-      emoji: assignment.emoji,
-      personality: assignment.personality,
-    };
-  }
-
-  function applyLocalAgentIdentity(
-    nextName: string,
-    nextEmoji: string,
-    nextPersonality: string | null,
-  ): void {
-    const previousName = agentName;
-    if (
-      agentName === nextName &&
-      agentEmoji === nextEmoji &&
-      (agentPersonality ?? null) === (nextPersonality ?? null)
-    ) {
-      return;
-    }
-
-    agentName = nextName;
-    agentEmoji = nextEmoji;
-    agentPersonality = nextPersonality ?? null;
-    rememberAgentAlias(previousName);
-    normalizeOwnedThreads(threads.values(), agentName, agentOwnerToken, agentAliases);
-    persistState();
-    updateBadge();
-  }
-
-  function refreshSettings(): void {
-    settings = loadSettingsFromFile();
-    botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
-    appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
-    allowedUsers = buildAllowlist(
-      settings,
-      process.env.SLACK_ALLOWED_USERS,
-      process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS,
-    );
-    guardrails = settings.security ?? {};
-    reactionCommands = resolveReactionCommands(settings.reactionCommands);
-    securityPrompt = buildSecurityPrompt(guardrails);
-    const role = brokerRole === "broker" ? "broker" : "worker";
-    const identitySeed = getIdentitySeedForRole(role);
-    const skinIdentity = resolveSkinAssignment(role, identitySeed);
-    if (skinIdentity) {
-      agentName = skinIdentity.name;
-      agentEmoji = skinIdentity.emoji;
-      agentPersonality = skinIdentity.personality;
-      return;
-    }
-    const refreshedIdentity = resolveRuntimeAgentIdentity(
-      { name: agentName, emoji: agentEmoji },
-      settings,
-      process.env.PI_NICKNAME,
-      identitySeed,
-      role,
-    );
-    agentName = refreshedIdentity.name;
-    agentEmoji = refreshedIdentity.emoji;
-    agentPersonality = null;
-  }
-
-  function snapshotReloadableRuntime(): ReloadableRuntimeSnapshot {
-    return {
-      settings: structuredClone(settings),
-      botToken,
-      appToken,
-      allowedUsers: allowedUsers ? new Set(allowedUsers) : null,
-      guardrails: structuredClone(guardrails),
-      reactionCommands: new Map(reactionCommands),
-      securityPrompt,
-      agentName,
-      agentEmoji,
-      activeSkinTheme,
-      agentPersonality,
-      agentAliases: [...agentAliases],
-    };
-  }
-
-  function restoreReloadableRuntime(snapshot: ReloadableRuntimeSnapshot): void {
-    settings = structuredClone(snapshot.settings);
-    botToken = snapshot.botToken;
-    appToken = snapshot.appToken;
-    allowedUsers = snapshot.allowedUsers ? new Set(snapshot.allowedUsers) : null;
-    guardrails = structuredClone(snapshot.guardrails);
-    reactionCommands = new Map(snapshot.reactionCommands);
-    securityPrompt = snapshot.securityPrompt;
-    agentName = snapshot.agentName;
-    agentEmoji = snapshot.agentEmoji;
-    activeSkinTheme = snapshot.activeSkinTheme;
-    agentPersonality = snapshot.agentPersonality;
-    agentOwnerToken = buildPinetOwnerToken(
-      getStableIdForRole(brokerRole === "broker" ? "broker" : "worker"),
-    );
-    agentAliases.clear();
-    for (const alias of snapshot.agentAliases) {
-      if (alias && alias !== agentName) {
-        agentAliases.add(alias);
-      }
-    }
-  }
-
-  function detectProjectTools(repoRoot: string, cwd: string): string[] {
-    const tools = new Set<string>();
-
-    for (const candidate of [path.join(cwd, "package.json"), path.join(repoRoot, "package.json")]) {
-      try {
-        if (!fs.existsSync(candidate)) continue;
-        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
-          scripts?: Record<string, string>;
-        };
-        const scripts = parsed.scripts ?? {};
-        if (scripts.test) tools.add("test");
-        if (scripts.lint) tools.add("lint");
-        if (scripts.typecheck) tools.add("typecheck");
-        if (scripts.build) tools.add("build");
-      } catch {
-        // Ignore unreadable package.json files.
-      }
-    }
-
-    tools.add("git");
-    return [...tools].sort();
-  }
-
-  const gitContextCache = createGitContextCache(() => probeGitContext(process.cwd()));
-
-  async function getAgentMetadata(
-    role: "broker" | "worker" = "worker",
-  ): Promise<Record<string, unknown>> {
-    const gitContext = await gitContextCache.get();
-    const { cwd, repo, repoRoot, branch } = gitContext;
-    const resolvedRepoRoot = repoRoot ?? cwd;
-    const tools = detectProjectTools(resolvedRepoRoot, cwd);
-    const tags = [
-      `role:${role}`,
-      `repo:${repo}`,
-      ...(branch ? [`branch:${branch}`] : []),
-      ...tools.map((tool) => `tool:${tool}`),
-    ];
-
-    return {
-      cwd,
-      branch,
-      host: os.hostname(),
-      role,
-      repo,
-      repoRoot,
-      ...(activeSkinTheme ? { skinTheme: activeSkinTheme } : {}),
-      ...(agentPersonality ? { personality: agentPersonality } : {}),
-      capabilities: {
-        repo,
-        repoRoot,
-        branch,
-        role,
-        tools,
-        tags,
-      },
-    };
-  }
-
-  function asStringValue(value: unknown): string | undefined {
-    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-  }
-
-  function getMeshRoleFromMetadata(
-    metadata: Record<string, unknown> | undefined,
-    fallback: "broker" | "worker" = "worker",
-  ): "broker" | "worker" {
-    return asStringValue(metadata?.role) === "broker" ? "broker" : fallback;
-  }
-
-  function buildSkinMetadata(
-    metadata: Record<string, unknown> | undefined,
-    personality: string,
-  ): Record<string, unknown> {
-    return {
-      ...(metadata ?? {}),
-      ...(activeSkinTheme ? { skinTheme: activeSkinTheme } : {}),
-      personality,
-    };
-  }
-
-  const selfLocation = `${shortenPath(process.cwd(), os.homedir())}@${os.hostname()}`;
-
-  function getIdentityGuidelines(): [string, string, string] {
-    return buildIdentityReplyGuidelines(agentEmoji, agentName, selfLocation);
-  }
-
-  function applyRegistrationIdentity(registration: {
-    name: string;
-    emoji: string;
-    metadata?: Record<string, unknown> | null;
-  }): void {
-    activeSkinTheme = asStringValue(registration.metadata?.skinTheme) ?? null;
-    applyLocalAgentIdentity(
-      registration.name,
-      registration.emoji,
-      asStringValue(registration.metadata?.personality) ?? null,
-    );
-  }
 
   let botUserId: string | null = null;
 
@@ -543,6 +264,81 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ─── Helpers ─────────────────────────────────────────
+
+  const gitContextCache = createGitContextCache(() => probeGitContext(process.cwd()));
+  const runtimeAgentContext = createRuntimeAgentContext({
+    cwd: process.cwd(),
+    getSettings: () => settings,
+    setSettings: (nextSettings) => {
+      settings = nextSettings;
+    },
+    getBotToken: () => botToken,
+    setBotToken: (token) => {
+      botToken = token;
+    },
+    getAppToken: () => appToken,
+    setAppToken: (token) => {
+      appToken = token;
+    },
+    getAllowedUsers: () => allowedUsers,
+    setAllowedUsers: (users) => {
+      allowedUsers = users;
+    },
+    getGuardrails: () => guardrails,
+    setGuardrails: (nextGuardrails) => {
+      guardrails = nextGuardrails;
+    },
+    getReactionCommands: () => reactionCommands,
+    setReactionCommands: (commands) => {
+      reactionCommands = commands;
+    },
+    getSecurityPrompt: () => securityPrompt,
+    setSecurityPrompt: (prompt) => {
+      securityPrompt = prompt;
+    },
+    getAgentName: () => agentName,
+    setAgentName: (name) => {
+      agentName = name;
+    },
+    getAgentEmoji: () => agentEmoji,
+    setAgentEmoji: (emoji) => {
+      agentEmoji = emoji;
+    },
+    getAgentStableId: () => agentStableId,
+    getBrokerStableId: () => brokerStableId,
+    getBrokerRole: () => brokerRole,
+    getAgentOwnerToken: () => agentOwnerToken,
+    setAgentOwnerToken: (ownerToken) => {
+      agentOwnerToken = ownerToken;
+    },
+    getActiveSkinTheme: () => activeSkinTheme,
+    setActiveSkinTheme: (theme) => {
+      activeSkinTheme = theme;
+    },
+    getAgentPersonality: () => agentPersonality,
+    setAgentPersonality: (personality) => {
+      agentPersonality = personality;
+    },
+    getAgentAliases: () => agentAliases,
+    getThreads: () => threads,
+    getExtensionContext: () => extCtx,
+    persistState,
+    updateBadge,
+    getGitContext: () => gitContextCache.get(),
+  });
+  const {
+    isUserAllowed,
+    maybeWarnSlackUserAccess,
+    applyLocalAgentIdentity,
+    refreshSettings,
+    snapshotReloadableRuntime,
+    restoreReloadableRuntime,
+    getAgentMetadata,
+    getMeshRoleFromMetadata,
+    buildSkinMetadata,
+    getIdentityGuidelines,
+    applyRegistrationIdentity,
+  } = runtimeAgentContext;
 
   let isSinglePlayerShuttingDown = () => false;
   let isSinglePlayerConnected = () => false;
