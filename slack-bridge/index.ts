@@ -73,6 +73,7 @@ import { createPinetRemoteControl } from "./pinet-remote-control.js";
 import { createPinetMeshOps } from "./pinet-mesh-ops.js";
 import { createAgentPromptGuidance } from "./agent-prompt-guidance.js";
 import { createSlackToolPolicyRuntime } from "./slack-tool-policy-runtime.js";
+import { createSessionUiRuntime } from "./session-ui-runtime.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -198,54 +199,13 @@ export default function (pi: ExtensionAPI) {
 
   const inbox: InboxMessage[] = [];
   const brokerDeliveryState = createBrokerDeliveryState();
-  const AUTO_DRAIN_INTERRUPT_SUPPRESSION_MS = 1_500;
-  let suppressAutoDrainUntil = 0;
-  let terminalInputUnsubscribe: (() => void) | null = null;
-  let extCtx: ExtensionContext | null = null; // cached for badge updates
-
-  function updateBadge(): void {
-    if (!extCtx?.hasUI) return;
-    const t = extCtx.ui.theme;
-    const n = inbox.length;
-    const label =
-      n > 0
-        ? t.fg("accent", `${agentEmoji} ${agentName} ✦ ${n}`)
-        : t.fg("accent", `${agentEmoji} ${agentName} ✦`);
-    extCtx.ui.setStatus("slack-bridge", label);
-  }
-
-  function notePotentialInterruptInput(data: string): void {
-    if (data !== "\u001b") {
-      return;
-    }
-
-    suppressAutoDrainUntil = Math.max(
-      suppressAutoDrainUntil,
-      Date.now() + AUTO_DRAIN_INTERRUPT_SUPPRESSION_MS,
-    );
-  }
-
-  function shouldSuppressAutomaticInboxDrain(now = Date.now()): boolean {
-    if (suppressAutoDrainUntil === 0) {
-      return false;
-    }
-    if (now >= suppressAutoDrainUntil) {
-      suppressAutoDrainUntil = 0;
-      return false;
-    }
-    return true;
-  }
-
-  function maybeDrainInboxIfIdle(ctx?: ExtensionContext): boolean {
-    if (!(ctx?.isIdle?.() ?? false)) {
-      return false;
-    }
-    if (shouldSuppressAutomaticInboxDrain()) {
-      return false;
-    }
-    drainInbox();
-    return true;
-  }
+  const sessionUiRuntime = createSessionUiRuntime({
+    getAgentName: () => agentName,
+    getAgentEmoji: () => agentEmoji,
+    getInboxLength: () => inbox.length,
+    drainInbox,
+  });
+  const { updateBadge, setExtStatus, maybeDrainInboxIfIdle } = sessionUiRuntime;
 
   // ─── Helpers ─────────────────────────────────────────
 
@@ -305,7 +265,7 @@ export default function (pi: ExtensionAPI) {
     },
     getAgentAliases: () => agentAliases,
     getThreads: () => threads,
-    getExtensionContext: () => extCtx,
+    getExtensionContext: sessionUiRuntime.getExtensionContext,
     persistState,
     updateBadge,
     getGitContext: () => gitContextCache.get(),
@@ -394,7 +354,7 @@ export default function (pi: ExtensionAPI) {
     getInboxLength: () => inbox.length,
     getCurrentRuntimeMode: () => currentRuntimeMode,
     maybeDrainInboxIfIdle,
-    getExtensionContext: () => extCtx ?? undefined,
+    getExtensionContext: () => sessionUiRuntime.getExtensionContext() ?? undefined,
   });
   const { reportStatus, signalAgentFree } = pinetAgentStatus;
   const pinetMeshSkin = createPinetMeshSkin({
@@ -545,27 +505,6 @@ export default function (pi: ExtensionAPI) {
   isSinglePlayerConnected = () => singlePlayerRuntime.isConnected();
 
   // ─── Reconnect / status ─────────────────────────────
-
-  function setExtStatus(
-    ctx: ExtensionContext,
-    state: "ok" | "reconnecting" | "error" | "off",
-  ): void {
-    if (!ctx.hasUI) return;
-    extCtx = ctx;
-    const t = ctx.ui.theme;
-    if (state === "ok") {
-      // delegate to updateBadge so unread count is shown
-      updateBadge();
-      return;
-    }
-    const text =
-      state === "reconnecting"
-        ? t.fg("warning", `${agentEmoji} ${agentName} ⟳`)
-        : state === "error"
-          ? t.fg("error", `${agentEmoji} ${agentName} ✗`)
-          : "";
-    ctx.ui.setStatus("slack-bridge", text);
-  }
 
   // ─── Tools ──────────────────────────────────────────
 
@@ -1217,9 +1156,7 @@ export default function (pi: ExtensionAPI) {
     applyMeshSkin,
     applyLocalAgentIdentity,
     setExtStatus,
-    setExtCtx: (ctx) => {
-      extCtx = ctx;
-    },
+    setExtCtx: sessionUiRuntime.setExtCtx,
   });
 
   async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
@@ -1260,10 +1197,7 @@ export default function (pi: ExtensionAPI) {
     resetTopLevelSlackRequests();
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
-    suppressAutoDrainUntil = 0;
-    terminalInputUnsubscribe?.();
-    terminalInputUnsubscribe = null;
-    extCtx = ctx;
+    sessionUiRuntime.prepareForSessionStart(ctx);
     const sessionHeader = (
       ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
     ).getHeader?.();
@@ -1276,18 +1210,6 @@ export default function (pi: ExtensionAPI) {
       stdinIsTTY: process.stdin.isTTY,
       stdoutIsTTY: process.stdout.isTTY,
     });
-    const uiWithTerminalInput = ctx.ui as ExtensionContext["ui"] & {
-      onTerminalInput?: (
-        handler: (data: string) => { consume?: boolean; data?: string } | undefined,
-      ) => () => void;
-    };
-    if (ctx.hasUI && typeof uiWithTerminalInput.onTerminalInput === "function") {
-      terminalInputUnsubscribe = uiWithTerminalInput.onTerminalInput((data: string) => {
-        notePotentialInterruptInput(data);
-        return undefined;
-      });
-    }
-
     // Restore persisted thread state (always restore, even before /pinet)
     restorePersistedRuntimeState(ctx);
 
@@ -1427,9 +1349,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
-    terminalInputUnsubscribe?.();
-    terminalInputUnsubscribe = null;
-    suppressAutoDrainUntil = 0;
+    sessionUiRuntime.cleanupForSessionShutdown();
     await stopPinetRuntime(ctx, { releaseIdentity: true });
     pinetRegistrationBlocked = false;
   });
