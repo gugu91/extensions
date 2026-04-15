@@ -5,9 +5,6 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
   type InboxMessage,
-  type RalphLoopAgentWorkload,
-  type RalphLoopEvaluationResult,
-  type RalphLoopEvaluationOptions,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   getSlackUserAccessWarning,
@@ -18,9 +15,6 @@ import {
   reloadPinetRuntimeSafely,
   callSlackAPI,
   createAbortableOperationTracker,
-  filterAgentsForMeshVisibility,
-  evaluateRalphLoopCycle,
-  DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   buildPinetOwnerToken,
   resolveAgentIdentity,
   resolvePersistedAgentIdentity,
@@ -53,9 +47,7 @@ import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { buildReactionPromptGuidelines, resolveReactionCommands } from "./reaction-triggers.js";
 import type { Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
-import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
-import { type BrokerMaintenanceResult } from "./broker/maintenance.js";
-import { DEFAULT_SOCKET_PATH, HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
@@ -85,27 +77,18 @@ import {
   type SinglePlayerThreadInfo,
 } from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
-import {
-  normalizeTrackedTaskAssignments,
-  resolveTaskAssignments,
-  type ResolvedTaskAssignment,
-} from "./task-assignments.js";
 import { SlackActivityLogger } from "./activity-log.js";
 import {
   createBrokerDeliveryState,
   getBrokerInboxIds,
   queueBrokerInboxIds,
 } from "./broker-delivery.js";
-import {
-  buildBrokerControlPlaneDashboardSnapshot,
-  refreshBrokerControlPlaneCanvas,
-  renderBrokerControlPlaneCanvasMarkdown,
-  type BrokerControlPlaneDashboardSnapshot,
-} from "./broker/control-plane-canvas.js";
+import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createPinetActivityFormatting } from "./pinet-activity-formatting.js";
+import { createPinetControlPlaneCanvas } from "./pinet-control-plane-canvas.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
 import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import { createPinetRemoteControl } from "./pinet-remote-control.js";
@@ -181,29 +164,6 @@ export default function (pi: ExtensionAPI) {
   function normalizeOptionalSetting(value?: string | null): string | null {
     const trimmed = value?.trim();
     return trimmed && trimmed.length > 0 ? trimmed : null;
-  }
-
-  function getExplicitBrokerControlPlaneCanvasId(): string | null {
-    return normalizeOptionalSetting(settings.controlPlaneCanvasId);
-  }
-
-  function getConfiguredBrokerControlPlaneCanvasId(): string | null {
-    return (
-      getExplicitBrokerControlPlaneCanvasId() ?? brokerRuntime.getControlPlaneCanvasRuntimeId()
-    );
-  }
-
-  function getConfiguredBrokerControlPlaneCanvasChannel(): string | null {
-    return (
-      normalizeOptionalSetting(settings.controlPlaneCanvasChannel) ??
-      normalizeOptionalSetting(settings.defaultChannel)
-    );
-  }
-
-  function getConfiguredBrokerControlPlaneCanvasTitle(): string {
-    return (
-      normalizeOptionalSetting(settings.controlPlaneCanvasTitle) ?? "Pinet Broker Control Plane"
-    );
   }
 
   interface ReloadableRuntimeSnapshot {
@@ -708,6 +668,36 @@ export default function (pi: ExtensionAPI) {
     getActiveBrokerDb: () => (brokerRuntime.getBroker()?.db as BrokerDB | undefined) ?? null,
   });
   const { formatTrackedAgent, summarizeTrackedAssignmentStatus } = pinetActivityFormatting;
+  const pinetControlPlaneCanvas = createPinetControlPlaneCanvas({
+    getSettings: () => settings,
+    getBotToken: () => botToken,
+    slack,
+    resolveChannel,
+    persistState,
+    getActiveBrokerDb,
+    getActiveBrokerSelfId,
+    heartbeatTimerActive: () => brokerRuntime.heartbeatTimerActive(),
+    maintenanceTimerActive: () => brokerRuntime.maintenanceTimerActive(),
+    getLastMaintenance: () => brokerRuntime.getLastMaintenance(),
+    isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
+    getControlPlaneCanvasRuntimeId: () => brokerRuntime.getControlPlaneCanvasRuntimeId(),
+    getControlPlaneCanvasRuntimeChannelId: () =>
+      brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
+    restoreControlPlaneCanvasRuntimeState: (input) => {
+      brokerRuntime.restoreControlPlaneCanvasRuntimeState(input);
+    },
+    setLastControlPlaneCanvasRefreshAt: (value) => {
+      brokerRuntime.setLastControlPlaneCanvasRefreshAt(value);
+    },
+    getLastControlPlaneCanvasError: () => brokerRuntime.getLastControlPlaneCanvasError(),
+    setLastControlPlaneCanvasError: (value) => {
+      brokerRuntime.setLastControlPlaneCanvasError(value);
+    },
+  });
+  const {
+    buildCurrentBrokerControlPlaneDashboardSnapshot,
+    refreshBrokerControlPlaneCanvasDashboard,
+  } = pinetControlPlaneCanvas;
 
   // ─── Socket Mode (native WebSocket) ─────────────────
 
@@ -1097,192 +1087,6 @@ export default function (pi: ExtensionAPI) {
 
   function getBrokerControlPlaneHomeTabViewerIds(): string[] {
     return brokerRuntime.getHomeTabViewerIds();
-  }
-
-  async function buildCurrentBrokerControlPlaneDashboardSnapshot(
-    cycleStartedAt: string = new Date().toISOString(),
-  ): Promise<BrokerControlPlaneDashboardSnapshot | null> {
-    const db = getActiveBrokerDb();
-    if (!db) {
-      return null;
-    }
-
-    const currentBranch = (await probeGitBranch(process.cwd())) ?? null;
-    const nowMs = Date.now();
-    const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
-    const workloads = filterAgentsForMeshVisibility(db.getAllAgents(), {
-      now: nowMs,
-      includeGhosts: true,
-      recentDisconnectWindowMs: recentGhostWindowMs,
-    }).map((agent) => ({
-      ...agent,
-      pendingInboxCount: db.getPendingInboxCount(agent.id),
-      ownedThreadCount: db.getOwnedThreadCount(agent.id),
-    }));
-    const pendingBacklogCount = db.getBacklogCount("pending");
-    const evaluationOptions: RalphLoopEvaluationOptions = {
-      now: nowMs,
-      heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
-      heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
-      stuckWorkingThresholdMs: DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
-      pendingBacklogCount,
-      currentBranch,
-      brokerHeartbeatActive: brokerRuntime.heartbeatTimerActive(),
-      brokerMaintenanceActive: brokerRuntime.maintenanceTimerActive(),
-      brokerAgentId: getActiveBrokerSelfId() ?? undefined,
-    };
-    const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
-
-    const rawTrackedAssignments = db.listTaskAssignments();
-    const trackedAssignmentSourceIds = [
-      ...new Set(
-        rawTrackedAssignments
-          .map((assignment) => assignment.sourceMessageId)
-          .filter((messageId): messageId is number => messageId != null),
-      ),
-    ];
-    const trackedAssignments = normalizeTrackedTaskAssignments(
-      rawTrackedAssignments,
-      new Map(
-        db
-          .getMessagesByIds(trackedAssignmentSourceIds)
-          .map((message) => [message.id, message.body]),
-      ),
-    );
-    let projectedAssignments: ResolvedTaskAssignment[] = [];
-    if (trackedAssignments.length > 0) {
-      const resolvedAssignments = await resolveTaskAssignments(trackedAssignments, process.cwd());
-      projectedAssignments = resolvedAssignments.map((assignment) => ({
-        ...assignment,
-        status: assignment.nextStatus,
-        prNumber: assignment.nextPrNumber,
-      }));
-    }
-
-    const recentRalphCycles = db.getRecentRalphCycles(5).map((cycle) => ({
-      startedAt: cycle.startedAt,
-      completedAt: cycle.completedAt,
-      durationMs: cycle.durationMs,
-      ghostAgentIds: cycle.ghostAgentIds,
-      stuckAgentIds: cycle.stuckAgentIds,
-      anomalies: cycle.anomalies,
-      followUpDelivered: cycle.followUpDelivered,
-      agentCount: cycle.agentCount,
-      backlogCount: cycle.backlogCount,
-    }));
-
-    return buildBrokerControlPlaneDashboardSnapshot({
-      workloads,
-      evaluation,
-      evaluationOptions,
-      maintenance: brokerRuntime.getLastMaintenance(),
-      assignments: projectedAssignments,
-      recentCycles: recentRalphCycles,
-      cycleStartedAt,
-      cycleDurationMs: 0,
-      currentBranch,
-      homedir: os.homedir(),
-    });
-  }
-
-  async function refreshBrokerControlPlaneCanvasDashboard(
-    ctx: ExtensionContext,
-    input: {
-      workloads: RalphLoopAgentWorkload[];
-      evaluation: RalphLoopEvaluationResult;
-      evaluationOptions: RalphLoopEvaluationOptions;
-      maintenance: BrokerMaintenanceResult | null;
-      assignments: ResolvedTaskAssignment[];
-      recentCycles: Array<{
-        startedAt: string;
-        completedAt: string | null;
-        durationMs: number | null;
-        ghostAgentIds: string[];
-        stuckAgentIds: string[];
-        anomalies: string[];
-        followUpDelivered: boolean;
-        agentCount: number;
-        backlogCount: number;
-      }>;
-      cycleStartedAt: string;
-      cycleDurationMs: number;
-      currentBranch: string | null;
-    },
-  ): Promise<void> {
-    if (!botToken || !brokerRuntime.isBrokerControlPlaneCanvasEnabled()) {
-      brokerRuntime.setLastControlPlaneCanvasError(null);
-      return;
-    }
-
-    const explicitCanvasId = getExplicitBrokerControlPlaneCanvasId();
-    const effectiveCanvasId = getConfiguredBrokerControlPlaneCanvasId();
-    const channelInput = getConfiguredBrokerControlPlaneCanvasChannel();
-    if (!effectiveCanvasId && !channelInput) {
-      const warning =
-        "Pinet broker control plane canvas skipped: set slack-bridge.controlPlaneCanvasChannel, defaultChannel, or controlPlaneCanvasId.";
-      if (brokerRuntime.getLastControlPlaneCanvasError() !== warning) {
-        ctx.ui.notify(warning, "warning");
-      }
-      brokerRuntime.setLastControlPlaneCanvasError(warning);
-      return;
-    }
-
-    const snapshot = buildBrokerControlPlaneDashboardSnapshot({
-      workloads: input.workloads,
-      evaluation: input.evaluation,
-      evaluationOptions: input.evaluationOptions,
-      maintenance: input.maintenance,
-      assignments: input.assignments,
-      recentCycles: input.recentCycles,
-      cycleStartedAt: input.cycleStartedAt,
-      cycleDurationMs: input.cycleDurationMs,
-      currentBranch: input.currentBranch,
-      homedir: os.homedir(),
-    });
-    const markdown = renderBrokerControlPlaneCanvasMarkdown(snapshot);
-    const channelId = explicitCanvasId || !channelInput ? null : await resolveChannel(channelInput);
-    const reusableRuntimeCanvasId =
-      !explicitCanvasId &&
-      brokerRuntime.getControlPlaneCanvasRuntimeId() &&
-      (!channelId || brokerRuntime.getControlPlaneCanvasRuntimeChannelId() === channelId)
-        ? brokerRuntime.getControlPlaneCanvasRuntimeId()
-        : null;
-    const previousRuntimeId = brokerRuntime.getControlPlaneCanvasRuntimeId();
-    const previousRuntimeChannelId = brokerRuntime.getControlPlaneCanvasRuntimeChannelId();
-    const result = await refreshBrokerControlPlaneCanvas({
-      slack,
-      token: botToken,
-      markdown,
-      canvasId: explicitCanvasId ?? reusableRuntimeCanvasId,
-      channelId,
-      title: getConfiguredBrokerControlPlaneCanvasTitle(),
-    });
-
-    if (!explicitCanvasId) {
-      brokerRuntime.restoreControlPlaneCanvasRuntimeState({
-        canvasId: result.canvasId,
-        channelId,
-      });
-    }
-    brokerRuntime.setLastControlPlaneCanvasRefreshAt(input.cycleStartedAt);
-    brokerRuntime.setLastControlPlaneCanvasError(null);
-
-    if (
-      !explicitCanvasId &&
-      (result.canvasId !== previousRuntimeId || channelId !== previousRuntimeChannelId)
-    ) {
-      persistState();
-      const destination = channelInput ? ` via ${channelInput}` : "";
-      const action = result.created
-        ? "created"
-        : result.reusedExistingChannelCanvas
-          ? "attached"
-          : "updated";
-      ctx.ui.notify(
-        `Pinet broker control plane canvas ${action}: ${result.canvasId}${destination}`,
-        "info",
-      );
-    }
   }
 
   async function transitionToRuntimeMode(
