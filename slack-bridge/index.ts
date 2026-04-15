@@ -115,6 +115,7 @@ import {
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
+import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -678,6 +679,14 @@ export default function (pi: ExtensionAPI) {
     persistState,
   });
   const { applyMeshSkin } = pinetMeshSkin;
+  const pinetMaintenanceDelivery = createPinetMaintenanceDelivery({
+    getActiveBrokerDb,
+    getActiveBrokerSelfId,
+    sendUserMessage: (body, options) => {
+      pi.sendUserMessage(body, options);
+    },
+  });
+  const { sendBrokerMaintenanceMessage, trySendBrokerFollowUp } = pinetMaintenanceDelivery;
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -1085,39 +1094,6 @@ export default function (pi: ExtensionAPI) {
 
   function getActiveBrokerSelfId(): string | null {
     return brokerRuntime.getSelfId();
-  }
-
-  function sendBrokerMaintenanceMessage(targetAgentId: string, body: string): void {
-    const db = getActiveBrokerDb();
-    const selfId = getActiveBrokerSelfId();
-    if (!db || !selfId) return;
-    const target = db.getAgentById(targetAgentId);
-    if (!target) return;
-
-    const threadId = `a2a:${selfId}:${target.id}`;
-    if (!db.getThread(threadId)) {
-      db.createThread(threadId, "agent", "", selfId);
-    }
-
-    db.insertMessage(threadId, "agent", "outbound", selfId, body, [target.id], {
-      kind: "ralph_loop_nudge",
-      targetAgentId,
-    });
-  }
-
-  function trySendBrokerFollowUp(body: string, onDelivered: () => void): void {
-    try {
-      pi.sendUserMessage(body, { deliverAs: "followUp" });
-      onDelivered();
-      return;
-    } catch {
-      try {
-        pi.sendUserMessage(body);
-        onDelivered();
-      } catch {
-        /* best effort */
-      }
-    }
   }
 
   function getBrokerControlPlaneHomeTabViewerIds(): string[] {
