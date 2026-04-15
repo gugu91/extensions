@@ -41,7 +41,6 @@ import {
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
-  resolveFollowerThreadChannel,
   normalizeOwnedThreads,
   trackBrokerInboundThread,
 } from "./helpers.js";
@@ -73,6 +72,7 @@ import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
 import { registerPinetTools } from "./pinet-tools.js";
 import { registerIMessageTools } from "./imessage-tools.js";
+import { createSlackRuntimeAccess } from "./slack-runtime-access.js";
 import { createThreadConfirmationPolicy } from "./thread-confirmations.js";
 import {
   createIMessageAdapter,
@@ -80,14 +80,7 @@ import {
   formatIMessageMvpReadiness,
 } from "@gugu910/pi-imessage-bridge";
 import {
-  addSlackReaction,
-  clearSlackThreadStatus,
-  fetchSlackMessageByTs as fetchSlackMessageByTsFromSlack,
-  removeSlackReaction,
-  resolveSlackChannelId,
   resolveSlackThreadOwnerHint,
-  resolveSlackUserName,
-  setSlackSuggestedPrompts,
   SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
 } from "./slack-access.js";
@@ -599,49 +592,34 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Helpers ─────────────────────────────────────────
 
-  async function addReaction(channel: string, ts: string, emoji: string): Promise<void> {
-    await addSlackReaction({
-      slack,
-      token: botToken!,
-      channel,
-      timestamp: ts,
-      emoji,
-    });
-  }
-
-  async function removeReaction(channel: string, ts: string, emoji: string): Promise<void> {
-    await removeSlackReaction({
-      slack,
-      token: botToken!,
-      channel,
-      timestamp: ts,
-      emoji,
-    });
-  }
-
-  async function resolveUser(userId: string): Promise<string> {
-    const hadCachedUser = userNames.get(userId) != null;
-    const name = await resolveSlackUserName({
-      slack,
-      token: botToken!,
-      userId,
-      cache: userNames,
-      shouldUseResult: () => !singlePlayerRuntime.isShuttingDown(),
-    });
-    if (!hadCachedUser && userNames.get(userId) != null) {
-      persistState();
-    }
-    return name;
-  }
-
-  async function resolveChannel(nameOrId: string): Promise<string> {
-    return resolveSlackChannelId({
-      slack,
-      token: botToken!,
-      nameOrId,
-      cache: channelCache,
-    });
-  }
+  let isSinglePlayerShuttingDown = () => false;
+  const slackRuntimeAccess = createSlackRuntimeAccess({
+    slack,
+    getBotToken: () => botToken!,
+    userNames,
+    channelCache,
+    persistState,
+    isSinglePlayerShuttingDown: () => isSinglePlayerShuttingDown(),
+    getSuggestedPrompts: () => settings.suggestedPrompts,
+    getAgentName: () => agentName,
+    getThreads: () => threads,
+    getBrokerRole: () => brokerRole,
+    resolveBrokerThreadChannel: (threadTs) =>
+      brokerRuntime.getBroker()?.db.getThread(threadTs)?.channel ?? null,
+    resolveFollowerThreadChannel: async (threadTs) =>
+      (await brokerClient?.client.resolveThread(threadTs)) ?? null,
+  });
+  const {
+    addReaction,
+    removeReaction,
+    resolveUser,
+    rememberChannel,
+    resolveChannel,
+    resolveFollowerReplyChannel,
+    clearThreadStatus,
+    setSuggestedPrompts,
+    fetchSlackMessageByTs,
+  } = slackRuntimeAccess;
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -684,66 +662,6 @@ export default function (pi: ExtensionAPI) {
           tone: "info",
         };
     }
-  }
-
-  async function resolveFollowerReplyChannel(threadTs: string | undefined): Promise<string | null> {
-    if (!threadTs) return null;
-
-    const existingThread = threads.get(threadTs);
-    const brokerRef = brokerRole === "broker" ? brokerRuntime.getBroker() : null;
-    const followerClient = brokerRole === "follower" ? brokerClient?.client : null;
-    const resolveThread = brokerRef
-      ? async (nextThreadTs: string) => brokerRef.db.getThread(nextThreadTs)?.channel ?? null
-      : followerClient
-        ? (nextThreadTs: string) => followerClient.resolveThread(nextThreadTs)
-        : undefined;
-    const resolved = await resolveFollowerThreadChannel(threadTs, existingThread, resolveThread);
-
-    if (resolved.threadUpdate && resolved.changed) {
-      threads.set(threadTs, {
-        ...(existingThread ?? {}),
-        ...resolved.threadUpdate,
-      });
-      persistState();
-    }
-
-    return resolved.channelId;
-  }
-
-  async function clearThreadStatus(channelId: string, threadTs: string): Promise<void> {
-    await clearSlackThreadStatus({
-      slack,
-      token: botToken!,
-      channelId,
-      threadTs,
-    });
-  }
-
-  async function setSuggestedPrompts(channelId: string, threadTs: string): Promise<void> {
-    const prompts = settings.suggestedPrompts ?? [
-      { title: "Status", message: `Hey ${agentName}, what are you working on right now?` },
-      { title: "Help", message: `${agentName}, I need help with something in the codebase` },
-      { title: "Review", message: `${agentName}, summarise the recent changes` },
-    ];
-    await setSlackSuggestedPrompts({
-      slack,
-      token: botToken!,
-      channelId,
-      threadTs,
-      prompts,
-    });
-  }
-
-  async function fetchSlackMessageByTs(
-    channel: string,
-    messageTs: string,
-  ): Promise<Record<string, unknown> | null> {
-    return fetchSlackMessageByTsFromSlack({
-      slack,
-      token: botToken!,
-      channel,
-      messageTs,
-    });
   }
 
   // ─── Socket Mode (native WebSocket) ─────────────────
@@ -794,6 +712,8 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  isSinglePlayerShuttingDown = () => singlePlayerRuntime.isShuttingDown();
+
   // ─── Reconnect / status ─────────────────────────────
 
   function setExtStatus(
@@ -838,9 +758,7 @@ export default function (pi: ExtensionAPI) {
     resolveUser,
     threadContext: singlePlayerRuntime.getThreadContextPort(),
     resolveChannel,
-    rememberChannel: (name, channelId) => {
-      channelCache.set(name, channelId);
-    },
+    rememberChannel,
     requireToolPolicy,
     getBotUserId: () => botUserId,
     registerConfirmationRequest,
