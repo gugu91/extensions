@@ -17,7 +17,6 @@ import {
   createAbortableOperationTracker,
   buildPinetOwnerToken,
   resolveAgentIdentity,
-  resolvePersistedAgentIdentity,
   resolveRuntimeAgentIdentity,
   resolveBrokerStableId,
   shortenPath,
@@ -87,6 +86,7 @@ import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createBrokerThreadOwnerHints } from "./broker-thread-owner-hints.js";
+import { createPersistedRuntimeState } from "./persisted-runtime-state.js";
 import { createPinetActivityFormatting } from "./pinet-activity-formatting.js";
 import { createPinetControlPlaneCanvas } from "./pinet-control-plane-canvas.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
@@ -160,11 +160,6 @@ export default function (pi: ExtensionAPI) {
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
   let securityPrompt = buildSecurityPrompt(guardrails);
-
-  function normalizeOptionalSetting(value?: string | null): string | null {
-    const trimmed = value?.trim();
-    return trimmed && trimmed.length > 0 ? trimmed : null;
-  }
 
   interface ReloadableRuntimeSnapshot {
     settings: typeof settings;
@@ -443,42 +438,53 @@ export default function (pi: ExtensionAPI) {
 
   // ─── State persistence ──────────────────────────────
 
-  let persistTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function persistStateNow(): void {
-    persistTimer = null;
-    try {
-      pi.appendEntry("slack-bridge-state", {
-        threads: Array.from(threads.entries()),
-        lastDmChannel,
-        userNames: Array.from(userNames.entries()),
-        agentName,
-        agentEmoji,
-        agentStableId,
-        brokerStableId,
-        lastPinetRole: brokerRole === "broker" ? "broker" : "worker",
-        activeSkinTheme,
-        agentPersonality,
-        agentAliases: [...agentAliases],
-        brokerControlPlaneCanvasId: brokerRuntime.getControlPlaneCanvasRuntimeId(),
-        brokerControlPlaneCanvasChannelId: brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
-      });
-    } catch (err) {
-      console.error(`[slack-bridge] persistState failed: ${msg(err)}`);
-    }
-  }
-
-  function persistState(): void {
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(persistStateNow, 1_000);
-  }
-
-  function flushPersist(): void {
-    if (persistTimer) {
-      clearTimeout(persistTimer);
-      persistStateNow();
-    }
-  }
+  const persistedRuntimeState = createPersistedRuntimeState({
+    pi,
+    threads,
+    userNames,
+    getLastDmChannel: () => lastDmChannel,
+    setLastDmChannel: (channelId) => {
+      lastDmChannel = channelId;
+    },
+    getAgentName: () => agentName,
+    setAgentName: (name) => {
+      agentName = name;
+    },
+    getAgentEmoji: () => agentEmoji,
+    setAgentEmoji: (emoji) => {
+      agentEmoji = emoji;
+    },
+    getAgentStableId: () => agentStableId,
+    setAgentStableId: (stableId) => {
+      agentStableId = stableId;
+    },
+    getBrokerStableId: () => brokerStableId,
+    setBrokerStableId: (stableId) => {
+      brokerStableId = stableId;
+    },
+    getBrokerRole: () => brokerRole,
+    getActiveSkinTheme: () => activeSkinTheme,
+    setActiveSkinTheme: (theme) => {
+      activeSkinTheme = theme;
+    },
+    getAgentPersonality: () => agentPersonality,
+    setAgentPersonality: (personality) => {
+      agentPersonality = personality;
+    },
+    agentAliases,
+    setAgentOwnerToken: (ownerToken) => {
+      agentOwnerToken = ownerToken;
+    },
+    getSettings: () => settings,
+    getControlPlaneCanvasRuntimeId: () => brokerRuntime.getControlPlaneCanvasRuntimeId(),
+    getControlPlaneCanvasRuntimeChannelId: () =>
+      brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
+    restoreControlPlaneCanvasRuntimeState: (input) => {
+      brokerRuntime.restoreControlPlaneCanvasRuntimeState(input);
+    },
+    formatError: msg,
+  });
+  const { persistState, flushPersist, restorePersistedRuntimeState } = persistedRuntimeState;
 
   // ─── Inbox queue ────────────────────────────────────
 
@@ -1496,89 +1502,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Restore persisted thread state (always restore, even before /pinet)
-    interface PersistedState {
-      threads?: [string, SinglePlayerThreadInfo][];
-      lastDmChannel?: string | null;
-      userNames?: [string, string][];
-      agentName?: string;
-      agentEmoji?: string;
-      agentStableId?: string;
-      brokerStableId?: string;
-      lastPinetRole?: "broker" | "worker";
-      activeSkinTheme?: string | null;
-      agentPersonality?: string | null;
-      agentAliases?: string[];
-      brokerControlPlaneCanvasId?: string | null;
-      brokerControlPlaneCanvasChannelId?: string | null;
-    }
-    try {
-      let savedState: PersistedState | null = null;
-      for (const entry of ctx.sessionManager.getEntries()) {
-        if (entry.type === "custom" && entry.customType === "slack-bridge-state") {
-          savedState = entry.data as PersistedState;
-        }
-      }
-
-      const restoredRole = savedState?.lastPinetRole === "broker" ? "broker" : "worker";
-      agentStableId = resolveAgentStableId(
-        savedState?.agentStableId,
-        ctx.sessionManager.getSessionFile(),
-        os.hostname(),
-        ctx.cwd,
-        ctx.sessionManager.getLeafId(),
-      );
-      brokerStableId = resolveBrokerStableId(savedState?.brokerStableId, os.hostname(), ctx.cwd);
-      agentOwnerToken = buildPinetOwnerToken(getStableIdForRole(restoredRole));
-      const identitySeed = getIdentitySeedForRole(
-        restoredRole,
-        ctx.sessionManager.getSessionFile() ?? undefined,
-      );
-      activeSkinTheme = savedState?.activeSkinTheme ?? null;
-      agentPersonality = savedState?.agentPersonality ?? null;
-      agentAliases.clear();
-      for (const alias of savedState?.agentAliases ?? []) {
-        if (alias) {
-          agentAliases.add(alias);
-        }
-      }
-      const restoredIdentity = resolvePersistedAgentIdentity(
-        settings,
-        savedState?.agentName,
-        savedState?.agentEmoji,
-        process.env.PI_NICKNAME,
-        identitySeed,
-        restoredRole,
-      );
-      agentName = restoredIdentity.name;
-      agentEmoji = restoredIdentity.emoji;
-
-      if (savedState) {
-        if (savedState.threads) {
-          for (const [k, v] of savedState.threads) {
-            if (!threads.has(k)) threads.set(k, v);
-          }
-        }
-        if (savedState.lastDmChannel && !lastDmChannel) {
-          lastDmChannel = savedState.lastDmChannel;
-        }
-        if (savedState.userNames) {
-          for (const [k, v] of savedState.userNames) {
-            if (!userNames.has(k)) userNames.set(k, v);
-          }
-        }
-        brokerRuntime.restoreControlPlaneCanvasRuntimeState({
-          canvasId:
-            normalizeOptionalSetting(savedState.brokerControlPlaneCanvasId) ??
-            brokerRuntime.getControlPlaneCanvasRuntimeId(),
-          channelId:
-            normalizeOptionalSetting(savedState.brokerControlPlaneCanvasChannelId) ??
-            brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
-        });
-      }
-      persistStateNow();
-    } catch (err) {
-      console.error(`[slack-bridge] restore failed: ${msg(err)}`);
-    }
+    restorePersistedRuntimeState(ctx);
 
     if (pinetRegistrationBlocked) {
       console.log("[slack-bridge] detected local subagent context; skipping Pinet registration");
