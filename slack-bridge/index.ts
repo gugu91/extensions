@@ -13,6 +13,10 @@ import {
   resolveAgentStableId,
   resolveAllowAllWorkspaceUsers,
   trackBrokerInboundThread,
+  parseSlackBrokerReloadCommand,
+  isBrokerTerminalProviderError,
+  isLikelyRetryableAssistantError,
+  type BrokerThinkingLevel,
 } from "./helpers.js";
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
@@ -202,7 +206,11 @@ export default function (pi: ExtensionAPI) {
       drainInboxPort?.();
     },
   });
-  const { updateBadge, setExtStatus, maybeDrainInboxIfIdle } = sessionUiRuntime;
+  const {
+    updateBadge,
+    setExtStatus,
+    maybeDrainInboxIfIdle: maybeDrainInboxIfIdleFromSession,
+  } = sessionUiRuntime;
   let reportAgentStatus: (status: "working" | "idle") => Promise<void> = async () => {};
   let deliverTrackedSlackFollowUpMessage: (options: {
     prompt: string;
@@ -228,9 +236,183 @@ export default function (pi: ExtensionAPI) {
       brokerRuntime.markDelivered(inboxIds);
     },
     getFollowerDeliveryState: () => followerDeliveryState,
+    shouldPauseDrain: () => brokerAutoDrainPause !== null,
+    onInboxDelivered: (messages) => {
+      if (brokerRole === "broker") {
+        startActiveBrokerTurnState(messages);
+      }
+    },
   });
   const { deliverFollowUpMessage, flushDeliveredFollowerAcks, drainInbox } = inboxDrainRuntime;
   drainInboxPort = drainInbox;
+
+  interface BrokerTurnThreadTarget {
+    channel: string;
+    threadTs: string;
+  }
+
+  interface ActiveBrokerTurnState {
+    startedAtMs: number;
+    targets: BrokerTurnThreadTarget[];
+    retryErrorCount: number;
+    lastProgressUpdateMinutes: number;
+    timer: ReturnType<typeof setInterval>;
+  }
+
+  interface BrokerAutoDrainPauseState {
+    reason: string;
+    pausedAtMs: number;
+    retryErrorCount: number;
+  }
+
+  const BROKER_PROGRESS_UPDATE_INTERVAL_MS = 2 * 60_000;
+  const brokerPauseNotifiedThreads = new TtlSet<string>({
+    maxSize: 2000,
+    ttlMs: 5 * 60_000,
+  });
+
+  let activeBrokerTurnState: ActiveBrokerTurnState | null = null;
+  let brokerAutoDrainPause: BrokerAutoDrainPauseState | null = null;
+
+  function maybeDrainInboxIfIdle(ctx?: ExtensionContext): boolean {
+    if (brokerAutoDrainPause) {
+      return false;
+    }
+    return maybeDrainInboxIfIdleFromSession(ctx);
+  }
+
+  function buildAgentSlackMetadata(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      event_type: "pi_agent_msg",
+      event_payload: {
+        agent: agentName,
+        agent_owner: agentOwnerToken,
+        ...extra,
+      },
+    };
+  }
+
+  async function postBrokerThreadNotice(
+    target: BrokerTurnThreadTarget,
+    text: string,
+    metadata: Record<string, unknown> = {},
+  ): Promise<void> {
+    try {
+      await slack("chat.postMessage", botToken!, {
+        channel: target.channel,
+        thread_ts: target.threadTs,
+        text,
+        metadata: buildAgentSlackMetadata(metadata),
+      });
+    } catch (error) {
+      console.error(`[slack-bridge] broker notice failed: ${msg(error)}`);
+    }
+  }
+
+  function collectBrokerTurnTargets(messages: InboxMessage[]): BrokerTurnThreadTarget[] {
+    const seen = new Set<string>();
+    const targets: BrokerTurnThreadTarget[] = [];
+
+    for (const message of messages) {
+      const channel = message.channel.trim();
+      const threadTs = message.threadTs.trim();
+      if (!channel || !threadTs) {
+        continue;
+      }
+
+      const key = `${channel}:${threadTs}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push({ channel, threadTs });
+    }
+
+    return targets;
+  }
+
+  function stopActiveBrokerTurnState(): ActiveBrokerTurnState | null {
+    const current = activeBrokerTurnState;
+    if (!current) {
+      return null;
+    }
+
+    clearInterval(current.timer);
+    activeBrokerTurnState = null;
+    return current;
+  }
+
+  async function emitBrokerTurnProgressUpdate(startedAtMs: number): Promise<void> {
+    const state = activeBrokerTurnState;
+    if (!state || state.startedAtMs !== startedAtMs) {
+      return;
+    }
+
+    const elapsedMinutes = Math.floor((Date.now() - state.startedAtMs) / 60_000);
+    if (elapsedMinutes <= 0 || elapsedMinutes === state.lastProgressUpdateMinutes) {
+      return;
+    }
+
+    state.lastProgressUpdateMinutes = elapsedMinutes;
+    await Promise.all(
+      state.targets.map((target) =>
+        postBrokerThreadNotice(
+          target,
+          `⏳ Broker still processing this request (${elapsedMinutes}m elapsed).`,
+          {
+            kind: "broker_progress",
+            elapsed_minutes: elapsedMinutes,
+          },
+        ),
+      ),
+    );
+  }
+
+  function startActiveBrokerTurnState(messages: InboxMessage[]): void {
+    stopActiveBrokerTurnState();
+
+    const targets = collectBrokerTurnTargets(messages);
+    if (targets.length === 0) {
+      return;
+    }
+
+    const startedAtMs = Date.now();
+    const timer = setInterval(() => {
+      void emitBrokerTurnProgressUpdate(startedAtMs);
+    }, BROKER_PROGRESS_UPDATE_INTERVAL_MS);
+    timer.unref?.();
+
+    activeBrokerTurnState = {
+      startedAtMs,
+      targets,
+      retryErrorCount: 0,
+      lastProgressUpdateMinutes: 0,
+      timer,
+    };
+  }
+
+  function summarizeAssistantError(
+    messages: readonly {
+      role: string;
+      stopReason?: string;
+      errorMessage?: string;
+      provider?: string;
+      model?: string;
+    }[],
+  ): { message: string; provider: string | null; model: string | null } | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message || message.role !== "assistant" || message.stopReason !== "error") {
+        continue;
+      }
+      return {
+        message: message.errorMessage?.trim() || "Unknown provider error",
+        provider: message.provider?.trim() || null,
+        model: message.model?.trim() || null,
+      };
+    }
+    return null;
+  }
 
   // ─── Helpers ─────────────────────────────────────────
 
@@ -528,7 +710,161 @@ export default function (pi: ExtensionAPI) {
     reloadPinetRuntime,
     formatError: msg,
   });
-  const { requestRemoteControl, runRemoteControl, resetRemoteControlState } = pinetRemoteControl;
+  const { requestRemoteControl, resetRemoteControlState } = pinetRemoteControl;
+
+  function runRemoteControl(command: "reload" | "exit", ctx: ExtensionContext): void {
+    stopActiveBrokerTurnState();
+    if (command === "reload") {
+      brokerAutoDrainPause = null;
+      brokerPauseNotifiedThreads.clear();
+    }
+    pinetRemoteControl.runRemoteControl(command, ctx);
+  }
+
+  function asRecord(value: unknown): Record<string, unknown> | null {
+    if (typeof value !== "object" || value === null) {
+      return null;
+    }
+    return Object.fromEntries(Object.entries(value));
+  }
+
+  function asFunction(value: unknown): ((...args: unknown[]) => unknown) | null {
+    if (typeof value !== "function") {
+      return null;
+    }
+    return (...args: unknown[]) => Reflect.apply(value, undefined, args);
+  }
+
+  async function applyBrokerReloadOverrides(
+    command: {
+      modelRef: string | null;
+      thinkingLevel: BrokerThinkingLevel | null;
+    },
+    ctx: ExtensionContext,
+  ): Promise<{ modelRef: string | null; thinkingLevel: BrokerThinkingLevel | null }> {
+    let appliedModelRef: string | null = null;
+    if (command.modelRef) {
+      const separatorIndex = command.modelRef.indexOf("/");
+      const provider = command.modelRef.slice(0, separatorIndex).trim();
+      const modelId = command.modelRef.slice(separatorIndex + 1).trim();
+      if (!provider || !modelId) {
+        throw new Error(
+          `Model ${JSON.stringify(command.modelRef)} is invalid. Use <provider>/<model>, e.g. openai/gpt-5.4`,
+        );
+      }
+
+      const ctxRecord = asRecord(ctx);
+      const modelRegistryRecord = ctxRecord ? asRecord(ctxRecord["modelRegistry"]) : null;
+      const findModel = modelRegistryRecord ? asFunction(modelRegistryRecord["find"]) : null;
+      if (!findModel) {
+        throw new Error("This pi build does not expose runtime model switching via Slack reload.");
+      }
+
+      const model = findModel(provider, modelId);
+      if (!model) {
+        throw new Error(
+          `Model ${JSON.stringify(command.modelRef)} is not available in this session.`,
+        );
+      }
+
+      const piRecord = asRecord(pi);
+      const setModel = piRecord ? asFunction(piRecord["setModel"]) : null;
+      if (!setModel) {
+        throw new Error("This pi build does not expose setModel for Slack-driven reloads.");
+      }
+
+      const switchedResult = await Promise.resolve(setModel(model));
+      if (switchedResult === false) {
+        throw new Error(
+          `Failed to switch to ${JSON.stringify(command.modelRef)}. Check API keys for that provider/model.`,
+        );
+      }
+      appliedModelRef = `${provider}/${modelId}`;
+    }
+
+    let appliedThinkingLevel: BrokerThinkingLevel | null = null;
+    if (command.thinkingLevel) {
+      const piRecord = asRecord(pi);
+      const setThinkingLevel = piRecord ? asFunction(piRecord["setThinkingLevel"]) : null;
+      if (!setThinkingLevel) {
+        throw new Error("This pi build does not expose thinking-level controls for Slack reload.");
+      }
+      setThinkingLevel(command.thinkingLevel);
+      appliedThinkingLevel = command.thinkingLevel;
+    }
+
+    return {
+      modelRef: appliedModelRef,
+      thinkingLevel: appliedThinkingLevel,
+    };
+  }
+
+  async function handleSlackBrokerReloadCommand(
+    input: {
+      channel: string;
+      threadTs: string;
+      text: string;
+    },
+    ctx: ExtensionContext,
+  ): Promise<boolean> {
+    const parsed = parseSlackBrokerReloadCommand(input.text);
+    if (parsed.kind === "none") {
+      return false;
+    }
+
+    const target = {
+      channel: input.channel,
+      threadTs: input.threadTs,
+    };
+
+    if (parsed.kind === "invalid") {
+      await postBrokerThreadNotice(
+        target,
+        `⚠️ ${parsed.reason}\n\nUse: \`pinet reload [provider/model] [thinking]\`\nExample: \`pinet reload openai/gpt-5.4 xhigh\``,
+        { kind: "broker_reload_invalid" },
+      );
+      return true;
+    }
+
+    try {
+      const applied = await applyBrokerReloadOverrides(parsed.command, ctx);
+      brokerAutoDrainPause = null;
+      brokerPauseNotifiedThreads.clear();
+
+      const queued = requestRemoteControl("reload", ctx);
+      const statusText = queued.shouldStartNow
+        ? "starting now"
+        : queued.status === "queued"
+          ? "queued behind an in-flight control action"
+          : "already scheduled";
+      const scope = [
+        applied.modelRef ? `model \`${applied.modelRef}\`` : null,
+        applied.thinkingLevel ? `thinking \`${applied.thinkingLevel}\`` : null,
+      ]
+        .filter((entry): entry is string => entry != null)
+        .join(" + ");
+      const scopeText = scope.length > 0 ? ` with ${scope}` : "";
+
+      await postBrokerThreadNotice(target, `🔄 Broker reload requested${scopeText} — ${statusText}.`, {
+        kind: "broker_reload_requested",
+        ...(applied.modelRef ? { model_ref: applied.modelRef } : {}),
+        ...(applied.thinkingLevel ? { thinking: applied.thinkingLevel } : {}),
+        queue_status: queued.status,
+        queue_start: queued.shouldStartNow,
+      });
+
+      if (queued.shouldStartNow) {
+        runRemoteControl("reload", ctx);
+      }
+    } catch (error) {
+      await postBrokerThreadNotice(target, `⚠️ Broker reload failed: ${msg(error)}`, {
+        kind: "broker_reload_error",
+      });
+    }
+
+    return true;
+  }
+
   const pinetActivityFormatting = createPinetActivityFormatting({
     getActiveBrokerDb,
   });
@@ -665,6 +1001,38 @@ export default function (pi: ExtensionAPI) {
       getMeshRoleFromMetadata(metadata ?? undefined, fallbackRole),
     handleInboundMessage: async ({ message, broker, router, selfId, ctx }) => {
       try {
+        if (message.source === "slack" && message.threadId && message.channel) {
+          const handledReloadCommand = await handleSlackBrokerReloadCommand(
+            {
+              channel: message.channel,
+              threadTs: message.threadId,
+              text: message.text,
+            },
+            ctx,
+          );
+          if (handledReloadCommand) {
+            return;
+          }
+
+          if (brokerAutoDrainPause) {
+            const pauseNoticeKey = `${message.channel}:${message.threadId}`;
+            if (!brokerPauseNotifiedThreads.has(pauseNoticeKey)) {
+              brokerPauseNotifiedThreads.add(pauseNoticeKey);
+              await postBrokerThreadNotice(
+                {
+                  channel: message.channel,
+                  threadTs: message.threadId,
+                },
+                `⚠️ Broker is paused after a terminal provider error: ${brokerAutoDrainPause.reason}\n\nUse \`pinet reload [provider/model] [thinking]\` to recover. Example: \`pinet reload openai/gpt-5.4 xhigh\`.`,
+                {
+                  kind: "broker_paused",
+                  retry_error_count: brokerAutoDrainPause.retryErrorCount,
+                },
+              );
+            }
+          }
+        }
+
         const ownerHint =
           message.source === "slack" && message.threadId && message.channel
             ? await resolveBrokerThreadOwnerHint(message.channel, message.threadId)
@@ -1334,11 +1702,102 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Agent event wiring ──────────────────────────────
 
+  pi.on("message_end", async (event) => {
+    if (event.message.role !== "assistant" || event.message.stopReason !== "error") {
+      return;
+    }
+
+    const state = activeBrokerTurnState;
+    if (!state) {
+      return;
+    }
+
+    state.retryErrorCount += 1;
+    if (brokerRole !== "broker") {
+      return;
+    }
+
+    const errorMessage = event.message.errorMessage?.trim() || "Unknown provider error";
+    const attempt = state.retryErrorCount;
+    const retryable = isLikelyRetryableAssistantError(errorMessage);
+    const retryHint = retryable
+      ? "Pi will retry automatically if retries remain."
+      : "This error looks terminal and may require a reload.";
+
+    await Promise.all(
+      state.targets.map((target) =>
+        postBrokerThreadNotice(
+          target,
+          `⚠️ Broker attempt ${attempt} failed: ${errorMessage}\n${retryHint}`,
+          {
+            kind: "broker_error_attempt",
+            attempt,
+            retryable,
+          },
+        ),
+      ),
+    );
+  });
+
+  pi.on("agent_end", async (event) => {
+    const turnState = stopActiveBrokerTurnState();
+    const assistantError = summarizeAssistantError(event.messages);
+
+    if (assistantError && brokerRole === "broker" && turnState) {
+      const retryCount = Math.max(0, turnState.retryErrorCount - 1);
+      const modelLabel =
+        assistantError.provider && assistantError.model
+          ? ` (${assistantError.provider}/${assistantError.model})`
+          : "";
+      await Promise.all(
+        turnState.targets.map((target) =>
+          postBrokerThreadNotice(
+            target,
+            `❌ Broker failed after ${retryCount} retr${retryCount === 1 ? "y" : "ies"}${modelLabel}: ${assistantError.message}`,
+            {
+              kind: "broker_error_final",
+              retries: retryCount,
+              ...(assistantError.provider ? { provider: assistantError.provider } : {}),
+              ...(assistantError.model ? { model: assistantError.model } : {}),
+            },
+          ),
+        ),
+      );
+
+      if (isBrokerTerminalProviderError(assistantError.message)) {
+        brokerAutoDrainPause = {
+          reason: assistantError.message,
+          pausedAtMs: Date.now(),
+          retryErrorCount: turnState.retryErrorCount,
+        };
+
+        await Promise.all(
+          turnState.targets.map((target) =>
+            postBrokerThreadNotice(
+              target,
+              "⏸️ Auto-processing is paused until reload to prevent repeated failures. Use `pinet reload [provider/model] [thinking]` (example: `pinet reload openai/gpt-5.4 xhigh`).",
+              {
+                kind: "broker_paused",
+                retries: turnState.retryErrorCount,
+              },
+            ),
+          ),
+        );
+      }
+    } else if (!assistantError) {
+      brokerAutoDrainPause = null;
+      brokerPauseNotifiedThreads.clear();
+    }
+  });
+
   agentEventRuntime.register(pi);
 
   pi.on("session_shutdown", async (_event, ctx) => {
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
+    stopActiveBrokerTurnState();
+    brokerAutoDrainPause = null;
+    brokerPauseNotifiedThreads.clear();
     sessionUiRuntime.cleanupForSessionShutdown();
     await stopPinetRuntime(ctx, { releaseIdentity: true });
     pinetRegistrationGate.reset();

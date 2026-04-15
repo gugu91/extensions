@@ -179,6 +179,13 @@ User opens Pinet in Slack sidebar
 
 Messages queue while the agent is busy. When the agent finishes, it automatically drains the inbox and responds.
 
+When running as a **broker**, Slack threads now get explicit operational visibility:
+
+- periodic `⏳` progress updates while a turn is still running
+- per-attempt error updates when an assistant turn errors
+- a final failure summary with retry count and provider/model context
+- automatic pause messaging for terminal provider errors (for example usage/auth failures)
+
 ### Available tools
 
 | Tool                         | Description                                                                       |
@@ -283,6 +290,27 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 | `/pinet-exit <agent>`   | Ask another agent to exit                  |
 | `/pinet-free`           | Mark this agent as idle                    |
 | `/pinet-skin <theme>`   | Change the mesh naming theme (broker only) |
+
+### Broker in-thread control commands (from Slack)
+
+In any broker-owned Slack thread, you can now send:
+
+- `pinet reload`
+- `pinet reload <provider/model>`
+- `pinet reload <provider/model> <thinking>`
+- `/pinet-reload <provider/model> <thinking>` (plain-text alias when your Slack client forwards slash text)
+
+Examples:
+
+- `pinet reload openai/gpt-5.4`
+- `pinet reload openai/gpt-5.4 xhigh`
+
+Behavior:
+
+- aborts the active broker turn (same intent as pressing `Esc` in the TUI)
+- applies model/thinking overrides when runtime model controls are available
+- reloads the broker runtime in place
+- resumes queued inbox work after reload
 
 ### How it works
 
