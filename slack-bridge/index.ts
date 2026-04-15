@@ -15,11 +15,7 @@ import {
   formatInboxMessages,
   buildPinetSkinAssignment,
   buildPinetSkinPromptGuideline,
-  queuePinetRemoteControl,
-  finishPinetRemoteControl,
   reloadPinetRuntimeSafely,
-  type PinetControlCommand,
-  type PinetRemoteControlState,
   callSlackAPI,
   createAbortableOperationTracker,
   filterAgentsForMeshVisibility,
@@ -111,6 +107,7 @@ import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
 import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
+import { createPinetRemoteControl } from "./pinet-remote-control.js";
 import { createPinetMeshOps } from "./pinet-mesh-ops.js";
 import {
   type SlackBridgeRuntimeMode,
@@ -118,11 +115,6 @@ import {
 } from "./runtime-mode.js";
 
 // Settings and helpers imported from ./helpers.js
-
-type PinetRuntimeControlContext = ExtensionContext & {
-  abort?: () => void;
-  shutdown?: () => void;
-};
 
 export default function (pi: ExtensionAPI) {
   let settings = loadSettingsFromFile();
@@ -705,6 +697,12 @@ export default function (pi: ExtensionAPI) {
     deferFollowerControlAck,
     flushDeferredRemoteControlAcks,
   } = pinetRemoteControlAcks;
+  const pinetRemoteControl = createPinetRemoteControl({
+    flushDeferredRemoteControlAcks,
+    reloadPinetRuntime,
+    formatError: msg,
+  });
+  const { requestRemoteControl, runRemoteControl, resetRemoteControlState } = pinetRemoteControl;
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -1325,11 +1323,6 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  let remoteControlState: PinetRemoteControlState = {
-    currentCommand: null,
-    queuedCommand: null,
-  };
-
   async function transitionToRuntimeMode(
     ctx: ExtensionContext,
     mode: SlackBridgeRuntimeMode,
@@ -1435,71 +1428,6 @@ export default function (pi: ExtensionAPI) {
         await connectAsFollower(ctx);
       },
     });
-  }
-
-  function runRemoteControl(command: PinetControlCommand, ctx: ExtensionContext): void {
-    flushDeferredRemoteControlAcks(command);
-
-    const controlCtx = ctx as PinetRuntimeControlContext;
-    if (!(ctx.isIdle?.() ?? true)) {
-      try {
-        controlCtx.abort?.();
-      } catch {
-        /* best effort */
-      }
-    }
-
-    ctx.ui.notify(`Pinet remote control requested: /${command}`, "warning");
-    void (async () => {
-      try {
-        if (command === "reload") {
-          await reloadPinetRuntime(ctx);
-          return;
-        }
-
-        if (typeof controlCtx.shutdown !== "function") {
-          throw new Error("Shutdown is not available in this extension context.");
-        }
-        controlCtx.shutdown();
-      } catch (err) {
-        ctx.ui.notify(`Pinet remote control failed: ${msg(err)}`, "error");
-      } finally {
-        const next = finishPinetRemoteControl(remoteControlState);
-        remoteControlState = {
-          currentCommand: next.currentCommand,
-          queuedCommand: next.queuedCommand,
-        };
-        if (next.nextCommand) {
-          ctx.ui.notify(
-            `Pinet remote control continuing with queued /${next.nextCommand}`,
-            "warning",
-          );
-          runRemoteControl(next.nextCommand, ctx);
-        }
-      }
-    })();
-  }
-
-  function requestRemoteControl(
-    command: PinetControlCommand,
-    ctx: ExtensionContext,
-  ): ReturnType<typeof queuePinetRemoteControl> {
-    const queued = queuePinetRemoteControl(remoteControlState, command);
-    remoteControlState = {
-      currentCommand: queued.currentCommand,
-      queuedCommand: queued.queuedCommand,
-    };
-
-    if (queued.status === "queued") {
-      ctx.ui.notify(`Pinet remote control queued: /${queued.queuedCommand ?? command}`, "warning");
-    } else if (!queued.shouldStartNow) {
-      ctx.ui.notify(
-        `Pinet remote control already scheduled — keeping /${queued.scheduledCommand}`,
-        "warning",
-      );
-    }
-
-    return queued;
   }
 
   registerPinetTools(pi, {
@@ -1786,7 +1714,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     singlePlayerRuntime.resetShutdownState();
     resetTopLevelSlackRequests();
-    remoteControlState = { currentCommand: null, queuedCommand: null };
+    resetRemoteControlState();
     resetPendingRemoteControlAcks();
     suppressAutoDrainUntil = 0;
     terminalInputUnsubscribe?.();
@@ -2080,7 +2008,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    remoteControlState = { currentCommand: null, queuedCommand: null };
+    resetRemoteControlState();
     resetPendingRemoteControlAcks();
     terminalInputUnsubscribe?.();
     terminalInputUnsubscribe = null;
