@@ -90,7 +90,7 @@ import {
   resolveTaskAssignments,
   type ResolvedTaskAssignment,
 } from "./task-assignments.js";
-import { SlackActivityLogger, type ActivityLogTone } from "./activity-log.js";
+import { SlackActivityLogger } from "./activity-log.js";
 import {
   createBrokerDeliveryState,
   getBrokerInboxIds,
@@ -105,6 +105,7 @@ import {
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
+import { createPinetActivityFormatting } from "./pinet-activity-formatting.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
 import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import { createPinetRemoteControl } from "./pinet-remote-control.js";
@@ -703,49 +704,10 @@ export default function (pi: ExtensionAPI) {
     formatError: msg,
   });
   const { requestRemoteControl, runRemoteControl, resetRemoteControlState } = pinetRemoteControl;
-
-  function formatTrackedAgent(agentId: string): string {
-    const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
-    if (!agent) {
-      return agentId;
-    }
-    return `${agent.emoji} ${agent.name}`.trim();
-  }
-
-  function summarizeTrackedAssignmentStatus(
-    status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed",
-    prNumber: number | null,
-    branch: string | null,
-  ): { summary: string; tone: ActivityLogTone } {
-    switch (status) {
-      case "pr_merged":
-        return {
-          summary: `PR #${prNumber ?? "?"} merged`,
-          tone: "success",
-        };
-      case "pr_open":
-        return {
-          summary: `PR #${prNumber ?? "?"} opened for review`,
-          tone: "success",
-        };
-      case "pr_closed":
-        return {
-          summary: `PR #${prNumber ?? "?"} closed without merge`,
-          tone: "warning",
-        };
-      case "branch_pushed":
-        return {
-          summary: `commits pushed on ${branch ?? "tracked branch"}`,
-          tone: "info",
-        };
-      case "assigned":
-      default:
-        return {
-          summary: "assigned",
-          tone: "info",
-        };
-    }
-  }
+  const pinetActivityFormatting = createPinetActivityFormatting({
+    getActiveBrokerDb: () => (brokerRuntime.getBroker()?.db as BrokerDB | undefined) ?? null,
+  });
+  const { formatTrackedAgent, summarizeTrackedAssignmentStatus } = pinetActivityFormatting;
 
   // ─── Socket Mode (native WebSocket) ─────────────────
 
