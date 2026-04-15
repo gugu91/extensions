@@ -7,16 +7,12 @@ import {
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   formatInboxMessages,
-  buildPinetSkinPromptGuideline,
   reloadPinetRuntimeSafely,
   callSlackAPI,
   createAbortableOperationTracker,
   buildPinetOwnerToken,
   resolveAgentIdentity,
   resolveBrokerStableId,
-  buildAgentPersonalityGuidelines,
-  buildBrokerPromptGuidelines,
-  buildWorkerPromptGuidelines,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
@@ -25,7 +21,6 @@ import {
 import {
   buildSecurityPrompt,
   isBrokerForbiddenTool,
-  buildBrokerToolGuardrailsPrompt,
   type SecurityGuardrails,
 } from "./guardrails.js";
 import { evaluateSlackOriginCoreToolPolicy } from "./core-tool-guardrails.js";
@@ -35,7 +30,7 @@ import {
   type PendingSlackToolPolicyTurn,
 } from "./slack-turn-guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
-import { buildReactionPromptGuidelines, resolveReactionCommands } from "./reaction-triggers.js";
+import { resolveReactionCommands } from "./reaction-triggers.js";
 import type { Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
@@ -86,6 +81,7 @@ import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js"
 import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import { createPinetRemoteControl } from "./pinet-remote-control.js";
 import { createPinetMeshOps } from "./pinet-mesh-ops.js";
+import { createAgentPromptGuidance } from "./agent-prompt-guidance.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -336,9 +332,16 @@ export default function (pi: ExtensionAPI) {
     getAgentMetadata,
     getMeshRoleFromMetadata,
     buildSkinMetadata,
-    getIdentityGuidelines,
     applyRegistrationIdentity,
   } = runtimeAgentContext;
+  const agentPromptGuidance = createAgentPromptGuidance({
+    getIdentityGuidelines: runtimeAgentContext.getIdentityGuidelines,
+    getAgentName: () => agentName,
+    getAgentEmoji: () => agentEmoji,
+    getActiveSkinTheme: () => activeSkinTheme,
+    getAgentPersonality: () => agentPersonality,
+    getBrokerRole: () => brokerRole,
+  });
 
   let isSinglePlayerShuttingDown = () => false;
   let isSinglePlayerConnected = () => false;
@@ -1441,26 +1444,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
-  pi.on("before_agent_start", async (event) => {
-    const guidelines = [
-      ...getIdentityGuidelines(),
-      ...buildAgentPersonalityGuidelines(agentName),
-      ...buildReactionPromptGuidelines(),
-    ];
-    const skinGuideline = buildPinetSkinPromptGuideline(activeSkinTheme, agentPersonality);
-    if (skinGuideline) {
-      guidelines.push(skinGuideline);
-    }
-    if (brokerRole === "broker") {
-      guidelines.push(...buildBrokerPromptGuidelines(agentEmoji, agentName));
-      guidelines.push(buildBrokerToolGuardrailsPrompt());
-    } else if (brokerRole === "follower") {
-      guidelines.push(...buildWorkerPromptGuidelines());
-    }
-    return {
-      systemPrompt: event.systemPrompt + "\n\n" + guidelines.join("\n"),
-    };
-  });
+  pi.on("before_agent_start", agentPromptGuidance.beforeAgentStart);
 
   // When agent finishes: clear thinking status, mark free, and auto-drain inbox
   pi.on("agent_end", async (_event, ctx) => {
