@@ -709,30 +709,42 @@ export default function (pi: ExtensionAPI) {
     flushDeferredRemoteControlAcks,
     reloadPinetRuntime,
     formatError: msg,
+    onReloadSuccess: () => {
+      brokerAutoDrainPause = null;
+      brokerPauseNotifiedThreads.clear();
+      maybeDrainInboxIfIdle(extCtx ?? undefined);
+    },
   });
   const { requestRemoteControl, resetRemoteControlState } = pinetRemoteControl;
 
   function runRemoteControl(command: "reload" | "exit", ctx: ExtensionContext): void {
     stopActiveBrokerTurnState();
-    if (command === "reload") {
-      brokerAutoDrainPause = null;
-      brokerPauseNotifiedThreads.clear();
-    }
     pinetRemoteControl.runRemoteControl(command, ctx);
   }
 
-  function asRecord(value: unknown): Record<string, unknown> | null {
-    if (typeof value !== "object" || value === null) {
-      return null;
+  function getObjectProperty(target: unknown, property: string): unknown {
+    if (typeof target !== "object" || target === null) {
+      return undefined;
     }
-    return Object.fromEntries(Object.entries(value));
+    return Reflect.get(target, property);
   }
 
-  function asFunction(value: unknown): ((...args: unknown[]) => unknown) | null {
-    if (typeof value !== "function") {
-      return null;
+  function hasObjectMethod(target: unknown, methodName: string): boolean {
+    if (typeof target !== "object" || target === null) {
+      return false;
     }
-    return (...args: unknown[]) => Reflect.apply(value, undefined, args);
+    return typeof Reflect.get(target, methodName) === "function";
+  }
+
+  function callObjectMethod(target: unknown, methodName: string, ...args: unknown[]): unknown {
+    if (typeof target !== "object" || target === null) {
+      return undefined;
+    }
+    const method = Reflect.get(target, methodName);
+    if (typeof method !== "function") {
+      return undefined;
+    }
+    return Reflect.apply(method, target, args);
   }
 
   async function applyBrokerReloadOverrides(
@@ -753,27 +765,23 @@ export default function (pi: ExtensionAPI) {
         );
       }
 
-      const ctxRecord = asRecord(ctx);
-      const modelRegistryRecord = ctxRecord ? asRecord(ctxRecord["modelRegistry"]) : null;
-      const findModel = modelRegistryRecord ? asFunction(modelRegistryRecord["find"]) : null;
-      if (!findModel) {
+      const modelRegistry = getObjectProperty(ctx, "modelRegistry");
+      if (!hasObjectMethod(modelRegistry, "find")) {
         throw new Error("This pi build does not expose runtime model switching via Slack reload.");
       }
 
-      const model = findModel(provider, modelId);
+      const model = callObjectMethod(modelRegistry, "find", provider, modelId);
       if (!model) {
         throw new Error(
           `Model ${JSON.stringify(command.modelRef)} is not available in this session.`,
         );
       }
 
-      const piRecord = asRecord(pi);
-      const setModel = piRecord ? asFunction(piRecord["setModel"]) : null;
-      if (!setModel) {
+      if (!hasObjectMethod(pi, "setModel")) {
         throw new Error("This pi build does not expose setModel for Slack-driven reloads.");
       }
 
-      const switchedResult = await Promise.resolve(setModel(model));
+      const switchedResult = await Promise.resolve(callObjectMethod(pi, "setModel", model));
       if (switchedResult === false) {
         throw new Error(
           `Failed to switch to ${JSON.stringify(command.modelRef)}. Check API keys for that provider/model.`,
@@ -784,12 +792,10 @@ export default function (pi: ExtensionAPI) {
 
     let appliedThinkingLevel: BrokerThinkingLevel | null = null;
     if (command.thinkingLevel) {
-      const piRecord = asRecord(pi);
-      const setThinkingLevel = piRecord ? asFunction(piRecord["setThinkingLevel"]) : null;
-      if (!setThinkingLevel) {
+      if (!hasObjectMethod(pi, "setThinkingLevel")) {
         throw new Error("This pi build does not expose thinking-level controls for Slack reload.");
       }
-      setThinkingLevel(command.thinkingLevel);
+      callObjectMethod(pi, "setThinkingLevel", command.thinkingLevel);
       appliedThinkingLevel = command.thinkingLevel;
     }
 
@@ -828,8 +834,6 @@ export default function (pi: ExtensionAPI) {
 
     try {
       const applied = await applyBrokerReloadOverrides(parsed.command, ctx);
-      brokerAutoDrainPause = null;
-      brokerPauseNotifiedThreads.clear();
 
       const queued = requestRemoteControl("reload", ctx);
       const statusText = queued.shouldStartNow
@@ -1002,16 +1006,22 @@ export default function (pi: ExtensionAPI) {
     handleInboundMessage: async ({ message, broker, router, selfId, ctx }) => {
       try {
         if (message.source === "slack" && message.threadId && message.channel) {
-          const handledReloadCommand = await handleSlackBrokerReloadCommand(
-            {
-              channel: message.channel,
-              threadTs: message.threadId,
-              text: message.text,
-            },
-            ctx,
-          );
-          if (handledReloadCommand) {
-            return;
+          const existingThreadOwner = broker.db.getThread(message.threadId)?.ownerAgent ?? null;
+          const shouldHandleBrokerReload =
+            existingThreadOwner === null || existingThreadOwner === selfId;
+
+          if (shouldHandleBrokerReload) {
+            const handledReloadCommand = await handleSlackBrokerReloadCommand(
+              {
+                channel: message.channel,
+                threadTs: message.threadId,
+                text: message.text,
+              },
+              ctx,
+            );
+            if (handledReloadCommand) {
+              return;
+            }
           }
 
           if (brokerAutoDrainPause) {
@@ -1784,9 +1794,6 @@ export default function (pi: ExtensionAPI) {
           ),
         );
       }
-    } else if (!assistantError) {
-      brokerAutoDrainPause = null;
-      brokerPauseNotifiedThreads.clear();
     }
   });
 
