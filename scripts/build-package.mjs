@@ -51,6 +51,13 @@ const packageConfigs = {
     vendorDirs: [],
     importRewrites: [],
   },
+  "openai-execution-shaping": {
+    excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
+    excludeFiles: new Set(),
+    excludePrefixes: [],
+    vendorDirs: [],
+    importRewrites: [],
+  },
 };
 
 const config = packageConfigs[packageName];

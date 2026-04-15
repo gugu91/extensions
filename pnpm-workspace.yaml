@@ -5,3 +5,4 @@ packages:
   - imessage-bridge
   - nvim-bridge
   - neon-psql
+  - openai-execution-shaping
