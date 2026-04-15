@@ -116,6 +116,7 @@ import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
+import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -687,6 +688,28 @@ export default function (pi: ExtensionAPI) {
     },
   });
   const { sendBrokerMaintenanceMessage, trySendBrokerFollowUp } = pinetMaintenanceDelivery;
+  const pinetRemoteControlAcks = createPinetRemoteControlAcks({
+    queueBrokerInboxIds: (inboxIds) => {
+      queueBrokerInboxIds(brokerDeliveryState, inboxIds);
+    },
+    isBrokerConnected: () => brokerRuntime.isConnected(),
+    markBrokerInboxIdsDelivered: (inboxIds) => {
+      brokerRuntime.markDelivered(inboxIds);
+    },
+    queueFollowerInboxIds: (inboxIds) => {
+      queueFollowerInboxIds(followerDeliveryState, inboxIds);
+    },
+    markFollowerInboxIdsDelivered: (inboxIds) => {
+      markFollowerInboxIdsDelivered(followerDeliveryState, inboxIds);
+    },
+    flushDeliveredFollowerAcks,
+  });
+  const {
+    resetPendingRemoteControlAcks,
+    deferBrokerControlAck,
+    deferFollowerControlAck,
+    flushDeferredRemoteControlAcks,
+  } = pinetRemoteControlAcks;
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -1496,46 +1519,6 @@ export default function (pi: ExtensionAPI) {
     currentCommand: null,
     queuedCommand: null,
   };
-  const pendingBrokerControlInboxIds: Record<PinetControlCommand, Set<number>> = {
-    reload: new Set<number>(),
-    exit: new Set<number>(),
-  };
-  const pendingFollowerControlInboxIds: Record<PinetControlCommand, Set<number>> = {
-    reload: new Set<number>(),
-    exit: new Set<number>(),
-  };
-
-  function resetPendingRemoteControlAcks(): void {
-    pendingBrokerControlInboxIds.reload.clear();
-    pendingBrokerControlInboxIds.exit.clear();
-    pendingFollowerControlInboxIds.reload.clear();
-    pendingFollowerControlInboxIds.exit.clear();
-  }
-
-  function deferBrokerControlAck(command: PinetControlCommand, inboxId: number): void {
-    pendingBrokerControlInboxIds[command].add(inboxId);
-    queueBrokerInboxIds(brokerDeliveryState, [inboxId]);
-  }
-
-  function deferFollowerControlAck(command: PinetControlCommand, inboxId: number): void {
-    pendingFollowerControlInboxIds[command].add(inboxId);
-    queueFollowerInboxIds(followerDeliveryState, [inboxId]);
-  }
-
-  function flushDeferredRemoteControlAcks(command: PinetControlCommand): void {
-    const brokerIds = [...pendingBrokerControlInboxIds[command]];
-    if (brokerIds.length > 0 && brokerRuntime.isConnected()) {
-      brokerRuntime.markDelivered(brokerIds);
-      pendingBrokerControlInboxIds[command].clear();
-    }
-
-    const followerIds = [...pendingFollowerControlInboxIds[command]];
-    if (followerIds.length > 0) {
-      markFollowerInboxIdsDelivered(followerDeliveryState, followerIds);
-      pendingFollowerControlInboxIds[command].clear();
-      void flushDeliveredFollowerAcks();
-    }
-  }
 
   async function transitionToRuntimeMode(
     ctx: ExtensionContext,
