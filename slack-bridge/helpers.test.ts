@@ -15,6 +15,10 @@ import {
   isTerminalPinetStandDownMessage,
   parsePinetControlCommand,
   getPinetControlCommandFromText,
+  parseSlackBrokerReloadCommand,
+  isBrokerThinkingLevel,
+  isBrokerTerminalProviderError,
+  isLikelyRetryableAssistantError,
   buildPinetControlMetadata,
   buildPinetControlMessage,
   normalizeOutgoingPinetControlMessage,
@@ -613,6 +617,51 @@ describe("Pinet control helpers", () => {
     expect(getPinetControlCommandFromText('{"type":"pinet:control","action":"noop"}')).toBe(null);
     expect(getPinetControlCommandFromText("/exit now please")).toBeNull();
     expect(getPinetControlCommandFromText("please /reload")).toBeNull();
+  });
+
+  it("parses broker reload commands from Slack text", () => {
+    expect(parseSlackBrokerReloadCommand("pinet reload")).toEqual({
+      kind: "command",
+      command: { modelRef: null, thinkingLevel: null },
+    });
+    expect(parseSlackBrokerReloadCommand("/pinet-reload openai/gpt-5.4 xhigh")).toEqual({
+      kind: "command",
+      command: { modelRef: "openai/gpt-5.4", thinkingLevel: "xhigh" },
+    });
+    expect(parseSlackBrokerReloadCommand("pinet-reload minimal")).toEqual({
+      kind: "command",
+      command: { modelRef: null, thinkingLevel: "minimal" },
+    });
+    expect(parseSlackBrokerReloadCommand("hello world")).toEqual({ kind: "none" });
+  });
+
+  it("rejects invalid broker reload command shapes", () => {
+    expect(parseSlackBrokerReloadCommand("pinet reload gpt-5.4")).toEqual({
+      kind: "invalid",
+      reason: 'Model "gpt-5.4" is invalid. Use <provider>/<model>, e.g. openai/gpt-5.4',
+    });
+    expect(parseSlackBrokerReloadCommand("pinet reload openai/gpt-5.4 turbo")).toEqual({
+      kind: "invalid",
+      reason:
+        'Thinking level "turbo" is invalid. Use one of: off, minimal, low, medium, high, xhigh.',
+    });
+  });
+
+  it("classifies broker provider errors and retryability", () => {
+    expect(isBrokerThinkingLevel("xhigh")).toBe(true);
+    expect(isBrokerThinkingLevel("turbo")).toBe(false);
+
+    expect(
+      isBrokerTerminalProviderError(
+        "You're out of extra usage. Add more at claude.ai/settings/usage",
+      ),
+    ).toBe(true);
+    expect(isBrokerTerminalProviderError("Authentication failed: invalid API key")).toBe(true);
+    expect(isBrokerTerminalProviderError("Error: fetch failed")).toBe(false);
+
+    expect(isLikelyRetryableAssistantError("provider returned error: overloaded_error")).toBe(true);
+    expect(isLikelyRetryableAssistantError("network timeout while calling upstream")).toBe(true);
+    expect(isLikelyRetryableAssistantError("You're out of extra usage")).toBe(false);
   });
 
   it("builds structured control metadata and body", () => {

@@ -31,7 +31,7 @@ export interface PinetAgentStatus {
   reportStatus: (status: PinetAgentStatusValue) => Promise<void>;
   signalAgentFree: (
     ctx?: ExtensionContext,
-    options?: { requirePinet?: boolean },
+    options?: { requirePinet?: boolean; drainQueuedInbox?: boolean },
   ) => Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }>;
 }
 
@@ -64,7 +64,7 @@ export function createPinetAgentStatus(deps: PinetAgentStatusDeps): PinetAgentSt
 
   async function signalAgentFree(
     ctx?: ExtensionContext,
-    options: { requirePinet?: boolean } = {},
+    options: { requirePinet?: boolean; drainQueuedInbox?: boolean } = {},
   ): Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }> {
     const pinetEnabled = deps.getPinetEnabled();
     if (!pinetEnabled && options.requirePinet) {
@@ -80,7 +80,9 @@ export function createPinetAgentStatus(deps: PinetAgentStatusDeps): PinetAgentSt
     }
 
     const queuedInboxCount = deps.getInboxLength();
-    const shouldDrainQueuedInbox = pinetEnabled || deps.getCurrentRuntimeMode() === "single";
+    const shouldDrainQueuedInbox =
+      options.drainQueuedInbox !== false &&
+      (pinetEnabled || deps.getCurrentRuntimeMode() === "single");
     const drainedQueuedInbox =
       shouldDrainQueuedInbox && queuedInboxCount > 0 && maintenanceCtx
         ? deps.maybeDrainInboxIfIdle(maintenanceCtx)

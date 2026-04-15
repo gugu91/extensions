@@ -298,6 +298,141 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
 
 // ─── Pinet control messages ─────────────────────────────
 
+export type BrokerThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface SlackBrokerReloadCommand {
+  modelRef: string | null;
+  thinkingLevel: BrokerThinkingLevel | null;
+}
+
+export type SlackBrokerReloadParseResult =
+  | { kind: "none" }
+  | { kind: "invalid"; reason: string }
+  | { kind: "command"; command: SlackBrokerReloadCommand };
+
+const BROKER_RELOAD_COMMAND_PATTERN = /^(?:\/pinet-reload|pinet-reload|pinet\s+reload)\b(.*)$/i;
+
+const RETRYABLE_ASSISTANT_ERROR_PATTERN =
+  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
+
+const TERMINAL_BROKER_PROVIDER_ERROR_PATTERN =
+  /out of (?:extra )?usage|quota|billing|payment required|insufficient credits|invalid[_\s-]?api[_\s-]?key|unauthorized|forbidden|auth(?:entication)?\s+failed|claude\.ai\/settings\/usage/i;
+
+function normalizeSlackMessageFirstLine(text: string | undefined): string {
+  const firstLine = text?.split(/\r?\n/, 1)[0] ?? "";
+  return firstLine.trim();
+}
+
+function normalizeBrokerThinkingLevel(value: string | undefined): BrokerThinkingLevel | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  switch (normalized) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+export function isBrokerThinkingLevel(value: string | undefined): value is BrokerThinkingLevel {
+  return normalizeBrokerThinkingLevel(value) !== null;
+}
+
+export function parseSlackBrokerReloadCommand(
+  text: string | undefined,
+): SlackBrokerReloadParseResult {
+  const firstLine = normalizeSlackMessageFirstLine(text);
+  if (!firstLine) {
+    return { kind: "none" };
+  }
+
+  const match = firstLine.match(BROKER_RELOAD_COMMAND_PATTERN);
+  if (!match) {
+    return { kind: "none" };
+  }
+
+  const remainder = match[1]?.trim() ?? "";
+  if (!remainder) {
+    return {
+      kind: "command",
+      command: { modelRef: null, thinkingLevel: null },
+    };
+  }
+
+  const tokens = remainder.split(/\s+/).filter(Boolean);
+  if (tokens.length > 2) {
+    return {
+      kind: "invalid",
+      reason:
+        "Usage: pinet reload [provider/model] [thinking]. Example: pinet reload openai/gpt-5.4 xhigh",
+    };
+  }
+
+  const singleTokenThinkingLevel = normalizeBrokerThinkingLevel(tokens[0]);
+  if (tokens.length === 1 && singleTokenThinkingLevel) {
+    return {
+      kind: "command",
+      command: { modelRef: null, thinkingLevel: singleTokenThinkingLevel },
+    };
+  }
+
+  const modelRef = tokens[0]?.trim() ?? "";
+  if (!modelRef.includes("/")) {
+    return {
+      kind: "invalid",
+      reason: `Model ${JSON.stringify(modelRef)} is invalid. Use <provider>/<model>, e.g. openai/gpt-5.4`,
+    };
+  }
+
+  const thinkingToken = tokens[1]?.trim();
+  if (!thinkingToken) {
+    return {
+      kind: "command",
+      command: { modelRef, thinkingLevel: null },
+    };
+  }
+
+  const thinkingLevel = normalizeBrokerThinkingLevel(thinkingToken);
+  if (!thinkingLevel) {
+    return {
+      kind: "invalid",
+      reason: `Thinking level ${JSON.stringify(thinkingToken)} is invalid. Use one of: off, minimal, low, medium, high, xhigh.`,
+    };
+  }
+
+  return {
+    kind: "command",
+    command: {
+      modelRef,
+      thinkingLevel,
+    },
+  };
+}
+
+export function isLikelyRetryableAssistantError(errorMessage: string | undefined): boolean {
+  const text = errorMessage?.trim();
+  if (!text) {
+    return false;
+  }
+  return RETRYABLE_ASSISTANT_ERROR_PATTERN.test(text);
+}
+
+export function isBrokerTerminalProviderError(errorMessage: string | undefined): boolean {
+  const text = errorMessage?.trim();
+  if (!text) {
+    return false;
+  }
+  return TERMINAL_BROKER_PROVIDER_ERROR_PATTERN.test(text);
+}
+
 export type PinetControlCommand = "reload" | "exit";
 
 export interface PinetRemoteControlState {

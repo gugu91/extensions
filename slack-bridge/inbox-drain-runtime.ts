@@ -19,6 +19,8 @@ export interface InboxDrainRuntimeDeps {
   flushFollowerDeliveredAcks: () => Promise<void>;
   markBrokerInboxIdsDelivered: (inboxIds: number[]) => void;
   getFollowerDeliveryState: () => FollowerDeliveryState;
+  shouldPauseDrain?: () => boolean;
+  onInboxDelivered?: (messages: InboxMessage[]) => void;
 }
 
 export interface InboxDrainRuntime {
@@ -51,6 +53,10 @@ export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrain
   }
 
   function drainInbox(): void {
+    if (deps.shouldPauseDrain?.()) {
+      return;
+    }
+
     const pending = deps.takeInboxMessages();
     if (pending.length === 0) {
       return;
@@ -74,6 +80,7 @@ export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrain
         messages: pending,
       })
     ) {
+      deps.onInboxDelivered?.(pending);
       if (brokerInboxIds.length > 0) {
         if (deps.getBrokerRole() === "follower") {
           markFollowerInboxIdsDelivered(deps.getFollowerDeliveryState(), brokerInboxIds);
