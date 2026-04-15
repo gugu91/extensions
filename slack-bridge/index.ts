@@ -14,7 +14,6 @@ import {
   isUserAllowed as checkUserAllowed,
   formatInboxMessages,
   buildPinetSkinAssignment,
-  buildPinetSkinMetadata,
   buildPinetSkinPromptGuideline,
   normalizeOutgoingPinetControlMessage,
   queuePinetRemoteControl,
@@ -37,7 +36,6 @@ import {
   buildAgentPersonalityGuidelines,
   buildBrokerPromptGuidelines,
   buildWorkerPromptGuidelines,
-  normalizePinetSkinTheme,
   resolveAgentStableId,
   isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
@@ -116,6 +114,7 @@ import {
 } from "./broker/control-plane-canvas.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
+import { createPinetMeshSkin } from "./pinet-skin.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -655,6 +654,30 @@ export default function (pi: ExtensionAPI) {
     getExtensionContext: () => extCtx ?? undefined,
   });
   const { reportStatus, signalAgentFree } = pinetAgentStatus;
+  const pinetMeshSkin = createPinetMeshSkin({
+    getBrokerRole: () => brokerRole,
+    getActiveBrokerDb,
+    getActiveBrokerSelfId,
+    pinetSkinSettingKey: PINET_SKIN_SETTING_KEY,
+    setActiveSkinTheme: (theme) => {
+      activeSkinTheme = theme;
+    },
+    getMeshRoleFromMetadata: (metadata, fallbackRole) =>
+      getMeshRoleFromMetadata(metadata ?? undefined, fallbackRole),
+    buildSkinMetadata: (metadata, personality) =>
+      buildSkinMetadata(metadata ?? undefined, personality),
+    applyLocalAgentIdentity,
+    getAgentName: () => agentName,
+    dispatchDirectAgentMessage: (input) => {
+      const db = getActiveBrokerDb();
+      if (!db) {
+        return;
+      }
+      dispatchDirectAgentMessage(db, input);
+    },
+    persistState,
+  });
+  const { applyMeshSkin } = pinetMeshSkin;
 
   function formatTrackedAgent(agentId: string): string {
     const agent = brokerRuntime.getBroker()?.db.getAgentById(agentId);
@@ -1491,67 +1514,6 @@ export default function (pi: ExtensionAPI) {
       disconnectedAt: agent.disconnectedAt,
       resumableUntil: agent.resumableUntil,
     }));
-  }
-
-  function applyMeshSkin(themeInput: string): { theme: string; updatedAgents: string[] } {
-    const db = getActiveBrokerDb();
-    const selfId = getActiveBrokerSelfId();
-    if (brokerRole !== "broker" || !db) {
-      throw new Error("/pinet-skin can only run on the active broker.");
-    }
-
-    const theme = normalizePinetSkinTheme(themeInput);
-    if (!theme) {
-      throw new Error("Usage: /pinet-skin <theme>");
-    }
-
-    if (!selfId) {
-      throw new Error("Broker agent identity is unavailable.");
-    }
-
-    activeSkinTheme = theme;
-    db.setSetting(PINET_SKIN_SETTING_KEY, theme);
-
-    const updatedAgents: string[] = [];
-    for (const agent of db.getAgents()) {
-      const role =
-        agent.id === selfId
-          ? "broker"
-          : getMeshRoleFromMetadata(agent.metadata ?? undefined, "worker");
-      const assignment = buildPinetSkinAssignment({
-        theme,
-        role,
-        seed: agent.stableId ?? agent.id,
-      });
-      const updated = db.updateAgentIdentity(agent.id, {
-        name: assignment.name,
-        emoji: assignment.emoji,
-        metadata: buildSkinMetadata(agent.metadata ?? undefined, assignment.personality),
-      });
-      if (!updated) continue;
-
-      if (agent.id === selfId) {
-        applyLocalAgentIdentity(updated.name, updated.emoji, assignment.personality);
-      } else {
-        dispatchDirectAgentMessage(db, {
-          senderAgentId: selfId,
-          senderAgentName: agentName,
-          target: updated.id,
-          body: `Mesh skin changed to ${theme}`,
-          metadata: buildPinetSkinMetadata({
-            theme,
-            name: updated.name,
-            emoji: updated.emoji,
-            personality: assignment.personality,
-          }),
-        });
-      }
-
-      updatedAgents.push(updated.name);
-    }
-
-    persistState();
-    return { theme, updatedAgents };
   }
 
   let remoteControlState: PinetRemoteControlState = {
