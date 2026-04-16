@@ -18,8 +18,6 @@ import {
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
-import type { Broker } from "./broker/index.js";
-import type { BrokerDB } from "./broker/schema.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { registerSlackTools } from "./slack-tools.js";
@@ -73,6 +71,7 @@ import { createSlackToolPolicyRuntime } from "./slack-tool-policy-runtime.js";
 import { createSessionUiRuntime } from "./session-ui-runtime.js";
 import { createSlackRequestRuntime } from "./slack-request-runtime.js";
 import { createPinetRegistrationGate } from "./pinet-registration-gate.js";
+import { createBrokerRuntimeAccess } from "./broker-runtime-access.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -328,6 +327,17 @@ export default function (pi: ExtensionAPI) {
     getCurrentBranch: async () => (await probeGitBranch(process.cwd())) ?? null,
     getBrokerHomeTabs: () => brokerRuntime,
   });
+  const brokerRuntimeAccess = createBrokerRuntimeAccess({
+    getBroker: () => brokerRuntime.getBroker(),
+    getSelfId: () => brokerRuntime.getSelfId(),
+    getHomeTabViewerIds: () => brokerRuntime.getHomeTabViewerIds(),
+  });
+  const {
+    getActiveBroker,
+    getActiveBrokerDb,
+    getActiveBrokerSelfId,
+    getBrokerControlPlaneHomeTabViewerIds,
+  } = brokerRuntimeAccess;
   const pinetAgentStatus = createPinetAgentStatus({
     getPinetEnabled: () => pinetEnabled,
     getBrokerRole: () => brokerRole,
@@ -410,7 +420,7 @@ export default function (pi: ExtensionAPI) {
   });
   const { requestRemoteControl, runRemoteControl, resetRemoteControlState } = pinetRemoteControl;
   const pinetActivityFormatting = createPinetActivityFormatting({
-    getActiveBrokerDb: () => (brokerRuntime.getBroker()?.db as BrokerDB | undefined) ?? null,
+    getActiveBrokerDb,
   });
   const { formatTrackedAgent, summarizeTrackedAssignmentStatus } = pinetActivityFormatting;
   const pinetControlPlaneCanvas = createPinetControlPlaneCanvas({
@@ -757,18 +767,6 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  function getActiveBroker(): Broker | null {
-    return brokerRuntime.getBroker();
-  }
-
-  function getActiveBrokerDb(): BrokerDB | null {
-    return (getActiveBroker()?.db as BrokerDB | undefined) ?? null;
-  }
-
-  function getActiveBrokerSelfId(): string | null {
-    return brokerRuntime.getSelfId();
-  }
-
   const pinetMeshOps = createPinetMeshOps({
     getPinetEnabled: () => pinetEnabled,
     getBrokerRole: () => brokerRole,
@@ -789,10 +787,6 @@ export default function (pi: ExtensionAPI) {
     listBrokerAgents,
     listFollowerAgents,
   } = pinetMeshOps;
-
-  function getBrokerControlPlaneHomeTabViewerIds(): string[] {
-    return brokerRuntime.getHomeTabViewerIds();
-  }
 
   async function transitionToRuntimeMode(
     ctx: ExtensionContext,
