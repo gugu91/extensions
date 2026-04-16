@@ -62,7 +62,7 @@ import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import { createPinetRemoteControl } from "./pinet-remote-control.js";
 import { createPinetMeshOps } from "./pinet-mesh-ops.js";
 import { createAgentPromptGuidance } from "./agent-prompt-guidance.js";
-import { createSlackToolPolicyRuntime } from "./slack-tool-policy-runtime.js";
+import { createAgentEventRuntime } from "./agent-event-runtime.js";
 import { createSessionUiRuntime } from "./session-ui-runtime.js";
 import { createSlackRequestRuntime } from "./slack-request-runtime.js";
 import { createPinetRegistrationGate } from "./pinet-registration-gate.js";
@@ -395,6 +395,19 @@ export default function (pi: ExtensionAPI) {
     },
     signalAgentFree: (ctx) => signalAgentFree(ctx),
     formatError: msg,
+  });
+  const agentEventRuntime = createAgentEventRuntime({
+    getBrokerRole: () => brokerRole,
+    getGuardrails: () => guardrails,
+    requireToolPolicy,
+    formatAction: formatConfirmationAction,
+    formatError: msg,
+    deliverFollowUpMessage,
+    beforeAgentStart: agentPromptGuidance.beforeAgentStart,
+    onCompletionAgentEnd: agentCompletionRuntime.onAgentEnd,
+    setDeliverTrackedSlackFollowUpMessage: (deliver) => {
+      deliverTrackedSlackFollowUpMessage = deliver;
+    },
   });
   const pinetMeshSkin = createPinetMeshSkin({
     getBrokerRole: () => brokerRole,
@@ -1248,35 +1261,9 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ─── Agent status reporting ──────────────────────────
+  // ─── Agent event wiring ──────────────────────────────
 
-  const slackToolPolicyRuntime = createSlackToolPolicyRuntime({
-    getBrokerRole: () => brokerRole,
-    getGuardrails: () => guardrails,
-    requireToolPolicy,
-    formatAction: formatConfirmationAction,
-    formatError: msg,
-    deliverFollowUpMessage,
-  });
-  deliverTrackedSlackFollowUpMessage = slackToolPolicyRuntime.deliverTrackedSlackFollowUpMessage;
-
-  pi.on("input", slackToolPolicyRuntime.onInput);
-
-  pi.on("turn_start", slackToolPolicyRuntime.onTurnStart);
-
-  pi.on("turn_end", slackToolPolicyRuntime.onTurnEnd);
-
-  pi.on("agent_end", slackToolPolicyRuntime.onAgentEnd);
-
-  // Hard-block forbidden tools when broker role is active.
-  // Also hard-enforce Slack-origin guardrails for core built-in tools.
-  pi.on("tool_call", slackToolPolicyRuntime.onToolCall);
-
-  // Inject dynamic identity guidance every turn so reload/session restore keeps prompts in sync.
-  pi.on("before_agent_start", agentPromptGuidance.beforeAgentStart);
-
-  // When agent finishes: clear thinking status, mark free, and auto-drain inbox
-  pi.on("agent_end", agentCompletionRuntime.onAgentEnd);
+  agentEventRuntime.register(pi);
 
   pi.on("session_shutdown", async (_event, ctx) => {
     resetRemoteControlState();
