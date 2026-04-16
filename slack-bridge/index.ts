@@ -6,7 +6,6 @@ import {
   type InboxMessage,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
-  formatInboxMessages,
   reloadPinetRuntimeSafely,
   buildPinetOwnerToken,
   resolveAgentIdentity,
@@ -48,11 +47,7 @@ import {
 } from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
 import { SlackActivityLogger } from "./activity-log.js";
-import {
-  createBrokerDeliveryState,
-  getBrokerInboxIds,
-  queueBrokerInboxIds,
-} from "./broker-delivery.js";
+import { createBrokerDeliveryState, queueBrokerInboxIds } from "./broker-delivery.js";
 import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
@@ -72,6 +67,7 @@ import { createSessionUiRuntime } from "./session-ui-runtime.js";
 import { createSlackRequestRuntime } from "./slack-request-runtime.js";
 import { createPinetRegistrationGate } from "./pinet-registration-gate.js";
 import { createBrokerRuntimeAccess } from "./broker-runtime-access.js";
+import { createInboxDrainRuntime } from "./inbox-drain-runtime.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -190,13 +186,44 @@ export default function (pi: ExtensionAPI) {
 
   const inbox: InboxMessage[] = [];
   const brokerDeliveryState = createBrokerDeliveryState();
+  let drainInboxPort: (() => void) | null = null;
   const sessionUiRuntime = createSessionUiRuntime({
     getAgentName: () => agentName,
     getAgentEmoji: () => agentEmoji,
     getInboxLength: () => inbox.length,
-    drainInbox,
+    drainInbox: () => {
+      drainInboxPort?.();
+    },
   });
   const { updateBadge, setExtStatus, maybeDrainInboxIfIdle } = sessionUiRuntime;
+  let reportAgentStatus: (status: "working" | "idle") => Promise<void> = async () => {};
+  let deliverTrackedSlackFollowUpMessage: (options: {
+    prompt: string;
+    messages: Pick<InboxMessage, "threadTs">[];
+  }) => boolean = () => false;
+  const inboxDrainRuntime = createInboxDrainRuntime({
+    sendUserMessage: (body, options) => {
+      pi.sendUserMessage(body, options);
+    },
+    takeInboxMessages: () => inbox.splice(0, inbox.length),
+    restoreInboxMessages: (messages) => {
+      inbox.push(...messages);
+    },
+    updateBadge,
+    reportStatus: (status) => reportAgentStatus(status),
+    userNames,
+    getSecurityPrompt: () => securityPrompt,
+    deliverTrackedSlackFollowUpMessage: (options) => deliverTrackedSlackFollowUpMessage(options),
+    getBrokerRole: () => brokerRole,
+    hasFollowerClient: () => brokerClient?.client != null,
+    flushFollowerDeliveredAcks: () => followerRuntime.flushDeliveredAcks(),
+    markBrokerInboxIdsDelivered: (inboxIds) => {
+      brokerRuntime.markDelivered(inboxIds);
+    },
+    getFollowerDeliveryState: () => followerDeliveryState,
+  });
+  const { deliverFollowUpMessage, flushDeliveredFollowerAcks, drainInbox } = inboxDrainRuntime;
+  drainInboxPort = drainInbox;
 
   // ─── Helpers ─────────────────────────────────────────
 
@@ -359,6 +386,7 @@ export default function (pi: ExtensionAPI) {
     getExtensionContext: () => sessionUiRuntime.getExtensionContext() ?? undefined,
   });
   const { reportStatus, signalAgentFree } = pinetAgentStatus;
+  reportAgentStatus = reportStatus;
   const pinetMeshSkin = createPinetMeshSkin({
     getBrokerRole: () => brokerRole,
     getActiveBrokerDb,
@@ -1213,20 +1241,6 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Agent status reporting ──────────────────────────
 
-  function deliverFollowUpMessage(text: string): boolean {
-    try {
-      pi.sendUserMessage(text, { deliverAs: "followUp" });
-      return true;
-    } catch {
-      try {
-        pi.sendUserMessage(text);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-  }
-
   const slackToolPolicyRuntime = createSlackToolPolicyRuntime({
     getBrokerRole: () => brokerRole,
     getGuardrails: () => guardrails,
@@ -1235,54 +1249,7 @@ export default function (pi: ExtensionAPI) {
     formatError: msg,
     deliverFollowUpMessage,
   });
-
-  async function flushDeliveredFollowerAcks(): Promise<void> {
-    if (brokerRole !== "follower" || !brokerClient?.client) return;
-    await followerRuntime.flushDeliveredAcks();
-  }
-
-  // Drain inbox: set thinking status, send to agent
-  function drainInbox(): void {
-    if (inbox.length === 0) return;
-
-    const pending = inbox.splice(0, inbox.length);
-    const brokerInboxIds = getBrokerInboxIds(pending);
-    updateBadge();
-    void reportStatus("working").catch(() => {
-      /* best effort */
-    });
-
-    let prompt = formatInboxMessages(pending, userNames);
-
-    // Prepend security guardrails if configured
-    if (securityPrompt) {
-      prompt = securityPrompt + "\n\n" + prompt;
-    }
-
-    if (
-      slackToolPolicyRuntime.deliverTrackedSlackFollowUpMessage({
-        prompt,
-        messages: pending,
-      })
-    ) {
-      if (brokerInboxIds.length > 0) {
-        if (brokerRole === "follower") {
-          markFollowerInboxIdsDelivered(followerDeliveryState, brokerInboxIds);
-          void flushDeliveredFollowerAcks();
-        } else if (brokerRole === "broker") {
-          try {
-            brokerRuntime.markDelivered(brokerInboxIds);
-          } catch {
-            /* best effort */
-          }
-        }
-      }
-      return;
-    }
-
-    inbox.push(...pending);
-    updateBadge();
-  }
+  deliverTrackedSlackFollowUpMessage = slackToolPolicyRuntime.deliverTrackedSlackFollowUpMessage;
 
   pi.on("input", slackToolPolicyRuntime.onInput);
 
