@@ -1,0 +1,179 @@
+import { describe, expect, it, vi } from "vitest";
+import { createFollowerDeliveryState } from "./follower-delivery.js";
+import { formatInboxMessages, type InboxMessage } from "./helpers.js";
+import { createInboxDrainRuntime, type InboxDrainRuntimeDeps } from "./inbox-drain-runtime.js";
+
+function createMessage(overrides: Partial<InboxMessage> = {}): InboxMessage {
+  return {
+    channel: "C123",
+    threadTs: "100.1",
+    userId: "U123",
+    text: "hello",
+    timestamp: "100.2",
+    ...overrides,
+  };
+}
+
+function createDeps(overrides: Partial<InboxDrainRuntimeDeps> = {}) {
+  const inbox: InboxMessage[] = [];
+  const sendUserMessage = vi.fn();
+  const updateBadge = vi.fn();
+  const reportStatus = vi.fn(async () => {});
+  const userNames = new Map<string, string>([["U123", "Ada"]]);
+  const deliverTrackedSlackFollowUpMessage = vi.fn(() => true);
+  const flushFollowerDeliveredAcks = vi.fn(async () => {});
+  const markBrokerInboxIdsDelivered = vi.fn();
+  let securityPrompt = "";
+  let brokerRole: "broker" | "follower" | null = null;
+  let followerClient = true;
+  const followerDeliveryState = createFollowerDeliveryState();
+
+  const deps: InboxDrainRuntimeDeps = {
+    sendUserMessage,
+    takeInboxMessages: () => inbox.splice(0, inbox.length),
+    restoreInboxMessages: (messages) => {
+      inbox.push(...messages);
+    },
+    updateBadge,
+    reportStatus,
+    userNames,
+    getSecurityPrompt: () => securityPrompt,
+    deliverTrackedSlackFollowUpMessage,
+    getBrokerRole: () => brokerRole,
+    hasFollowerClient: () => followerClient,
+    flushFollowerDeliveredAcks,
+    markBrokerInboxIdsDelivered,
+    getFollowerDeliveryState: () => followerDeliveryState,
+    ...overrides,
+  };
+
+  const runtime = createInboxDrainRuntime(deps);
+
+  return {
+    runtime,
+    inbox,
+    sendUserMessage,
+    updateBadge,
+    reportStatus,
+    userNames,
+    deliverTrackedSlackFollowUpMessage,
+    flushFollowerDeliveredAcks,
+    markBrokerInboxIdsDelivered,
+    followerDeliveryState,
+    setSecurityPrompt: (value: string) => {
+      securityPrompt = value;
+    },
+    setBrokerRole: (value: "broker" | "follower" | null) => {
+      brokerRole = value;
+    },
+    setFollowerClient: (value: boolean) => {
+      followerClient = value;
+    },
+  };
+}
+
+describe("createInboxDrainRuntime", () => {
+  it("delivers follow-up messages with a plain-send fallback", () => {
+    const { runtime, sendUserMessage } = createDeps();
+    sendUserMessage
+      .mockImplementationOnce(() => {
+        throw new Error("followUp failed");
+      })
+      .mockImplementationOnce(() => undefined);
+
+    expect(runtime.deliverFollowUpMessage("steady note")).toBe(true);
+    expect(sendUserMessage).toHaveBeenNthCalledWith(1, "steady note", { deliverAs: "followUp" });
+    expect(sendUserMessage).toHaveBeenNthCalledWith(2, "steady note");
+  });
+
+  it("returns false when both follow-up delivery attempts fail", () => {
+    const { runtime, sendUserMessage } = createDeps();
+    sendUserMessage.mockImplementation(() => {
+      throw new Error("send failed");
+    });
+
+    expect(runtime.deliverFollowUpMessage("steady note")).toBe(false);
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("formats pending inbox work, applies security guidance, and flushes follower acks", () => {
+    const {
+      runtime,
+      inbox,
+      updateBadge,
+      reportStatus,
+      userNames,
+      deliverTrackedSlackFollowUpMessage,
+      flushFollowerDeliveredAcks,
+      followerDeliveryState,
+      markBrokerInboxIdsDelivered,
+      setSecurityPrompt,
+      setBrokerRole,
+    } = createDeps();
+    const message = createMessage({ brokerInboxId: 42 });
+    inbox.push(message);
+    setSecurityPrompt("SECURITY FIRST");
+    setBrokerRole("follower");
+
+    runtime.drainInbox();
+
+    expect(updateBadge).toHaveBeenCalledTimes(1);
+    expect(reportStatus).toHaveBeenCalledWith("working");
+    expect(deliverTrackedSlackFollowUpMessage).toHaveBeenCalledWith({
+      prompt: `SECURITY FIRST\n\n${formatInboxMessages([message], userNames)}`,
+      messages: [message],
+    });
+    expect(followerDeliveryState.deliveredAwaitingAckIds.has(42)).toBe(true);
+    expect(flushFollowerDeliveredAcks).toHaveBeenCalledTimes(1);
+    expect(markBrokerInboxIdsDelivered).not.toHaveBeenCalled();
+    expect(inbox).toEqual([]);
+  });
+
+  it("marks broker inbox ids delivered after a successful broker-side drain", () => {
+    const {
+      runtime,
+      inbox,
+      markBrokerInboxIdsDelivered,
+      setBrokerRole,
+      flushFollowerDeliveredAcks,
+    } = createDeps();
+    inbox.push(createMessage({ brokerInboxId: 77 }));
+    setBrokerRole("broker");
+
+    runtime.drainInbox();
+
+    expect(markBrokerInboxIdsDelivered).toHaveBeenCalledWith([77]);
+    expect(flushFollowerDeliveredAcks).not.toHaveBeenCalled();
+  });
+
+  it("requeues pending inbox work when the follow-up delivery is not accepted", () => {
+    const { runtime, inbox, updateBadge, reportStatus, markBrokerInboxIdsDelivered } = createDeps({
+      deliverTrackedSlackFollowUpMessage: vi.fn(() => false),
+    });
+    const message = createMessage({ brokerInboxId: 88 });
+    inbox.push(message);
+
+    runtime.drainInbox();
+
+    expect(reportStatus).toHaveBeenCalledWith("working");
+    expect(updateBadge).toHaveBeenCalledTimes(2);
+    expect(markBrokerInboxIdsDelivered).not.toHaveBeenCalled();
+    expect(inbox).toEqual([message]);
+  });
+
+  it("only flushes follower acks when follower delivery is still live", async () => {
+    const { runtime, flushFollowerDeliveredAcks, setBrokerRole, setFollowerClient } = createDeps();
+
+    await runtime.flushDeliveredFollowerAcks();
+    expect(flushFollowerDeliveredAcks).not.toHaveBeenCalled();
+
+    setBrokerRole("follower");
+    setFollowerClient(false);
+    await runtime.flushDeliveredFollowerAcks();
+    expect(flushFollowerDeliveredAcks).not.toHaveBeenCalled();
+
+    setFollowerClient(true);
+    await runtime.flushDeliveredFollowerAcks();
+    expect(flushFollowerDeliveredAcks).toHaveBeenCalledTimes(1);
+  });
+});
