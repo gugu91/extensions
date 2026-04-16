@@ -68,6 +68,7 @@ import { createSlackRequestRuntime } from "./slack-request-runtime.js";
 import { createPinetRegistrationGate } from "./pinet-registration-gate.js";
 import { createBrokerRuntimeAccess } from "./broker-runtime-access.js";
 import { createInboxDrainRuntime } from "./inbox-drain-runtime.js";
+import { createAgentCompletionRuntime } from "./agent-completion-runtime.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -112,7 +113,6 @@ export default function (pi: ExtensionAPI) {
   let botUserId: string | null = null;
 
   const threads = new Map<string, SinglePlayerThreadInfo>();
-  const thinking = new Set<string>();
   const pendingEyes = new Map<string, SinglePlayerPendingAttentionEntry[]>(); // thread_ts → message ts list // thread_ts values showing "is thinking…"
   const userNames = new TtlCache<string, string>({ maxSize: 2000, ttlMs: 60 * 60 * 1000 });
   let lastDmChannel: string | null = null;
@@ -387,6 +387,15 @@ export default function (pi: ExtensionAPI) {
   });
   const { reportStatus, signalAgentFree } = pinetAgentStatus;
   reportAgentStatus = reportStatus;
+  const agentCompletionRuntime = createAgentCompletionRuntime({
+    getThreads: () => threads,
+    clearThreadStatus,
+    clearFollowUpPending: () => {
+      brokerRuntime.clearFollowUpPending();
+    },
+    signalAgentFree: (ctx) => signalAgentFree(ctx),
+    formatError: msg,
+  });
   const pinetMeshSkin = createPinetMeshSkin({
     getBrokerRole: () => brokerRole,
     getActiveBrokerDb,
@@ -1267,20 +1276,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", agentPromptGuidance.beforeAgentStart);
 
   // When agent finishes: clear thinking status, mark free, and auto-drain inbox
-  pi.on("agent_end", async (_event, ctx) => {
-    for (const ts of thinking) {
-      const thread = threads.get(ts);
-      if (thread) await clearThreadStatus(thread.channelId, ts);
-    }
-    thinking.clear();
-    brokerRuntime.clearFollowUpPending();
-
-    try {
-      await signalAgentFree(ctx);
-    } catch (err) {
-      ctx.ui.notify(`Pinet auto-free failed: ${msg(err)}`, "warning");
-    }
-  });
+  pi.on("agent_end", agentCompletionRuntime.onAgentEnd);
 
   pi.on("session_shutdown", async (_event, ctx) => {
     resetRemoteControlState();
