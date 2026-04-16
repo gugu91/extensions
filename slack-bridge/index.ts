@@ -8,8 +8,6 @@ import {
   buildAllowlist,
   formatInboxMessages,
   reloadPinetRuntimeSafely,
-  callSlackAPI,
-  createAbortableOperationTracker,
   buildPinetOwnerToken,
   resolveAgentIdentity,
   resolveBrokerStableId,
@@ -74,6 +72,7 @@ import { createPinetMeshOps } from "./pinet-mesh-ops.js";
 import { createAgentPromptGuidance } from "./agent-prompt-guidance.js";
 import { createSlackToolPolicyRuntime } from "./slack-tool-policy-runtime.js";
 import { createSessionUiRuntime } from "./session-ui-runtime.js";
+import { createSlackRequestRuntime } from "./slack-request-runtime.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -89,15 +88,8 @@ export default function (pi: ExtensionAPI) {
 
   if (!botToken || !appToken) return;
 
-  let slackRequests = createAbortableOperationTracker();
-
-  function resetTopLevelSlackRequests(): void {
-    slackRequests = createAbortableOperationTracker();
-  }
-
-  async function slack(method: string, token: string, body?: Record<string, unknown>) {
-    return slackRequests.run((signal) => callSlackAPI(method, token, body, { signal }));
-  }
+  const slackRequestRuntime = createSlackRequestRuntime();
+  const { slack } = slackRequestRuntime;
 
   // allowedUsers / allowAllWorkspaceUsers: settings.json takes priority, env vars as fallback
   let allowedUsers = buildAllowlist(
@@ -459,7 +451,7 @@ export default function (pi: ExtensionAPI) {
     getBotToken: () => botToken!,
     getAppToken: () => appToken!,
     dedup: processedSlackSocketDeliveries,
-    abortSlackRequests: () => slackRequests.abortAndWait(),
+    abortSlackRequests: slackRequestRuntime.abortAndWait,
     isSingleRuntimeActive: () => currentRuntimeMode === "single",
     setExtStatus,
     formatError: msg,
@@ -821,7 +813,7 @@ export default function (pi: ExtensionAPI) {
       await stopPinetRuntime(ctx, { releaseIdentity: true });
       // Runtime transitions keep the extension alive in-process, so restore a
       // fresh top-level Slack request tracker after tearing the prior runtime down.
-      resetTopLevelSlackRequests();
+      slackRequestRuntime.reset();
       singlePlayerRuntime.resetShutdownState();
     }
 
@@ -899,7 +891,7 @@ export default function (pi: ExtensionAPI) {
         // fresh top-level Slack request tracker after aborting the previous
         // generation. This preserves shutdown abort semantics without leaving
         // top-level Slack tools permanently stuck in "shutdown in progress".
-        resetTopLevelSlackRequests();
+        slackRequestRuntime.reset();
         singlePlayerRuntime.resetShutdownState();
         setExtStatus(ctx, "reconnecting");
       },
@@ -1194,7 +1186,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     singlePlayerRuntime.resetShutdownState();
-    resetTopLevelSlackRequests();
+    slackRequestRuntime.reset();
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
     sessionUiRuntime.prepareForSessionStart(ctx);
