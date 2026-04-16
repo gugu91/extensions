@@ -12,7 +12,6 @@ import {
   resolveAgentIdentity,
   resolveBrokerStableId,
   resolveAgentStableId,
-  isLikelyLocalSubagentContext,
   resolveAllowAllWorkspaceUsers,
   trackBrokerInboundThread,
 } from "./helpers.js";
@@ -73,6 +72,7 @@ import { createAgentPromptGuidance } from "./agent-prompt-guidance.js";
 import { createSlackToolPolicyRuntime } from "./slack-tool-policy-runtime.js";
 import { createSessionUiRuntime } from "./session-ui-runtime.js";
 import { createSlackRequestRuntime } from "./slack-request-runtime.js";
+import { createPinetRegistrationGate } from "./pinet-registration-gate.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -535,14 +535,10 @@ export default function (pi: ExtensionAPI) {
   let pinetEnabled = false;
   let currentRuntimeMode: SlackBridgeRuntimeMode = "off";
   let brokerRole: "broker" | "follower" | null = null;
-  let pinetRegistrationBlocked = false;
   let brokerClient: BrokerClientRef | null = null;
   const followerDeliveryState = createFollowerDeliveryState();
   let desiredAgentStatus: "working" | "idle" = "idle";
-
-  function getPinetRegistrationBlockReason(): string {
-    return "Pinet is disabled in local subagent sessions to avoid polluting the agent mesh.";
-  }
+  const pinetRegistrationGate = createPinetRegistrationGate();
 
   const brokerThreadOwnerHints = createBrokerThreadOwnerHints({
     slack,
@@ -1103,7 +1099,7 @@ export default function (pi: ExtensionAPI) {
 
   registerPinetCommands(pi, {
     pinetEnabled: () => pinetEnabled,
-    pinetRegistrationBlocked: () => pinetRegistrationBlocked,
+    pinetRegistrationBlocked: pinetRegistrationGate.isBlocked,
     runtimeMode: () => currentRuntimeMode,
     runtimeConnected: () =>
       currentRuntimeMode === "broker"
@@ -1138,7 +1134,7 @@ export default function (pi: ExtensionAPI) {
     getBrokerControlPlaneHomeTabViewerIds,
     lastBrokerControlPlaneHomeTabRefreshAt: () => brokerRuntime.getLastHomeTabRefreshAt(),
     lastBrokerControlPlaneHomeTabError: () => brokerRuntime.getLastHomeTabError(),
-    getPinetRegistrationBlockReason,
+    getPinetRegistrationBlockReason: pinetRegistrationGate.getBlockReason,
     connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
     connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
     reloadPinetRuntime,
@@ -1152,9 +1148,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
-    if (pinetRegistrationBlocked) {
-      throw new Error(getPinetRegistrationBlockReason());
-    }
+    pinetRegistrationGate.assertCanRegister();
 
     const clientRef = await followerRuntime.connect(ctx);
     brokerClient = clientRef;
@@ -1190,18 +1184,7 @@ export default function (pi: ExtensionAPI) {
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
     sessionUiRuntime.prepareForSessionStart(ctx);
-    const sessionHeader = (
-      ctx.sessionManager as { getHeader?: () => { parentSession?: string } | null }
-    ).getHeader?.();
-    pinetRegistrationBlocked = isLikelyLocalSubagentContext({
-      sessionHeader,
-      sessionFile: ctx.sessionManager.getSessionFile(),
-      leafId: ctx.sessionManager.getLeafId(),
-      argv: process.argv.slice(2),
-      hasUI: ctx.hasUI,
-      stdinIsTTY: process.stdin.isTTY,
-      stdoutIsTTY: process.stdout.isTTY,
-    });
+    const pinetRegistrationBlocked = pinetRegistrationGate.evaluateSessionStart(ctx);
     // Restore persisted thread state (always restore, even before /pinet)
     restorePersistedRuntimeState(ctx);
 
@@ -1343,7 +1326,7 @@ export default function (pi: ExtensionAPI) {
     resetPendingRemoteControlAcks();
     sessionUiRuntime.cleanupForSessionShutdown();
     await stopPinetRuntime(ctx, { releaseIdentity: true });
-    pinetRegistrationBlocked = false;
+    pinetRegistrationGate.reset();
   });
 }
 
