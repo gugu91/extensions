@@ -19,10 +19,8 @@ import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
-import { registerSlackTools } from "./slack-tools.js";
 import { registerPinetCommands } from "./pinet-commands.js";
-import { registerPinetTools } from "./pinet-tools.js";
-import { registerIMessageTools } from "./imessage-tools.js";
+import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
 import { createSlackRuntimeAccess } from "./slack-runtime-access.js";
 import { createThreadConfirmationPolicy } from "./thread-confirmations.js";
 import {
@@ -558,33 +556,6 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Reconnect / status ─────────────────────────────
 
-  // ─── Tools ──────────────────────────────────────────
-
-  registerSlackTools(pi, {
-    getBotToken: () => {
-      if (!botToken) {
-        throw new Error("Slack bot token is not configured.");
-      }
-      return botToken;
-    },
-    getDefaultChannel: () => settings.defaultChannel,
-    getSecurityPrompt: () => securityPrompt,
-    inbox,
-    slack,
-    getAgentName: () => agentName,
-    getAgentEmoji: () => agentEmoji,
-    getAgentOwnerToken: () => agentOwnerToken,
-    getLastDmChannel: () => lastDmChannel,
-    updateBadge,
-    resolveUser,
-    threadContext: singlePlayerRuntime.getThreadContextPort(),
-    resolveChannel,
-    rememberChannel,
-    requireToolPolicy,
-    getBotUserId: () => botUserId,
-    registerConfirmationRequest,
-  });
-
   // ─── Agent-to-agent messaging tools ──────────────────
 
   // These are registered unconditionally but only work when pinet is active.
@@ -945,45 +916,74 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  registerPinetTools(pi, {
-    pinetEnabled: () => pinetEnabled,
-    brokerRole: () => brokerRole,
-    requireToolPolicy,
-    sendPinetAgentMessage,
-    sendPinetBroadcastMessage,
-    signalAgentFree,
-    scheduleBrokerWakeup,
-    scheduleFollowerWakeup,
-    listBrokerAgents,
-    listFollowerAgents,
+  // ─── Tools ──────────────────────────────────────────
+
+  const toolRegistrationRuntime = createToolRegistrationRuntime({
+    slackTools: {
+      getBotToken: () => {
+        if (!botToken) {
+          throw new Error("Slack bot token is not configured.");
+        }
+        return botToken;
+      },
+      getDefaultChannel: () => settings.defaultChannel,
+      getSecurityPrompt: () => securityPrompt,
+      inbox,
+      slack,
+      getAgentName: () => agentName,
+      getAgentEmoji: () => agentEmoji,
+      getAgentOwnerToken: () => agentOwnerToken,
+      getLastDmChannel: () => lastDmChannel,
+      updateBadge,
+      resolveUser,
+      threadContext: singlePlayerRuntime.getThreadContextPort(),
+      resolveChannel,
+      rememberChannel,
+      requireToolPolicy,
+      getBotUserId: () => botUserId,
+      registerConfirmationRequest,
+    },
+    pinetTools: {
+      pinetEnabled: () => pinetEnabled,
+      brokerRole: () => brokerRole,
+      requireToolPolicy,
+      sendPinetAgentMessage,
+      sendPinetBroadcastMessage,
+      signalAgentFree,
+      scheduleBrokerWakeup,
+      scheduleFollowerWakeup,
+      listBrokerAgents,
+      listFollowerAgents,
+    },
+    iMessageTools: {
+      pinetEnabled: () => pinetEnabled,
+      brokerRole: () => brokerRole,
+      requireToolPolicy,
+      getActiveBroker,
+      getActiveBrokerSelfId,
+      sendFollowerIMessage: async (input) => {
+        if (!brokerClient?.client) {
+          throw new Error("Pinet is in an unexpected state.");
+        }
+
+        const result = await brokerClient.client.sendMessage(input);
+        return {
+          adapter: result.adapter,
+          messageId: result.messageId,
+        };
+      },
+      getAgentIdentity: () => ({
+        name: agentName,
+        emoji: agentEmoji,
+        ownerToken: agentOwnerToken,
+      }),
+      trackOwnedThread: (threadId, channel, source) => {
+        singlePlayerRuntime.trackOwnedThread(threadId, channel, source);
+      },
+    },
   });
 
-  registerIMessageTools(pi, {
-    pinetEnabled: () => pinetEnabled,
-    brokerRole: () => brokerRole,
-    requireToolPolicy,
-    getActiveBroker,
-    getActiveBrokerSelfId,
-    sendFollowerIMessage: async (input) => {
-      if (!brokerClient?.client) {
-        throw new Error("Pinet is in an unexpected state.");
-      }
-
-      const result = await brokerClient.client.sendMessage(input);
-      return {
-        adapter: result.adapter,
-        messageId: result.messageId,
-      };
-    },
-    getAgentIdentity: () => ({
-      name: agentName,
-      emoji: agentEmoji,
-      ownerToken: agentOwnerToken,
-    }),
-    trackOwnedThread: (threadId, channel, source) => {
-      singlePlayerRuntime.trackOwnedThread(threadId, channel, source);
-    },
-  });
+  toolRegistrationRuntime.register(pi);
 
   // ─── Commands ───────────────────────────────────────
 
