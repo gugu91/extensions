@@ -19,7 +19,7 @@ import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
-import { registerPinetCommands } from "./pinet-commands.js";
+import { createCommandRegistrationRuntime } from "./command-registration-runtime.js";
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
 import { createSlackRuntimeAccess } from "./slack-runtime-access.js";
 import { createThreadConfirmationPolicy } from "./thread-confirmations.js";
@@ -1141,55 +1141,60 @@ export default function (pi: ExtensionAPI) {
     deliveryState: followerDeliveryState,
   });
 
-  registerPinetCommands(pi, {
-    pinetEnabled: () => pinetEnabled,
-    pinetRegistrationBlocked: pinetRegistrationGate.isBlocked,
-    runtimeMode: () => currentRuntimeMode,
-    runtimeConnected: () =>
-      currentRuntimeMode === "broker"
-        ? brokerRuntime.isConnected()
-        : currentRuntimeMode === "follower"
-          ? brokerClient != null
-          : currentRuntimeMode === "single"
-            ? singlePlayerRuntime.isConnected()
-            : false,
-    brokerRole: () => brokerRole,
-    agentName: () => agentName,
-    agentEmoji: () => agentEmoji,
-    agentOwnerToken: () => agentOwnerToken,
-    agentPersonality: () => agentPersonality,
-    agentAliases: () => agentAliases,
-    botUserId: () => botUserId,
-    activeSkinTheme: () => activeSkinTheme,
-    lastDmChannel: () => lastDmChannel,
-    threads: () => threads,
-    allowedUsers: () => allowedUsers,
-    inboxLength: () => inbox.length,
-    recentActivityLogEntries: (limit) => brokerRuntime.getRecentActivityEntries(limit),
-    settings: () => settings,
-    lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
-    isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
-    getConfiguredBrokerControlPlaneCanvasId: () =>
-      brokerRuntime.getConfiguredBrokerControlPlaneCanvasId(),
-    getConfiguredBrokerControlPlaneCanvasChannel: () =>
-      brokerRuntime.getConfiguredBrokerControlPlaneCanvasChannel(),
-    lastBrokerControlPlaneCanvasRefreshAt: () => brokerRuntime.getLastControlPlaneCanvasRefreshAt(),
-    lastBrokerControlPlaneCanvasError: () => brokerRuntime.getLastControlPlaneCanvasError(),
-    getBrokerControlPlaneHomeTabViewerIds,
-    lastBrokerControlPlaneHomeTabRefreshAt: () => brokerRuntime.getLastHomeTabRefreshAt(),
-    lastBrokerControlPlaneHomeTabError: () => brokerRuntime.getLastHomeTabError(),
-    getPinetRegistrationBlockReason: pinetRegistrationGate.getBlockReason,
-    connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
-    connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
-    reloadPinetRuntime,
-    disconnectFollower,
-    sendPinetAgentMessage,
-    signalAgentFree,
-    applyMeshSkin,
-    applyLocalAgentIdentity,
-    setExtStatus,
-    setExtCtx: sessionUiRuntime.setExtCtx,
+  const commandRegistrationRuntime = createCommandRegistrationRuntime({
+    pinetCommands: {
+      pinetEnabled: () => pinetEnabled,
+      pinetRegistrationBlocked: pinetRegistrationGate.isBlocked,
+      runtimeMode: () => currentRuntimeMode,
+      runtimeConnected: () =>
+        currentRuntimeMode === "broker"
+          ? brokerRuntime.isConnected()
+          : currentRuntimeMode === "follower"
+            ? brokerClient != null
+            : currentRuntimeMode === "single"
+              ? singlePlayerRuntime.isConnected()
+              : false,
+      brokerRole: () => brokerRole,
+      agentName: () => agentName,
+      agentEmoji: () => agentEmoji,
+      agentOwnerToken: () => agentOwnerToken,
+      agentPersonality: () => agentPersonality,
+      agentAliases: () => agentAliases,
+      botUserId: () => botUserId,
+      activeSkinTheme: () => activeSkinTheme,
+      lastDmChannel: () => lastDmChannel,
+      threads: () => threads,
+      allowedUsers: () => allowedUsers,
+      inboxLength: () => inbox.length,
+      recentActivityLogEntries: (limit) => brokerRuntime.getRecentActivityEntries(limit),
+      settings: () => settings,
+      lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
+      isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
+      getConfiguredBrokerControlPlaneCanvasId: () =>
+        brokerRuntime.getConfiguredBrokerControlPlaneCanvasId(),
+      getConfiguredBrokerControlPlaneCanvasChannel: () =>
+        brokerRuntime.getConfiguredBrokerControlPlaneCanvasChannel(),
+      lastBrokerControlPlaneCanvasRefreshAt: () =>
+        brokerRuntime.getLastControlPlaneCanvasRefreshAt(),
+      lastBrokerControlPlaneCanvasError: () => brokerRuntime.getLastControlPlaneCanvasError(),
+      getBrokerControlPlaneHomeTabViewerIds,
+      lastBrokerControlPlaneHomeTabRefreshAt: () => brokerRuntime.getLastHomeTabRefreshAt(),
+      lastBrokerControlPlaneHomeTabError: () => brokerRuntime.getLastHomeTabError(),
+      getPinetRegistrationBlockReason: pinetRegistrationGate.getBlockReason,
+      connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
+      connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
+      reloadPinetRuntime,
+      disconnectFollower,
+      sendPinetAgentMessage,
+      signalAgentFree,
+      applyMeshSkin,
+      applyLocalAgentIdentity,
+      setExtStatus,
+      setExtCtx: sessionUiRuntime.setExtCtx,
+    },
   });
+
+  commandRegistrationRuntime.register(pi);
 
   async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
     pinetRegistrationGate.assertCanRegister();
