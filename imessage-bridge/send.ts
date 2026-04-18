@@ -46,12 +46,12 @@ export function getDefaultIMessageThreadId(recipient: string): string {
 export function buildIMessageSendAppleScript(): string[] {
   return [
     "on run argv",
-    'set recipientHandle to item 1 of argv',
-    'set messageBody to item 2 of argv',
+    "set recipientHandle to item 1 of argv",
+    "set messageBody to item 2 of argv",
     'tell application "Messages"',
-    'set targetService to 1st service whose service type = iMessage',
-    'set targetBuddy to buddy recipientHandle of targetService',
-    'send messageBody to targetBuddy',
+    "set targetService to 1st service whose service type = iMessage",
+    "set targetBuddy to buddy recipientHandle of targetService",
+    "send messageBody to targetBuddy",
     "end tell",
     "end run",
   ];

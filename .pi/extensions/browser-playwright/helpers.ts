@@ -78,7 +78,10 @@ export function sanitizeLabel(value: string | undefined): string {
 }
 
 export function sanitizeStorageStateName(value: string): string {
-  const base = value.trim().toLowerCase().replace(/\.json$/i, "");
+  const base = value
+    .trim()
+    .toLowerCase()
+    .replace(/\.json$/i, "");
   const cleaned = base.replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|[-_]+$/g, "");
   if (!/[a-z0-9]/.test(cleaned)) {
     throw new Error("Storage state names must contain at least one letter or number.");
@@ -133,7 +136,9 @@ export function buildInstallInstructions(
           "The extension prefers a host Chrome/Chromium executable when one is available.",
           "If no compatible host browser is found, install Playwright Chromium:",
         ]
-      : [`Install the browser-playwright extension dependencies and ${browserEngine} browser binaries:`];
+      : [
+          `Install the browser-playwright extension dependencies and ${browserEngine} browser binaries:`,
+        ];
 
   return [
     reason,
@@ -177,8 +182,7 @@ function chromiumExecutableCandidates(
       : null,
   );
 
-  const pathNames =
-    platform === "win32" ? CHROMIUM_PATH_NAMES_WINDOWS : CHROMIUM_PATH_NAMES_POSIX;
+  const pathNames = platform === "win32" ? CHROMIUM_PATH_NAMES_WINDOWS : CHROMIUM_PATH_NAMES_POSIX;
   for (const entry of pathEntries(env.PATH)) {
     for (const executableName of pathNames) {
       push({
@@ -200,7 +204,10 @@ function chromiumExecutableCandidates(
       "/Applications/Chromium.app/Contents/MacOS/Chromium",
       home ? join(home, "Applications/Google Chrome.app/Contents/MacOS/Google Chrome") : "",
       home
-        ? join(home, "Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+        ? join(
+            home,
+            "Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+          )
         : "",
       home ? join(home, "Applications/Chromium.app/Contents/MacOS/Chromium") : "",
     ]) {
@@ -224,13 +231,9 @@ function chromiumExecutableCandidates(
     for (const candidatePath of [
       localAppData ? join(localAppData, "Google", "Chrome", "Application", "chrome.exe") : "",
       programFiles ? join(programFiles, "Google", "Chrome", "Application", "chrome.exe") : "",
-      programFilesX86
-        ? join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
-        : "",
+      programFilesX86 ? join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe") : "",
       programFiles ? join(programFiles, "Chromium", "Application", "chrome.exe") : "",
-      programFilesX86
-        ? join(programFilesX86, "Chromium", "Application", "chrome.exe")
-        : "",
+      programFilesX86 ? join(programFilesX86, "Chromium", "Application", "chrome.exe") : "",
     ]) {
       push(candidatePath ? { path: candidatePath, source: "system" } : null);
     }
@@ -242,11 +245,7 @@ function chromiumExecutableCandidates(
 export async function findPreferredChromiumExecutable(
   options: ChromiumExecutableLookupOptions = {},
 ): Promise<ChromiumExecutableCandidate | null> {
-  const {
-    env = process.env,
-    platform = process.platform,
-    accessImpl = access,
-  } = options;
+  const { env = process.env, platform = process.platform, accessImpl = access } = options;
 
   for (const candidate of chromiumExecutableCandidates(env, platform)) {
     try {
@@ -271,9 +270,7 @@ export function safeRequestPageId<PageLike>(
   }
 }
 
-export function isPlaywrightStorageState(
-  value: unknown,
-): value is PlaywrightStorageStateLike {
+export function isPlaywrightStorageState(value: unknown): value is PlaywrightStorageStateLike {
   if (value == null || typeof value !== "object") {
     return false;
   }

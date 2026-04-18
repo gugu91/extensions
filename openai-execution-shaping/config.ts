@@ -49,7 +49,9 @@ function parseJsonFile(filePath: string): unknown | null {
   }
 }
 
-function readSettingsConfig(settingsPath: string): { path: string; raw: OpenAIExecutionShapingConfig } | null {
+function readSettingsConfig(
+  settingsPath: string,
+): { path: string; raw: OpenAIExecutionShapingConfig } | null {
   if (!fs.existsSync(settingsPath)) return null;
   const parsed = parseJsonFile(settingsPath);
   if (!parsed || typeof parsed !== "object") return null;
@@ -112,9 +114,7 @@ export function resolveConfig(
   };
 }
 
-export function loadConfig(
-  options: LoadConfigOptions = {},
-): ResolvedOpenAIExecutionShapingConfig {
+export function loadConfig(options: LoadConfigOptions = {}): ResolvedOpenAIExecutionShapingConfig {
   const cwd = options.cwd ?? process.cwd();
   const agentDir = options.agentDir ?? join(os.homedir(), ".pi", "agent");
   const env = options.env ?? process.env;

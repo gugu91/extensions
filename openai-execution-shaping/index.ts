@@ -119,7 +119,11 @@ export default function openAIExecutionShapingExtension(pi: ExtensionAPI) {
   pi.on("agent_end", async (event, ctx) => {
     const extensionCtx = ctx as CompatibleExtensionContext;
     const config = loadRuntimeConfig(ctx.cwd);
-    if (!config.enabled || !config.autoContinueEnabled || !isTargetModel(extensionCtx.model, config)) {
+    if (
+      !config.enabled ||
+      !config.autoContinueEnabled ||
+      !isTargetModel(extensionCtx.model, config)
+    ) {
       return;
     }
 

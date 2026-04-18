@@ -24,10 +24,15 @@ test("resolveStorageStateFile keeps saved state under the workspace-local browse
   const resolved = await resolveStorageStateFile(" GitHub Login ", { workspaceRoot: workspace });
 
   assert.equal(resolved.name, "github-login");
-  assert.match(resolved.relativePath, /^\.pi[\\/]state[\\/]browser-playwright[\\/]github-login\.json$/);
+  assert.match(
+    resolved.relativePath,
+    /^\.pi[\\/]state[\\/]browser-playwright[\\/]github-login\.json$/,
+  );
   assert.match(
     resolved.absolutePath,
-    new RegExp(`\\${path.sep}\\.pi\\${path.sep}state\\${path.sep}browser-playwright\\${path.sep}github-login\\.json$`),
+    new RegExp(
+      `\\${path.sep}\\.pi\\${path.sep}state\\${path.sep}browser-playwright\\${path.sep}github-login\\.json$`,
+    ),
   );
 });
 
@@ -39,7 +44,11 @@ test("loadStoredStorageState reuses a trusted saved storageState file", async ()
     origins: [{ origin: "https://example.com", localStorage: [{ name: "theme", value: "dark" }] }],
   };
   await mkdir(targetDir, { recursive: true });
-  await writeFile(path.join(targetDir, "example-session.json"), `${JSON.stringify(storageState, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(targetDir, "example-session.json"),
+    `${JSON.stringify(storageState, null, 2)}\n`,
+    "utf8",
+  );
 
   const loaded = await loadStoredStorageState("Example Session", { workspaceRoot: workspace });
   assert.deepEqual(loaded.summary, {
@@ -80,7 +89,11 @@ test("loadStoredStorageState rejects symlinked saved state files", async () => {
   const targetDir = path.join(workspace, ".pi", "state", "browser-playwright");
   const outside = await makeTempDir("browser-storage-outside-file-");
   await mkdir(targetDir, { recursive: true });
-  await writeFile(path.join(outside, "secret.json"), JSON.stringify({ cookies: [], origins: [] }), "utf8");
+  await writeFile(
+    path.join(outside, "secret.json"),
+    JSON.stringify({ cookies: [], origins: [] }),
+    "utf8",
+  );
   await symlink(path.join(outside, "secret.json"), path.join(targetDir, "linked.json"));
 
   await assert.rejects(
@@ -101,13 +114,17 @@ test("loadStoredStorageState rejects a symlink swap just before open", async () 
 
   await assert.rejects(
     () =>
-      loadStoredStorageState("swap", { workspaceRoot: workspace }, {
-        openImpl: async (filePath, flags) => {
-          await rm(filePath, { force: true });
-          await symlink(outsideFile, filePath);
-          return open(filePath, flags);
+      loadStoredStorageState(
+        "swap",
+        { workspaceRoot: workspace },
+        {
+          openImpl: async (filePath, flags) => {
+            await rm(filePath, { force: true });
+            await symlink(outsideFile, filePath);
+            return open(filePath, flags);
+          },
         },
-      }),
+      ),
     /must not use symlinks/i,
   );
 });

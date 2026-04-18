@@ -699,7 +699,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
           const request: Request = route.request();
           session.networkSummary.total_requests += 1;
           const pageId = safeRequestPageId(request, (page) => session.pageIds.get(page) ?? null);
-          const pageRecord = pageId ? session.pages.get(pageId) ?? null : null;
+          const pageRecord = pageId ? (session.pages.get(pageId) ?? null) : null;
           const decision = assessUrl(
             request.url(),
             resolveRouteSecurityOptions(getSecurityOptions(), {

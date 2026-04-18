@@ -9,9 +9,7 @@ import {
 
 describe("iMessage send helpers", () => {
   it("builds a stable default thread id from the recipient", () => {
-    expect(getDefaultIMessageThreadId("Alice@Example.com")).toBe(
-      "imessage:alice@example.com",
-    );
+    expect(getDefaultIMessageThreadId("Alice@Example.com")).toBe("imessage:alice@example.com");
   });
 
   it("builds the AppleScript lines for an argv-driven send", () => {
@@ -20,9 +18,9 @@ describe("iMessage send helpers", () => {
       "set recipientHandle to item 1 of argv",
       "set messageBody to item 2 of argv",
       'tell application "Messages"',
-      'set targetService to 1st service whose service type = iMessage',
-      'set targetBuddy to buddy recipientHandle of targetService',
-      'send messageBody to targetBuddy',
+      "set targetService to 1st service whose service type = iMessage",
+      "set targetBuddy to buddy recipientHandle of targetService",
+      "send messageBody to targetBuddy",
       "end tell",
       "end run",
     ]);

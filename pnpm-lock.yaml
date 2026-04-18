@@ -59,6 +59,8 @@ importers:
         specifier: ^0.34.49
         version: 0.34.49
 
+  openai-execution-shaping: {}
+
   slack-api:
     dependencies:
       "@slack/web-api":

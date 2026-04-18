@@ -2,7 +2,12 @@ import type { BrokerMessage, MessageAdapter, OutboundMessage, ThreadInfo } from 
 
 export interface BrokerMessageSenderDb {
   getThread(threadId: string): ThreadInfo | null;
-  createThread(threadId: string, source: string, channel: string, ownerAgent: string | null): ThreadInfo;
+  createThread(
+    threadId: string,
+    source: string,
+    channel: string,
+    ownerAgent: string | null,
+  ): ThreadInfo;
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void;
   insertMessage(
     threadId: string,
