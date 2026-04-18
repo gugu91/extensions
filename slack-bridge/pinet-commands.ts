@@ -8,6 +8,10 @@ import {
 } from "./helpers.js";
 import { formatRecentActivityLogEntries, type LoggedActivityLogEntry } from "./activity-log.js";
 import type { PinetRuntimeControlContext } from "./pinet-remote-control.js";
+import {
+  formatSlackScopeDiagnosticsStatus,
+  type SlackScopeDiagnostics,
+} from "./slack-scope-diagnostics.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
 export interface PinetCommandsDeps {
@@ -29,6 +33,7 @@ export interface PinetCommandsDeps {
   allowedUsers: () => Set<string> | null;
   inboxLength: () => number;
   recentActivityLogEntries: (limit: number) => ReadonlyArray<LoggedActivityLogEntry>;
+  slackScopeDiagnostics: () => SlackScopeDiagnostics;
   settings: () => SlackBridgeSettings;
   lastBrokerMaintenance: () => {
     pendingBacklogCount: number;
@@ -279,6 +284,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       const activityLogInfo = s.logChannel
         ? `Activity log: ${s.logChannel} (${s.logLevel ?? "actions"})`
         : "Activity log: disabled";
+      const slackToolHealthInfo = `Slack tool health: ${formatSlackScopeDiagnosticsStatus(deps.slackScopeDiagnostics())}`;
       const lbm = deps.lastBrokerMaintenance();
       const brokerHealthInfo =
         mode === "broker" && lbm
@@ -325,6 +331,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
           allowlistInfo,
           defaultChInfo,
           activityLogInfo,
+          slackToolHealthInfo,
           ...brokerHealthInfo,
           ...brokerCanvasInfo,
         ].join("\n"),
