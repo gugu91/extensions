@@ -140,15 +140,62 @@ function extractAttachmentContextLines(attachments: unknown): string[] {
   return lines;
 }
 
+export interface SlackMessageFileMetadata {
+  id?: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  filetype?: string;
+  prettyType?: string;
+  permalink?: string;
+  urlPrivate?: string;
+  mode?: string;
+  size?: number;
+}
+
+export function extractSlackMessageFileMetadata(files: unknown): SlackMessageFileMetadata[] {
+  const extracted: SlackMessageFileMetadata[] = [];
+
+  for (const file of asRecordArray(files)) {
+    const metadata: SlackMessageFileMetadata = {
+      ...(asString(file.id) ? { id: asString(file.id) ?? undefined } : {}),
+      ...(asString(file.name) ? { name: asString(file.name) ?? undefined } : {}),
+      ...(asString(file.title) ? { title: asString(file.title) ?? undefined } : {}),
+      ...(asString(file.mimetype) ? { mimetype: asString(file.mimetype) ?? undefined } : {}),
+      ...(asString(file.filetype) ? { filetype: asString(file.filetype) ?? undefined } : {}),
+      ...(asString(file.pretty_type)
+        ? { prettyType: asString(file.pretty_type) ?? undefined }
+        : {}),
+      ...(asString(file.permalink) ? { permalink: asString(file.permalink) ?? undefined } : {}),
+      ...(asString(file.url_private_download)
+        ? { urlPrivate: asString(file.url_private_download) ?? undefined }
+        : asString(file.url_private)
+          ? { urlPrivate: asString(file.url_private) ?? undefined }
+          : {}),
+      ...(asString(file.mode) ? { mode: asString(file.mode) ?? undefined } : {}),
+      ...(typeof file.size === "number" ? { size: file.size } : {}),
+    };
+
+    if (Object.keys(metadata).length === 0) continue;
+    extracted.push(metadata);
+  }
+
+  return extracted;
+}
+
 function extractFileContextLines(files: unknown): string[] {
   const lines: string[] = [];
 
-  for (const file of asRecordArray(files)) {
-    const title = asString(file.title) ?? asString(file.name);
-    const prettyType = asString(file.pretty_type) ?? asString(file.filetype);
-    const mode = asString(file.mode);
-
-    const parts = [title, prettyType, mode].filter((part): part is string => Boolean(part));
+  for (const file of extractSlackMessageFileMetadata(files)) {
+    const title = file.title ?? file.name;
+    const prettyType = file.prettyType ?? file.filetype ?? file.mimetype;
+    const parts = [
+      title,
+      prettyType,
+      file.mode,
+      file.id ? `id=${file.id}` : null,
+      file.permalink ?? file.urlPrivate ?? null,
+    ].filter((part): part is string => Boolean(part));
     if (parts.length === 0) continue;
 
     pushContextLine(lines, parts.join(" — "));

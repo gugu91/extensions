@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSlackInboundMessageText,
   extractSlackMessageContextLines,
+  extractSlackMessageFileMetadata,
 } from "./slack-message-context.js";
 
 describe("slack message context extraction", () => {
@@ -90,6 +91,56 @@ describe("slack message context extraction", () => {
 
     expect(extractSlackMessageContextLines(evt, "review")).toEqual([
       "Please review the rollout checklist",
+    ]);
+  });
+
+  it("extracts fetchable Slack file metadata for later follow-up", () => {
+    const files = [
+      {
+        id: "F123",
+        name: "incident.md",
+        title: "Incident notes",
+        mimetype: "text/markdown",
+        filetype: "markdown",
+        pretty_type: "Markdown",
+        permalink: "https://files.example/incident.md",
+        url_private_download: "https://files.example/download/F123",
+        mode: "snippet",
+        size: 128,
+      },
+    ] satisfies unknown[];
+
+    expect(extractSlackMessageFileMetadata(files)).toEqual([
+      {
+        id: "F123",
+        name: "incident.md",
+        title: "Incident notes",
+        mimetype: "text/markdown",
+        filetype: "markdown",
+        prettyType: "Markdown",
+        permalink: "https://files.example/incident.md",
+        urlPrivate: "https://files.example/download/F123",
+        mode: "snippet",
+        size: 128,
+      },
+    ]);
+  });
+
+  it("keeps file-share context lines fetchable instead of title-only", () => {
+    const evt = {
+      files: [
+        {
+          id: "F123",
+          title: "Incident notes",
+          filetype: "markdown",
+          mode: "snippet",
+          permalink: "https://files.example/incident.md",
+        },
+      ],
+    } satisfies Record<string, unknown>;
+
+    expect(extractSlackMessageContextLines(evt, "")).toEqual([
+      "Incident notes — markdown — snippet — id=F123 — https://files.example/incident.md",
     ]);
   });
 
