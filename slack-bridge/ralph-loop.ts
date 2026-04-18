@@ -43,6 +43,7 @@ export interface RalphLoopState {
   hadOutstandingAnomalies: boolean;
   followUpAt: number;
   followUpPending: boolean;
+  followUpSignature: string;
   taskAssignmentReportSignature: string;
   pendingTaskAssignmentReport: { message: string; signature: string } | null;
 }
@@ -58,6 +59,7 @@ export function createRalphLoopState(): RalphLoopState {
     hadOutstandingAnomalies: false,
     followUpAt: 0,
     followUpPending: false,
+    followUpSignature: "",
     taskAssignmentReportSignature: "",
     pendingTaskAssignmentReport: null,
   };
@@ -76,6 +78,7 @@ export function resetRalphLoopState(state: RalphLoopState): void {
   state.hadOutstandingAnomalies = false;
   state.followUpAt = 0;
   state.followUpPending = false;
+  state.followUpSignature = "";
   state.taskAssignmentReportSignature = "";
   state.pendingTaskAssignmentReport = null;
 }
@@ -331,21 +334,33 @@ export async function runRalphLoopCycle(
       );
     }
 
+    const shouldWarn =
+      ghostRewrite.newGhostIds.length > 0 ||
+      (nonGhostSignature.length > 0 && nonGhostSignature !== state.nonGhostSignature);
+    const shouldInform =
+      ghostRewrite.clearedGhostIds.length > 0 && visibleEvaluation.anomalies.length > 0;
+
     const shouldDeliverFollowUp =
       followUpPrompt != null &&
       shouldDeliverRalphLoopFollowUp({
         signature: visibleSignature,
+        lastDeliveredSignature: state.followUpSignature,
         lastDeliveredAt: state.followUpAt,
         now,
         cooldownMs: DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
         pending: state.followUpPending,
         idle: ctx.isIdle?.() ?? true,
-      });
+      }) &&
+      (shouldWarn || shouldInform);
     if (shouldDeliverFollowUp && followUpPrompt) {
       deps.trySendFollowUp(followUpPrompt, () => {
         state.followUpPending = true;
         state.followUpAt = now;
+        state.followUpSignature = visibleSignature;
       });
+    }
+    if (!hasOutstandingAnomalies) {
+      state.followUpSignature = "";
     }
     if (state.pendingTaskAssignmentReport && (ctx.isIdle?.() ?? true)) {
       const reportToDeliver = state.pendingTaskAssignmentReport;
@@ -354,12 +369,6 @@ export async function runRalphLoopCycle(
         state.pendingTaskAssignmentReport = null;
       });
     }
-
-    const shouldWarn =
-      ghostRewrite.newGhostIds.length > 0 ||
-      (nonGhostSignature.length > 0 && nonGhostSignature !== state.nonGhostSignature);
-    const shouldInform =
-      ghostRewrite.clearedGhostIds.length > 0 && visibleEvaluation.anomalies.length > 0;
     if (shouldWarn) {
       ctx.ui.notify(ralphNotifications.anomalyStatus ?? "RALPH loop anomaly detected", "warning");
     } else if (shouldInform) {
