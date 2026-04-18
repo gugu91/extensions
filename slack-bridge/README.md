@@ -149,7 +149,7 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | ------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
 | `botToken`                     | **yes**  | Bot User OAuth Token (`xoxb-...`)                                                                                  |
 | `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)                                                                       |
-| `allowedUsers`                 | no       | Slack user IDs that can interact; when unset, access is denied unless `allowAllWorkspaceUsers` is true            |
+| `allowedUsers`                 | no       | Slack user IDs that can interact; when unset, access is denied unless `allowAllWorkspaceUsers` is true             |
 | `allowAllWorkspaceUsers`       | no       | Explicit opt-in for workspace-wide Slack access when you do not want a user allowlist                              |
 | `defaultChannel`               | no       | Default channel for `slack_post_channel`                                                                           |
 | `logChannel`                   | no       | Channel for broker activity logs                                                                                   |
@@ -265,12 +265,12 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 ### Multi-agent tools
 
-| Tool             | Description                                           |
-| ---------------- | ----------------------------------------------------- |
-| `pinet_message`  | Send a message to another connected agent             |
-| `pinet_agents`   | List connected agents with status and capabilities    |
-| `pinet_free`     | Signal that this agent is idle and available for work |
-| `pinet_schedule` | Schedule a future wake-up message for this agent      |
+| Tool             | Description                                                                |
+| ---------------- | -------------------------------------------------------------------------- |
+| `pinet_message`  | Send a message to a connected Pinet agent or broker-only broadcast channel |
+| `pinet_agents`   | List connected Pinet agents with status and capabilities                   |
+| `pinet_free`     | Mark this Pinet agent idle/free for new work                               |
+| `pinet_schedule` | Schedule a future wake-up for this Pinet agent                             |
 
 ### Broker commands
 
