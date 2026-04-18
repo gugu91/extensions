@@ -23,7 +23,6 @@ export class AppleScriptIMessageAdapter implements IMessageAdapter {
   readonly name = "imessage" as const;
 
   private readonly options: IMessageAdapterOptions;
-  private inboundHandler: ((msg: IMessageAdapterInboundMessage) => void) | null = null;
 
   constructor(options: IMessageAdapterOptions = {}) {
     this.options = options;
@@ -54,11 +53,13 @@ export class AppleScriptIMessageAdapter implements IMessageAdapter {
   }
 
   async disconnect(): Promise<void> {
-    this.inboundHandler = null;
+    // The current send-first adapter does not hold inbound subscriptions or
+    // long-lived connection state beyond the shared MessageAdapter surface.
   }
 
-  onInbound(handler: (msg: IMessageAdapterInboundMessage) => void): void {
-    this.inboundHandler = handler;
+  onInbound(_handler: (msg: IMessageAdapterInboundMessage) => void): void {
+    // The shared MessageAdapter contract requires an inbound hook, but the
+    // current iMessage adapter is send-only and intentionally ignores it.
   }
 
   async send(msg: IMessageAdapterOutboundMessage): Promise<void> {

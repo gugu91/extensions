@@ -86,4 +86,32 @@ describe("AppleScriptIMessageAdapter", () => {
 
     await expect(adapter.connect()).rejects.toThrow("iMessage send-first adapter is not ready");
   });
+
+  it("treats onInbound as a no-op for the send-first adapter", async () => {
+    const runAppleScript = vi.fn(async () => ({ stdout: "sent", stderr: "" }));
+    const handler = vi.fn();
+    const adapter = createIMessageAdapter({
+      runAppleScript,
+      detectEnvironment: () => ({
+        platform: "darwin",
+        homeDir: "/Users/goose",
+        messagesDbPath: "/Users/goose/Library/Messages/chat.db",
+        osascriptPath: APPLESCRIPT_BINARY_PATH,
+        osascriptAvailable: true,
+        messagesDbAvailable: false,
+        canAttemptSend: true,
+        canAttemptHistoryRead: false,
+        readyForLocalMvp: false,
+        blockers: ["missing_messages_db"],
+      }),
+    });
+
+    adapter.onInbound(handler);
+    await adapter.connect();
+    await adapter.send({ threadId: "imessage:alice", channel: "chat:alice", text: "hi" });
+    await adapter.disconnect();
+
+    expect(runAppleScript).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
