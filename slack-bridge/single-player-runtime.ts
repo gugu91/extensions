@@ -347,7 +347,8 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
     const classified = classifyMessage(evt, getCurrentBotUserId(), new Set(threads.keys()));
     if (!classified.relevant) return;
 
-    const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs } = classified;
+    const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs, metadata } =
+      classified;
 
     if (!threads.has(threadTs)) {
       threads.set(threadTs, { channelId: channel, threadTs, userId, source: "slack" });
@@ -396,6 +397,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       text: messageText,
       timestamp: messageTs,
       ...(isChannelMention && { isChannelMention: true }),
+      ...(metadata ? { metadata } : {}),
     });
     deps.updateBadge();
 

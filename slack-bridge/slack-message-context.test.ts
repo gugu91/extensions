@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSlackInboundMessageText,
+  extractSlackInboundMessageMetadata,
   extractSlackMessageContextLines,
 } from "./slack-message-context.js";
 
@@ -91,6 +92,48 @@ describe("slack message context extraction", () => {
     expect(extractSlackMessageContextLines(evt, "review")).toEqual([
       "Please review the rollout checklist",
     ]);
+  });
+
+  it("preserves fetchable file-share context and metadata for inbound Slack files", () => {
+    const evt = {
+      files: [
+        {
+          id: "F123",
+          title: "incident.md",
+          name: "incident.md",
+          pretty_type: "Markdown",
+          filetype: "markdown",
+          mimetype: "text/markdown",
+          mode: "snippet",
+          permalink: "https://files.example/F123",
+          url_private: "https://files.example/private/F123",
+          preview: "# Incident\n- capture timeline",
+        },
+      ],
+    } satisfies Record<string, unknown>;
+
+    expect(extractSlackMessageContextLines(evt, "")).toEqual([
+      "incident.md — Markdown — snippet",
+      "file_id=F123 | permalink=https://files.example/F123",
+      "# Incident - capture timeline",
+    ]);
+    expect(extractSlackInboundMessageMetadata(evt)).toEqual({
+      kind: "slack_file_context",
+      files: [
+        {
+          id: "F123",
+          title: "incident.md",
+          name: "incident.md",
+          prettyType: "Markdown",
+          filetype: "markdown",
+          mimetype: "text/markdown",
+          mode: "snippet",
+          permalink: "https://files.example/F123",
+          urlPrivate: "https://files.example/private/F123",
+          preview: "# Incident\n- capture timeline",
+        },
+      ],
+    });
   });
 
   it("dedupes repeated context lines and limits the attached snippet count", () => {

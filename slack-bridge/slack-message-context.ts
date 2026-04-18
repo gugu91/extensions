@@ -25,11 +25,28 @@ function clipLine(value: string, maxLength = 220): string {
   return `${value.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-function pushContextLine(lines: string[], rawValue: string | null | undefined): void {
+function pushContextLine(
+  lines: string[],
+  rawValue: string | null | undefined,
+  maxLength = 220,
+): void {
   if (!rawValue) return;
-  const normalized = clipLine(normalizeWhitespace(rawValue));
+  const normalized = clipLine(normalizeWhitespace(rawValue), maxLength);
   if (!normalized) return;
   lines.push(normalized);
+}
+
+export interface SlackInboundFileContext {
+  id?: string;
+  title?: string;
+  name?: string;
+  prettyType?: string;
+  filetype?: string;
+  mimetype?: string;
+  mode?: string;
+  permalink?: string;
+  urlPrivate?: string;
+  preview?: string;
 }
 
 function extractTextObject(value: unknown): string[] {
@@ -140,18 +157,73 @@ function extractAttachmentContextLines(attachments: unknown): string[] {
   return lines;
 }
 
+function extractSlackInboundFiles(files: unknown): SlackInboundFileContext[] {
+  const extracted: SlackInboundFileContext[] = [];
+
+  for (const file of asRecordArray(files)) {
+    const entry: SlackInboundFileContext = {};
+
+    const id = asString(file.id);
+    if (id) entry.id = id;
+
+    const title = asString(file.title);
+    if (title) entry.title = title;
+
+    const name = asString(file.name);
+    if (name) entry.name = name;
+
+    const prettyType = asString(file.pretty_type);
+    if (prettyType) entry.prettyType = prettyType;
+
+    const filetype = asString(file.filetype);
+    if (filetype) entry.filetype = filetype;
+
+    const mimetype = asString(file.mimetype);
+    if (mimetype) entry.mimetype = mimetype;
+
+    const mode = asString(file.mode);
+    if (mode) entry.mode = mode;
+
+    const permalink = asString(file.permalink);
+    if (permalink) entry.permalink = permalink;
+
+    const urlPrivate = asString(file.url_private_download) ?? asString(file.url_private);
+    if (urlPrivate) entry.urlPrivate = urlPrivate;
+
+    const preview = asString(file.preview);
+    if (preview) entry.preview = preview;
+
+    if (Object.keys(entry).length > 0) {
+      extracted.push(entry);
+    }
+  }
+
+  return extracted;
+}
+
+function buildSlackFileSummaryLine(file: SlackInboundFileContext): string | null {
+  const label = file.title ?? file.name ?? null;
+  const type = file.prettyType ?? file.filetype ?? file.mimetype ?? null;
+  const parts = [label, type, file.mode].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" — ") : null;
+}
+
+function buildSlackFileHandleLine(file: SlackInboundFileContext): string | null {
+  const parts = [
+    file.id ? `file_id=${file.id}` : null,
+    file.permalink ? `permalink=${file.permalink}` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
 function extractFileContextLines(files: unknown): string[] {
   const lines: string[] = [];
 
-  for (const file of asRecordArray(files)) {
-    const title = asString(file.title) ?? asString(file.name);
-    const prettyType = asString(file.pretty_type) ?? asString(file.filetype);
-    const mode = asString(file.mode);
-
-    const parts = [title, prettyType, mode].filter((part): part is string => Boolean(part));
-    if (parts.length === 0) continue;
-
-    pushContextLine(lines, parts.join(" — "));
+  for (const file of extractSlackInboundFiles(files)) {
+    pushContextLine(lines, buildSlackFileSummaryLine(file));
+    pushContextLine(lines, buildSlackFileHandleLine(file), 500);
+    pushContextLine(lines, file.preview);
   }
 
   return lines;
@@ -187,6 +259,20 @@ export function extractSlackMessageContextLines(
   ];
 
   return dedupeContextLines(baseText, lines).slice(0, 4);
+}
+
+export function extractSlackInboundMessageMetadata(
+  evt: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const files = extractSlackInboundFiles(evt.files);
+  if (files.length === 0) {
+    return undefined;
+  }
+
+  return {
+    kind: "slack_file_context",
+    files,
+  };
 }
 
 export function buildSlackInboundMessageText(

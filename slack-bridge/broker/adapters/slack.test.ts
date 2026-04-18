@@ -274,6 +274,55 @@ describe("classifyMessage", () => {
     }
   });
 
+  it("accepts file_share messages and preserves attachment context", () => {
+    const evt = {
+      type: "message",
+      subtype: "file_share",
+      user: "U1",
+      text: "",
+      channel: "D1",
+      channel_type: "im",
+      ts: "1.1",
+      files: [
+        {
+          id: "F123",
+          title: "incident.md",
+          filetype: "markdown",
+          pretty_type: "Markdown",
+          mode: "snippet",
+          permalink: "https://files.example/F123",
+        },
+      ],
+    };
+    const result = classifyMessage(evt, botId, emptyTracked);
+    expect(result.relevant).toBe(true);
+    if (result.relevant) {
+      expect(result.isDM).toBe(true);
+      expect(result.text).toBe(
+        [
+          "(Slack message had no plain-text body)",
+          "",
+          "Slack message context:",
+          "- incident.md — Markdown — snippet",
+          "- file_id=F123 | permalink=https://files.example/F123",
+        ].join("\n"),
+      );
+      expect(result.metadata).toEqual({
+        kind: "slack_file_context",
+        files: [
+          {
+            id: "F123",
+            title: "incident.md",
+            prettyType: "Markdown",
+            filetype: "markdown",
+            mode: "snippet",
+            permalink: "https://files.example/F123",
+          },
+        ],
+      });
+    }
+  });
+
   it("accepts messages in tracked threads", () => {
     const tracked = new Set(["100.200"]);
     const evt = {
@@ -632,6 +681,71 @@ describe("SlackAdapter", () => {
     adapter.onInbound(handler);
     // handler is registered (can't easily verify without triggering a message)
     expect(adapter.name).toBe("slack");
+  });
+
+  it("forwards inbound file-share metadata to broker routing", async () => {
+    const adapter = new SlackAdapter(baseConfig);
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+    (adapter as unknown as { botUserId: string | null }).botUserId = "U_BOT";
+
+    vi.spyOn(
+      adapter as unknown as { resolveUser: (userId: string) => Promise<string> },
+      "resolveUser",
+    ).mockResolvedValue("Alice");
+    vi.spyOn(
+      adapter as unknown as {
+        addReaction: (channel: string, ts: string, emoji: string) => Promise<void>;
+      },
+      "addReaction",
+    ).mockResolvedValue(undefined);
+
+    await (
+      adapter as unknown as {
+        onMessage: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onMessage({
+      type: "message",
+      subtype: "file_share",
+      user: "U_SENDER",
+      text: "",
+      channel: "D123",
+      channel_type: "im",
+      ts: "100.1",
+      files: [
+        {
+          id: "F123",
+          title: "incident.md",
+          pretty_type: "Markdown",
+          filetype: "markdown",
+          mode: "snippet",
+          permalink: "https://files.example/F123",
+        },
+      ],
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "slack",
+        threadId: "100.1",
+        channel: "D123",
+        userId: "U_SENDER",
+        userName: "Alice",
+        metadata: {
+          kind: "slack_file_context",
+          files: [
+            {
+              id: "F123",
+              title: "incident.md",
+              prettyType: "Markdown",
+              filetype: "markdown",
+              mode: "snippet",
+              permalink: "https://files.example/F123",
+            },
+          ],
+        },
+      }),
+    );
   });
 
   it("forwards app_home_opened events to the configured callback", async () => {

@@ -283,4 +283,67 @@ describe("single-player-runtime", () => {
     expect(spies.updateBadge).toHaveBeenCalledTimes(1);
     expect(spies.maybeDrainInboxIfIdle).toHaveBeenCalledWith(ctx);
   });
+
+  it("queues Slack file shares with preserved attachment metadata", async () => {
+    const state: TestState = {
+      threads: new Map(),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const ctx = createContext();
+    const { deps, spies } = createDeps(state);
+    const runtime = createSinglePlayerRuntime(deps);
+
+    await runtime.connect(ctx);
+
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    await socketConfig?.onMessage?.({
+      type: "message",
+      subtype: "file_share",
+      channel: "D123",
+      channel_type: "im",
+      user: "U_SENDER",
+      text: "",
+      ts: "100.2",
+      files: [
+        {
+          id: "F123",
+          title: "incident.md",
+          pretty_type: "Markdown",
+          filetype: "markdown",
+          mode: "snippet",
+          permalink: "https://files.example/F123",
+        },
+      ],
+    });
+
+    expect(spies.pushInboxMessage).toHaveBeenCalledWith({
+      channel: "D123",
+      threadTs: "100.2",
+      userId: "U_SENDER",
+      text: [
+        "(Slack message had no plain-text body)",
+        "",
+        "Slack message context:",
+        "- incident.md — Markdown — snippet",
+        "- file_id=F123 | permalink=https://files.example/F123",
+      ].join("\n"),
+      timestamp: "100.2",
+      metadata: {
+        kind: "slack_file_context",
+        files: [
+          {
+            id: "F123",
+            title: "incident.md",
+            prettyType: "Markdown",
+            filetype: "markdown",
+            mode: "snippet",
+            permalink: "https://files.example/F123",
+          },
+        ],
+      },
+    });
+  });
 });
