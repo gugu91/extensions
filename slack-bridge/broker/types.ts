@@ -17,6 +17,8 @@ export interface AgentInfo {
   lastActivity?: string | null;
 }
 
+export type ClientAgentInfo = Omit<AgentInfo, "stableId">;
+
 export interface ThreadInfo {
   threadId: string;
   source: string;

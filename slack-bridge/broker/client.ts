@@ -2,6 +2,7 @@ import * as net from "node:net";
 import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
+import type { ClientAgentInfo } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -28,22 +29,7 @@ export interface ThreadInfo {
   updatedAt: string;
 }
 
-export interface AgentInfo {
-  id: string;
-  stableId?: string | null;
-  name: string;
-  emoji: string;
-  pid: number;
-  connectedAt: string;
-  lastSeen: string;
-  lastHeartbeat: string;
-  metadata: Record<string, unknown> | null;
-  status: "working" | "idle";
-  disconnectedAt?: string | null;
-  resumableUntil?: string | null;
-  idleSince?: string | null;
-  lastActivity?: string | null;
-}
+export type AgentInfo = ClientAgentInfo;
 
 export interface ScheduledWakeupInfo {
   id: number;

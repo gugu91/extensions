@@ -181,19 +181,20 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
-  it("agents.list returns all connected agents", async () => {
-    await client.register("agent-alpha", "🅰️");
+  it("agents.list returns connected agents without exposing raw stableIds", async () => {
+    await client.register("agent-alpha", "🅰️", undefined, "host:session:/tmp/alpha");
 
     const info = server.getConnectInfo();
     if (info.type !== "tcp") throw new Error("Expected TCP");
     const client2 = new BrokerClient({ host: info.host, port: info.port });
     await client2.connect();
-    await client2.register("agent-beta", "🅱️");
+    await client2.register("agent-beta", "🅱️", undefined, "host:session:/tmp/beta");
 
     const agents = await client.listAgents();
     expect(agents.length).toBe(2);
     const names = agents.map((a) => a.name).sort();
     expect(names).toEqual(["agent-alpha", "agent-beta"]);
+    expect(agents.every((agent) => !("stableId" in agent))).toBe(true);
 
     client2.disconnect();
   });

@@ -9,7 +9,9 @@ import { MessageRouter } from "./router.js";
 import { dispatchDirectAgentMessage } from "./agent-messaging.js";
 import { sendBrokerMessage } from "./message-send.js";
 import type {
+  AgentInfo,
   BrokerMessage,
+  ClientAgentInfo,
   JsonRpcRequest,
   JsonRpcResponse,
   JsonRpcError,
@@ -48,6 +50,12 @@ export type AgentMessageCallback = (
 ) => void;
 
 export type AgentStatusChangeCallback = (agentId: string, status: "working" | "idle") => void;
+
+function toClientAgentInfo(agent: AgentInfo): ClientAgentInfo {
+  const { stableId, ...clientAgent } = agent;
+  void stableId;
+  return clientAgent;
+}
 
 export type AgentRegistrationResolver = (input: {
   agentId: string;
@@ -792,7 +800,9 @@ export class BrokerSocketServer {
   private handleAgentsList(req: JsonRpcRequest): JsonRpcResponse {
     const params = req.params ?? {};
     const includeDisconnected = params.includeDisconnected === true;
-    const agents = includeDisconnected ? this.db.getAllAgents() : this.db.getAgents();
+    const agents = (includeDisconnected ? this.db.getAllAgents() : this.db.getAgents()).map(
+      toClientAgentInfo,
+    );
     return rpcOk(req.id, agents);
   }
 
