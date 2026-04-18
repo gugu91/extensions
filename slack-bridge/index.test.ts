@@ -178,7 +178,11 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionShutdown?.({}, ctx);
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(
+      fetchSpy.mock.calls.some(
+        (call) => String(call.at(0)) === "https://slack.com/api/conversations.create",
+      ),
+    ).toBe(true);
     expect(notify).not.toHaveBeenCalled();
     expect(setStatus).toHaveBeenCalledTimes(2);
   });
@@ -348,8 +352,11 @@ describe("slack-bridge top-level shutdown", () => {
     expect(response).toMatchObject({
       details: { id: "C123", name: "reload-test" },
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://slack.com/api/conversations.create");
+    expect(
+      fetchSpy.mock.calls.some(
+        (call) => String(call.at(0)) === "https://slack.com/api/conversations.create",
+      ),
+    ).toBe(true);
 
     await sessionShutdown?.({}, ctx);
     expect(notify).not.toHaveBeenCalledWith(
@@ -1219,7 +1226,154 @@ describe("slack-bridge top-level shutdown", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
 
     await sessionShutdown?.({}, ctx);
-    expect(FakeWebSocket.instances[0]?.close).toHaveBeenCalled();
+    const firstSocket = FakeWebSocket.instances[0];
+    expect(firstSocket).toBeDefined();
+    if (!firstSocket) {
+      throw new Error("Expected a single-mode websocket instance");
+    }
+    expect(firstSocket.close).toHaveBeenCalled();
+  });
+
+  it("warns and reports status when live Slack scope drift is detected at startup", async () => {
+    const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
+    fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ "slack-bridge": { runtimeMode: "single" } }));
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+    const FakeWebSocket = createFakeWebSocketClass();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "single-scope-drift-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-single-scope-drift-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const fetchSpy = vi.fn(async (input) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/apps.connections.open") {
+        return new Response(JSON.stringify({ ok: true, url: "wss://slack.example/socket" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/files.info") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "files:read" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://slack.com/api/files.completeUploadExternal") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "files:write" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://slack.com/api/bookmarks.list") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "bookmarks:read" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://slack.com/api/bookmarks.remove") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "bookmarks:write" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://slack.com/api/pins.list") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "pins:read" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url === "https://slack.com/api/pins.add") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "pins:write" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStatus = commands.get("pinet-status");
+
+    await sessionStart?.({}, ctx);
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Slack scope drift detected: missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write.",
+        ),
+        "warning",
+      );
+    });
+    await pinetStatus?.handler("", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Slack scope drift detected: missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write.",
+      ),
+      "warning",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Slack tool health: scope drift — missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write",
+      ),
+      "info",
+    );
+
+    await sessionShutdown?.({}, ctx);
   });
 
   it("transitions from single runtime mode to broker mode without leaving the direct Slack socket open", async () => {
@@ -1326,9 +1480,18 @@ describe("slack-bridge top-level shutdown", () => {
 
     await pinetStart?.handler("", ctx);
 
-    expect(FakeWebSocket.instances[0]?.close).toHaveBeenCalled();
+    const firstSocket = FakeWebSocket.instances[0];
+    expect(firstSocket).toBeDefined();
+    if (!firstSocket) {
+      throw new Error("Expected a single-mode websocket instance");
+    }
+    expect(firstSocket.close).toHaveBeenCalled();
     expect(brokerModule.startBroker).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(
+      fetchSpy.mock.calls.some(
+        (call) => String(call.at(0)) === "https://slack.com/api/apps.connections.open",
+      ),
+    ).toBe(true);
 
     await sessionShutdown?.({}, ctx);
   });
@@ -1754,13 +1917,21 @@ describe("slack-bridge top-level shutdown", () => {
     try {
       const startup = sessionStart?.({}, ctx);
       await Promise.resolve();
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(
+        fetchSpy.mock.calls.some(
+          (call) => String(call.at(0)) === "https://slack.com/api/apps.connections.open",
+        ),
+      ).toBe(true);
 
       await pinetStart?.handler("", ctx);
       await startup;
 
       await vi.advanceTimersByTimeAsync(5_001);
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(
+        fetchSpy.mock.calls.some(
+          (call) => String(call.at(0)) === "https://slack.com/api/apps.connections.open",
+        ),
+      ).toBe(true);
       expect(brokerModule.startBroker).toHaveBeenCalledTimes(1);
 
       await sessionShutdown?.({}, ctx);

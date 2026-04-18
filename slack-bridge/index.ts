@@ -71,6 +71,12 @@ import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
 } from "./runtime-mode.js";
+import {
+  buildSlackScopeDriftWarning,
+  createPendingSlackScopeDiagnostics,
+  createUncheckedSlackScopeDiagnostics,
+  detectSlackScopeDiagnostics,
+} from "./slack-scope-diagnostics.js";
 
 // Settings and helpers imported from ./helpers.js
 
@@ -109,6 +115,9 @@ export default function (pi: ExtensionAPI) {
   let securityPrompt = buildSecurityPrompt(guardrails);
 
   let botUserId: string | null = null;
+  let slackScopeDiagnostics = createUncheckedSlackScopeDiagnostics();
+  let slackScopeDiagnosticsRefresh: Promise<void> | null = null;
+  let lastSlackScopeDriftWarning = "";
 
   const threads = new Map<string, SinglePlayerThreadInfo>();
   const pendingEyes = new Map<string, SinglePlayerPendingAttentionEntry[]>(); // thread_ts → message ts list // thread_ts values showing "is thinking…"
@@ -298,6 +307,59 @@ export default function (pi: ExtensionAPI) {
     buildSkinMetadata,
     applyRegistrationIdentity,
   } = runtimeAgentContext;
+
+  async function refreshSlackScopeDiagnostics(ctx?: ExtensionContext): Promise<void> {
+    if (!botToken) {
+      slackScopeDiagnostics = createUncheckedSlackScopeDiagnostics();
+      lastSlackScopeDriftWarning = "";
+      return;
+    }
+
+    slackScopeDiagnostics = createPendingSlackScopeDiagnostics();
+    const diagnostics = await detectSlackScopeDiagnostics({ token: botToken });
+    slackScopeDiagnostics = diagnostics;
+
+    const warning = buildSlackScopeDriftWarning(diagnostics);
+    if (!warning) {
+      lastSlackScopeDriftWarning = "";
+      return;
+    }
+
+    if (warning === lastSlackScopeDriftWarning) {
+      return;
+    }
+
+    lastSlackScopeDriftWarning = warning;
+    console.warn(`[slack-bridge] ${warning}`);
+    ctx?.ui.notify(warning, "warning");
+  }
+
+  async function ensureSlackScopeDiagnostics(ctx?: ExtensionContext): Promise<void> {
+    if (slackScopeDiagnosticsRefresh) {
+      await slackScopeDiagnosticsRefresh;
+      return;
+    }
+
+    slackScopeDiagnosticsRefresh = refreshSlackScopeDiagnostics(ctx)
+      .catch((error) => {
+        slackScopeDiagnostics = {
+          status: "unavailable",
+          checkedAt: new Date().toISOString(),
+          summary: `unavailable (${msg(error)})`,
+          surfaces: [],
+          missingScopes: [],
+          results: [],
+          error: msg(error),
+        };
+        lastSlackScopeDriftWarning = "";
+      })
+      .finally(() => {
+        slackScopeDiagnosticsRefresh = null;
+      });
+
+    await slackScopeDiagnosticsRefresh;
+  }
+
   const agentPromptGuidance = createAgentPromptGuidance({
     getIdentityGuidelines: runtimeAgentContext.getIdentityGuidelines,
     getAgentName: () => agentName,
@@ -839,15 +901,18 @@ export default function (pi: ExtensionAPI) {
       setExtStatus(ctx, "reconnecting");
       await singlePlayerRuntime.connect(ctx);
       botUserId = singlePlayerRuntime.getBotUserId() ?? botUserId;
+      void ensureSlackScopeDiagnostics(ctx);
       return;
     }
 
     if (mode === "broker") {
       await connectAsBroker(ctx);
+      void ensureSlackScopeDiagnostics(ctx);
       return;
     }
 
     await connectAsFollower(ctx);
+    void ensureSlackScopeDiagnostics(ctx);
   }
 
   async function stopPinetRuntime(
@@ -1167,6 +1232,7 @@ export default function (pi: ExtensionAPI) {
       allowedUsers: () => allowedUsers,
       inboxLength: () => inbox.length,
       recentActivityLogEntries: (limit) => brokerRuntime.getRecentActivityEntries(limit),
+      slackScopeDiagnostics: () => slackScopeDiagnostics,
       settings: () => settings,
       lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
       isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
