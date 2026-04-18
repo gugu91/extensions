@@ -82,6 +82,14 @@ const SCOPE_DRIFT_PROBES: readonly SlackScopeProbe[] = [
     okErrors: ["channel_not_found", "not_found", "invalid_arguments"],
   },
   {
+    key: "pins_read",
+    surface: "pins",
+    method: "pins.list",
+    body: { channel: "C0000000000" },
+    expectedScopes: ["pins:read"],
+    okErrors: ["channel_not_found", "invalid_arguments"],
+  },
+  {
     key: "pins_write",
     surface: "pins",
     method: "pins.add",

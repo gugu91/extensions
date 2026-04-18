@@ -1320,6 +1320,15 @@ describe("slack-bridge top-level shutdown", () => {
           },
         );
       }
+      if (url === "https://slack.com/api/pins.list") {
+        return new Response(
+          JSON.stringify({ ok: false, error: "missing_scope", needed: "pins:read" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
       if (url === "https://slack.com/api/pins.add") {
         return new Response(
           JSON.stringify({ ok: false, error: "missing_scope", needed: "pins:write" }),
@@ -1344,7 +1353,7 @@ describe("slack-bridge top-level shutdown", () => {
     await vi.waitFor(() => {
       expect(notify).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Slack scope drift detected: missing bookmarks:read, bookmarks:write, files:read, files:write, pins:write.",
+          "Slack scope drift detected: missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write.",
         ),
         "warning",
       );
@@ -1353,13 +1362,13 @@ describe("slack-bridge top-level shutdown", () => {
 
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Slack scope drift detected: missing bookmarks:read, bookmarks:write, files:read, files:write, pins:write.",
+        "Slack scope drift detected: missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write.",
       ),
       "warning",
     );
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Slack tool health: scope drift — missing bookmarks:read, bookmarks:write, files:read, files:write, pins:write",
+        "Slack tool health: scope drift — missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write",
       ),
       "info",
     );

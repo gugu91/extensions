@@ -41,6 +41,9 @@ describe("slack scope diagnostics", () => {
       if (url.endsWith("/bookmarks.remove")) {
         return slackJson({ ok: false, error: "missing_scope", needed: "bookmarks:write" });
       }
+      if (url.endsWith("/pins.list")) {
+        return slackJson({ ok: false, error: "missing_scope", needed: "pins:read" });
+      }
       if (url.endsWith("/pins.add")) {
         return slackJson({ ok: false, error: "missing_scope", needed: "pins:write" });
       }
@@ -61,12 +64,13 @@ describe("slack scope diagnostics", () => {
         "bookmarks:write",
         "files:read",
         "files:write",
+        "pins:read",
         "pins:write",
       ],
       surfaces: ["bookmarks", "files", "pins"],
     });
     expect(formatSlackScopeDiagnosticsStatus(diagnostics)).toBe(
-      "scope drift — missing bookmarks:read, bookmarks:write, files:read, files:write, pins:write",
+      "scope drift — missing bookmarks:read, bookmarks:write, files:read, files:write, pins:read, pins:write",
     );
     expect(buildSlackScopeDriftWarning(diagnostics)).toContain(
       "Affected Slack surfaces: bookmarks, files, pins.",
@@ -87,6 +91,9 @@ describe("slack scope diagnostics", () => {
       }
       if (url.endsWith("/bookmarks.remove")) {
         return slackJson({ ok: false, error: "not_found" });
+      }
+      if (url.endsWith("/pins.list")) {
+        return slackJson({ ok: false, error: "channel_not_found" });
       }
       if (url.endsWith("/pins.add")) {
         return slackJson({ ok: false, error: "channel_not_found" });
