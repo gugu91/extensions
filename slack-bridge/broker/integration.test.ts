@@ -283,6 +283,36 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("rejects live stableId takeover and still allows resume after the holder disconnects", async () => {
+    const stableId = "host:session:/tmp/resume-live";
+    const reg1 = await client.register("resume-agent", "🔁", undefined, stableId);
+    await client.claimThread("t-resume-live");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+
+    await expect(client2.register("takeover-agent", "🪤", undefined, stableId)).rejects.toThrow(
+      `Agent stableId "${stableId}" is already active on another live connection. Wait for that agent to disconnect before retrying.`,
+    );
+    expect(db.getAgents()).toHaveLength(1);
+    expect(db.getThread("t-resume-live")?.ownerAgent).toBe(reg1.agentId);
+
+    client.disconnect();
+    await waitFor(() => db.getAgents().length === 0, 1000);
+
+    const reg2 = await client2.register("different-name", "❌", undefined, stableId);
+    expect(reg2.agentId).toBe(reg1.agentId);
+    expect(reg2.name).toBe("different-name");
+    expect(reg2.emoji).toBe("❌");
+
+    const threads = await client2.listThreads();
+    expect(threads.map((thread) => thread.threadId)).toContain("t-resume-live");
+
+    client2.disconnect();
+  });
+
   it("reconnect with same stableId refreshes identity while preserving thread ownership", async () => {
     const reg1 = await client.register("resume-agent", "🔁", undefined, "host:session:/tmp/resume");
     await client.claimThread("t-resume");
