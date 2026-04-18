@@ -2364,10 +2364,22 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
     ).toBe(true);
   });
 
-  it("allows the same signature again after cooldown", () => {
+  it("does not resend the same signature again after cooldown without new evidence", () => {
     expect(
       shouldDeliverRalphLoopFollowUp({
         signature: "ghost agents detected: ghost-1",
+        lastDeliveredSignature: "ghost agents detected: ghost-1",
+        lastDeliveredAt: 10_000,
+        now: 10_000 + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows a changed signature after cooldown", () => {
+    expect(
+      shouldDeliverRalphLoopFollowUp({
+        signature: "ghost agents detected: ghost-2",
+        lastDeliveredSignature: "ghost agents detected: ghost-1",
         lastDeliveredAt: 10_000,
         now: 10_000 + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
       }),
@@ -2396,6 +2408,7 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
     expect(
       shouldDeliverRalphLoopFollowUp({
         signature: "ghost agents detected: ghost-1",
+        lastDeliveredSignature: "ghost agents detected: ghost-0",
         lastDeliveredAt: 10_000,
         now: 10_000 + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS - 1,
       }),
@@ -2416,6 +2429,7 @@ describe("shouldDeliverRalphLoopFollowUp", () => {
     expect(
       shouldDeliverRalphLoopFollowUp({
         signature: "ghost agents detected: ghost-1",
+        lastDeliveredSignature: "ghost agents detected: ghost-1",
         lastDeliveredAt: deliveredAt,
         now: deliveredAt + DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS - 1,
       }),

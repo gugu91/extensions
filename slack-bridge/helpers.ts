@@ -1317,6 +1317,7 @@ export function buildRalphLoopStatusMessage(summary: string, cycleStartedAt: str
 
 export interface RalphLoopFollowUpDeliveryOptions {
   signature: string;
+  lastDeliveredSignature?: string;
   lastDeliveredAt?: number;
   now?: number;
   cooldownMs?: number;
@@ -1335,6 +1336,9 @@ export function shouldDeliverRalphLoopFollowUp(options: RalphLoopFollowUpDeliver
     return false;
   }
   if (pending || !idle) {
+    return false;
+  }
+  if (options.lastDeliveredSignature === options.signature) {
     return false;
   }
   if (lastDeliveredAt > 0 && now - lastDeliveredAt < cooldownMs) {
