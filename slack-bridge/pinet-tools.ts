@@ -84,10 +84,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   pi.registerTool({
     name: "pinet_message",
     label: "Pinet Message",
-    description:
-      "Send a message to another connected Pinet agent, or from the broker to a broadcast channel.",
+    description: "Send a message to a connected Pinet agent or broker-only broadcast channel.",
     promptSnippet:
-      "Send a message to another connected Pinet agent. When you send a task, sepcify the desired workflow, ideally something like `ack/work/ask/report`: ACK briefly, do the work, report blockers or questions immediately, report the outcome when done. Always reply where the task came from. To trigger remote agent control, send the exact message `/reload` or `/exit`. Broadcast channels like `#all` or `#extensions` are broker-only.",
+      "Send a message to a connected Pinet agent by name or ID, or to a broker-only broadcast channel. Use it to delegate work, reply in a Pinet thread, or send `/reload` / `/exit`; when assigning work, include the expected `ack/work/ask/report` flow.",
     parameters: Type.Object({
       to: Type.String({
         description:
@@ -135,9 +134,8 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   pi.registerTool({
     name: "pinet_free",
     label: "Pinet Free",
-    description: "Signal that this Pinet agent is idle/free and available for new work.",
-    promptSnippet:
-      "When you have finished all assigned work and already reported the outcome, call this to mark yourself idle/free for new assignments.",
+    description: "Mark this Pinet agent idle/free for new work.",
+    promptSnippet: "Mark this Pinet agent idle/free for new work after you report the outcome.",
     parameters: Type.Object({
       note: Type.Optional(
         Type.String({ description: "Optional short note about what you just finished" }),
@@ -173,9 +171,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   pi.registerTool({
     name: "pinet_schedule",
     label: "Pinet Schedule",
-    description: "Schedule a future wake-up message for the current Pinet agent.",
+    description: "Schedule a future wake-up for this Pinet agent.",
     promptSnippet:
-      "Schedule a future wake-up for yourself via the Pinet broker. Use this instead of busy-waiting when you need to check back later.",
+      "Schedule a future wake-up for this Pinet agent instead of waiting around for the next check-in.",
     parameters: Type.Object({
       delay: Type.Optional(
         Type.String({ description: "Relative delay like 5m, 30s, 1h30m, or 1d" }),
@@ -236,9 +234,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   pi.registerTool({
     name: "pinet_agents",
     label: "Pinet Agents",
-    description: "List Pinet agents, including liveness and capability visibility.",
+    description: "List connected Pinet agents with status and capabilities.",
     promptSnippet:
-      "List connected Pinet agents with liveness and capability info. Use before delegating work to find available agents, or to check health and status of agents you have assigned work to.",
+      "List connected Pinet agents to choose a worker, check status, or route work by repo, branch, role, or tools.",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
       branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
