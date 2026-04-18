@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install StyLua
+        run: npm install --global @johnnymorganz/stylua-bin@2.0.2
+
       - name: Run quality checks
         run: pnpm check
 
