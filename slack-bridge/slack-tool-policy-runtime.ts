@@ -1,5 +1,6 @@
 import type { InboxMessage } from "./helpers.js";
 import { evaluateSlackOriginCoreToolPolicy } from "./core-tool-guardrails.js";
+import { evaluateSlackOriginRepoToolPolicy } from "./repo-tool-guardrails.js";
 import { isBrokerForbiddenTool, type SecurityGuardrails } from "./guardrails.js";
 import {
   consumePendingSlackToolPolicyTurn,
@@ -85,7 +86,20 @@ export function createSlackToolPolicyRuntime(
       };
     }
 
-    return evaluateSlackOriginCoreToolPolicy({
+    const corePolicy = evaluateSlackOriginCoreToolPolicy({
+      turn: activeSlackToolPolicyTurn,
+      toolName: event.toolName,
+      input: event.input,
+      guardrails: deps.getGuardrails(),
+      requireToolPolicy: deps.requireToolPolicy,
+      formatAction: deps.formatAction,
+      formatError: deps.formatError,
+    });
+    if (corePolicy) {
+      return corePolicy;
+    }
+
+    return evaluateSlackOriginRepoToolPolicy({
       turn: activeSlackToolPolicyTurn,
       toolName: event.toolName,
       input: event.input,

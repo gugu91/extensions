@@ -118,6 +118,57 @@ describe("createSlackToolPolicyRuntime", () => {
     expect(requireToolPolicy).not.toHaveBeenCalled();
   });
 
+  it("routes the five-tool repo slice through the same Slack turn policy gate", async () => {
+    const { deps, requireToolPolicy } = createDeps({
+      getGuardrails: () => ({ requireConfirmation: ["psql"] }),
+    });
+    const runtime = createSlackToolPolicyRuntime(deps);
+
+    runtime.deliverTrackedSlackFollowUpMessage({
+      prompt: "repo-tool prompt",
+      messages: [{ threadTs: "100.1" }],
+    });
+    await runtime.onInput({ source: "extension", text: "repo-tool prompt" });
+    await runtime.onTurnStart();
+
+    await expect(
+      runtime.onToolCall({
+        toolName: "psql",
+        input: { query: "select *\nfrom agents", format: "csv" },
+      }),
+    ).resolves.toBeUndefined();
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "psql",
+      "100.1",
+      "format=csv | query=select * from agents",
+    );
+  });
+
+  it("hard-blocks write-capable repo tools under Slack readOnly mode", async () => {
+    const { deps, requireToolPolicy } = createDeps({
+      getGuardrails: () => ({ readOnly: true }),
+    });
+    const runtime = createSlackToolPolicyRuntime(deps);
+
+    runtime.deliverTrackedSlackFollowUpMessage({
+      prompt: "repo-write prompt",
+      messages: [{ threadTs: "100.1" }],
+    });
+    await runtime.onInput({ source: "extension", text: "repo-write prompt" });
+    await runtime.onTurnStart();
+
+    await expect(
+      runtime.onToolCall({
+        toolName: "comment_add",
+        input: { comment: "hello from slack" },
+      }),
+    ).resolves.toEqual({
+      block: true,
+      reason: 'Tool "comment_add" is blocked by Slack security guardrails.',
+    });
+    expect(requireToolPolicy).not.toHaveBeenCalled();
+  });
+
   it("clears the active Slack tool-policy turn on agent_end", async () => {
     const { deps, requireToolPolicy } = createDeps({
       getGuardrails: () => ({ requireConfirmation: ["read"] }),
