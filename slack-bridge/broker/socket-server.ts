@@ -595,7 +595,6 @@ export class BrokerSocketServer {
           {
             code: "AGENT_NAME_CONFLICT",
             requestedName: finalName,
-            ownerAgentId: conflict.id,
             ownerStableId: conflict.stableId,
             retryable: true,
           },

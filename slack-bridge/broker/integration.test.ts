@@ -172,11 +172,26 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     const client2 = new BrokerClient({ host: info.host, port: info.port });
     await client2.connect();
 
-    await expect(
-      client2.register("Reserved Crane", "🪿", undefined, "host:session:/tmp/name-2"),
-    ).rejects.toThrow(
+    let conflictError: unknown;
+    try {
+      await client2.register("Reserved Crane", "🪿", undefined, "host:session:/tmp/name-2");
+    } catch (error) {
+      conflictError = error;
+    }
+
+    expect(conflictError).toBeInstanceOf(Error);
+    const rpcConflictError = conflictError as Error & { data?: unknown };
+    expect(rpcConflictError.message).toBe(
       'Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.',
     );
+    expect(rpcConflictError.data).toEqual(
+      expect.objectContaining({
+        code: "AGENT_NAME_CONFLICT",
+        requestedName: "Reserved Crane",
+        retryable: true,
+      }),
+    );
+    expect(rpcConflictError.data as Record<string, unknown>).not.toHaveProperty("ownerAgentId");
 
     client2.disconnect();
   });
