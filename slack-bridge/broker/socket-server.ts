@@ -23,6 +23,7 @@ import {
   RPC_INTERNAL_ERROR,
   RPC_AUTH_REQUIRED,
   RPC_AGENT_NAME_CONFLICT,
+  RPC_AGENT_STABLE_ID_CONFLICT,
 } from "./types.js";
 
 export type SlackProxyFn = (
@@ -336,6 +337,25 @@ export class BrokerSocketServer {
     }
   }
 
+  private findLiveStableIdConflict(
+    stableId: string,
+    currentSocket: net.Socket,
+  ): { ownerAgentId: string } | null {
+    const existing = this.db.getAgentByStableId(stableId);
+    if (!existing) {
+      return null;
+    }
+
+    for (const [socket, state] of this.connections) {
+      if (socket === currentSocket || state.agentId !== existing.id) {
+        continue;
+      }
+      return { ownerAgentId: existing.id };
+    }
+
+    return null;
+  }
+
   // ─── Connection handling ─────────────────────────────
 
   private onConnection(socket: net.Socket): void {
@@ -521,6 +541,23 @@ export class BrokerSocketServer {
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
         : undefined;
+
+    if (stableId) {
+      const liveStableIdConflict = this.findLiveStableIdConflict(stableId, socket);
+      if (liveStableIdConflict) {
+        return rpcError(
+          req.id,
+          RPC_AGENT_STABLE_ID_CONFLICT,
+          `Agent stableId "${stableId}" is already active on another live connection. Wait for that agent to disconnect before retrying.`,
+          {
+            code: "AGENT_STABLE_ID_CONFLICT",
+            stableId,
+            ownerAgentId: liveStableIdConflict.ownerAgentId,
+            retryable: true,
+          },
+        );
+      }
+    }
 
     const candidateId = state.agentId ?? crypto.randomUUID();
     const resolved = this.agentRegistrationResolver?.({

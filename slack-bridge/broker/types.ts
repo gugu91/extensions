@@ -139,6 +139,7 @@ export const RPC_INTERNAL_ERROR = -32603;
 // Server-defined broker auth / registration error codes
 export const RPC_AUTH_REQUIRED = -32001;
 export const RPC_AGENT_NAME_CONFLICT = -32002;
+export const RPC_AGENT_STABLE_ID_CONFLICT = -32003;
 
 // ─── Message adapter (canonical types from adapters) ─────
 
