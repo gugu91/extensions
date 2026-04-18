@@ -1862,6 +1862,19 @@ describe("BrokerSocketServer", () => {
     client.destroy();
   });
 
+  it("allows loopback raw TCP listen targets and rejects non-loopback ones", () => {
+    expect(
+      () => new BrokerSocketServer(db, { type: "tcp", host: "localhost", port: 0 }),
+    ).not.toThrow();
+    expect(() => new BrokerSocketServer(db, { type: "tcp", host: "::1", port: 0 })).not.toThrow();
+    expect(() => new BrokerSocketServer(db, { type: "tcp", host: "0.0.0.0", port: 0 })).toThrow(
+      /loopback-only/i,
+    );
+    expect(
+      () => new BrokerSocketServer(db, { type: "tcp", host: "192.168.1.25", port: 0 }),
+    ).toThrow(/loopback-only/i);
+  });
+
   it("register returns agentId", async () => {
     const client = await connectClient(getInfo());
     const res = await client.call("register", { name: "TestBot", emoji: "🤖" });
@@ -2219,6 +2232,23 @@ describe("startBroker leader lock", () => {
 
     const broker = await launch({ lockPath });
     expect(broker.lock.isLeader()).toBe(true);
+  });
+
+  it("rejects non-loopback raw TCP listen targets before creating broker artifacts", async () => {
+    const lockPath = path.join(dir, "broker.lock");
+    const meshSecretPath = path.join(dir, "pinet.secret");
+
+    await expect(
+      startBroker({
+        dbPath: path.join(dir, "blocked.db"),
+        listenTarget: { type: "tcp", host: "0.0.0.0", port: 0 },
+        lockPath,
+        meshSecretPath,
+      }),
+    ).rejects.toThrow(/loopback-only/i);
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(meshSecretPath)).toBe(false);
   });
 
   it("starts without creating a mesh secret when none is configured", async () => {

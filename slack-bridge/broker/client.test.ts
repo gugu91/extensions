@@ -124,6 +124,17 @@ describe("BrokerClient — construction", () => {
     const client = new BrokerClient({ host: "127.0.0.1", port: 9999 });
     expect(client.isConnected()).toBe(false);
   });
+
+  it("allows loopback TCP connect opts", () => {
+    expect(() => new BrokerClient({ host: "localhost", port: 9999 })).not.toThrow();
+    expect(() => new BrokerClient({ host: "127.0.0.42", port: 9999 })).not.toThrow();
+    expect(() => new BrokerClient({ host: "::1", port: 9999 })).not.toThrow();
+  });
+
+  it("rejects non-loopback TCP connect opts", () => {
+    expect(() => new BrokerClient({ host: "0.0.0.0", port: 9999 })).toThrow(/loopback-only/i);
+    expect(() => new BrokerClient({ host: "192.168.1.25", port: 9999 })).toThrow(/loopback-only/i);
+  });
 });
 
 describe("BrokerClient — connect / disconnect", () => {
