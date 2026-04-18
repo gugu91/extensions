@@ -3,6 +3,7 @@ import { BrokerDB } from "./schema.js";
 import { loadOrCreateMeshSecret } from "./auth.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import type { ListenTarget } from "./socket-server.js";
+import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import { LeaderLock } from "./leader.js";
 import { getDefaultSocketPath } from "./paths.js";
 import type { MessageAdapter } from "./types.js";
@@ -57,6 +58,15 @@ export interface Broker {
  * Throws if another broker process already holds the lock.
  */
 export async function startBroker(options: BrokerOptions = {}): Promise<Broker> {
+  // Resolve listen target: explicit target > socketPath > default
+  const target: ListenTarget = options.listenTarget ?? {
+    type: "unix" as const,
+    path: options.socketPath ?? getDefaultSocketPath(),
+  };
+  if (target.type === "tcp") {
+    assertLoopbackTcpHost(target.host, "broker listen target");
+  }
+
   // ── Leader lock: prevent split-brain (issue #119) ────
   const lock = new LeaderLock(options.lockPath);
   if (!lock.tryAcquire()) {
@@ -72,12 +82,6 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
     lock.release();
     throw err;
   }
-
-  // Resolve listen target: explicit target > socketPath > default
-  const target: ListenTarget = options.listenTarget ?? {
-    type: "unix" as const,
-    path: options.socketPath ?? getDefaultSocketPath(),
-  };
 
   // Clean up stale socket file (Unix only)
   if (target.type === "unix") {

@@ -8,6 +8,7 @@ import { DEFAULT_SOCKET_PATH } from "./paths.js";
 import { MessageRouter } from "./router.js";
 import { dispatchDirectAgentMessage } from "./agent-messaging.js";
 import { sendBrokerMessage } from "./message-send.js";
+import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import type {
   BrokerMessage,
   JsonRpcRequest,
@@ -174,6 +175,9 @@ export class BrokerSocketServer {
       this.target = target;
     } else {
       this.target = { type: "unix", path: DEFAULT_SOCKET_PATH };
+    }
+    if (this.target.type === "tcp") {
+      assertLoopbackTcpHost(this.target.host, "broker listen target");
     }
   }
 

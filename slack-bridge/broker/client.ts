@@ -1,6 +1,7 @@
 import * as net from "node:net";
 import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
+import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -226,6 +227,7 @@ export class BrokerClient {
     if ("path" in opts) {
       this.connectOpts = { path: opts.path };
     } else {
+      assertLoopbackTcpHost(opts.host, "broker client connect target");
       this.connectOpts = { host: opts.host, port: opts.port };
     }
 
