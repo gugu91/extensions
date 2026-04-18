@@ -212,7 +212,7 @@ describe("classifyMessage", () => {
   const botId = "U_BOT";
   const emptyTracked = new Set<string>();
 
-  it("rejects messages with subtype", () => {
+  it("rejects unrelated message subtypes", () => {
     const evt = {
       type: "message",
       subtype: "channel_join",
@@ -224,6 +224,47 @@ describe("classifyMessage", () => {
     expect(classifyMessage(evt, botId, emptyTracked)).toEqual({
       relevant: false,
     });
+  });
+
+  it("accepts file_share subtype messages and preserves fetchable file metadata", () => {
+    const evt = {
+      type: "message",
+      subtype: "file_share",
+      user: "U1",
+      text: "",
+      channel: "D1",
+      channel_type: "im",
+      ts: "1.1",
+      files: [
+        {
+          id: "F123",
+          title: "Incident notes",
+          filetype: "markdown",
+          mode: "snippet",
+          permalink: "https://files.example/incident.md",
+          url_private_download: "https://files.example/download/F123",
+        },
+      ],
+    };
+
+    const result = classifyMessage(evt, botId, emptyTracked);
+    expect(result.relevant).toBe(true);
+    if (result.relevant) {
+      expect(result.text).toContain("Incident notes — markdown — snippet — id=F123");
+      expect(result.metadata).toEqual({
+        slackSubtype: "file_share",
+        slackFiles: [
+          {
+            id: "F123",
+            title: "Incident notes",
+            filetype: "markdown",
+            permalink: "https://files.example/incident.md",
+            urlPrivate: "https://files.example/download/F123",
+            mode: "snippet",
+          },
+        ],
+      });
+    }
   });
 
   it("rejects messages from bots", () => {
@@ -1600,6 +1641,112 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     expect(endpoints).toContain("https://slack.com/api/chat.postMessage");
     expect(endpoints).toContain("https://slack.com/api/reactions.remove");
     expect(endpoints).toContain("https://slack.com/api/assistant.threads.setStatus");
+
+    await adapter.disconnect();
+  });
+
+  it("emits structured file metadata for inbound file_share messages", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      const ok = (data: Record<string, unknown>) =>
+        new Response(JSON.stringify({ ok: true, ...data }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+
+      if (url.endsWith("/auth.test")) {
+        return ok({ user_id: "U_BOT" });
+      }
+      if (url.endsWith("/apps.connections.open")) {
+        return ok({ url: "wss://slack.test/socket" });
+      }
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U123");
+        return ok({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        expect(parsedBody).toEqual({ channel: "D123", timestamp: "111.222", name: "eyes" });
+        return ok({});
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await adapter.connect();
+
+    const ws = FakeWebSocket.instances[0]!;
+    ws.emit("message", {
+      data: JSON.stringify({
+        envelope_id: "env-2",
+        type: "events_api",
+        payload: {
+          event_id: "Ev-2",
+          event: {
+            type: "message",
+            subtype: "file_share",
+            user: "U123",
+            text: "",
+            channel: "D123",
+            channel_type: "im",
+            ts: "111.222",
+            files: [
+              {
+                id: "F123",
+                title: "Incident notes",
+                filetype: "markdown",
+                mode: "snippet",
+                permalink: "https://files.example/incident.md",
+                url_private_download: "https://files.example/download/F123",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await waitForAssertion(() => {
+      expect(ws.sent).toContain(JSON.stringify({ envelope_id: "env-2" }));
+      expect(handler).toHaveBeenCalledWith({
+        source: "slack",
+        threadId: "111.222",
+        channel: "D123",
+        userId: "U123",
+        userName: "Alice Example",
+        text: [
+          "(Slack message had no plain-text body)",
+          "",
+          "Slack message context:",
+          "- Incident notes — markdown — snippet — id=F123 — https://files.example/incident.md",
+        ].join("\n"),
+        timestamp: "111.222",
+        metadata: {
+          slackSubtype: "file_share",
+          slackFiles: [
+            {
+              id: "F123",
+              title: "Incident notes",
+              filetype: "markdown",
+              permalink: "https://files.example/incident.md",
+              urlPrivate: "https://files.example/download/F123",
+              mode: "snippet",
+            },
+          ],
+        },
+      });
+    });
 
     await adapter.disconnect();
   });

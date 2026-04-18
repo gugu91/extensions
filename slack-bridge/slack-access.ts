@@ -5,7 +5,10 @@ import {
   stripBotMention,
   isAbortError,
 } from "./helpers.js";
-import { buildSlackInboundMessageText } from "./slack-message-context.js";
+import {
+  buildSlackInboundMessageText,
+  extractSlackMessageFileMetadata,
+} from "./slack-message-context.js";
 import {
   extractSlackInteractivePayloadFromEnvelope,
   normalizeSlackBlockActionPayload,
@@ -188,6 +191,7 @@ export type MessageClassification =
       isDM: boolean;
       isChannelMention: boolean;
       messageTs: string;
+      metadata?: Record<string, unknown>;
     };
 
 /**
@@ -201,7 +205,9 @@ export function classifyMessage(
   trackedThreadIds: Set<string>,
   isKnownThread?: (threadTs: string) => boolean,
 ): MessageClassification {
-  if (evt.subtype || evt.bot_id) return { relevant: false };
+  const subtype = typeof evt.subtype === "string" ? evt.subtype : undefined;
+  const allowsSubtype = subtype === undefined || subtype === "file_share";
+  if (!allowsSubtype || evt.bot_id) return { relevant: false };
 
   const text = (evt.text as string) ?? "";
   const user = evt.user as string;
@@ -218,6 +224,11 @@ export function classifyMessage(
   const effectiveTs = threadTs ?? (evt.ts as string);
   const isChannelMention = isMention && !isDM && !isKnown;
   const cleanText = isChannelMention && botUserId ? stripBotMention(text, botUserId) : text;
+  const slackFiles = extractSlackMessageFileMetadata(evt.files);
+  const metadata: Record<string, unknown> = {
+    ...(subtype ? { slackSubtype: subtype } : {}),
+    ...(slackFiles.length > 0 ? { slackFiles } : {}),
+  };
 
   return {
     relevant: true,
@@ -228,6 +239,7 @@ export function classifyMessage(
     isDM,
     isChannelMention,
     messageTs: (evt.ts as string) ?? effectiveTs,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }
 

@@ -53,7 +53,12 @@ type TestState = {
   threads: Map<string, SinglePlayerThreadState>;
   pendingEyes: Map<string, SinglePlayerPendingAttention[]>;
   unclaimedThreads: Set<string>;
-  inbox: Array<{ text: string; channel: string; threadTs: string }>;
+  inbox: Array<{
+    text: string;
+    channel: string;
+    threadTs: string;
+    metadata?: Record<string, unknown>;
+  }>;
   lastDmChannel: string | null;
 };
 
@@ -71,9 +76,16 @@ function createContext(notify = vi.fn()): ExtensionContext {
 }
 
 function createDeps(state: TestState, overrides: Partial<SinglePlayerRuntimeDeps> = {}) {
-  const pushInboxMessage = vi.fn((message: { text: string; channel: string; threadTs: string }) => {
-    state.inbox.push(message);
-  });
+  const pushInboxMessage = vi.fn(
+    (message: {
+      text: string;
+      channel: string;
+      threadTs: string;
+      metadata?: Record<string, unknown>;
+    }) => {
+      state.inbox.push(message);
+    },
+  );
   const persistState = vi.fn();
   const updateBadge = vi.fn();
   const maybeDrainInboxIfIdle = vi.fn(() => true);
@@ -282,5 +294,67 @@ describe("single-player-runtime", () => {
     });
     expect(spies.updateBadge).toHaveBeenCalledTimes(1);
     expect(spies.maybeDrainInboxIfIdle).toHaveBeenCalledWith(ctx);
+  });
+
+  it("preserves file-share metadata on inbound Slack messages", async () => {
+    const state: TestState = {
+      threads: new Map(),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const ctx = createContext();
+    const { deps, spies } = createDeps(state);
+    const runtime = createSinglePlayerRuntime(deps);
+
+    await runtime.connect(ctx);
+
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    await socketConfig?.onMessage?.({
+      type: "message",
+      subtype: "file_share",
+      channel: "D123",
+      channel_type: "im",
+      user: "U_SENDER",
+      text: "",
+      ts: "100.1",
+      files: [
+        {
+          id: "F123",
+          title: "Incident notes",
+          filetype: "markdown",
+          mode: "snippet",
+          permalink: "https://files.example/incident.md",
+          url_private_download: "https://files.example/download/F123",
+        },
+      ],
+    });
+
+    expect(spies.pushInboxMessage).toHaveBeenCalledWith({
+      channel: "D123",
+      threadTs: "100.1",
+      userId: "U_SENDER",
+      text: [
+        "(Slack message had no plain-text body)",
+        "",
+        "Slack message context:",
+        "- Incident notes — markdown — snippet — id=F123 — https://files.example/incident.md",
+      ].join("\n"),
+      timestamp: "100.1",
+      metadata: {
+        slackSubtype: "file_share",
+        slackFiles: [
+          {
+            id: "F123",
+            title: "Incident notes",
+            filetype: "markdown",
+            permalink: "https://files.example/incident.md",
+            urlPrivate: "https://files.example/download/F123",
+            mode: "snippet",
+          },
+        ],
+      },
+    });
   });
 });

@@ -360,7 +360,7 @@ export class SlackAdapter implements MessageAdapter {
     );
     if (!classified.relevant) return;
 
-    const { threadTs, channel, userId, text, isChannelMention, messageTs } = classified;
+    const { threadTs, channel, userId, text, isChannelMention, messageTs, metadata } = classified;
 
     if (!this.threads.has(threadTs)) {
       this.threads.set(threadTs, {
@@ -389,6 +389,7 @@ export class SlackAdapter implements MessageAdapter {
       text,
       timestamp: messageTs,
       ...(isChannelMention ? { isChannelMention: true } : {}),
+      ...(metadata ? { metadata } : {}),
     });
   }
 
