@@ -3,11 +3,7 @@ import type {
   MessageAdapter,
   OutboundMessage as IMessageAdapterOutboundMessage,
 } from "@gugu910/pi-transport-core";
-import {
-  assertIMessageSendCapability,
-  sendIMessage,
-  type RunAppleScript,
-} from "./send.js";
+import { assertIMessageSendCapability, sendIMessage, type RunAppleScript } from "./send.js";
 import type { DetectIMessageMvpEnvironmentOptions, IMessageMvpEnvironment } from "./mvp.js";
 
 export type { IMessageAdapterInboundMessage, IMessageAdapterOutboundMessage };
@@ -16,9 +12,7 @@ export interface IMessageAdapterOptions {
   osascriptPath?: string;
   runAppleScript?: RunAppleScript;
   detectEnvironmentOptions?: DetectIMessageMvpEnvironmentOptions;
-  detectEnvironment?: (
-    options?: DetectIMessageMvpEnvironmentOptions,
-  ) => IMessageMvpEnvironment;
+  detectEnvironment?: (options?: DetectIMessageMvpEnvironmentOptions) => IMessageMvpEnvironment;
 }
 
 export interface IMessageAdapter extends MessageAdapter {

@@ -114,7 +114,9 @@ export async function loadStoredStorageState(
     handle = await openImpl(resolvedState.absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stats = await handle.stat();
     if (!stats.isFile()) {
-      throw new Error(`Stored browser state must be a regular file: \`${resolvedState.relativePath}\`.`);
+      throw new Error(
+        `Stored browser state must be a regular file: \`${resolvedState.relativePath}\`.`,
+      );
     }
 
     const parsed = JSON.parse(await handle.readFile({ encoding: "utf8" }));

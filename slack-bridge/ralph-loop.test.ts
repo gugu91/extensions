@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createRalphLoopState,
-  hydrateRalphLoopReportedGhosts,
-} from "./ralph-loop.js";
+import { createRalphLoopState, hydrateRalphLoopReportedGhosts } from "./ralph-loop.js";
 import { rewriteRalphLoopGhostAnomalies } from "./helpers.js";
 
 function buildEvaluation(ghostAgentIds: string[]) {

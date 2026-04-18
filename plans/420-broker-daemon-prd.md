@@ -167,20 +167,20 @@ The daemon is a supervisor/control-plane process that starts and talks to a sepa
 
 ## Comparison table
 
-| Dimension | Pi SDK in daemon | External pi over RPC |
-|---|---|---|
-| Process model | Single long-lived daemon process hosts broker infra and pi session together | Two long-lived processes: daemon + pi child/service |
-| Lifecycle control | Strong — one owner controls session creation, replacement, shutdown, subscriptions | Indirect — daemon must coordinate with external pi lifecycle and reconnect semantics |
-| Extension reuse | Strong — broker can bind the same extensions/resources directly in-process | Medium — reuse depends on what RPC exposes and how extension-side events map across the boundary |
-| Startup complexity | Lower for first implementation | Higher — requires bootstrapping and supervising a second process |
-| Failure isolation | Lower — broker infra and broker reasoning can crash together | Higher — daemon and pi process can fail independently |
-| Observability | Easier unified logs/events in one process | Better hard isolation, but split logs/metrics and cross-process correlation |
-| Backpressure / event streaming | Direct function and event calls | Must be modeled over transport; more framing work |
-| Resource usage | Lower process overhead | Higher process overhead |
-| Upgrade / version skew | Simpler — single dependency graph | Harder — daemon and pi RPC contract can drift |
-| Broker connectivity ownership | Clear — daemon owns Slack + broker session | Risk of ambiguous ownership if daemon and pi child split responsibilities poorly |
-| Fit for long-lived control plane | Strong | Acceptable, but only if strict ownership and supervision are designed up front |
-| Time-to-first-usable daemon | Faster | Slower |
+| Dimension                        | Pi SDK in daemon                                                                   | External pi over RPC                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Process model                    | Single long-lived daemon process hosts broker infra and pi session together        | Two long-lived processes: daemon + pi child/service                                              |
+| Lifecycle control                | Strong — one owner controls session creation, replacement, shutdown, subscriptions | Indirect — daemon must coordinate with external pi lifecycle and reconnect semantics             |
+| Extension reuse                  | Strong — broker can bind the same extensions/resources directly in-process         | Medium — reuse depends on what RPC exposes and how extension-side events map across the boundary |
+| Startup complexity               | Lower for first implementation                                                     | Higher — requires bootstrapping and supervising a second process                                 |
+| Failure isolation                | Lower — broker infra and broker reasoning can crash together                       | Higher — daemon and pi process can fail independently                                            |
+| Observability                    | Easier unified logs/events in one process                                          | Better hard isolation, but split logs/metrics and cross-process correlation                      |
+| Backpressure / event streaming   | Direct function and event calls                                                    | Must be modeled over transport; more framing work                                                |
+| Resource usage                   | Lower process overhead                                                             | Higher process overhead                                                                          |
+| Upgrade / version skew           | Simpler — single dependency graph                                                  | Harder — daemon and pi RPC contract can drift                                                    |
+| Broker connectivity ownership    | Clear — daemon owns Slack + broker session                                         | Risk of ambiguous ownership if daemon and pi child split responsibilities poorly                 |
+| Fit for long-lived control plane | Strong                                                                             | Acceptable, but only if strict ownership and supervision are designed up front                   |
+| Time-to-first-usable daemon      | Faster                                                                             | Slower                                                                                           |
 
 ## Explicit tradeoffs
 

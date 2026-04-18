@@ -68,7 +68,10 @@ export function buildAutoContinueMessage(): string {
   ].join(" ");
 }
 
-export function normalizeModelId(modelId: string | undefined, provider: string | undefined): string {
+export function normalizeModelId(
+  modelId: string | undefined,
+  provider: string | undefined,
+): string {
   if (!modelId) return "";
   const trimmed = modelId.trim();
   if (!trimmed) return "";
@@ -114,9 +117,7 @@ export function countAssistantToolCalls(message: AssistantMessageLike | undefine
   return message.content.filter((block) => block?.type === "toolCall").length;
 }
 
-export function classifyContinuationNeed(
-  input: ContinuationDecisionInput,
-): ContinuationDecision {
+export function classifyContinuationNeed(input: ContinuationDecisionInput): ContinuationDecision {
   const { message, toolResultCount, usedAutoContinueTurns, maxAutoContinueTurns } = input;
 
   if (!message || message.role !== "assistant") {

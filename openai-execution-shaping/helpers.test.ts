@@ -50,13 +50,15 @@ describe("target model matching", () => {
 
   it("matches targeted OpenAI GPT-5 models", () => {
     expect(isTargetModel({ provider: "openai", id: "gpt-5.4" }, enabledConfig)).toBe(true);
-    expect(isTargetModel({ provider: "openai-codex", id: "openai-codex/gpt-5.4" }, enabledConfig)).toBe(
-      true,
-    );
+    expect(
+      isTargetModel({ provider: "openai-codex", id: "openai-codex/gpt-5.4" }, enabledConfig),
+    ).toBe(true);
   });
 
   it("does not match non-target providers or models", () => {
-    expect(isTargetModel({ provider: "anthropic", id: "claude-sonnet-4-5" }, enabledConfig)).toBe(false);
+    expect(isTargetModel({ provider: "anthropic", id: "claude-sonnet-4-5" }, enabledConfig)).toBe(
+      false,
+    );
     expect(isTargetModel({ provider: "openai", id: "gpt-4.1" }, enabledConfig)).toBe(false);
   });
 
@@ -86,7 +88,12 @@ describe("assistant drift detection", () => {
       message: {
         role: "assistant",
         stopReason: "stop",
-        content: [{ type: "text", text: "I'll inspect the repository structure and then update the files." }],
+        content: [
+          {
+            type: "text",
+            text: "I'll inspect the repository structure and then update the files.",
+          },
+        ],
       },
       toolResultCount: 0,
       usedAutoContinueTurns: 0,
@@ -121,7 +128,12 @@ describe("assistant drift detection", () => {
       message: {
         role: "assistant",
         stopReason: "stop",
-        content: [{ type: "text", text: "I'll inspect the repository structure and then update the files." }],
+        content: [
+          {
+            type: "text",
+            text: "I'll inspect the repository structure and then update the files.",
+          },
+        ],
       },
       toolResultCount: 1,
       usedAutoContinueTurns: 0,
@@ -161,7 +173,12 @@ describe("assistant drift detection", () => {
       message: {
         role: "assistant",
         stopReason: "stop",
-        content: [{ type: "text", text: "I'll inspect the repository structure and then update the files." }],
+        content: [
+          {
+            type: "text",
+            text: "I'll inspect the repository structure and then update the files.",
+          },
+        ],
       },
       toolResultCount: 0,
       usedAutoContinueTurns: 1,

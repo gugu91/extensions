@@ -121,7 +121,7 @@ This package is intentionally constrained by the current Pi extension/runtime se
 ### What still needs Pi core support for a cleaner implementation
 
 - treating plan-only / commentary-only turns as **core incomplete-turn retries** instead of post-hoc follow-up turns
-- detecting and handling **one-action-then-narrative** patterns *inside* the agent loop rather than only after `agent_end`
+- detecting and handling **one-action-then-narrative** patterns _inside_ the agent loop rather than only after `agent_end`
 - surfacing richer lifecycle states like `blocked` / `paused` / `abandoned`
 - provider/model-specific prompt overlays integrated at the core prompt builder layer
 
