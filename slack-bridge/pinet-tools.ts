@@ -80,7 +80,28 @@ function buildPinetAgentsHintText(hint: PinetAgentsRoutingHint): string {
     .join(" · ")}`;
 }
 
+const DELIVERY_CLAIM_PATTERNS = [
+  /\bdelivered\b/i,
+  /\bsent\b/i,
+  /\breported\b/i,
+  /\bfinal report\b/i,
+  /\bhand(?:ed)?\s+off\b/i,
+];
+
+function noteClaimsDelivery(note: string): boolean {
+  return DELIVERY_CLAIM_PATTERNS.some((pattern) => pattern.test(note));
+}
+
 export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDeps): void {
+  let verifiedOutboundMessagesSinceFree = 0;
+
+  function recordVerifiedOutboundMessage(count = 1): void {
+    verifiedOutboundMessagesSinceFree += count;
+  }
+
+  function resetVerifiedOutboundMessageWindow(): void {
+    verifiedOutboundMessagesSinceFree = 0;
+  }
   pi.registerTool({
     name: "pinet_message",
     label: "Pinet Message",
@@ -103,6 +124,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
 
       if (deps.brokerRole() === "broker" && isBroadcastChannelTarget(params.to)) {
         const result = deps.sendPinetBroadcastMessage(params.to, params.message);
+        recordVerifiedOutboundMessage(result.messageIds.length);
         const preview = result.recipients.slice(0, 5).join(", ");
         const suffix = result.recipients.length > 5 ? ", …" : "";
 
@@ -122,6 +144,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       }
 
       const result = await deps.sendPinetAgentMessage(params.to, params.message);
+      recordVerifiedOutboundMessage();
       return {
         content: [
           { type: "text", text: `Message sent to ${result.target} (id: ${result.messageId}).` },
@@ -145,7 +168,14 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       deps.requireToolPolicy("pinet_free", undefined, `note=${params.note ?? ""}`);
 
       const note = typeof params.note === "string" ? params.note.trim() : "";
+      if (note && noteClaimsDelivery(note) && verifiedOutboundMessagesSinceFree === 0) {
+        throw new Error(
+          "pinet_free note claims delivery, but no verified outbound pinet_message was sent since the last free/reset. Send the report with pinet_message first, or use a non-delivery note.",
+        );
+      }
+
       const result = await deps.signalAgentFree(undefined, { requirePinet: true });
+      resetVerifiedOutboundMessageWindow();
       const inboxSuffix =
         result.queuedInboxCount > 0
           ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`

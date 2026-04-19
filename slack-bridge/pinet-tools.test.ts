@@ -108,7 +108,62 @@ describe("registerPinetTools", () => {
     });
   });
 
-  it("formats pinet_free responses with note and queued inbox count", async () => {
+  it("rejects delivery-claiming pinet_free notes with no verified outbound sends", async () => {
+    const signalAgentFree = vi.fn(async () => ({
+      queuedInboxCount: 0,
+      drainedQueuedInbox: false,
+    }));
+    const deps = createDeps({ signalAgentFree });
+    const tools = registerWithDeps(deps);
+
+    await expect(
+      tools.get("pinet_free")?.execute("tool-call-2", {
+        note: "Delivered final report to Goose",
+      }),
+    ).rejects.toThrow(
+      "pinet_free note claims delivery, but no verified outbound pinet_message was sent since the last free/reset.",
+    );
+    expect(signalAgentFree).not.toHaveBeenCalled();
+  });
+
+  it("allows delivery-claiming pinet_free notes after a verified pinet_message and resets the window", async () => {
+    const signalAgentFree = vi.fn(async () => ({
+      queuedInboxCount: 0,
+      drainedQueuedInbox: false,
+    }));
+    const sendPinetAgentMessage = vi.fn(async (target: string) => ({ messageId: 17, target }));
+    const deps = createDeps({ signalAgentFree, sendPinetAgentMessage });
+    const tools = registerWithDeps(deps);
+
+    await tools.get("pinet_message")?.execute("tool-call-2a", {
+      to: "Goose",
+      message: "Final report body",
+    });
+
+    const result = (await tools.get("pinet_free")?.execute("tool-call-2b", {
+      note: "Delivered final report to Goose",
+    })) as {
+      content: Array<{ text: string }>;
+      details: { status: string; note: string | null; queuedInboxCount: number };
+    };
+
+    expect(sendPinetAgentMessage).toHaveBeenCalledWith("Goose", "Final report body");
+    expect(signalAgentFree).toHaveBeenCalledTimes(1);
+    expect(result.content[0]?.text).toBe(
+      "Marked this Pinet agent idle/free for new work. Note: Delivered final report to Goose.",
+    );
+
+    await expect(
+      tools.get("pinet_free")?.execute("tool-call-2c", {
+        note: "Sent final report to Goose",
+      }),
+    ).rejects.toThrow(
+      "pinet_free note claims delivery, but no verified outbound pinet_message was sent since the last free/reset.",
+    );
+    expect(signalAgentFree).toHaveBeenCalledTimes(1);
+  });
+
+  it("formats non-delivery pinet_free responses with note and queued inbox count", async () => {
     const signalAgentFree = vi.fn(async () => ({
       queuedInboxCount: 2,
       drainedQueuedInbox: false,
@@ -116,7 +171,7 @@ describe("registerPinetTools", () => {
     const deps = createDeps({ signalAgentFree });
     const tools = registerWithDeps(deps);
 
-    const result = (await tools.get("pinet_free")?.execute("tool-call-2", {
+    const result = (await tools.get("pinet_free")?.execute("tool-call-2d", {
       note: "wrapped up #395",
     })) as {
       content: Array<{ text: string }>;
