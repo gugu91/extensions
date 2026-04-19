@@ -78,14 +78,14 @@ export function buildPinetFollowerSpawnPlan(options: PinetSpawnPlanOptions): Pin
     'cd "$ROOT"',
     branchCommand,
     moveCommand,
-    `exec ${piInvocation} --command /pinet-follow > \"$ROOT/$LOG_DIR/worker-$N.log\" 2>&1`,
+    `exec ${piInvocation} --command /pinet-follow > "$ROOT/$LOG_DIR/worker-$N.log" 2>&1`,
   ].join("\n");
 
   const spawnLoop = [
     `mkdir -p ${JSON.stringify(logDir)}`,
     `cat > ${JSON.stringify(launcherScriptPath)} <<'EOF'\n${launcherBody}\nEOF`,
     `chmod +x ${JSON.stringify(launcherScriptPath)}`,
-    `for N in $(seq 1 ${count}); do (${JSON.stringify(launcherScriptPath)} \"$N\" </dev/null &); done`,
+    `for N in $(seq 1 ${count}); do (${JSON.stringify(launcherScriptPath)} "$N" </dev/null &); done`,
   ];
 
   return {
