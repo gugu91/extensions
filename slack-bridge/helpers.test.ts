@@ -3064,9 +3064,7 @@ describe("getFollowerReconnectUiUpdate", () => {
       degradedReason: "registration refresh failed",
       degradedNextStep: "Follower reconnected with the broker-assigned identity.",
     });
-    expect(result.notify?.message).toContain(
-      "after degraded state: registration refresh failed",
-    );
+    expect(result.notify?.message).toContain("after degraded state: registration refresh failed");
     expect(result.notify?.message).toContain(
       "Next step: Follower reconnected with the broker-assigned identity.",
     );
