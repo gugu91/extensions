@@ -110,11 +110,79 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
     expect(snapshot.brokerCount).toBe(1);
     expect(snapshot.workerCount).toBe(1);
     expect(snapshot.pendingBacklogCount).toBe(3);
+    expect(snapshot.acceptedTaskReplyGaps).toBe(0);
     expect(snapshot.taskCounts.openPrs).toBe(1);
     expect(snapshot.taskCounts.mergedPrs).toBe(1);
     expect(snapshot.roster[0]?.label).toContain("The Broker Otter");
     expect(snapshot.roster[1]?.taskSummary).toContain("#217 PR #221 open");
+    expect(snapshot.roster[1]?.needsReply).toBe(false);
     expect(snapshot.recentOutcomes).toContain("#202 PR #205 merged");
+  });
+
+  it("surfaces accepted tasks that still need a worker report", () => {
+    const snapshot = buildBrokerControlPlaneDashboardSnapshot({
+      workloads: [
+        {
+          id: "worker-1",
+          name: "Cosmic Crane",
+          emoji: "🦩",
+          status: "idle",
+          lastHeartbeat: "2026-04-02T17:00:10.000Z",
+          pendingInboxCount: 0,
+          ownedThreadCount: 0,
+          metadata: {
+            role: "worker",
+            branch: "fix/463-silent-worker-failures",
+            worktreeKind: "linked",
+            worktreePath: "/Users/alice/src/extensions/.worktrees/463",
+            capabilities: { role: "worker" },
+          },
+        },
+      ],
+      evaluation: {
+        ghostAgentIds: [],
+        nudgeAgentIds: [],
+        idleDrainAgentIds: ["worker-1"],
+        stuckAgentIds: [],
+        anomalies: [],
+      },
+      evaluationOptions: {
+        now: Date.parse("2026-04-02T17:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+      maintenance: {
+        reapedAgentIds: [],
+        repairedThreadClaims: 0,
+        assignedBacklogCount: 0,
+        nudgedAgentIds: [],
+        pendingBacklogCount: 0,
+        anomalies: [],
+      },
+      assignments: [
+        {
+          agentId: "worker-1",
+          issueNumber: 463,
+          branch: "fix/463-silent-worker-failures",
+          status: "assigned",
+          prNumber: null,
+          issueState: "OPEN",
+          updatedAt: "2026-04-02T17:00:05.000Z",
+        },
+      ],
+      recentCycles: [],
+      cycleStartedAt: "2026-04-02T17:00:00.000Z",
+      cycleDurationMs: 3200,
+      currentBranch: "main",
+      homedir: "/Users/alice",
+    });
+
+    expect(snapshot.acceptedTaskReplyGaps).toBe(1);
+    expect(snapshot.roster[0]?.needsReply).toBe(true);
+    expect(renderBrokerControlPlaneCanvasMarkdown(snapshot)).toContain(
+      "Accepted tasks awaiting worker reply: 1",
+    );
+    expect(renderBrokerControlPlaneCanvasMarkdown(snapshot)).toContain("awaiting report");
   });
 });
 
@@ -132,6 +200,7 @@ describe("renderBrokerControlPlaneCanvasMarkdown", () => {
       workingWorkers: 1,
       ghostAgents: 1,
       stuckAgents: 1,
+      acceptedTaskReplyGaps: 0,
       pendingBacklogCount: 3,
       nudgesThisCycle: 1,
       idleDrainCandidates: 0,
@@ -158,6 +227,7 @@ describe("renderBrokerControlPlaneCanvasMarkdown", () => {
           health: "healthy",
           workload: "0 inbox / 0 threads",
           taskSummary: "—",
+          needsReply: false,
           heartbeat: "2s ago",
           branch: "main",
           worktree: "main checkout",

@@ -267,6 +267,7 @@ describe("createPinetControlPlaneCanvas", () => {
     expect(snapshot?.liveAgents).toBe(2);
     expect(snapshot?.workerCount).toBe(1);
     expect(snapshot?.pendingBacklogCount).toBe(3);
+    expect(snapshot?.acceptedTaskReplyGaps).toBe(0);
     expect(snapshot?.roster[0]?.label).toContain("Broker Otter");
     expect(snapshot?.recentCycles).toHaveLength(1);
   });

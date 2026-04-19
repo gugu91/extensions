@@ -33,6 +33,7 @@ export interface BrokerControlPlaneAgentRow {
   health: string;
   workload: string;
   taskSummary: string;
+  needsReply: boolean;
   heartbeat: string;
   branch: string;
   worktree: string;
@@ -50,6 +51,7 @@ export interface BrokerControlPlaneDashboardSnapshot {
   workingWorkers: number;
   ghostAgents: number;
   stuckAgents: number;
+  acceptedTaskReplyGaps: number;
   pendingBacklogCount: number;
   nudgesThisCycle: number;
   idleDrainCandidates: number;
@@ -209,6 +211,12 @@ function summarizeCycleAnomalies(anomalies: string[]): string {
   return truncateText(anomalies.join("; "), 72);
 }
 
+function hasAcceptedTaskReplyGap(
+  assignments: Array<Pick<ResolvedTaskAssignment, "issueNumber" | "status">>,
+): boolean {
+  return assignments.some((assignment) => assignment.status === "assigned");
+}
+
 function isSlackMethodError(err: unknown, method: string, ...codes: string[]): boolean {
   if (!(err instanceof Error)) {
     return false;
@@ -274,6 +282,7 @@ export function buildBrokerControlPlaneDashboardSnapshot(
     const health = display.stuck
       ? `${display.health ?? "unknown"} / stuck`
       : (display.health ?? "unknown");
+    const agentAssignments = assignmentsByAgent.get(display.id) ?? [];
     return {
       id: display.id,
       role: getAgentRole(display),
@@ -281,7 +290,8 @@ export function buildBrokerControlPlaneDashboardSnapshot(
       status: display.status,
       health,
       workload: buildWorkloadSummary(workload),
-      taskSummary: summarizeAgentTasks(assignmentsByAgent.get(display.id) ?? []),
+      taskSummary: summarizeAgentTasks(agentAssignments),
+      needsReply: hasAcceptedTaskReplyGap(agentAssignments),
       heartbeat,
       branch,
       worktree,
@@ -317,6 +327,7 @@ export function buildBrokerControlPlaneDashboardSnapshot(
     workingWorkers: workerDisplays.filter(({ display }) => display.status === "working").length,
     ghostAgents: input.evaluation.ghostAgentIds.length,
     stuckAgents: input.evaluation.stuckAgentIds.length,
+    acceptedTaskReplyGaps: roster.filter((row) => row.needsReply).length,
     pendingBacklogCount: input.maintenance?.pendingBacklogCount ?? 0,
     nudgesThisCycle: input.evaluation.nudgeAgentIds.length,
     idleDrainCandidates: input.evaluation.idleDrainAgentIds.length,
@@ -363,6 +374,7 @@ export function renderBrokerControlPlaneCanvasMarkdown(
     `- Main checkout: \`${snapshot.currentBranch ?? "unknown"}\``,
     `- Agents: ${snapshot.liveAgents} live / ${snapshot.totalAgents} total (${snapshot.brokerCount} broker, ${snapshot.workerCount} workers)`,
     `- Workers: ${snapshot.workingWorkers} working, ${snapshot.idleWorkers} idle, ${snapshot.ghostAgents} ghost, ${snapshot.stuckAgents} stuck`,
+    `- Accepted tasks awaiting worker reply: ${snapshot.acceptedTaskReplyGaps}`,
     `- Backlog: ${snapshot.pendingBacklogCount} pending · nudges ${snapshot.nudgesThisCycle} · idle drains ${snapshot.idleDrainCandidates}`,
     `- Maintenance: assigned ${snapshot.assignedBacklogCount} · reaped ${snapshot.reapedAgents} · repaired claims ${snapshot.repairedThreadClaims}`,
     "",
@@ -379,8 +391,8 @@ export function renderBrokerControlPlaneCanvasMarkdown(
       : []),
     "",
     "## Agent roster",
-    "| Agent | Role | Health | Status | Workload | Current task | Heartbeat | Branch | Worktree |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Agent | Role | Health | Status | Workload | Current task | Reply | Heartbeat | Branch | Worktree |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...snapshot.roster.map((row) =>
       [
         row.label,
@@ -389,6 +401,7 @@ export function renderBrokerControlPlaneCanvasMarkdown(
         row.status,
         row.workload,
         truncateText(row.taskSummary, 72),
+        row.needsReply ? "awaiting report" : "—",
         row.heartbeat,
         row.branch,
         row.worktree,
