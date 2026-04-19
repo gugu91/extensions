@@ -125,6 +125,15 @@ caching.
 | `pnpm format`       | Prettier + Stylua                                               |
 | `pnpm check`        | lint + typecheck + format check                                 |
 
+### Release workflow
+
+Public npm releases are currently **manual by design**. If a fix merged to
+`main` should reach npm users, prepare a small release PR, verify the package
+with `pnpm --filter <package> pack`, then publish from `main`.
+
+See [`docs/releases.md`](docs/releases.md) for the package list, the manual
+release checklist, and the tarball verification policy.
+
 ### Structure
 
 ```
@@ -179,6 +188,8 @@ expectations and the required smoke checklist.
 2. Write tests for any new logic
 3. Run `pnpm lint && pnpm typecheck && pnpm test`
 4. Create a PR — merge to `main`
+5. If the change should reach npm users, follow [`docs/releases.md`](docs/releases.md)
+   to prep and publish the relevant package release from `main`
 
 ## Contributors
 

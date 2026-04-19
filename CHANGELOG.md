@@ -2,6 +2,17 @@
 
 All notable changes to this repository are documented in this file.
 
+## [Unreleased]
+
+### Docs
+
+- Added `docs/releases.md`, a manual release checklist that makes the path from
+  merged fixes on `main` to published npm packages explicit, including focused
+  package verification and `pnpm --filter <package> pack` tarball review.
+- Linked the root README's development workflow to the release checklist so
+  shipping a fix and publishing it are no longer separate tribal-knowledge
+  steps.
+
 ## [0.1.3] - 2026-04-08
 
 Pinet v0.1.3 is a narrow follow-up patch for `@gugu910/pi-slack-bridge` after `0.1.2` was published with real Slack identifiers in the package README settings example. Because published npm tarballs are immutable, this release corrects the npm-visible package surface with scrubbed example placeholders while leaving the runtime behavior unchanged.
