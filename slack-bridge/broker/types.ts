@@ -15,6 +15,7 @@ export interface AgentInfo {
   resumableUntil?: string | null;
   idleSince?: string | null;
   lastActivity?: string | null;
+  outboundCount?: number;
 }
 
 export type ClientAgentInfo = Omit<AgentInfo, "stableId">;

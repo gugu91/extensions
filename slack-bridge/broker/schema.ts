@@ -746,12 +746,34 @@ export class BrokerDB implements BrokerDBInterface {
     return row ? rowToAgent(row) : null;
   }
 
+  private getCurrentSessionOutboundCount(agentId: string, connectedAt: string): number {
+    const db = this.getDb();
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM messages
+         WHERE sender = ?
+           AND source = 'agent'
+           AND created_at >= ?`,
+      )
+      .get(agentId, connectedAt) as { count: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  private rowToAgentWithCurrentSessionOutboundCount(row: AgentRow): AgentInfo {
+    const agent = rowToAgent(row);
+    return {
+      ...agent,
+      outboundCount: this.getCurrentSessionOutboundCount(agent.id, agent.connectedAt),
+    };
+  }
+
   getAgents(): AgentInfo[] {
     const db = this.getDb();
     const rows = db
       .prepare("SELECT * FROM agents WHERE disconnected_at IS NULL ORDER BY connected_at ASC")
       .all() as unknown as AgentRow[];
-    return rows.map(rowToAgent);
+    return rows.map((row) => this.rowToAgentWithCurrentSessionOutboundCount(row));
   }
 
   getAllAgents(): AgentInfo[] {
@@ -762,7 +784,7 @@ export class BrokerDB implements BrokerDBInterface {
          ORDER BY CASE WHEN disconnected_at IS NULL THEN 0 ELSE 1 END, connected_at ASC`,
       )
       .all() as unknown as AgentRow[];
-    return rows.map(rowToAgent);
+    return rows.map((row) => this.rowToAgentWithCurrentSessionOutboundCount(row));
   }
 
   getSetting<T = unknown>(key: string): T | null {
