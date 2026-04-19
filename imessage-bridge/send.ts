@@ -27,6 +27,7 @@ export type RunAppleScript = (
 export interface SendIMessageOptions {
   recipient: string;
   text: string;
+  markdown?: string;
   osascriptPath?: string;
   runAppleScript?: RunAppleScript;
 }
@@ -81,17 +82,26 @@ export function assertIMessageSendCapability(
   );
 }
 
-export async function sendIMessage(options: SendIMessageOptions): Promise<RunAppleScriptResult> {
-  const recipient = normalizeIMessageRecipient(options.recipient);
+export function resolveIMessageBody(
+  options: Pick<SendIMessageOptions, "text" | "markdown">,
+): string {
+  const markdown = options.markdown?.trim();
   const text = options.text.trim();
-  if (!text) {
+  const body = markdown && markdown.length > 0 ? markdown : text;
+  if (!body) {
     throw new Error("iMessage text is required.");
   }
+  return body;
+}
+
+export async function sendIMessage(options: SendIMessageOptions): Promise<RunAppleScriptResult> {
+  const recipient = normalizeIMessageRecipient(options.recipient);
+  const body = resolveIMessageBody(options);
 
   const runner = options.runAppleScript ?? runAppleScript;
   return runner({
     osascriptPath: options.osascriptPath ?? APPLESCRIPT_BINARY_PATH,
     scriptLines: buildIMessageSendAppleScript(),
-    args: [recipient, text],
+    args: [recipient, body],
   });
 }

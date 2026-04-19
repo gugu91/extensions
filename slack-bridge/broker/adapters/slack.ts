@@ -147,11 +147,12 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   async send(msg: OutboundMessage): Promise<void> {
+    const slackBlocks = msg.content?.slackBlocks ?? msg.blocks;
     const body: Record<string, unknown> = {
       channel: msg.channel,
-      text: msg.text,
+      text: msg.content?.text ?? msg.text,
       thread_ts: msg.threadId,
-      ...(msg.blocks ? { blocks: msg.blocks } : {}),
+      ...(slackBlocks ? { blocks: slackBlocks } : {}),
     };
 
     if (msg.agentName ?? msg.agentOwnerToken ?? msg.metadata) {

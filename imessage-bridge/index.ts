@@ -22,6 +22,7 @@ export {
   getDefaultIMessageThreadId,
   normalizeIMessageRecipient,
   runAppleScript,
+  resolveIMessageBody,
   sendIMessage,
   type RunAppleScript,
   type RunAppleScriptInput,

@@ -364,6 +364,11 @@ export class BrokerClient {
     body: string;
     source?: string;
     channel?: string;
+    content?: {
+      text: string;
+      markdown?: string;
+      slackBlocks?: ReadonlyArray<Record<string, unknown>>;
+    };
     blocks?: ReadonlyArray<Record<string, unknown>>;
     agentName?: string;
     agentEmoji?: string;
@@ -381,6 +386,7 @@ export class BrokerClient {
       body: input.body,
       ...(input.source ? { source: input.source } : {}),
       ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.content ? { content: input.content } : {}),
       ...(input.blocks ? { blocks: input.blocks } : {}),
       ...(input.agentName ? { agentName: input.agentName } : {}),
       ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),

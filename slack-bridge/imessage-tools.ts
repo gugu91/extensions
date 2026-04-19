@@ -12,6 +12,10 @@ export interface IMessageToolSendInput {
   body: string;
   source: "imessage";
   channel: string;
+  content: {
+    text: string;
+    markdown: string;
+  };
   agentName: string;
   agentEmoji: string;
   agentOwnerToken: string;
@@ -81,6 +85,10 @@ export function registerIMessageTools(pi: ExtensionAPI, deps: RegisterIMessageTo
         body: text,
         source: "imessage",
         channel: recipient,
+        content: {
+          text,
+          markdown: text,
+        },
         agentName: name,
         agentEmoji: emoji,
         agentOwnerToken: ownerToken,
@@ -111,6 +119,7 @@ export function registerIMessageTools(pi: ExtensionAPI, deps: RegisterIMessageTo
             senderAgentId: selfId,
             source: request.source,
             channel: request.channel,
+            content: request.content,
             agentName: request.agentName,
             agentEmoji: request.agentEmoji,
             agentOwnerToken: request.agentOwnerToken,

@@ -31,6 +31,11 @@ export interface SendBrokerMessageInput {
   senderAgentId: string;
   source?: string;
   channel?: string;
+  content?: {
+    text: string;
+    markdown?: string;
+    slackBlocks?: ReadonlyArray<Record<string, unknown>>;
+  };
   blocks?: ReadonlyArray<Record<string, unknown>>;
   agentName?: string;
   agentEmoji?: string;
@@ -70,10 +75,21 @@ export async function sendBrokerMessage(
     throw new Error(`No adapter is registered for transport source ${JSON.stringify(source)}.`);
   }
 
+  const content = input.content
+    ? {
+        text: input.content.text.trim(),
+        ...(input.content.markdown?.trim() ? { markdown: input.content.markdown.trim() } : {}),
+        ...(input.content.slackBlocks && input.content.slackBlocks.length > 0
+          ? { slackBlocks: input.content.slackBlocks }
+          : {}),
+      }
+    : undefined;
+
   const outbound: OutboundMessage = {
     threadId,
     channel,
-    text: body,
+    text: content?.text ?? body,
+    ...(content ? { content } : {}),
     ...(input.blocks ? { blocks: input.blocks } : {}),
     ...(input.agentName ? { agentName: input.agentName } : {}),
     ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),

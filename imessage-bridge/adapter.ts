@@ -65,7 +65,8 @@ export class AppleScriptIMessageAdapter implements IMessageAdapter {
   async send(msg: IMessageAdapterOutboundMessage): Promise<void> {
     await sendIMessage({
       recipient: msg.channel,
-      text: msg.text,
+      text: msg.content?.text ?? msg.text,
+      markdown: msg.content?.markdown,
       osascriptPath: this.options.osascriptPath,
       runAppleScript: this.options.runAppleScript,
     });

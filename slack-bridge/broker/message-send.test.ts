@@ -113,6 +113,11 @@ describe("sendBrokerMessage", () => {
         senderAgentId: "agent-1",
         source: "slack",
         channel: "C123",
+        content: {
+          text: "fallback text",
+          markdown: "**fallback text**",
+          slackBlocks: blocks,
+        },
         blocks,
       },
     );
@@ -121,6 +126,11 @@ describe("sendBrokerMessage", () => {
       threadId: "100.200",
       channel: "C123",
       text: "fallback text",
+      content: {
+        text: "fallback text",
+        markdown: "**fallback text**",
+        slackBlocks: blocks,
+      },
       blocks,
     });
   });

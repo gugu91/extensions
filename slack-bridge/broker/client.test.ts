@@ -721,6 +721,11 @@ describe("BrokerClient — message.send", () => {
       body: "fallback text",
       source: "slack",
       channel: "C123",
+      content: {
+        text: "fallback text",
+        markdown: "**fallback text**",
+        slackBlocks: blocks,
+      },
       blocks,
     });
 
@@ -733,6 +738,11 @@ describe("BrokerClient — message.send", () => {
         body: string;
         source: string;
         channel: string;
+        content?: {
+          text: string;
+          markdown?: string;
+          slackBlocks?: ReadonlyArray<Record<string, unknown>>;
+        };
         blocks?: ReadonlyArray<Record<string, unknown>>;
       };
     };
@@ -742,6 +752,11 @@ describe("BrokerClient — message.send", () => {
       body: "fallback text",
       source: "slack",
       channel: "C123",
+      content: {
+        text: "fallback text",
+        markdown: "**fallback text**",
+        slackBlocks: blocks,
+      },
       blocks,
     });
 

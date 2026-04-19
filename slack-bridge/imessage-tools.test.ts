@@ -179,6 +179,10 @@ describe("registerIMessageTools", () => {
       body: "follower hello",
       source: "imessage",
       channel: "+15555550123",
+      content: {
+        text: "follower hello",
+        markdown: "follower hello",
+      },
       agentName: "Cobalt Olive Crane",
       agentEmoji: "🦩",
       agentOwnerToken: "owner-token",

@@ -758,6 +758,27 @@ export class BrokerSocketServer {
           (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
         )
       : undefined;
+    const content =
+      params.content && typeof params.content === "object"
+        ? (() => {
+            const raw = params.content as Record<string, unknown>;
+            const text = typeof raw.text === "string" ? raw.text : null;
+            if (!text) {
+              return undefined;
+            }
+            const markdown = typeof raw.markdown === "string" ? raw.markdown : undefined;
+            const slackBlocks = Array.isArray(raw.slackBlocks)
+              ? raw.slackBlocks.filter(
+                  (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+                )
+              : undefined;
+            return {
+              text,
+              ...(markdown ? { markdown } : {}),
+              ...(slackBlocks && slackBlocks.length > 0 ? { slackBlocks } : {}),
+            };
+          })()
+        : undefined;
     const metadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
@@ -778,6 +799,7 @@ export class BrokerSocketServer {
         senderAgentId: state.agentId,
         ...(source ? { source } : {}),
         ...(channel ? { channel } : {}),
+        ...(content ? { content } : {}),
         ...(blocks && blocks.length > 0 ? { blocks } : {}),
         ...(agentName ? { agentName } : {}),
         ...(agentEmoji ? { agentEmoji } : {}),

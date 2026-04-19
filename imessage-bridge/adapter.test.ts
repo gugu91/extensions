@@ -4,6 +4,7 @@ import {
   APPLESCRIPT_BINARY_PATH,
   buildIMessageSendAppleScript,
   getDefaultIMessageThreadId,
+  resolveIMessageBody,
   sendIMessage,
 } from "./index.ts";
 
@@ -26,19 +27,26 @@ describe("iMessage send helpers", () => {
     ]);
   });
 
-  it("runs osascript with argv-based recipient and text values", async () => {
+  it("prefers markdown when present for outbound iMessage rendering", () => {
+    expect(resolveIMessageBody({ text: "hello from pi", markdown: "**hello** from pi" })).toBe(
+      "**hello** from pi",
+    );
+  });
+
+  it("runs osascript with argv-based recipient and transport-aware body values", async () => {
     const runAppleScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
     await sendIMessage({
       recipient: "chat:alice",
       text: "hello from pi",
+      markdown: "**hello** from pi",
       runAppleScript,
     });
 
     expect(runAppleScript).toHaveBeenCalledWith({
       osascriptPath: APPLESCRIPT_BINARY_PATH,
       scriptLines: buildIMessageSendAppleScript(),
-      args: ["chat:alice", "hello from pi"],
+      args: ["chat:alice", "**hello** from pi"],
     });
   });
 });

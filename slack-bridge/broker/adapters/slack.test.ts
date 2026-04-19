@@ -1360,6 +1360,43 @@ describe("SlackAdapter — send", () => {
     expect(body.blocks).toEqual(blocks);
   });
 
+  it("prefers transport-aware slack content when present", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+    const slackBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Transport-aware*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    await adapter.send({
+      threadId: "1.1",
+      channel: "C1",
+      text: "legacy fallback",
+      content: {
+        text: "plain fallback",
+        markdown: "**plain fallback**",
+        slackBlocks,
+      },
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "*legacy blocks*" },
+        },
+      ],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.text).toBe("plain fallback");
+    expect(body.blocks).toEqual(slackBlocks);
+  });
+
   it("uses buildSlackRequest for proper encoding", async () => {
     fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
 
