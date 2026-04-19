@@ -364,6 +364,7 @@ export class BrokerClient {
     body: string;
     source?: string;
     channel?: string;
+    blocks?: ReadonlyArray<Record<string, unknown>>;
     agentName?: string;
     agentEmoji?: string;
     agentOwnerToken?: string;
@@ -380,6 +381,7 @@ export class BrokerClient {
       body: input.body,
       ...(input.source ? { source: input.source } : {}),
       ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.blocks ? { blocks: input.blocks } : {}),
       ...(input.agentName ? { agentName: input.agentName } : {}),
       ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),
       ...(input.agentOwnerToken ? { agentOwnerToken: input.agentOwnerToken } : {}),

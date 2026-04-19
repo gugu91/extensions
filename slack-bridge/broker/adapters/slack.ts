@@ -151,6 +151,7 @@ export class SlackAdapter implements MessageAdapter {
       channel: msg.channel,
       text: msg.text,
       thread_ts: msg.threadId,
+      ...(msg.blocks ? { blocks: msg.blocks } : {}),
     };
 
     if (msg.agentName ?? msg.agentOwnerToken ?? msg.metadata) {

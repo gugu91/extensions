@@ -1334,6 +1334,32 @@ describe("SlackAdapter — send", () => {
     expect(body.metadata).toBeUndefined();
   });
 
+  it("includes blocks when provided", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+    const blocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Hello blocks*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    await adapter.send({
+      threadId: "1.1",
+      channel: "C1",
+      text: "plain message",
+      blocks,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.blocks).toEqual(blocks);
+  });
+
   it("uses buildSlackRequest for proper encoding", async () => {
     fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
 

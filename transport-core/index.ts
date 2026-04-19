@@ -14,6 +14,7 @@ export interface OutboundMessage {
   threadId: string;
   channel: string;
   text: string;
+  blocks?: ReadonlyArray<Record<string, unknown>>;
   agentName?: string;
   agentEmoji?: string;
   agentOwnerToken?: string;

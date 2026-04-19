@@ -753,6 +753,11 @@ export class BrokerSocketServer {
     const agentEmoji = typeof params.agentEmoji === "string" ? params.agentEmoji : undefined;
     const agentOwnerToken =
       typeof params.agentOwnerToken === "string" ? params.agentOwnerToken : undefined;
+    const blocks = Array.isArray(params.blocks)
+      ? params.blocks.filter(
+          (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+        )
+      : undefined;
     const metadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
@@ -773,6 +778,7 @@ export class BrokerSocketServer {
         senderAgentId: state.agentId,
         ...(source ? { source } : {}),
         ...(channel ? { channel } : {}),
+        ...(blocks && blocks.length > 0 ? { blocks } : {}),
         ...(agentName ? { agentName } : {}),
         ...(agentEmoji ? { agentEmoji } : {}),
         ...(agentOwnerToken ? { agentOwnerToken } : {}),

@@ -31,6 +31,7 @@ export interface SendBrokerMessageInput {
   senderAgentId: string;
   source?: string;
   channel?: string;
+  blocks?: ReadonlyArray<Record<string, unknown>>;
   agentName?: string;
   agentEmoji?: string;
   agentOwnerToken?: string;
@@ -73,6 +74,7 @@ export async function sendBrokerMessage(
     threadId,
     channel,
     text: body,
+    ...(input.blocks ? { blocks: input.blocks } : {}),
     ...(input.agentName ? { agentName: input.agentName } : {}),
     ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),
     ...(input.agentOwnerToken ? { agentOwnerToken: input.agentOwnerToken } : {}),

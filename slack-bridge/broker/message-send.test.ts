@@ -92,6 +92,39 @@ describe("sendBrokerMessage", () => {
     expect(result.adapter).toBe("imessage");
   });
 
+  it("passes transport-aware blocks through to the adapter", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+    const blocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Hello from blocks*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    await sendBrokerMessage(
+      {
+        db,
+        adapters: [{ name: "slack", send }],
+      },
+      {
+        threadId: "100.200",
+        body: "fallback text",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C123",
+        blocks,
+      },
+    );
+
+    expect(send).toHaveBeenCalledWith({
+      threadId: "100.200",
+      channel: "C123",
+      text: "fallback text",
+      blocks,
+    });
+  });
+
   it("reuses the stored thread transport when source and channel are omitted", async () => {
     const db = createFakeDb();
     db.createThread("imessage:chat:bob", "imessage", "chat:bob", "agent-1");
