@@ -156,6 +156,70 @@ describe("createPinetRemoteControl", () => {
     expect(notify).toHaveBeenNthCalledWith(4, "Pinet remote control requested: /exit", "warning");
   });
 
+  it("invokes onCommandSettled with queue state after each command", async () => {
+    const onCommandSettled = vi.fn();
+    const { deps } = createDeps({ onCommandSettled });
+    const shutdown = vi.fn();
+    const pinetRemoteControl = createPinetRemoteControl(deps);
+    const { ctx } = createCtx({ idle: true, shutdown });
+
+    pinetRemoteControl.requestRemoteControl("reload", ctx);
+    pinetRemoteControl.requestRemoteControl("exit", ctx);
+    pinetRemoteControl.runRemoteControl("reload", ctx);
+    await settleRemoteControl();
+
+    expect(onCommandSettled).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        command: "reload",
+        success: true,
+        nextCommand: "exit",
+        ctx,
+      }),
+    );
+    expect(onCommandSettled).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        command: "exit",
+        success: true,
+        nextCommand: null,
+        ctx,
+      }),
+    );
+  });
+
+  it("reports command failures to onCommandSettled", async () => {
+    const failure = new Error("reload exploded");
+    const onCommandSettled = vi.fn();
+    const { deps } = createDeps({
+      onCommandSettled,
+      reloadPinetRuntime: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    const pinetRemoteControl = createPinetRemoteControl(deps);
+    const { ctx, notify } = createCtx({ idle: true });
+
+    pinetRemoteControl.requestRemoteControl("reload", ctx);
+    pinetRemoteControl.runRemoteControl("reload", ctx);
+    await settleRemoteControl();
+
+    expect(onCommandSettled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "reload",
+        success: false,
+        error: failure,
+        nextCommand: null,
+        ctx,
+      }),
+    );
+    expect(notify).toHaveBeenNthCalledWith(
+      2,
+      "Pinet remote control failed: reload exploded",
+      "error",
+    );
+  });
+
   it("reports remote-control failures and resets cleanly", async () => {
     const { deps, flushDeferredRemoteControlAcks } = createDeps();
     const pinetRemoteControl = createPinetRemoteControl(deps);

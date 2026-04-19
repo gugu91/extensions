@@ -265,6 +265,14 @@ export default function (pi: ExtensionAPI) {
     retryErrorCount: number;
   }
 
+  interface PendingBrokerReloadRequest {
+    target: BrokerTurnThreadTarget;
+    command: {
+      modelRef: string | null;
+      thinkingLevel: BrokerThinkingLevel | null;
+    };
+  }
+
   const BROKER_PROGRESS_UPDATE_INTERVAL_MS = 2 * 60_000;
   const brokerPauseNotifiedThreads = new TtlSet<string>({
     maxSize: 2000,
@@ -273,6 +281,7 @@ export default function (pi: ExtensionAPI) {
 
   let activeBrokerTurnState: ActiveBrokerTurnState | null = null;
   let brokerAutoDrainPause: BrokerAutoDrainPauseState | null = null;
+  let pendingBrokerReloadRequest: PendingBrokerReloadRequest | null = null;
 
   function maybeDrainInboxIfIdle(ctx?: ExtensionContext): boolean {
     if (brokerAutoDrainPause) {
@@ -709,11 +718,7 @@ export default function (pi: ExtensionAPI) {
     flushDeferredRemoteControlAcks,
     reloadPinetRuntime,
     formatError: msg,
-    onReloadSuccess: () => {
-      brokerAutoDrainPause = null;
-      brokerPauseNotifiedThreads.clear();
-      maybeDrainInboxIfIdle(extCtx ?? undefined);
-    },
+    onCommandSettled: handlePinetRemoteControlSettled,
   });
   const { requestRemoteControl, resetRemoteControlState } = pinetRemoteControl;
 
@@ -747,6 +752,38 @@ export default function (pi: ExtensionAPI) {
     return Reflect.apply(method, target, args);
   }
 
+  function hasBrokerReloadOverrides(command: {
+    modelRef: string | null;
+    thinkingLevel: BrokerThinkingLevel | null;
+  }): boolean {
+    return command.modelRef !== null || command.thinkingLevel !== null;
+  }
+
+  function formatBrokerReloadScope(command: {
+    modelRef: string | null;
+    thinkingLevel: BrokerThinkingLevel | null;
+  }): string {
+    const scope = [
+      command.modelRef ? `model \`${command.modelRef}\`` : null,
+      command.thinkingLevel ? `thinking \`${command.thinkingLevel}\`` : null,
+    ]
+      .filter((entry): entry is string => entry != null)
+      .join(" + ");
+    return scope.length > 0 ? ` with ${scope}` : "";
+  }
+
+  function validateBrokerReloadOverrideSupport(command: {
+    modelRef: string | null;
+    thinkingLevel: BrokerThinkingLevel | null;
+  }): void {
+    if (command.modelRef && !hasObjectMethod(pi, "setModel")) {
+      throw new Error("This pi build does not expose setModel for Slack-driven reloads.");
+    }
+    if (command.thinkingLevel && !hasObjectMethod(pi, "setThinkingLevel")) {
+      throw new Error("This pi build does not expose thinking-level controls for Slack reload.");
+    }
+  }
+
   async function applyBrokerReloadOverrides(
     command: {
       modelRef: string | null;
@@ -754,11 +791,15 @@ export default function (pi: ExtensionAPI) {
     },
     ctx: ExtensionContext,
   ): Promise<{ modelRef: string | null; thinkingLevel: BrokerThinkingLevel | null }> {
-    let appliedModelRef: string | null = null;
+    validateBrokerReloadOverrideSupport(command);
+
+    let provider: string | null = null;
+    let modelId: string | null = null;
+    let model: unknown = null;
     if (command.modelRef) {
       const separatorIndex = command.modelRef.indexOf("/");
-      const provider = command.modelRef.slice(0, separatorIndex).trim();
-      const modelId = command.modelRef.slice(separatorIndex + 1).trim();
+      provider = command.modelRef.slice(0, separatorIndex).trim();
+      modelId = command.modelRef.slice(separatorIndex + 1).trim();
       if (!provider || !modelId) {
         throw new Error(
           `Model ${JSON.stringify(command.modelRef)} is invalid. Use <provider>/<model>, e.g. openai/gpt-5.4`,
@@ -770,39 +811,110 @@ export default function (pi: ExtensionAPI) {
         throw new Error("This pi build does not expose runtime model switching via Slack reload.");
       }
 
-      const model = callObjectMethod(modelRegistry, "find", provider, modelId);
+      model = callObjectMethod(modelRegistry, "find", provider, modelId);
       if (!model) {
         throw new Error(
           `Model ${JSON.stringify(command.modelRef)} is not available in this session.`,
         );
       }
+    }
 
-      if (!hasObjectMethod(pi, "setModel")) {
-        throw new Error("This pi build does not expose setModel for Slack-driven reloads.");
-      }
-
+    if (command.modelRef && model) {
       const switchedResult = await Promise.resolve(callObjectMethod(pi, "setModel", model));
       if (switchedResult === false) {
         throw new Error(
           `Failed to switch to ${JSON.stringify(command.modelRef)}. Check API keys for that provider/model.`,
         );
       }
-      appliedModelRef = `${provider}/${modelId}`;
     }
 
-    let appliedThinkingLevel: BrokerThinkingLevel | null = null;
     if (command.thinkingLevel) {
-      if (!hasObjectMethod(pi, "setThinkingLevel")) {
-        throw new Error("This pi build does not expose thinking-level controls for Slack reload.");
-      }
-      callObjectMethod(pi, "setThinkingLevel", command.thinkingLevel);
-      appliedThinkingLevel = command.thinkingLevel;
+      await Promise.resolve(callObjectMethod(pi, "setThinkingLevel", command.thinkingLevel));
     }
 
     return {
-      modelRef: appliedModelRef,
-      thinkingLevel: appliedThinkingLevel,
+      modelRef: provider && modelId ? `${provider}/${modelId}` : null,
+      thinkingLevel: command.thinkingLevel,
     };
+  }
+
+  async function handlePinetRemoteControlSettled(event: {
+    command: "reload" | "exit";
+    success: boolean;
+    error: unknown;
+    nextCommand: "reload" | "exit" | null;
+    ctx: ExtensionContext;
+  }): Promise<void> {
+    if (event.command !== "reload") {
+      return;
+    }
+
+    if (event.nextCommand === "reload") {
+      return;
+    }
+
+    const pending = pendingBrokerReloadRequest;
+    pendingBrokerReloadRequest = null;
+
+    if (!event.success) {
+      if (pending) {
+        await postBrokerThreadNotice(
+          pending.target,
+          `⚠️ Broker reload failed: ${msg(event.error)}`,
+          {
+            kind: "broker_reload_error",
+          },
+        );
+      }
+      return;
+    }
+
+    const pauseWasActive = brokerAutoDrainPause !== null;
+    let overridesApplied = true;
+
+    if (pending && hasBrokerReloadOverrides(pending.command)) {
+      try {
+        const applied = await applyBrokerReloadOverrides(pending.command, event.ctx);
+        await postBrokerThreadNotice(
+          pending.target,
+          `✅ Broker reload complete${formatBrokerReloadScope(applied)}.`,
+          {
+            kind: "broker_reload_complete",
+            ...(applied.modelRef ? { model_ref: applied.modelRef } : {}),
+            ...(applied.thinkingLevel ? { thinking: applied.thinkingLevel } : {}),
+          },
+        );
+      } catch (error) {
+        overridesApplied = false;
+        await postBrokerThreadNotice(
+          pending.target,
+          `⚠️ Broker reload completed, but override apply failed: ${msg(error)}`,
+          {
+            kind: "broker_reload_error",
+          },
+        );
+
+        if (pauseWasActive) {
+          await postBrokerThreadNotice(
+            pending.target,
+            "⏸️ Broker remains paused. Retry with `pinet reload [provider/model] [thinking]` or run `pinet reload` with no overrides.",
+            { kind: "broker_paused" },
+          );
+        }
+      }
+    } else if (pending) {
+      await postBrokerThreadNotice(pending.target, "✅ Broker reload complete.", {
+        kind: "broker_reload_complete",
+      });
+    }
+
+    if (!pauseWasActive || overridesApplied) {
+      brokerAutoDrainPause = null;
+      brokerPauseNotifiedThreads.clear();
+      if (event.nextCommand === null) {
+        maybeDrainInboxIfIdle(event.ctx);
+      }
+    }
   }
 
   async function handleSlackBrokerReloadCommand(
@@ -833,29 +945,45 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      const applied = await applyBrokerReloadOverrides(parsed.command, ctx);
+      validateBrokerReloadOverrideSupport(parsed.command);
 
       const queued = requestRemoteControl("reload", ctx);
+      if (queued.scheduledCommand !== "reload") {
+        await postBrokerThreadNotice(
+          target,
+          "⚠️ Broker reload was ignored because an `/exit` control action is already scheduled.",
+          {
+            kind: "broker_reload_error",
+            queue_status: queued.status,
+            scheduled_command: queued.scheduledCommand,
+          },
+        );
+        return true;
+      }
+
+      pendingBrokerReloadRequest = {
+        target,
+        command: parsed.command,
+      };
+
       const statusText = queued.shouldStartNow
         ? "starting now"
         : queued.status === "queued"
           ? "queued behind an in-flight control action"
           : "already scheduled";
-      const scope = [
-        applied.modelRef ? `model \`${applied.modelRef}\`` : null,
-        applied.thinkingLevel ? `thinking \`${applied.thinkingLevel}\`` : null,
-      ]
-        .filter((entry): entry is string => entry != null)
-        .join(" + ");
-      const scopeText = scope.length > 0 ? ` with ${scope}` : "";
+      const scopeText = formatBrokerReloadScope(parsed.command);
 
-      await postBrokerThreadNotice(target, `🔄 Broker reload requested${scopeText} — ${statusText}.`, {
-        kind: "broker_reload_requested",
-        ...(applied.modelRef ? { model_ref: applied.modelRef } : {}),
-        ...(applied.thinkingLevel ? { thinking: applied.thinkingLevel } : {}),
-        queue_status: queued.status,
-        queue_start: queued.shouldStartNow,
-      });
+      await postBrokerThreadNotice(
+        target,
+        `🔄 Broker reload requested${scopeText} — ${statusText}.`,
+        {
+          kind: "broker_reload_requested",
+          ...(parsed.command.modelRef ? { model_ref: parsed.command.modelRef } : {}),
+          ...(parsed.command.thinkingLevel ? { thinking: parsed.command.thinkingLevel } : {}),
+          queue_status: queued.status,
+          queue_start: queued.shouldStartNow,
+        },
+      );
 
       if (queued.shouldStartNow) {
         runRemoteControl("reload", ctx);
@@ -1804,6 +1932,7 @@ export default function (pi: ExtensionAPI) {
     resetPendingRemoteControlAcks();
     stopActiveBrokerTurnState();
     brokerAutoDrainPause = null;
+    pendingBrokerReloadRequest = null;
     brokerPauseNotifiedThreads.clear();
     sessionUiRuntime.cleanupForSessionShutdown();
     await stopPinetRuntime(ctx, { releaseIdentity: true });

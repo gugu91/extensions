@@ -16,8 +16,13 @@ export interface PinetRemoteControlDeps {
   flushDeferredRemoteControlAcks: (command: PinetControlCommand) => void;
   reloadPinetRuntime: (ctx: ExtensionContext) => Promise<void>;
   formatError: (error: unknown) => string;
-  onReloadSuccess?: () => void;
-  onReloadError?: (error: unknown) => void;
+  onCommandSettled?: (event: {
+    command: PinetControlCommand;
+    success: boolean;
+    error: unknown;
+    nextCommand: PinetControlCommand | null;
+    ctx: ExtensionContext;
+  }) => void | Promise<void>;
 }
 
 export interface PinetRemoteControl {
@@ -57,21 +62,21 @@ export function createPinetRemoteControl(deps: PinetRemoteControlDeps): PinetRem
 
     ctx.ui.notify(`Pinet remote control requested: /${command}`, "warning");
     void (async () => {
+      let success = false;
+      let commandError: unknown = null;
       try {
         if (command === "reload") {
           await deps.reloadPinetRuntime(ctx);
-          deps.onReloadSuccess?.();
-          return;
+          success = true;
+        } else {
+          if (typeof controlCtx.shutdown !== "function") {
+            throw new Error("Shutdown is not available in this extension context.");
+          }
+          controlCtx.shutdown();
+          success = true;
         }
-
-        if (typeof controlCtx.shutdown !== "function") {
-          throw new Error("Shutdown is not available in this extension context.");
-        }
-        controlCtx.shutdown();
       } catch (err) {
-        if (command === "reload") {
-          deps.onReloadError?.(err);
-        }
+        commandError = err;
         ctx.ui.notify(`Pinet remote control failed: ${deps.formatError(err)}`, "error");
       } finally {
         const next = finishPinetRemoteControl(remoteControlState);
@@ -79,6 +84,17 @@ export function createPinetRemoteControl(deps: PinetRemoteControlDeps): PinetRem
           currentCommand: next.currentCommand,
           queuedCommand: next.queuedCommand,
         };
+        try {
+          await deps.onCommandSettled?.({
+            command,
+            success,
+            error: commandError,
+            nextCommand: next.nextCommand,
+            ctx,
+          });
+        } catch {
+          /* best effort */
+        }
         if (next.nextCommand) {
           ctx.ui.notify(
             `Pinet remote control continuing with queued /${next.nextCommand}`,
