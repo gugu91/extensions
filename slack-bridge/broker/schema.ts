@@ -900,6 +900,43 @@ export class BrokerDB implements BrokerDBInterface {
     }
   }
 
+  getTaskAssignmentThreadIdsForAgent(agentId: string): string[] {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT thread_id
+         FROM task_assignments
+         WHERE agent_id = ?`,
+      )
+      .all(agentId) as Array<{ thread_id: string }>;
+
+    return rows
+      .map((row) => row.thread_id)
+      .filter(
+        (threadId): threadId is string => typeof threadId === "string" && threadId.length > 0,
+      );
+  }
+
+  countOutboundMessagesForAgentThreads(agentId: string, threadIds: string[]): number {
+    if (threadIds.length === 0) {
+      return 0;
+    }
+
+    const db = this.getDb();
+    const placeholders = threadIds.map(() => "?").join(", ");
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM messages
+         WHERE sender = ?
+           AND direction = 'outbound'
+           AND thread_id IN (${placeholders})`,
+      )
+      .get(agentId, ...threadIds) as { count: number };
+
+    return Number(row.count ?? 0);
+  }
+
   updateAgentIdentity(
     id: string,
     identity: { name: string; emoji: string; metadata?: Record<string, unknown> | null },

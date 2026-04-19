@@ -13,6 +13,7 @@ import {
   resolveAgentStableId,
   resolveAllowAllWorkspaceUsers,
   trackBrokerInboundThread,
+  containsDeliveryClaimLanguage,
 } from "./helpers.js";
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
@@ -444,6 +445,24 @@ export default function (pi: ExtensionAPI) {
     getCurrentRuntimeMode: () => currentRuntimeMode,
     maybeDrainInboxIfIdle,
     getExtensionContext: () => sessionUiRuntime.getExtensionContext() ?? undefined,
+    noteClaimsDelivery: (note) => containsDeliveryClaimLanguage(note),
+    logSuspiciousDeliveryClaim: ({ note, trackedThreadCount, outboundCount }) => {
+      const selfId = getActiveBrokerSelfId();
+      brokerRuntime.logActivity({
+        kind: "suspicious_delivery_claim",
+        level: "actions",
+        title: "Unverified delivery claim in pinet_free note",
+        summary: `${agentEmoji} ${agentName} claimed delivery in pinet_free without broker-observed outbound evidence.`,
+        details: [
+          `Note: ${note}`,
+          `Tracked assignment threads: ${trackedThreadCount}`,
+          `Broker-observed outbound messages on tracked threads: ${outboundCount}`,
+          "Broker did not verify a matching outbound report, so the claim should be treated as suspicious.",
+        ],
+        fields: selfId ? [{ label: "Agent", value: formatTrackedAgent(selfId) }] : undefined,
+        tone: "warning",
+      });
+    },
   });
   const { reportStatus, signalAgentFree } = pinetAgentStatus;
   reportAgentStatus = reportStatus;

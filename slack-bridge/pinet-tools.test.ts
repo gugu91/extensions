@@ -123,7 +123,10 @@ describe("registerPinetTools", () => {
       details: { status: string; note: string | null; queuedInboxCount: number };
     };
 
-    expect(signalAgentFree).toHaveBeenCalledWith(undefined, { requirePinet: true });
+    expect(signalAgentFree).toHaveBeenCalledWith(undefined, {
+      requirePinet: true,
+      note: "wrapped up #395",
+    });
     expect(result.content[0]?.text).toBe(
       "Marked this Pinet agent idle/free for new work. Note: wrapped up #395. 2 queued inbox items remain.",
     );

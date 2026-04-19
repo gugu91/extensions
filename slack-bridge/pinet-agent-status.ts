@@ -5,6 +5,8 @@ export type PinetAgentStatusValue = "working" | "idle";
 
 export interface PinetAgentStatusBrokerDbPort {
   updateAgentStatus: (agentId: string, status: PinetAgentStatusValue) => void;
+  getTaskAssignmentThreadIdsForAgent: (agentId: string) => string[];
+  countOutboundMessagesForAgentThreads: (agentId: string, threadIds: string[]) => number;
 }
 
 export interface PinetAgentStatusDeps {
@@ -24,6 +26,12 @@ export interface PinetAgentStatusDeps {
   getCurrentRuntimeMode: () => SlackBridgeRuntimeMode;
   maybeDrainInboxIfIdle: (ctx: ExtensionContext) => boolean;
   getExtensionContext: () => ExtensionContext | undefined;
+  noteClaimsDelivery: (note: string) => boolean;
+  logSuspiciousDeliveryClaim: (details: {
+    note: string;
+    trackedThreadCount: number;
+    outboundCount: number;
+  }) => void;
 }
 
 export interface PinetAgentStatus {
@@ -31,7 +39,7 @@ export interface PinetAgentStatus {
   reportStatus: (status: PinetAgentStatusValue) => Promise<void>;
   signalAgentFree: (
     ctx?: ExtensionContext,
-    options?: { requirePinet?: boolean },
+    options?: { requirePinet?: boolean; note?: string },
   ) => Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }>;
 }
 
@@ -64,18 +72,35 @@ export function createPinetAgentStatus(deps: PinetAgentStatusDeps): PinetAgentSt
 
   async function signalAgentFree(
     ctx?: ExtensionContext,
-    options: { requirePinet?: boolean } = {},
+    options: { requirePinet?: boolean; note?: string } = {},
   ): Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }> {
     const pinetEnabled = deps.getPinetEnabled();
     if (!pinetEnabled && options.requirePinet) {
       throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
     }
 
+    const note = typeof options.note === "string" ? options.note.trim() : "";
     const maintenanceCtx = ctx ?? deps.getExtensionContext() ?? undefined;
     if (pinetEnabled) {
       await reportStatus("idle");
       if (deps.getBrokerRole() === "broker" && maintenanceCtx) {
         deps.runBrokerMaintenance(maintenanceCtx);
+      }
+    }
+
+    if (note && deps.noteClaimsDelivery(note)) {
+      const db = deps.getActiveBrokerDb();
+      const selfId = deps.getActiveBrokerSelfId();
+      if (db && selfId) {
+        const trackedThreadIds = db.getTaskAssignmentThreadIdsForAgent(selfId);
+        const outboundCount = db.countOutboundMessagesForAgentThreads(selfId, trackedThreadIds);
+        if (outboundCount === 0) {
+          deps.logSuspiciousDeliveryClaim({
+            note,
+            trackedThreadCount: trackedThreadIds.length,
+            outboundCount,
+          });
+        }
       }
     }
 

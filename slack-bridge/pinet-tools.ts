@@ -145,7 +145,10 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       deps.requireToolPolicy("pinet_free", undefined, `note=${params.note ?? ""}`);
 
       const note = typeof params.note === "string" ? params.note.trim() : "";
-      const result = await deps.signalAgentFree(undefined, { requirePinet: true });
+      const result = await deps.signalAgentFree(undefined, {
+        requirePinet: true,
+        ...(note ? { note } : {}),
+      });
       const inboxSuffix =
         result.queuedInboxCount > 0
           ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`

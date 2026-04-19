@@ -43,6 +43,7 @@ import {
   buildRalphLoopCycleNotifications,
   buildRalphLoopFollowUpMessage,
   buildRalphLoopStatusMessage,
+  containsDeliveryClaimLanguage,
   shouldDeliverRalphLoopFollowUp,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -489,6 +490,19 @@ describe("formatInboxMessages", () => {
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain('will: Clicked Slack "Approve" (action_id: review.approve).');
     expect(result).toContain('metadata={"kind":"slack_block_action","actionId":"review.approve"');
+  });
+});
+
+describe("containsDeliveryClaimLanguage", () => {
+  it("detects delivery-like self-reports in free notes", () => {
+    expect(containsDeliveryClaimLanguage("delivered report")).toBe(true);
+    expect(containsDeliveryClaimLanguage("reported back to broker")).toBe(true);
+    expect(containsDeliveryClaimLanguage("shared results")).toBe(true);
+  });
+
+  it("ignores neutral completion notes", () => {
+    expect(containsDeliveryClaimLanguage("wrapped up #462")).toBe(false);
+    expect(containsDeliveryClaimLanguage("waiting for more work")).toBe(false);
   });
 });
 
