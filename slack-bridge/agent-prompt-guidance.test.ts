@@ -87,4 +87,21 @@ describe("createAgentPromptGuidance", () => {
     expect(result.systemPrompt).not.toContain("Pinet BROKER");
     expect(result.systemPrompt).not.toContain("🚫 BROKER TOOL RESTRICTION:");
   });
+
+  it("keeps identity guidance ahead of follower workflow guidance", async () => {
+    const guidance = createAgentPromptGuidance(
+      createDeps({
+        getBrokerRole: () => "follower",
+      }),
+    );
+
+    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
+
+    expect(result.systemPrompt.indexOf("IDENTITY 1")).toBeLessThan(
+      result.systemPrompt.indexOf("TASK WORKFLOW:"),
+    );
+    expect(result.systemPrompt.indexOf("TASK WORKFLOW:")).toBeLessThan(
+      result.systemPrompt.indexOf("PINET DELEGATION RULES:"),
+    );
+  });
 });
