@@ -18,7 +18,10 @@ import {
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
-import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
+import {
+  DEFAULT_SOCKET_PATH,
+  REQUEST_TIMEOUT_MS as BROKER_REQUEST_TIMEOUT_MS,
+} from "./broker/client.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { createCommandRegistrationRuntime } from "./command-registration-runtime.js";
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
@@ -1203,8 +1206,12 @@ export default function (pi: ExtensionAPI) {
         /* best effort */
       });
       setExtStatus(ctx, "error");
+      const reconnectFailureMessage = msg(error);
+      const stableIdConflictHint = reconnectFailureMessage.includes("AGENT_STABLE_ID_CONFLICT")
+        ? ` Another worker is still connected with this session identity. Wait about ${Math.ceil(BROKER_REQUEST_TIMEOUT_MS / 1000)}s for the old socket to clear, then run /pinet-follow again.`
+        : "";
       ctx.ui.notify(
-        `Pinet reconnect stopped: ${msg(error)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.`,
+        `Pinet reconnect stopped: ${reconnectFailureMessage} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.${stableIdConflictHint}`,
         "error",
       );
     },
