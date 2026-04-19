@@ -6,6 +6,7 @@ import {
   resolveAllowAllWorkspaceUsers,
   type SlackBridgeSettings,
 } from "./helpers.js";
+import { buildPinetFollowerSpawnPlan } from "./pinet-spawn-plan.js";
 import { formatRecentActivityLogEntries, type LoggedActivityLogEntry } from "./activity-log.js";
 import type { PinetRuntimeControlContext } from "./pinet-remote-control.js";
 import {
@@ -69,6 +70,7 @@ export interface PinetCommandsDeps {
   applyLocalAgentIdentity: (name: string, emoji: string, personality: string | null) => void;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
   setExtCtx: (ctx: ExtensionContext) => void;
+  brokerSocketPath: () => string | null;
 }
 
 // ─── Registration ────────────────────────────────────────
@@ -260,6 +262,36 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       } catch (err) {
         ctx.ui.notify(`Pinet skin failed: ${errorMsg(err)}`, "error");
       }
+    },
+  });
+
+  pi.registerCommand("pinet-spawn-followers", {
+    description: "Show a broker-managed launcher plan for real Pinet follower sessions",
+    handler: async (args, ctx) => {
+      if (deps.runtimeMode() !== "broker" || deps.brokerRole() !== "broker") {
+        ctx.ui.notify("/pinet-spawn-followers can only run on the active broker.", "warning");
+        return;
+      }
+
+      const [countToken] = args.trim().split(/\s+/, 1);
+      const parsedCount = countToken ? Number.parseInt(countToken, 10) : Number.NaN;
+      const count = Number.isNaN(parsedCount) ? 1 : parsedCount;
+      const plan = buildPinetFollowerSpawnPlan({
+        cwd: ctx.cwd,
+        socketPath: deps.brokerSocketPath(),
+        count,
+      });
+
+      ctx.ui.notify(
+        [
+          plan.summary,
+          `Launcher: ${plan.launcherScriptPath}`,
+          `Logs: ${plan.logDir}`,
+          "Run from the broker worktree:",
+          ...plan.commands.map((command, index) => `${index + 1}. ${command}`),
+        ].join("\n"),
+        "info",
+      );
     },
   });
 

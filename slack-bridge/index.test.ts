@@ -1975,6 +1975,23 @@ describe("slack-bridge Pinet reconnect", () => {
     vi.restoreAllMocks();
   });
 
+  it("registers the broker follower spawn command", async () => {
+    const commands = new Map<string, CommandDefinition>();
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn(),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    slackBridge(pi);
+
+    expect(commands.get("pinet-spawn-followers")).toBeDefined();
+  });
+
   it("refreshes follower registration state after broker reconnect", async () => {
     const tools = new Map<string, ToolDefinition>();
     const commands = new Map<string, CommandDefinition>();
@@ -2392,25 +2409,30 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(disconnectHandler).toBeTypeOf("function");
     expect(reconnectFailedHandler).toBeTypeOf("function");
 
-    if (!disconnectHandler || !reconnectFailedHandler) {
+    if (disconnectHandler == null || reconnectFailedHandler == null) {
       throw new Error("Reconnect handlers were not registered");
     }
 
-    disconnectHandler();
-    reconnectFailedHandler(
+    const runDisconnect: () => void = disconnectHandler;
+    const runReconnectFailed: (error: Error) => void = reconnectFailedHandler;
+
+    runDisconnect();
+    runReconnectFailed(
       new Error(
         'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying. code=AGENT_STABLE_ID_CONFLICT',
       ),
     );
 
     await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Another worker is still connected with this session identity."),
+        "error",
+      );
+    });
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Pinet broker disconnected — reconnecting..."),
       "warning",
-    );
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("Another worker is still connected with this session identity."),
-      "error",
     );
 
     await sessionShutdown?.({}, ctx);

@@ -274,20 +274,22 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 ### Broker commands
 
-| Command                 | Description                                |
-| ----------------------- | ------------------------------------------ |
-| `/pinet-start`          | Start as the mesh broker                   |
-| `/pinet-follow`         | Connect as a follower worker               |
-| `/pinet-unfollow`       | Disconnect from the broker                 |
-| `/pinet-reload <agent>` | Ask another agent to reload                |
-| `/pinet-exit <agent>`   | Ask another agent to exit                  |
-| `/pinet-free`           | Mark this agent as idle                    |
-| `/pinet-skin <theme>`   | Change the mesh naming theme (broker only) |
+| Command                          | Description                                      |
+| -------------------------------- | ------------------------------------------------ |
+| `/pinet-start`                   | Start as the mesh broker                         |
+| `/pinet-follow`                  | Connect as a follower worker                     |
+| `/pinet-unfollow`                | Disconnect from the broker                       |
+| `/pinet-reload <agent>`          | Ask another agent to reload                      |
+| `/pinet-exit <agent>`            | Ask another agent to exit                        |
+| `/pinet-free`                    | Mark this agent as idle                          |
+| `/pinet-skin <theme>`            | Change the mesh naming theme (broker only)       |
+| `/pinet-spawn-followers [count]` | Print a launcher plan for real follower sessions |
 
 ### How it works
 
 - The **broker** runs Slack Socket Mode, routes messages to agents, monitors health via the RALPH loop, and maintains a control plane canvas
 - **Followers** connect to the broker over a local Unix socket, poll for work, and report results
+- `/pinet-spawn-followers [count]` gives the broker a first-class launcher plan: it prints a ready-to-run shell script path, background launch loop, and log directory for spawning real `pi --command /pinet-follow` workers from the broker worktree
 - Agents can optionally authenticate using a shared local secret (`meshSecret` or `meshSecretPath`); when both are unset, mesh auth is disabled
 - Thread ownership is first-responder-wins — the first agent to reply claims the thread
 

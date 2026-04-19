@@ -110,6 +110,7 @@ export default function (pi: ExtensionAPI) {
   let agentOwnerToken = buildPinetOwnerToken(agentStableId);
   let activeSkinTheme: string | null = null;
   let agentPersonality: string | null = null;
+  const brokerSocketPath = DEFAULT_SOCKET_PATH;
   const agentAliases = new Set<string>();
   const PINET_SKIN_SETTING_KEY = "pinet.skinTheme";
 
@@ -1264,6 +1265,7 @@ export default function (pi: ExtensionAPI) {
       applyLocalAgentIdentity,
       setExtStatus,
       setExtCtx: sessionUiRuntime.setExtCtx,
+      brokerSocketPath: () => brokerSocketPath,
     },
   });
 
