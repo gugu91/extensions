@@ -20,6 +20,7 @@ export interface PinetMeshOpsAgentRecord {
   lastSeen?: string;
   disconnectedAt?: string | null;
   resumableUntil?: string | null;
+  outboundCount?: number;
 }
 
 export interface PinetMeshOpsRecordedAssignment {
@@ -256,6 +257,7 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
       lastSeen: agent.lastSeen,
       disconnectedAt: agent.disconnectedAt,
       resumableUntil: agent.resumableUntil,
+      outboundCount: agent.outboundCount,
     }));
   }
 
@@ -276,6 +278,7 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
       lastSeen: agent.lastSeen,
       disconnectedAt: agent.disconnectedAt,
       resumableUntil: agent.resumableUntil,
+      outboundCount: agent.outboundCount,
     }));
   }
 

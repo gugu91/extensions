@@ -725,6 +725,7 @@ export interface AgentDisplayInfo {
   lastActivity?: string | null;
   idleDuration?: string | null;
   lastActivityAge?: string | null;
+  outboundCount?: number | null;
   capabilityTags?: string[];
   routingScore?: number;
   routingReasons?: string[];
@@ -743,6 +744,7 @@ export interface AgentVisibilityInput {
   resumableUntil?: string | null;
   idleSince?: string | null;
   lastActivity?: string | null;
+  outboundCount?: number | null;
 }
 
 export interface AgentVisibilityOptions {
@@ -982,6 +984,7 @@ export function buildAgentDisplayInfo(
     lastActivity: agent.lastActivity ?? null,
     idleDuration: formatAge(idleDurationMs),
     lastActivityAge: formatAge(lastActivityAgeMs),
+    outboundCount: agent.outboundCount ?? null,
     capabilityTags,
   };
 }
@@ -2115,6 +2118,10 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
           activityInfo,
         ].filter((item): item is string => Boolean(item));
         line += `\n   ${summary.join(" · ")}`;
+      }
+
+      if (a.outboundCount != null) {
+        line += `\n   outbound: ${a.outboundCount} this session`;
       }
 
       const tags = (a.capabilityTags ?? []).slice(0, 6);

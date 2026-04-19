@@ -196,7 +196,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
-  it("agents.list returns connected agents without exposing raw stableIds", async () => {
+  it("agents.list returns connected agents with outbound counts without exposing raw stableIds", async () => {
     await client.register("agent-alpha", "🅰️", undefined, "host:session:/tmp/alpha");
 
     const info = server.getConnectInfo();
@@ -205,11 +205,16 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     await client2.connect();
     await client2.register("agent-beta", "🅱️", undefined, "host:session:/tmp/beta");
 
+    const messageId = await client.sendAgentMessage("agent-beta", "handover ready");
+    expect(messageId).toBeGreaterThan(0);
+
     const agents = await client.listAgents();
     expect(agents.length).toBe(2);
     const names = agents.map((a) => a.name).sort();
     expect(names).toEqual(["agent-alpha", "agent-beta"]);
     expect(agents.every((agent) => !("stableId" in agent))).toBe(true);
+    expect(agents.find((agent) => agent.name === "agent-alpha")?.outboundCount).toBe(1);
+    expect(agents.find((agent) => agent.name === "agent-beta")?.outboundCount).toBe(0);
 
     client2.disconnect();
   });
