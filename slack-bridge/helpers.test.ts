@@ -3031,25 +3031,49 @@ describe("resolveFollowerThreadChannel", () => {
 
 describe("getFollowerReconnectUiUpdate", () => {
   it("notifies on first disconnect", () => {
-    const result = getFollowerReconnectUiUpdate("disconnect", false);
+    const result = getFollowerReconnectUiUpdate({ event: "disconnect", wasDisconnected: false });
     expect(result.nextWasDisconnected).toBe(true);
     expect(result.notify?.level).toBe("warning");
   });
 
+  it("includes the last degraded reason in the disconnect notice", () => {
+    const result = getFollowerReconnectUiUpdate({
+      event: "disconnect",
+      wasDisconnected: false,
+      degradedReason: "socket unavailable",
+    });
+    expect(result.notify?.message).toContain("Last degraded state: socket unavailable");
+  });
+
   it("suppresses notification on repeated disconnect", () => {
-    const result = getFollowerReconnectUiUpdate("disconnect", true);
+    const result = getFollowerReconnectUiUpdate({ event: "disconnect", wasDisconnected: true });
     expect(result.nextWasDisconnected).toBe(true);
     expect(result.notify).toBeUndefined();
   });
 
   it("notifies on reconnect after disconnect", () => {
-    const result = getFollowerReconnectUiUpdate("reconnect", true);
+    const result = getFollowerReconnectUiUpdate({ event: "reconnect", wasDisconnected: true });
     expect(result.nextWasDisconnected).toBe(false);
     expect(result.notify?.level).toBe("info");
   });
 
+  it("includes degraded reason and next step after reconnect", () => {
+    const result = getFollowerReconnectUiUpdate({
+      event: "reconnect",
+      wasDisconnected: true,
+      degradedReason: "registration refresh failed",
+      degradedNextStep: "Follower reconnected with the broker-assigned identity.",
+    });
+    expect(result.notify?.message).toContain(
+      "after degraded state: registration refresh failed",
+    );
+    expect(result.notify?.message).toContain(
+      "Next step: Follower reconnected with the broker-assigned identity.",
+    );
+  });
+
   it("suppresses notification on reconnect when not disconnected", () => {
-    const result = getFollowerReconnectUiUpdate("reconnect", false);
+    const result = getFollowerReconnectUiUpdate({ event: "reconnect", wasDisconnected: false });
     expect(result.nextWasDisconnected).toBe(false);
     expect(result.notify).toBeUndefined();
   });

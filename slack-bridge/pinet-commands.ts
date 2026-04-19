@@ -35,6 +35,12 @@ export interface PinetCommandsDeps {
   recentActivityLogEntries: (limit: number) => ReadonlyArray<LoggedActivityLogEntry>;
   slackScopeDiagnostics: () => SlackScopeDiagnostics;
   settings: () => SlackBridgeSettings;
+  followerRuntimeFailure: () => {
+    kind: string;
+    message: string;
+    retryable: boolean;
+    nextStep: string;
+  } | null;
   lastBrokerMaintenance: () => {
     pendingBacklogCount: number;
     assignedBacklogCount: number;
@@ -294,6 +300,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
               ...(lbm.anomalies.length > 0 ? [`Health: ${lbm.anomalies.join("; ")}`] : []),
             ]
           : [];
+      const brokerCanvasError = deps.lastBrokerControlPlaneCanvasError();
+      const brokerHomeTabError = deps.lastBrokerControlPlaneHomeTabError();
       const brokerCanvasInfo =
         mode === "broker"
           ? [
@@ -306,16 +314,21 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
               ...(deps.lastBrokerControlPlaneCanvasRefreshAt()
                 ? [`Canvas refreshed: ${deps.lastBrokerControlPlaneCanvasRefreshAt()}`]
                 : []),
-              ...(deps.lastBrokerControlPlaneCanvasError()
-                ? [`Canvas status: ${deps.lastBrokerControlPlaneCanvasError()}`]
-                : []),
+              ...(brokerCanvasError ? [`Canvas degraded: ${brokerCanvasError}`] : []),
               `Home tab viewers: ${deps.getBrokerControlPlaneHomeTabViewerIds().length}`,
               ...(deps.lastBrokerControlPlaneHomeTabRefreshAt()
                 ? [`Home tab refreshed: ${deps.lastBrokerControlPlaneHomeTabRefreshAt()}`]
                 : []),
-              ...(deps.lastBrokerControlPlaneHomeTabError()
-                ? [`Home tab status: ${deps.lastBrokerControlPlaneHomeTabError()}`]
-                : []),
+              ...(brokerHomeTabError ? [`Home tab degraded: ${brokerHomeTabError}`] : []),
+            ]
+          : [];
+      const followerFailure = deps.followerRuntimeFailure();
+      const followerHealthInfo =
+        mode === "follower" && followerFailure
+          ? [
+              `Follower health: ${followerFailure.kind} — ${followerFailure.message}`,
+              `Follower action: ${followerFailure.nextStep}`,
+              `Follower recovery: ${followerFailure.retryable ? "automatic retry in progress" : "manual follow required"}`,
             ]
           : [];
       ctx.ui.notify(
@@ -334,6 +347,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
           slackToolHealthInfo,
           ...brokerHealthInfo,
           ...brokerCanvasInfo,
+          ...followerHealthInfo,
         ].join("\n"),
         "info",
       );

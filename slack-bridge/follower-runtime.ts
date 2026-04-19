@@ -37,6 +37,19 @@ type SharedFollowerThreadState = Pick<
   "channelId" | "threadTs" | "userId" | "source" | "owner"
 >;
 
+export type FollowerRuntimeFailureKind =
+  | "poll_error"
+  | "registration_refresh_failed"
+  | "reconnect_failed";
+
+export interface FollowerRuntimeFailureEvent {
+  kind: FollowerRuntimeFailureKind;
+  message: string;
+  retryable: boolean;
+  nextStep: string;
+  error: Error;
+}
+
 export interface FollowerRuntimeDeps {
   getSettings: () => SlackBridgeSettings;
   refreshSettings: () => void;
@@ -74,6 +87,9 @@ export interface FollowerRuntimeDeps {
   runRemoteControl: (command: PinetControlCommand, ctx: ExtensionContext) => void;
   deliverFollowUpMessage: (text: string) => boolean;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
+  noteRuntimeFailure: (ctx: ExtensionContext, event: FollowerRuntimeFailureEvent) => void;
+  clearRuntimeFailure: () => void;
+  getRuntimeFailure: () => FollowerRuntimeFailureEvent | null;
   handleTerminalReconnectFailure: (ctx: ExtensionContext, error: Error) => Promise<void> | void;
   formatError: (error: unknown) => string;
   deliveryState: FollowerDeliveryState;
@@ -366,8 +382,15 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
             deps.updateBadge();
             deps.maybeDrainInboxIfIdle(ctx);
           }
-        } catch {
-          /* broker may be restarting */
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          deps.noteRuntimeFailure(ctx, {
+            kind: "poll_error",
+            message: deps.formatError(err),
+            retryable: true,
+            nextStep: "Broker may be restarting; follower will keep polling automatically.",
+            error: err,
+          });
         } finally {
           void syncDesiredStatus(deps.getDesiredAgentStatus()).catch(() => {
             /* best effort */
@@ -397,7 +420,13 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
         }
         stopPolling();
         deps.setExtStatus(ctx, "reconnecting");
-        const uiUpdate = getFollowerReconnectUiUpdate("disconnect", wasDisconnected);
+        const runtimeFailure = deps.getRuntimeFailure();
+        const uiUpdate = getFollowerReconnectUiUpdate({
+          event: "disconnect",
+          wasDisconnected,
+          degradedReason: runtimeFailure?.message ?? null,
+          degradedNextStep: runtimeFailure?.nextStep ?? null,
+        });
         wasDisconnected = uiUpdate.nextWasDisconnected;
         if (uiUpdate.notify) {
           ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);
@@ -412,9 +441,18 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
           try {
             await registerFollowerRuntime();
           } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
             console.error(
-              `[slack-bridge] follower reconnect registration refresh failed: ${deps.formatError(error)}`,
+              `[slack-bridge] follower reconnect registration refresh failed: ${deps.formatError(err)}`,
             );
+            deps.noteRuntimeFailure(ctx, {
+              kind: "registration_refresh_failed",
+              message: deps.formatError(err),
+              retryable: true,
+              nextStep:
+                "Follower reconnected with the broker-assigned identity; fix the explicit identity request if this persists.",
+              error: err,
+            });
             const registration = client.getRegisteredIdentity();
             if (registration) {
               deps.applyRegistrationIdentity(registration);
@@ -429,8 +467,15 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
           if (hasDeliveredFollowerInboxIds(deps.deliveryState)) {
             void flushDeliveredAcks();
           }
+          const runtimeFailure = deps.getRuntimeFailure();
+          deps.clearRuntimeFailure();
           deps.setExtStatus(ctx, "ok");
-          const uiUpdate = getFollowerReconnectUiUpdate("reconnect", wasDisconnected);
+          const uiUpdate = getFollowerReconnectUiUpdate({
+            event: "reconnect",
+            wasDisconnected,
+            degradedReason: runtimeFailure?.message ?? null,
+            degradedNextStep: runtimeFailure?.nextStep ?? null,
+          });
           wasDisconnected = uiUpdate.nextWasDisconnected;
           if (uiUpdate.notify) {
             ctx.ui.notify(uiUpdate.notify.message, uiUpdate.notify.level);

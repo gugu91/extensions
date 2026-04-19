@@ -2080,23 +2080,30 @@ export interface FollowerReconnectUiUpdate {
   };
 }
 
-export function getFollowerReconnectUiUpdate(
-  event: "disconnect" | "reconnect",
-  wasDisconnected: boolean,
-): FollowerReconnectUiUpdate {
-  if (event === "disconnect") {
-    return wasDisconnected
+export function getFollowerReconnectUiUpdate(input: {
+  event: "disconnect" | "reconnect";
+  wasDisconnected: boolean;
+  degradedReason?: string | null;
+  degradedNextStep?: string | null;
+}): FollowerReconnectUiUpdate {
+  const degradedReason = input.degradedReason?.trim() || null;
+  const degradedNextStep = input.degradedNextStep?.trim() || null;
+
+  if (input.event === "disconnect") {
+    return input.wasDisconnected
       ? { nextWasDisconnected: true }
       : {
           nextWasDisconnected: true,
           notify: {
             level: "warning",
-            message: "Pinet broker disconnected — reconnecting...",
+            message: degradedReason
+              ? `Pinet broker disconnected — reconnecting... Last degraded state: ${degradedReason}`
+              : "Pinet broker disconnected — reconnecting...",
           },
         };
   }
 
-  if (!wasDisconnected) {
+  if (!input.wasDisconnected) {
     return { nextWasDisconnected: false };
   }
 
@@ -2104,7 +2111,10 @@ export function getFollowerReconnectUiUpdate(
     nextWasDisconnected: false,
     notify: {
       level: "info",
-      message: "Pinet broker reconnected",
+      message:
+        degradedReason || degradedNextStep
+          ? `Pinet broker reconnected${degradedReason ? ` after degraded state: ${degradedReason}` : ""}${degradedNextStep ? ` Next step: ${degradedNextStep}` : ""}`
+          : "Pinet broker reconnected",
     },
   };
 }
