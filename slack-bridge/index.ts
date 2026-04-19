@@ -41,7 +41,11 @@ import {
   markFollowerInboxIdsDelivered,
   queueFollowerInboxIds,
 } from "./follower-delivery.js";
-import { createFollowerRuntime, type BrokerClientRef } from "./follower-runtime.js";
+import {
+  createFollowerRuntime,
+  type BrokerClientRef,
+  type FollowerRuntimeFailureEvent,
+} from "./follower-runtime.js";
 import {
   createSinglePlayerRuntime,
   type SinglePlayerPendingAttentionEntry,
@@ -281,6 +285,7 @@ export default function (pi: ExtensionAPI) {
 
   let activeBrokerTurnState: ActiveBrokerTurnState | null = null;
   let brokerAutoDrainPause: BrokerAutoDrainPauseState | null = null;
+  let followerRuntimeFailure: FollowerRuntimeFailureEvent | null = null;
   let pendingBrokerReloadRequest: PendingBrokerReloadRequest | null = null;
 
   function maybeDrainInboxIfIdle(ctx?: ExtensionContext): boolean {
@@ -1697,8 +1702,28 @@ export default function (pi: ExtensionAPI) {
     runRemoteControl,
     deliverFollowUpMessage,
     setExtStatus,
+    noteRuntimeFailure: (ctx, event) => {
+      followerRuntimeFailure = event;
+      setExtStatus(ctx, event.retryable ? "reconnecting" : "error");
+      ctx.ui.notify(
+        `Pinet ${event.kind.replaceAll("_", " ")}: ${event.message} ${event.nextStep}`,
+        event.retryable ? "warning" : "error",
+      );
+    },
+    clearRuntimeFailure: () => {
+      followerRuntimeFailure = null;
+    },
+    getRuntimeFailure: () => followerRuntimeFailure,
     handleTerminalReconnectFailure: async (ctx, error) => {
       console.error(`[slack-bridge] follower reconnect failed: ${msg(error)}`);
+      followerRuntimeFailure = {
+        kind: "reconnect_failed",
+        message: msg(error),
+        retryable: false,
+        nextStep:
+          "Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.",
+        error,
+      };
       await disconnectFollower(ctx, { preserveErrorState: true }).catch(() => {
         /* best effort */
       });
@@ -1740,6 +1765,15 @@ export default function (pi: ExtensionAPI) {
       recentActivityLogEntries: (limit) => brokerRuntime.getRecentActivityEntries(limit),
       slackScopeDiagnostics: () => slackScopeDiagnostics,
       settings: () => settings,
+      followerRuntimeFailure: () =>
+        followerRuntimeFailure
+          ? {
+              kind: followerRuntimeFailure.kind,
+              message: followerRuntimeFailure.message,
+              retryable: followerRuntimeFailure.retryable,
+              nextStep: followerRuntimeFailure.nextStep,
+            }
+          : null,
       lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
       isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
       getConfiguredBrokerControlPlaneCanvasId: () =>
@@ -1932,6 +1966,7 @@ export default function (pi: ExtensionAPI) {
     resetPendingRemoteControlAcks();
     stopActiveBrokerTurnState();
     brokerAutoDrainPause = null;
+    followerRuntimeFailure = null;
     pendingBrokerReloadRequest = null;
     brokerPauseNotifiedThreads.clear();
     sessionUiRuntime.cleanupForSessionShutdown();
