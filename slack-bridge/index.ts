@@ -3,6 +3,7 @@ import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
 import {
+  type FollowerRuntimeDiagnostic,
   type InboxMessage,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
@@ -629,6 +630,7 @@ export default function (pi: ExtensionAPI) {
   let currentRuntimeMode: SlackBridgeRuntimeMode = "off";
   let brokerRole: "broker" | "follower" | null = null;
   let brokerClient: BrokerClientRef | null = null;
+  let followerRuntimeDiagnostic: FollowerRuntimeDiagnostic | null = null;
   const followerDeliveryState = createFollowerDeliveryState();
   let desiredAgentStatus: "working" | "idle" = "idle";
   const pinetRegistrationGate = createPinetRegistrationGate();
@@ -1191,6 +1193,10 @@ export default function (pi: ExtensionAPI) {
     runRemoteControl,
     deliverFollowUpMessage,
     setExtStatus,
+    getRuntimeDiagnostic: () => followerRuntimeDiagnostic,
+    setRuntimeDiagnostic: (diagnostic) => {
+      followerRuntimeDiagnostic = diagnostic;
+    },
     handleTerminalReconnectFailure: async (ctx, error) => {
       console.error(`[slack-bridge] follower reconnect failed: ${msg(error)}`);
       await disconnectFollower(ctx, { preserveErrorState: true }).catch(() => {
@@ -1215,7 +1221,7 @@ export default function (pi: ExtensionAPI) {
         currentRuntimeMode === "broker"
           ? brokerRuntime.isConnected()
           : currentRuntimeMode === "follower"
-            ? brokerClient != null
+            ? (brokerClient?.client.isConnected() ?? false)
             : currentRuntimeMode === "single"
               ? singlePlayerRuntime.isConnected()
               : false,
@@ -1228,6 +1234,7 @@ export default function (pi: ExtensionAPI) {
       botUserId: () => botUserId,
       activeSkinTheme: () => activeSkinTheme,
       lastDmChannel: () => lastDmChannel,
+      followerRuntimeDiagnostic: () => followerRuntimeDiagnostic,
       threads: () => threads,
       allowedUsers: () => allowedUsers,
       inboxLength: () => inbox.length,
@@ -1267,6 +1274,7 @@ export default function (pi: ExtensionAPI) {
 
     const clientRef = await followerRuntime.connect(ctx);
     brokerClient = clientRef;
+    followerRuntimeDiagnostic = null;
     brokerRole = "follower";
     pinetEnabled = true;
     desiredAgentStatus = "idle";
@@ -1285,6 +1293,7 @@ export default function (pi: ExtensionAPI) {
     pinetEnabled = false;
     currentRuntimeMode = "off";
     if (!options.preserveErrorState) {
+      followerRuntimeDiagnostic = null;
       setExtStatus(ctx, "off");
     }
 
