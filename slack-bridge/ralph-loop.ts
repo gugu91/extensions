@@ -134,9 +134,7 @@ export function applyTrackedAssignmentIdleReplyStalls(
       evaluation.nudgeAgentIds.push(agentId);
     }
     const agentName = idleWorkloads.get(agentId)?.name ?? agentId;
-    evaluation.anomalies.push(
-      buildTrackedAssignmentIdleReplyStallAnomaly(agentName, issueNumbers),
-    );
+    evaluation.anomalies.push(buildTrackedAssignmentIdleReplyStallAnomaly(agentName, issueNumbers));
     result.set(agentId, issueNumbers);
   }
 

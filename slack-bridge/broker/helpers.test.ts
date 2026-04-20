@@ -832,13 +832,7 @@ describe("BrokerDB", () => {
       { senderAgent: "Broker Crane", a2a: true },
     );
 
-    db.recordTaskAssignment(
-      "worker-1",
-      114,
-      "fix/114",
-      "a2a:broker:worker-1",
-      sourceMessage.id,
-    );
+    db.recordTaskAssignment("worker-1", 114, "fix/114", "a2a:broker:worker-1", sourceMessage.id);
 
     expect(db.listTaskAssignmentsAwaitingFirstReply()).toEqual([
       {
