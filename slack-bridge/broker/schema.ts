@@ -89,6 +89,15 @@ interface ScheduledWakeupRow {
   created_at: string;
 }
 
+export interface TaskAssignmentAwaitingReplyInfo {
+  id: number;
+  agentId: string;
+  issueNumber: number;
+  status: TaskAssignmentStatus;
+  sourceMessageId: number;
+  originalSenderAgentId: string;
+}
+
 // ─── Mappers ─────────────────────────────────────────────
 
 interface RalphCycleRow {
@@ -1515,6 +1524,55 @@ export class BrokerDB implements BrokerDBInterface {
       )
       .all() as unknown as TaskAssignmentRow[];
     return rows.map(rowToTaskAssignment);
+  }
+
+  listTaskAssignmentsAwaitingFirstReply(): TaskAssignmentAwaitingReplyInfo[] {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT
+           ta.id AS id,
+           ta.agent_id AS agent_id,
+           ta.issue_number AS issue_number,
+           ta.status AS status,
+           ta.source_message_id AS source_message_id,
+           source.sender AS original_sender_agent_id
+         FROM task_assignments ta
+         JOIN messages source ON source.id = ta.source_message_id
+         WHERE ta.source_message_id IS NOT NULL
+           AND ta.status IN ('assigned', 'branch_pushed', 'pr_open')
+           AND source.source = 'agent'
+           AND source.direction = 'inbound'
+           AND source.sender != ta.agent_id
+           AND NOT EXISTS (
+             SELECT 1
+             FROM messages reply
+             JOIN inbox reply_inbox ON reply_inbox.message_id = reply.id
+             WHERE reply.source = 'agent'
+               AND reply.direction = 'inbound'
+               AND reply.sender = ta.agent_id
+               AND reply.id > source.id
+               AND reply_inbox.agent_id = source.sender
+           )
+         ORDER BY ta.updated_at DESC, ta.created_at DESC, ta.id DESC`,
+      )
+      .all() as Array<{
+      id: number;
+      agent_id: string;
+      issue_number: number;
+      status: string;
+      source_message_id: number;
+      original_sender_agent_id: string;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      agentId: row.agent_id,
+      issueNumber: row.issue_number,
+      status: row.status as TaskAssignmentStatus,
+      sourceMessageId: row.source_message_id,
+      originalSenderAgentId: row.original_sender_agent_id,
+    }));
   }
 
   updateTaskAssignmentProgress(

@@ -1,7 +1,9 @@
 import * as os from "node:os";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
+  type RalphLoopAgentWorkload,
   type RalphLoopEvaluationOptions,
+  type RalphLoopEvaluationResult,
   evaluateRalphLoopCycle,
   rewriteRalphLoopGhostAnomalies,
   buildRalphLoopNudgeMessage,
@@ -28,7 +30,7 @@ import type { ActivityLogEntry, ActivityLogTone } from "./activity-log.js";
 import { probeGitBranch } from "./git-metadata.js";
 import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
 import type { BrokerMaintenanceResult } from "./broker/maintenance.js";
-import type { BrokerDB } from "./broker/schema.js";
+import type { BrokerDB, TaskAssignmentAwaitingReplyInfo } from "./broker/schema.js";
 import type { TaskAssignmentInfo } from "./broker/types.js";
 
 // ─── State ───────────────────────────────────────────────
@@ -81,6 +83,64 @@ export function resetRalphLoopState(state: RalphLoopState): void {
   state.followUpSignature = "";
   state.taskAssignmentReportSignature = "";
   state.pendingTaskAssignmentReport = null;
+}
+
+function formatTrackedAssignmentIssueList(issueNumbers: readonly number[]): string {
+  return issueNumbers.map((issueNumber) => `#${issueNumber}`).join(", ");
+}
+
+function buildTrackedAssignmentIdleReplyStallAnomaly(
+  agentName: string,
+  issueNumbers: readonly number[],
+): string {
+  const label = issueNumbers.length === 1 ? "assignment" : "assignments";
+  return `${agentName} idle after tracked ${label} ${formatTrackedAssignmentIssueList(issueNumbers)} without any agent reply to the original sender`;
+}
+
+export function buildTrackedAssignmentReplyNudgeMessage(
+  issueNumbers: readonly number[],
+  cycleStartedAt?: string,
+): string {
+  const prefix = cycleStartedAt ? `RALPH LOOP nudge (${cycleStartedAt})` : "RALPH LOOP nudge";
+  const label = issueNumbers.length === 1 ? "assignment" : "assignments";
+  return `${prefix}: you are idle after tracked ${label} ${formatTrackedAssignmentIssueList(issueNumbers)} and still have not sent any agent reply to the original sender. Please report outcome or blocker now.`;
+}
+
+export function applyTrackedAssignmentIdleReplyStalls(
+  evaluation: RalphLoopEvaluationResult,
+  workloads: ReadonlyArray<Pick<RalphLoopAgentWorkload, "id" | "name" | "status">>,
+  awaitingReplyAssignments: ReadonlyArray<TaskAssignmentAwaitingReplyInfo>,
+): Map<string, number[]> {
+  const idleWorkloads = new Map(
+    workloads
+      .filter((workload) => workload.status === "idle")
+      .map((workload) => [workload.id, workload] as const),
+  );
+  const pendingIssuesByAgent = new Map<string, Set<number>>();
+
+  for (const assignment of awaitingReplyAssignments) {
+    if (!idleWorkloads.has(assignment.agentId)) {
+      continue;
+    }
+    const issues = pendingIssuesByAgent.get(assignment.agentId) ?? new Set<number>();
+    issues.add(assignment.issueNumber);
+    pendingIssuesByAgent.set(assignment.agentId, issues);
+  }
+
+  const result = new Map<string, number[]>();
+  for (const [agentId, issues] of pendingIssuesByAgent) {
+    const issueNumbers = [...issues].sort((left, right) => left - right);
+    if (!evaluation.nudgeAgentIds.includes(agentId)) {
+      evaluation.nudgeAgentIds.push(agentId);
+    }
+    const agentName = idleWorkloads.get(agentId)?.name ?? agentId;
+    evaluation.anomalies.push(
+      buildTrackedAssignmentIdleReplyStallAnomaly(agentName, issueNumbers),
+    );
+    result.set(agentId, issueNumbers);
+  }
+
+  return result;
 }
 
 // ─── Callbacks ───────────────────────────────────────────
@@ -188,6 +248,11 @@ export async function runRalphLoopCycle(
       brokerAgentId: selfId,
     };
     const evaluation = evaluateRalphLoopCycle(workloads, evaluationOptions);
+    const trackedAssignmentIdleReplyStalls = applyTrackedAssignmentIdleReplyStalls(
+      evaluation,
+      workloads,
+      db.listTaskAssignmentsAwaitingFirstReply(),
+    );
 
     const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
     for (const workload of workloads) {
@@ -201,13 +266,16 @@ export async function runRalphLoopCycle(
         continue;
       }
 
+      const trackedAssignmentIssues = trackedAssignmentIdleReplyStalls.get(workload.id);
       deps.sendMaintenanceMessage(
         workload.id,
-        buildRalphLoopNudgeMessage(
-          workload.pendingInboxCount,
-          workload.ownedThreadCount,
-          cycleStartedAt,
-        ),
+        trackedAssignmentIssues
+          ? buildTrackedAssignmentReplyNudgeMessage(trackedAssignmentIssues, cycleStartedAt)
+          : buildRalphLoopNudgeMessage(
+              workload.pendingInboxCount,
+              workload.ownedThreadCount,
+              cycleStartedAt,
+            ),
       );
       state.nudges.set(workload.id, now);
     }
