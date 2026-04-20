@@ -718,6 +718,129 @@ describe("slack-bridge top-level shutdown", () => {
     expect(brokerRuntimes[1]?.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the incoming system prompt prefix when broker guidance is appended at root runtime", async () => {
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-prompt-layering-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-broker-prompt-layering-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const server = {
+        setAgentRegistrationResolver: vi.fn(),
+        onAgentMessage: vi.fn(),
+        onAgentStatusChange: vi.fn(),
+      };
+      const stop = vi.fn(async () => {
+        db.close();
+      });
+      return {
+        db,
+        server,
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters: [],
+        addAdapter: vi.fn(),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+    const beforeAgentStart = events.get("before_agent_start") as
+      | ((
+          event: { systemPrompt: string },
+          ctx: ExtensionContext,
+        ) => Promise<{ systemPrompt: string }>)
+      | undefined;
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+    expect(beforeAgentStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+    expect(startBrokerSpy).toHaveBeenCalledTimes(1);
+
+    const sentinelSystemPrompt = "SENTINEL ROOT PROMPT";
+    const result = await beforeAgentStart?.({ systemPrompt: sentinelSystemPrompt }, ctx);
+    const nextPrompt = result?.systemPrompt ?? "";
+
+    expect(nextPrompt.startsWith(`${sentinelSystemPrompt}\n\n`)).toBe(true);
+    expect(nextPrompt).toContain("First message in a new thread:");
+    expect(nextPrompt).toContain("COMMUNICATION STYLE:");
+    expect(nextPrompt).toContain("Reaction-triggered requests may appear");
+    expect(nextPrompt).toContain("the Pinet BROKER. Your ONLY role is coordination");
+    expect(nextPrompt).toContain("🚫 BROKER TOOL RESTRICTION:");
+    expect(nextPrompt.indexOf("First message in a new thread:")).toBeGreaterThan(
+      nextPrompt.indexOf(sentinelSystemPrompt),
+    );
+    expect(nextPrompt.indexOf("COMMUNICATION STYLE:")).toBeGreaterThan(
+      nextPrompt.indexOf("First message in a new thread:"),
+    );
+    expect(nextPrompt.indexOf("Reaction-triggered requests may appear")).toBeGreaterThan(
+      nextPrompt.indexOf("COMMUNICATION STYLE:"),
+    );
+    expect(nextPrompt.indexOf("the Pinet BROKER. Your ONLY role is coordination")).toBeGreaterThan(
+      nextPrompt.indexOf("Reaction-triggered requests may appear"),
+    );
+    expect(nextPrompt.indexOf("🚫 BROKER TOOL RESTRICTION:")).toBeGreaterThan(
+      nextPrompt.indexOf("the Pinet BROKER. Your ONLY role is coordination"),
+    );
+
+    await sessionShutdown?.({}, ctx);
+  });
+
   it("sends an iMessage through the broker adapter when enabled", async () => {
     const settingsPath = path.join(testHome, ".pi", "agent", "settings.json");
     fs.writeFileSync(
