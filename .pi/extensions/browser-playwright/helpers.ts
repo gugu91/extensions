@@ -60,10 +60,6 @@ function envFlagFrom(env: NodeJS.ProcessEnv, name: string): boolean {
   return raw != null && /^(1|true|yes|on)$/i.test(raw.trim());
 }
 
-export function envFlag(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return envFlagFrom(env, name);
-}
-
 export function resolveSecurityOptions(env: NodeJS.ProcessEnv = process.env): SecurityOptions {
   return {
     allowLocalhost: envFlagFrom(env, "BROWSER_ALLOW_LOCALHOST"),

@@ -77,14 +77,3 @@ export function buildScheduledWakeupThreadId(agentId: string): string {
   return `wakeup:${agentId}`;
 }
 
-export function buildScheduledWakeupMetadata(
-  wakeupId: number,
-  fireAt: string,
-): Record<string, unknown> {
-  return {
-    senderAgent: "Pinet Scheduler",
-    scheduledWakeup: true,
-    wakeupId,
-    fireAt,
-  };
-}
