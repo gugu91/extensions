@@ -340,4 +340,3 @@ export function extractSlackCanvasCommentsPage(
     ...(nextCursor ? { nextCursor } : {}),
   };
 }
-
