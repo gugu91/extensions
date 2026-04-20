@@ -69,7 +69,7 @@ describe("hydrateRalphLoopReportedGhosts", () => {
 });
 
 describe("applyTrackedAssignmentIdleReplyStalls", () => {
-  it("flags and nudges idle assignees that never replied after a tracked assignment", () => {
+  it("flags and nudges healthy idle assignees that never replied after a tracked assignment", () => {
     const evaluation = {
       ghostAgentIds: [],
       nudgeAgentIds: [],
@@ -81,7 +81,12 @@ describe("applyTrackedAssignmentIdleReplyStalls", () => {
     const pending = applyTrackedAssignmentIdleReplyStalls(
       evaluation,
       [
-        { id: "worker-1", name: "Quiet Otter", status: "idle" },
+        {
+          id: "worker-1",
+          name: "Quiet Otter",
+          status: "idle",
+          lastHeartbeat: "2026-04-20T10:00:15.000Z",
+        },
         { id: "worker-2", name: "Busy Crane", status: "working" },
       ],
       [
@@ -110,12 +115,95 @@ describe("applyTrackedAssignmentIdleReplyStalls", () => {
           originalSenderAgentId: "broker",
         },
       ],
+      { now: Date.parse("2026-04-20T10:00:20.000Z") },
     );
 
     expect(pending).toEqual(new Map([["worker-1", [114, 463]]]));
     expect(evaluation.nudgeAgentIds).toEqual(["worker-1"]);
     expect(evaluation.anomalies).toEqual([
       "Quiet Otter idle after tracked assignments #114, #463 without any agent reply to the original sender",
+    ]);
+  });
+
+  it("ignores idle tracked assignees that are disconnected, resumable, or stale", () => {
+    const evaluation = {
+      ghostAgentIds: [],
+      nudgeAgentIds: [],
+      idleDrainAgentIds: [],
+      stuckAgentIds: [],
+      anomalies: [],
+    };
+
+    const pending = applyTrackedAssignmentIdleReplyStalls(
+      evaluation,
+      [
+        {
+          id: "healthy-worker",
+          name: "Careful Moth",
+          status: "idle",
+          lastHeartbeat: "2026-04-20T10:00:15.000Z",
+        },
+        {
+          id: "ghost-worker",
+          name: "Ghost Goose",
+          status: "idle",
+          disconnectedAt: "2026-04-20T10:00:19.000Z",
+        },
+        {
+          id: "resumable-worker",
+          name: "Resumable Raven",
+          status: "idle",
+          disconnectedAt: "2026-04-20T10:00:19.000Z",
+          resumableUntil: "2026-04-20T10:01:00.000Z",
+        },
+        {
+          id: "stale-worker",
+          name: "Stale Stoat",
+          status: "idle",
+          lastHeartbeat: "2026-04-20T10:00:09.000Z",
+        },
+      ],
+      [
+        {
+          id: 1,
+          agentId: "healthy-worker",
+          issueNumber: 463,
+          status: "assigned",
+          sourceMessageId: 10,
+          originalSenderAgentId: "broker",
+        },
+        {
+          id: 2,
+          agentId: "ghost-worker",
+          issueNumber: 464,
+          status: "assigned",
+          sourceMessageId: 11,
+          originalSenderAgentId: "broker",
+        },
+        {
+          id: 3,
+          agentId: "resumable-worker",
+          issueNumber: 465,
+          status: "assigned",
+          sourceMessageId: 12,
+          originalSenderAgentId: "broker",
+        },
+        {
+          id: 4,
+          agentId: "stale-worker",
+          issueNumber: 466,
+          status: "assigned",
+          sourceMessageId: 13,
+          originalSenderAgentId: "broker",
+        },
+      ],
+      { now: Date.parse("2026-04-20T10:00:20.000Z") },
+    );
+
+    expect(pending).toEqual(new Map([["healthy-worker", [463]]]));
+    expect(evaluation.nudgeAgentIds).toEqual(["healthy-worker"]);
+    expect(evaluation.anomalies).toEqual([
+      "Careful Moth idle after tracked assignment #463 without any agent reply to the original sender",
     ]);
   });
 });

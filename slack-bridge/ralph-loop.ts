@@ -6,6 +6,7 @@ import {
   type RalphLoopEvaluationResult,
   evaluateRalphLoopCycle,
   rewriteRalphLoopGhostAnomalies,
+  buildAgentDisplayInfo,
   buildRalphLoopNudgeMessage,
   buildRalphLoopAnomalySignature,
   buildRalphLoopCycleNotifications,
@@ -108,18 +109,33 @@ export function buildTrackedAssignmentReplyNudgeMessage(
 
 export function applyTrackedAssignmentIdleReplyStalls(
   evaluation: RalphLoopEvaluationResult,
-  workloads: ReadonlyArray<Pick<RalphLoopAgentWorkload, "id" | "name" | "status">>,
+  workloads: ReadonlyArray<
+    Pick<
+      RalphLoopAgentWorkload,
+      "id" | "name" | "status" | "lastHeartbeat" | "lastSeen" | "disconnectedAt" | "resumableUntil"
+    >
+  >,
   awaitingReplyAssignments: ReadonlyArray<TaskAssignmentAwaitingReplyInfo>,
+  options: Pick<
+    RalphLoopEvaluationOptions,
+    "now" | "heartbeatTimeoutMs" | "heartbeatIntervalMs"
+  > = {},
 ): Map<string, number[]> {
-  const idleWorkloads = new Map(
+  const idleHealthyWorkloads = new Map(
     workloads
-      .filter((workload) => workload.status === "idle")
+      .filter((workload) => {
+        if (workload.status !== "idle" || workload.disconnectedAt != null) {
+          return false;
+        }
+
+        return buildAgentDisplayInfo({ emoji: "", ...workload }, options).health === "healthy";
+      })
       .map((workload) => [workload.id, workload] as const),
   );
   const pendingIssuesByAgent = new Map<string, Set<number>>();
 
   for (const assignment of awaitingReplyAssignments) {
-    if (!idleWorkloads.has(assignment.agentId)) {
+    if (!idleHealthyWorkloads.has(assignment.agentId)) {
       continue;
     }
     const issues = pendingIssuesByAgent.get(assignment.agentId) ?? new Set<number>();
@@ -133,7 +149,7 @@ export function applyTrackedAssignmentIdleReplyStalls(
     if (!evaluation.nudgeAgentIds.includes(agentId)) {
       evaluation.nudgeAgentIds.push(agentId);
     }
-    const agentName = idleWorkloads.get(agentId)?.name ?? agentId;
+    const agentName = idleHealthyWorkloads.get(agentId)?.name ?? agentId;
     evaluation.anomalies.push(buildTrackedAssignmentIdleReplyStallAnomaly(agentName, issueNumbers));
     result.set(agentId, issueNumbers);
   }
@@ -250,6 +266,7 @@ export async function runRalphLoopCycle(
       evaluation,
       workloads,
       db.listTaskAssignmentsAwaitingFirstReply(),
+      evaluationOptions,
     );
 
     const nudgeAgentIds = new Set(evaluation.nudgeAgentIds);
