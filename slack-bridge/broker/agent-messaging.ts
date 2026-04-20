@@ -117,7 +117,6 @@ function buildAgentMessageMetadata(
 function deliverAgentMessage(
   storage: AgentMessageStorage,
   senderAgentId: string,
-  senderAgentName: string,
   target: AgentDispatchTarget,
   body: string,
   metadata: Record<string, unknown>,
@@ -225,7 +224,6 @@ export function dispatchDirectAgentMessage(
   const { threadId, messageId } = deliverAgentMessage(
     storage,
     input.senderAgentId,
-    input.senderAgentName,
     resolvedTarget,
     input.body,
     metadata,
@@ -272,7 +270,6 @@ export function dispatchBroadcastAgentMessage(
     const delivery = deliverAgentMessage(
       storage,
       input.senderAgentId,
-      input.senderAgentName,
       target,
       input.body,
       metadata,

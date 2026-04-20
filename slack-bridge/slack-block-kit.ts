@@ -507,15 +507,3 @@ export function normalizeSlackViewSubmissionPayload(
     },
   };
 }
-
-export function normalizeSlackInteractivePayload(
-  payload: Record<string, unknown>,
-): SlackInteractiveInboxEvent | null {
-  if (payload.type === "block_actions") {
-    return normalizeSlackBlockActionPayload(payload);
-  }
-  if (payload.type === "view_submission") {
-    return normalizeSlackViewSubmissionPayload(payload);
-  }
-  return null;
-}
