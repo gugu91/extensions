@@ -1940,6 +1940,90 @@ export async function resolveFollowerThreadChannel(
   }
 }
 
+export type FollowerRuntimeDiagnosticKind =
+  | "broker_disconnect"
+  | "poll_failure"
+  | "registration_refresh_failure"
+  | "reconnect_stopped";
+
+export type FollowerRuntimeDiagnosticState = "reconnecting" | "degraded" | "error";
+
+export interface FollowerRuntimeDiagnostic {
+  kind: FollowerRuntimeDiagnosticKind;
+  state: FollowerRuntimeDiagnosticState;
+  reason: string;
+  nextStep: string;
+  detail?: string;
+}
+
+export function buildFollowerRuntimeDiagnostic(
+  kind: FollowerRuntimeDiagnosticKind,
+  options: {
+    detail?: string | null;
+    connected?: boolean;
+  } = {},
+): FollowerRuntimeDiagnostic {
+  const detail = options.detail?.trim() || undefined;
+
+  if (kind === "broker_disconnect") {
+    return {
+      kind,
+      state: "reconnecting",
+      reason: "broker disconnected",
+      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (kind === "poll_failure") {
+    const connected = options.connected ?? true;
+    return {
+      kind,
+      state: connected ? "degraded" : "reconnecting",
+      reason: "inbox polling failed",
+      nextStep: connected
+        ? "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow."
+        : "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (kind === "registration_refresh_failure") {
+    return {
+      kind,
+      state: "degraded",
+      reason: "registration refresh failed after reconnect",
+      nextStep:
+        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  return {
+    kind,
+    state: "error",
+    reason: "automatic reconnect stopped",
+    nextStep: "Fix the reported error, then run /pinet-follow to retry.",
+    ...(detail ? { detail } : {}),
+  };
+}
+
+export function formatFollowerRuntimeDiagnosticHealth(
+  diagnostic: FollowerRuntimeDiagnostic | null,
+): string {
+  if (!diagnostic) {
+    return "healthy";
+  }
+
+  return `${diagnostic.state} — ${diagnostic.reason}${diagnostic.detail ? ` (${diagnostic.detail})` : ""}`;
+}
+
+export function formatFollowerRuntimeDiagnosticNextStep(
+  diagnostic: FollowerRuntimeDiagnostic | null,
+): string {
+  return diagnostic?.nextStep ?? "None.";
+}
+
 export interface FollowerReconnectUiUpdate {
   nextWasDisconnected: boolean;
   notify?: {

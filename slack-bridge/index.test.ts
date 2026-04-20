@@ -2017,6 +2017,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     let disconnectHandler: (() => void) | null = null;
     let reconnectHandler: (() => void) | null = null;
+    let followerConnected = false;
     const registerCalls: Array<{
       name: string;
       emoji: string;
@@ -2024,7 +2025,10 @@ describe("slack-bridge Pinet reconnect", () => {
       stableId?: string;
     }> = [];
 
-    vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(async () => {
+      followerConnected = true;
+    });
+    vi.spyOn(BrokerClient.prototype, "isConnected").mockImplementation(() => followerConnected);
     vi.spyOn(BrokerClient.prototype, "register").mockImplementation(async function (
       this: BrokerClient,
       name: string,
@@ -2088,10 +2092,12 @@ describe("slack-bridge Pinet reconnect", () => {
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
     const follow = commands.get("pinet-follow");
+    const pinetStatus = commands.get("pinet-status");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(follow).toBeDefined();
+    expect(pinetStatus).toBeDefined();
 
     await sessionStart?.({}, ctx);
     await follow?.handler("", ctx);
@@ -2104,10 +2110,36 @@ describe("slack-bridge Pinet reconnect", () => {
       throw new Error("Reconnect handlers were not registered");
     }
 
-    const runDisconnect: () => void = disconnectHandler;
-    const runReconnect: () => void = reconnectHandler;
+    const activeDisconnectHandler: () => void = disconnectHandler;
+    const activeReconnectHandler: () => void = reconnectHandler;
+    const runDisconnect = (): void => {
+      followerConnected = false;
+      activeDisconnectHandler();
+    };
+    const runReconnect = (): void => {
+      followerConnected = true;
+      activeReconnectHandler();
+    };
 
     runDisconnect();
+
+    notify.mockClear();
+    await pinetStatus?.handler("", ctx);
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Connection: disconnected"),
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Runtime health: reconnecting — broker disconnected"),
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Next step: Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      ),
+      "info",
+    );
+
     runReconnect();
 
     await vi.waitFor(() => {
@@ -2119,11 +2151,182 @@ describe("slack-bridge Pinet reconnect", () => {
       role: "worker",
       capabilities: expect.objectContaining({ role: "worker" }),
     });
-    expect(notify).toHaveBeenCalledWith("Pinet broker disconnected — reconnecting...", "warning");
     expect(notify).toHaveBeenCalledWith("Pinet broker reconnected", "info");
+
+    notify.mockClear();
+    await pinetStatus?.handler("", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Runtime health: healthy"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Next step: None."), "info");
 
     await sessionShutdown?.({}, ctx);
     expect(setStatus).toHaveBeenCalled();
+  });
+
+  it("reports degraded follower diagnostics when reconnect registration refresh fails", async () => {
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => false,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let disconnectHandler: (() => void) | null = null;
+    let reconnectHandler: (() => void) | null = null;
+    let followerConnected = false;
+    let registerAttempt = 0;
+
+    vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(async () => {
+      followerConnected = true;
+    });
+    vi.spyOn(BrokerClient.prototype, "isConnected").mockImplementation(() => followerConnected);
+    vi.spyOn(BrokerClient.prototype, "register").mockImplementation(async function (
+      this: BrokerClient,
+      name: string,
+      emoji: string,
+      metadata?: Record<string, unknown>,
+      stableId?: string,
+    ) {
+      registerAttempt += 1;
+      if (registerAttempt === 2) {
+        throw new Error("refresh failed once");
+      }
+
+      const result = {
+        agentId: "worker-1",
+        name,
+        emoji,
+        metadata: metadata ?? null,
+      };
+      (
+        this as unknown as {
+          registeredIdentity: typeof result | null;
+          registrationSnapshot: {
+            name: string;
+            emoji: string;
+            metadata?: Record<string, unknown>;
+            stableId?: string;
+          } | null;
+        }
+      ).registeredIdentity = result;
+      (
+        this as unknown as {
+          registrationSnapshot: {
+            name: string;
+            emoji: string;
+            metadata?: Record<string, unknown>;
+            stableId?: string;
+          } | null;
+        }
+      ).registrationSnapshot = {
+        name,
+        emoji,
+        ...(metadata ? { metadata } : {}),
+        ...(stableId ? { stableId } : {}),
+      };
+      return result;
+    });
+    vi.spyOn(BrokerClient.prototype, "claimThread").mockResolvedValue({ claimed: true });
+    vi.spyOn(BrokerClient.prototype, "pollInbox").mockResolvedValue([]);
+    vi.spyOn(BrokerClient.prototype, "updateStatus").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "ackMessages").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "unregister").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onDisconnect").mockImplementation((handler) => {
+      disconnectHandler = handler;
+    });
+    vi.spyOn(BrokerClient.prototype, "onReconnect").mockImplementation((handler) => {
+      reconnectHandler = handler;
+    });
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const follow = commands.get("pinet-follow");
+    const pinetStatus = commands.get("pinet-status");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(follow).toBeDefined();
+    expect(pinetStatus).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await follow?.handler("", ctx);
+
+    expect(registerAttempt).toBe(1);
+    expect(disconnectHandler).toBeTypeOf("function");
+    expect(reconnectHandler).toBeTypeOf("function");
+
+    if (!disconnectHandler || !reconnectHandler) {
+      throw new Error("Reconnect handlers were not registered");
+    }
+
+    notify.mockClear();
+    const activeDisconnectHandler: () => void = disconnectHandler;
+    const activeReconnectHandler: () => void = reconnectHandler;
+    followerConnected = false;
+    activeDisconnectHandler();
+    followerConnected = true;
+    activeReconnectHandler();
+
+    await vi.waitFor(() => {
+      expect(registerAttempt).toBe(2);
+    });
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith("Pinet broker reconnected", "info");
+    });
+
+    notify.mockClear();
+    await pinetStatus?.handler("", ctx);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Runtime health: degraded — registration refresh failed after reconnect (refresh failed once)",
+      ),
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Next step: Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+      ),
+      "info",
+    );
+
+    await sessionShutdown?.({}, ctx);
   });
 
   it("stops follower reconnect retries after a terminal name conflict and allows a clean retry", async () => {
@@ -2172,6 +2375,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
       let disconnectHandler: (() => void) | null = null;
       let reconnectFailedHandler: ((error: Error) => void) | null = null;
+      let followerConnected = false;
       const registerCalls: Array<{
         name: string;
         emoji: string;
@@ -2179,7 +2383,10 @@ describe("slack-bridge Pinet reconnect", () => {
         stableId?: string;
       }> = [];
 
-      const connect = vi.spyOn(BrokerClient.prototype, "connect").mockResolvedValue(undefined);
+      const connect = vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(async () => {
+        followerConnected = true;
+      });
+      vi.spyOn(BrokerClient.prototype, "isConnected").mockImplementation(() => followerConnected);
       vi.spyOn(BrokerClient.prototype, "register").mockImplementation(async function (
         this: BrokerClient,
         name: string,
@@ -2248,10 +2455,12 @@ describe("slack-bridge Pinet reconnect", () => {
       const sessionStart = events.get("session_start");
       const sessionShutdown = events.get("session_shutdown");
       const follow = commands.get("pinet-follow");
+      const pinetStatus = commands.get("pinet-status");
 
       expect(sessionStart).toBeDefined();
       expect(sessionShutdown).toBeDefined();
       expect(follow).toBeDefined();
+      expect(pinetStatus).toBeDefined();
 
       await sessionStart?.({}, ctx);
       await follow?.handler("", ctx);
@@ -2265,11 +2474,15 @@ describe("slack-bridge Pinet reconnect", () => {
         throw new Error("Reconnect handlers were not registered");
       }
 
-      const runDisconnect: () => void = disconnectHandler;
-      const runReconnectFailed: (error: Error) => void = reconnectFailedHandler;
+      const activeDisconnectHandler: () => void = disconnectHandler;
+      const activeReconnectFailedHandler: (error: Error) => void = reconnectFailedHandler;
+      const runDisconnect = (): void => {
+        followerConnected = false;
+        activeDisconnectHandler();
+      };
 
       runDisconnect();
-      runReconnectFailed(
+      activeReconnectFailedHandler(
         new Error(
           'Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.',
         ),
@@ -2292,10 +2505,39 @@ describe("slack-bridge Pinet reconnect", () => {
       );
       expect(setStatus).toHaveBeenCalledWith("slack-bridge", expect.stringContaining("✗"));
 
+      notify.mockClear();
+      await pinetStatus?.handler("", ctx);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: off"), "info");
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Connection: disconnected"),
+        "info",
+      );
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Runtime health: error — automatic reconnect stopped (Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.)',
+        ),
+        "info",
+      );
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Next step: Fix the reported error, then run /pinet-follow to retry.",
+        ),
+        "info",
+      );
+
       await follow?.handler("", ctx);
       expect(connect).toHaveBeenCalledTimes(2);
       expect(registerCalls).toHaveLength(2);
       expect(registerCalls[1]?.name).toBe("Reserved Crane");
+
+      notify.mockClear();
+      await pinetStatus?.handler("", ctx);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Runtime health: healthy"),
+        "info",
+      );
 
       await sessionShutdown?.({}, ctx);
     } finally {
@@ -2304,6 +2546,132 @@ describe("slack-bridge Pinet reconnect", () => {
       } else {
         process.env.PI_NICKNAME = originalNickname;
       }
+    }
+  });
+
+  it("surfaces follower poll failures in pinet-status and clears them after recovery", async () => {
+    vi.useFakeTimers();
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => false,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "leaf",
+        getSessionFile: () => "/tmp/slack-bridge-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let followerConnected = false;
+    let pollAttempt = 0;
+    vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(async () => {
+      followerConnected = true;
+    });
+    vi.spyOn(BrokerClient.prototype, "isConnected").mockImplementation(() => followerConnected);
+    vi.spyOn(BrokerClient.prototype, "register").mockResolvedValue({
+      agentId: "worker-1",
+      name: "Agent",
+      emoji: "🦙",
+      metadata: { role: "worker", capabilities: { role: "worker" } },
+    });
+    vi.spyOn(BrokerClient.prototype, "claimThread").mockResolvedValue({ claimed: true });
+    vi.spyOn(BrokerClient.prototype, "pollInbox").mockImplementation(async () => {
+      pollAttempt += 1;
+      if (pollAttempt === 1) {
+        throw new Error("poll failed once");
+      }
+      return [];
+    });
+    vi.spyOn(BrokerClient.prototype, "updateStatus").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "ackMessages").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnectGracefully").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "unregister").mockResolvedValue(undefined);
+    vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onDisconnect").mockImplementation(() => {
+      /* mocked */
+    });
+    vi.spyOn(BrokerClient.prototype, "onReconnect").mockImplementation(() => {
+      /* mocked */
+    });
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const follow = commands.get("pinet-follow");
+    const pinetStatus = commands.get("pinet-status");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(follow).toBeDefined();
+    expect(pinetStatus).toBeDefined();
+
+    try {
+      await sessionStart?.({}, ctx);
+      await follow?.handler("", ctx);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pollAttempt).toBe(1);
+
+      notify.mockClear();
+      await pinetStatus?.handler("", ctx);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Runtime health: degraded — inbox polling failed (poll failed once)",
+        ),
+        "info",
+      );
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Next step: Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow.",
+        ),
+        "info",
+      );
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pollAttempt).toBe(2);
+
+      notify.mockClear();
+      await pinetStatus?.handler("", ctx);
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Runtime health: healthy"),
+        "info",
+      );
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Next step: None."), "info");
+
+      await sessionShutdown?.({}, ctx);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
