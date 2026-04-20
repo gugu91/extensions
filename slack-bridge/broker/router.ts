@@ -36,7 +36,8 @@ export function findAgentMention(text: string, agents: AgentInfo[]): AgentInfo |
 export function extractPiAgentThreadOwnerHint(
   replies: ReadonlyArray<Record<string, unknown>>,
 ): ThreadOwnerHint | null {
-  for (const message of replies) {
+  for (let index = replies.length - 1; index >= 0; index -= 1) {
+    const message = replies[index];
     if (!message.bot_id) continue;
     const metadata = message.metadata as
       | {

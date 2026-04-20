@@ -1,6 +1,5 @@
 import type { ThreadOwnerHint } from "./broker/router.js";
 import { resolveSlackThreadOwnerHint, type SlackCall } from "./slack-access.js";
-import { TtlCache } from "./ttl-cache.js";
 
 export interface BrokerThreadOwnerHintsDeps {
   slack: SlackCall;
@@ -17,11 +16,6 @@ export interface BrokerThreadOwnerHints {
 export function createBrokerThreadOwnerHints(
   deps: BrokerThreadOwnerHintsDeps,
 ): BrokerThreadOwnerHints {
-  const brokerThreadOwnerHintCache = new TtlCache<string, ThreadOwnerHint>({
-    maxSize: 2000,
-    ttlMs: 60 * 1000,
-  });
-
   async function resolveBrokerThreadOwnerHint(
     channel: string,
     threadTs: string,
@@ -31,7 +25,6 @@ export function createBrokerThreadOwnerHints(
       token: deps.getBotToken(),
       channel,
       threadTs,
-      cache: brokerThreadOwnerHintCache,
     });
   }
 
