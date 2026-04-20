@@ -1,10 +1,4 @@
-import {
-  buildAllowlist,
-  isUserAllowed,
-  isChannelId,
-  stripBotMention,
-  isAbortError,
-} from "./helpers.js";
+import { isUserAllowed, isChannelId, stripBotMention, isAbortError } from "./helpers.js";
 import {
   buildSlackInboundMessageText,
   extractSlackMessageFileMetadata,
@@ -52,13 +46,6 @@ export interface ParsedEnvelope {
   dedupKey?: string;
   event?: Record<string, unknown>;
   interactivePayload?: Record<string, unknown>;
-}
-
-export function buildSlackUserAllowlist(
-  allowedUsers?: string[],
-  envAllowedUsers?: string,
-): Set<string> | null {
-  return buildAllowlist({ allowedUsers }, envAllowedUsers);
 }
 
 export function isSlackUserAllowed(allowlist: Set<string> | null, userId: string): boolean {
