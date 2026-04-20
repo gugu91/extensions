@@ -2125,7 +2125,10 @@ describe("slack-bridge Pinet reconnect", () => {
 
     notify.mockClear();
     await pinetStatus?.handler("", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: disconnected"), "info");
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Connection: disconnected"),
+      "info",
+    );
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Runtime health: reconnecting — broker disconnected"),
       "info",
@@ -2505,7 +2508,10 @@ describe("slack-bridge Pinet reconnect", () => {
       notify.mockClear();
       await pinetStatus?.handler("", ctx);
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: off"), "info");
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: disconnected"), "info");
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Connection: disconnected"),
+        "info",
+      );
       expect(notify).toHaveBeenCalledWith(
         expect.stringContaining(
           'Runtime health: error — automatic reconnect stopped (Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.)',
@@ -2528,7 +2534,10 @@ describe("slack-bridge Pinet reconnect", () => {
       await pinetStatus?.handler("", ctx);
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Runtime health: healthy"), "info");
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Runtime health: healthy"),
+        "info",
+      );
 
       await sessionShutdown?.({}, ctx);
     } finally {
@@ -2654,7 +2663,10 @@ describe("slack-bridge Pinet reconnect", () => {
 
       notify.mockClear();
       await pinetStatus?.handler("", ctx);
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Runtime health: healthy"), "info");
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("Runtime health: healthy"),
+        "info",
+      );
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Next step: None."), "info");
 
       await sessionShutdown?.({}, ctx);
