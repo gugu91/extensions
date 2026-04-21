@@ -204,9 +204,11 @@ function normalizeSlackBookmarkUrl(url: string): string {
 function isPiAgentSlackMessage(
   message: Record<string, unknown>,
   botUserId: string | null,
+  agentOwnerToken: string,
 ): boolean {
-  if (botUserId && message.user === botUserId) {
-    return true;
+  const messageUser = typeof message.user === "string" ? message.user : undefined;
+  if (messageUser) {
+    return botUserId != null && messageUser === botUserId;
   }
 
   const metadata = message.metadata;
@@ -214,7 +216,16 @@ function isPiAgentSlackMessage(
     return false;
   }
 
-  return (metadata as { event_type?: unknown }).event_type === "pi_agent_msg";
+  if ((metadata as { event_type?: unknown }).event_type !== "pi_agent_msg") {
+    return false;
+  }
+
+  const eventPayload = (metadata as { event_payload?: unknown }).event_payload;
+  if (!eventPayload || typeof eventPayload !== "object") {
+    return false;
+  }
+
+  return (eventPayload as { agent_owner?: unknown }).agent_owner === agentOwnerToken;
 }
 
 function summarizeSlackDeleteAction(input: {
@@ -350,6 +361,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     threadTs: string,
     oldest?: string,
     latest?: string,
+    includeAllMetadata = false,
   ): Promise<Record<string, unknown>[]> {
     const messages: Record<string, unknown>[] = [];
     let cursor: string | undefined;
@@ -362,6 +374,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         ...(cursor ? { cursor } : {}),
         ...(oldest ? { oldest } : {}),
         ...(latest ? { latest } : {}),
+        ...(includeAllMetadata ? { include_all_metadata: true } : {}),
       });
 
       const batch = Array.isArray(response.messages)
@@ -393,7 +406,13 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       return { channelId, messageTsList: [targetTs] };
     }
 
-    const messages = await fetchSlackThreadMessages(channelId, targetTs);
+    const messages = await fetchSlackThreadMessages(
+      channelId,
+      targetTs,
+      undefined,
+      undefined,
+      true,
+    );
     const threadRootTs =
       messages.length > 0 && typeof messages[0]?.ts === "string"
         ? (messages[0].ts as string)
@@ -408,7 +427,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     }
 
     const undeletableMessages = messages
-      .filter((message) => !isPiAgentSlackMessage(message, getBotUserId()))
+      .filter((message) => !isPiAgentSlackMessage(message, getBotUserId(), getAgentOwnerToken()))
       .map((message) => (typeof message.ts === "string" ? message.ts : "unknown-ts"));
     if (undeletableMessages.length > 0) {
       throw new Error(

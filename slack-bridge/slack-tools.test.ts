@@ -559,9 +559,27 @@ describe("registerSlackTools", () => {
       {
         ok: true,
         messages: [
-          { ts: "123.456", user: "U_BOT" },
-          { ts: "123.457", user: "U_BOT" },
-          { ts: "123.458", user: "U_BOT" },
+          {
+            ts: "123.456",
+            metadata: {
+              event_type: "pi_agent_msg",
+              event_payload: { agent_owner: "owner:test-token" },
+            },
+          },
+          {
+            ts: "123.457",
+            metadata: {
+              event_type: "pi_agent_msg",
+              event_payload: { agent_owner: "owner:test-token" },
+            },
+          },
+          {
+            ts: "123.458",
+            metadata: {
+              event_type: "pi_agent_msg",
+              event_payload: { agent_owner: "owner:test-token" },
+            },
+          },
         ],
         response_metadata: { next_cursor: "" },
       } as SlackResult,
@@ -578,6 +596,7 @@ describe("registerSlackTools", () => {
       channel: "resolved:deployments",
       ts: "123.456",
       limit: 1000,
+      include_all_metadata: true,
     });
     expect(slack).toHaveBeenNthCalledWith(2, "chat.delete", "xoxb-initial", {
       channel: "resolved:deployments",
