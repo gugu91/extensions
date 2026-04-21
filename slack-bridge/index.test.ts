@@ -3780,11 +3780,11 @@ describe("slack-bridge broker startup backlog recovery", () => {
       const brokerRows = inspectDb
         .prepare("SELECT id, stable_id, metadata, disconnected_at FROM agents")
         .all() as Array<{
-          id: string;
-          stable_id: string | null;
-          metadata: string | null;
-          disconnected_at: string | null;
-        }>;
+        id: string;
+        stable_id: string | null;
+        metadata: string | null;
+        disconnected_at: string | null;
+      }>;
       const liveBrokerRows = brokerRows.filter((row) => {
         const metadata = row.metadata
           ? (JSON.parse(row.metadata) as Record<string, unknown>)
@@ -3837,31 +3837,29 @@ describe("slack-bridge broker startup backlog recovery", () => {
       pendingBacklogCount: db.getBacklogCount("pending"),
       anomalies: [],
     }));
-    const startBrokerSpy = vi
-      .spyOn(brokerModule, "startBroker")
-      .mockImplementation(async () => {
-        const db = new BrokerDB(dbPath);
-        db.initialize();
-        const stop = vi.fn(async () => {
-          db.close();
-        });
-        brokerRuntimes.push({ db, stop });
-        return {
-          db,
-          server: {
-            setAgentRegistrationResolver: vi.fn(),
-            onAgentMessage: vi.fn(),
-            onAgentStatusChange: vi.fn(),
-          },
-          lock: {
-            isLeader: () => true,
-            release: vi.fn(),
-          },
-          adapters: [],
-          addAdapter: vi.fn(),
-          stop,
-        } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const stop = vi.fn(async () => {
+        db.close();
       });
+      brokerRuntimes.push({ db, stop });
+      return {
+        db,
+        server: {
+          setAgentRegistrationResolver: vi.fn(),
+          onAgentMessage: vi.fn(),
+          onAgentStatusChange: vi.fn(),
+        },
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters: [],
+        addAdapter: vi.fn(),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
     vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
     vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
     vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
