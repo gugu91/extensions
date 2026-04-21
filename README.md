@@ -84,11 +84,30 @@ can coordinate and execute most of the work itself.
 ## Quick start
 
 ```bash
-# Install dependencies
+# Install dependencies in this checkout
 pnpm install
 
 # Run all checks
 pnpm lint && pnpm typecheck && pnpm test
+```
+
+### Fresh worktree bootstrap
+
+For a fresh git worktree, bootstrap dependencies in that checkout before
+running `pnpm lint`, `pnpm typecheck`, `pnpm test`, or `pnpm prepush`:
+
+```bash
+git worktree add .worktrees/<name> -b <branch>
+cd .worktrees/<name>
+pnpm install --frozen-lockfile
+```
+
+Dependency bootstrap is per checkout/worktree, not a one-time repo setup step.
+If the lane touches `.pi/extensions/browser-playwright`, also run:
+
+```bash
+cd .pi/extensions/browser-playwright
+npm install
 ```
 
 ## Local extension development

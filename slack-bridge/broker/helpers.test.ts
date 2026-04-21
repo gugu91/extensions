@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as net from "node:net";
+import { BrokerDB as CoreBrokerDB } from "@gugu910/pi-broker-core/schema";
 import { BrokerDB, CURRENT_BROKER_SCHEMA_VERSION } from "./schema.js";
 import { LeaderLock } from "./leader.js";
 import { startBroker, type Broker } from "./index.js";
@@ -109,6 +110,21 @@ describe("BrokerDB", () => {
   it("creates tables without error", () => {
     // initialize() already ran — just verify we can query
     expect(db.getAgents()).toEqual([]);
+  });
+
+  it("keeps RALPH cycle storage out of the broker-core base schema", () => {
+    const coreDbPath = path.join(dir, "core.db");
+    const coreDb = new CoreBrokerDB(coreDbPath);
+    coreDb.initialize();
+    coreDb.close();
+
+    const inspectDb = new DatabaseSync(coreDbPath);
+    const ralphTable = inspectDb
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ralph_cycles'")
+      .get() as { name?: string } | undefined;
+    inspectDb.close();
+
+    expect(ralphTable).toBeUndefined();
   });
 
   it("migrates a legacy agents table and stamps the schema version", () => {
@@ -815,6 +831,77 @@ describe("BrokerDB", () => {
     expect(report).toBe(
       ["RALPH LOOP — WORKER STATUS:", "- 🐦‍⬛ Frozen Raven: #114 → no commits, no PR ⚠️"].join("\n"),
     );
+  });
+
+  it("lists active tracked assignments that still have no reply to the original sender", () => {
+    db.registerAgent("broker", "Broker Crane", "🪿", 10);
+    db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
+
+    db.createThread("a2a:broker:worker-1", "agent", "", "broker");
+    const sourceMessage = db.insertMessage(
+      "a2a:broker:worker-1",
+      "agent",
+      "inbound",
+      "broker",
+      "Please take issue #114",
+      ["worker-1"],
+      { senderAgent: "Broker Crane", a2a: true },
+    );
+
+    db.recordTaskAssignment("worker-1", 114, "fix/114", "a2a:broker:worker-1", sourceMessage.id);
+
+    expect(db.listTaskAssignmentsAwaitingFirstReply()).toEqual([
+      {
+        id: expect.any(Number),
+        agentId: "worker-1",
+        issueNumber: 114,
+        status: "assigned",
+        sourceMessageId: sourceMessage.id,
+        originalSenderAgentId: "broker",
+      },
+    ]);
+  });
+
+  it("stops tracking once the assignee replies and ignores completed tracked assignments", () => {
+    db.registerAgent("broker", "Broker Crane", "🪿", 10);
+    db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
+
+    db.createThread("a2a:broker:worker-1", "agent", "", "broker");
+    const sourceMessage = db.insertMessage(
+      "a2a:broker:worker-1",
+      "agent",
+      "inbound",
+      "broker",
+      "Please take issue #114",
+      ["worker-1"],
+      { senderAgent: "Broker Crane", a2a: true },
+    );
+    const tracked = db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "fix/114",
+      "a2a:broker:worker-1",
+      sourceMessage.id,
+    );
+
+    db.updateTaskAssignmentProgress(tracked.id, "pr_merged", 201);
+    expect(db.listTaskAssignmentsAwaitingFirstReply()).toEqual([]);
+
+    db.updateTaskAssignmentProgress(tracked.id, "assigned", null);
+    expect(db.listTaskAssignmentsAwaitingFirstReply()).toHaveLength(1);
+
+    db.createThread("a2a:worker-1:broker", "agent", "", "worker-1");
+    db.insertMessage(
+      "a2a:worker-1:broker",
+      "agent",
+      "inbound",
+      "worker-1",
+      "Working on it",
+      ["broker"],
+      { senderAgent: "Hyper Horse", a2a: true },
+    );
+
+    expect(db.listTaskAssignmentsAwaitingFirstReply()).toEqual([]);
   });
 
   it("startup reconciliation preserves ownership until reconnect and refreshes the returning identity", () => {

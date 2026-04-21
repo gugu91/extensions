@@ -190,6 +190,56 @@ export function buildSqliteWalFallbackWarning(
   return `[${component}] SQLite WAL mode not available, using ${getSqliteJournalMode(result)} journal mode fallback`;
 }
 
+function extractSlackCanvasIdFromPermalink(permalink: string | undefined): string | undefined {
+  if (!permalink) return undefined;
+
+  const match = permalink.match(/\/docs\/[^/]+\/(F[^/?#]+)/i);
+  return match?.[1];
+}
+
+function extractInboxCanvasReference(metadata: Record<string, unknown> | null | undefined): {
+  canvasId: string;
+  title?: string;
+  permalink?: string;
+} | null {
+  const slackFiles = Array.isArray(metadata?.slackFiles) ? metadata.slackFiles : [];
+
+  for (const file of slackFiles) {
+    if (!file || typeof file !== "object" || Array.isArray(file)) {
+      continue;
+    }
+
+    const record = asRecord(file);
+    if (!record) {
+      continue;
+    }
+
+    const title = asString(record.title) ?? asString(record.name);
+    const permalink = asString(record.permalink);
+    const prettyType = asString(record.prettyType)?.toLowerCase();
+    const filetype = asString(record.filetype)?.toLowerCase();
+    const mimetype = asString(record.mimetype)?.toLowerCase();
+    const canvasId = asString(record.id) ?? extractSlackCanvasIdFromPermalink(permalink);
+    const looksCanvas =
+      Boolean(permalink && permalink.includes("/docs/")) ||
+      prettyType === "canvas" ||
+      filetype === "canvas" ||
+      Boolean(mimetype?.includes("slack-doc"));
+
+    if (!looksCanvas || !canvasId) {
+      continue;
+    }
+
+    return {
+      canvasId,
+      ...(title ? { title } : {}),
+      ...(permalink ? { permalink } : {}),
+    };
+  }
+
+  return null;
+}
+
 function formatInboxMetadata(metadata: Record<string, unknown> | null | undefined): string {
   if (!metadata || Object.keys(metadata).length === 0) return "";
 
@@ -200,6 +250,16 @@ function formatInboxMetadata(metadata: Record<string, unknown> | null | undefine
       blockId: metadata.blockId ?? null,
       value: metadata.value ?? null,
       parsedValue: metadata.parsedValue ?? null,
+    })}`;
+  }
+
+  const canvasReference = extractInboxCanvasReference(metadata);
+  if (canvasReference) {
+    return ` | canvas=${JSON.stringify({
+      canvasId: canvasReference.canvasId,
+      ...(canvasReference.title ? { title: canvasReference.title } : {}),
+      ...(canvasReference.permalink ? { permalink: canvasReference.permalink } : {}),
+      toolHint: `slack_canvas_comments_read canvas_id=${canvasReference.canvasId}`,
     })}`;
   }
 
@@ -1398,6 +1458,8 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
     "IF ASKED TO CODE: Refuse politely and immediately delegate. Say: 'I'm the broker — I coordinate, not code. Let me find a worker for this.' Then check pinet_agents and delegate via pinet_message.",
     // ── ALLOWED ACTIONS ─────────────────────────────────────────
     "ALLOWED — These are your responsibilities: (1) Route messages between humans and agents. (2) Check pinet_agents for idle workers and delegate tasks via pinet_message. (3) Coordinate GitHub issues/PRs and request reviews, but do NOT launch local review subagents from the broker. (4) Monitor agent health via the RALPH loop. (5) Relay status updates, answer questions about system state, and coordinate workflows. (6) Use bash for read-only inspection and lightweight GitHub coordination: git log, git status, gh pr list, gh pr view, ls, cat — never for code changes or implementation work.",
+    "TRIAGE, THEN DELEGATE: Do only the minimum quick triage needed to route work well — for example, confirm the repo, branch, issue/PR number, current worker availability, and a light GitHub status check. Delegate before any deep repo/source inspection.",
+    "DEEP INSPECTION BELONGS TO WORKERS: Do NOT read through multiple source files, trace implementations, perform deep diagnosis, or inspect the codebase in detail before assigning the task. That investigation is worker implementation work, even when you are only trying to be helpful.",
     "When a human asks for work to be done, ALWAYS check `pinet_agents` for idle workers and delegate via `pinet_message`. Pick the agent on the right repo/branch when possible.",
     "If a repo instruction says to use the `code-reviewer` subagent, treat that as work to assign to a connected worker session — never the broker itself.",
     "When delegating, include: the task description, relevant issue/PR numbers, branch to work on, and where to report back (Slack thread_ts).",
@@ -1938,6 +2000,90 @@ export async function resolveFollowerThreadChannel(
   } catch {
     return { channelId: null, changed: false };
   }
+}
+
+export type FollowerRuntimeDiagnosticKind =
+  | "broker_disconnect"
+  | "poll_failure"
+  | "registration_refresh_failure"
+  | "reconnect_stopped";
+
+export type FollowerRuntimeDiagnosticState = "reconnecting" | "degraded" | "error";
+
+export interface FollowerRuntimeDiagnostic {
+  kind: FollowerRuntimeDiagnosticKind;
+  state: FollowerRuntimeDiagnosticState;
+  reason: string;
+  nextStep: string;
+  detail?: string;
+}
+
+export function buildFollowerRuntimeDiagnostic(
+  kind: FollowerRuntimeDiagnosticKind,
+  options: {
+    detail?: string | null;
+    connected?: boolean;
+  } = {},
+): FollowerRuntimeDiagnostic {
+  const detail = options.detail?.trim() || undefined;
+
+  if (kind === "broker_disconnect") {
+    return {
+      kind,
+      state: "reconnecting",
+      reason: "broker disconnected",
+      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (kind === "poll_failure") {
+    const connected = options.connected ?? true;
+    return {
+      kind,
+      state: connected ? "degraded" : "reconnecting",
+      reason: "inbox polling failed",
+      nextStep: connected
+        ? "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow."
+        : "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (kind === "registration_refresh_failure") {
+    return {
+      kind,
+      state: "degraded",
+      reason: "registration refresh failed after reconnect",
+      nextStep:
+        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  return {
+    kind,
+    state: "error",
+    reason: "automatic reconnect stopped",
+    nextStep: "Fix the reported error, then run /pinet-follow to retry.",
+    ...(detail ? { detail } : {}),
+  };
+}
+
+export function formatFollowerRuntimeDiagnosticHealth(
+  diagnostic: FollowerRuntimeDiagnostic | null,
+): string {
+  if (!diagnostic) {
+    return "healthy";
+  }
+
+  return `${diagnostic.state} — ${diagnostic.reason}${diagnostic.detail ? ` (${diagnostic.detail})` : ""}`;
+}
+
+export function formatFollowerRuntimeDiagnosticNextStep(
+  diagnostic: FollowerRuntimeDiagnostic | null,
+): string {
+  return diagnostic?.nextStep ?? "None.";
 }
 
 export interface FollowerReconnectUiUpdate {

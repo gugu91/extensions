@@ -1,48 +1,14 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CommentRecord } from "./comments.js";
+import {
+  buildPiCommsReadPrompt,
+  formatContext,
+  parseCommentRpcRequest,
+  parseNvimEvent,
+  type EditorState,
+} from "./helpers.js";
 
-vi.mock("@sinclair/typebox", () => ({
-  Type: {
-    Object: () => ({}),
-    String: () => ({}),
-    Number: () => ({}),
-    Optional: (value: unknown) => value,
-    Boolean: () => ({}),
-  },
-}));
-
-type EditorStateShape = {
-  file: string | null;
-  line: number | null;
-  visibleStart: number | null;
-  visibleEnd: number | null;
-  selectionStart: number | null;
-  selectionEnd: number | null;
-};
-
-let buildPiCommsReadPrompt: (
-  state: EditorStateShape,
-  comments: CommentRecord[],
-  totalCount: number,
-  maxChars?: number,
-) => {
-  prompt: string;
-  included: number;
-  truncated: boolean;
-};
-let formatContext: (state: EditorStateShape) => string;
-let parseCommentRpcRequest: (value: unknown) => unknown;
-let parseNvimEvent: (value: unknown) => unknown;
-
-beforeAll(async () => {
-  const mod = await import("./index.js");
-  buildPiCommsReadPrompt = mod.buildPiCommsReadPrompt;
-  formatContext = mod.formatContext;
-  parseCommentRpcRequest = mod.parseCommentRpcRequest;
-  parseNvimEvent = mod.parseNvimEvent;
-});
-
-function createState(overrides: Partial<EditorStateShape> = {}): EditorStateShape {
+function createState(overrides: Partial<EditorState> = {}): EditorState {
   return {
     file: null,
     line: null,

@@ -178,7 +178,7 @@ describe("findAgentMention", () => {
 });
 
 describe("extractPiAgentThreadOwnerHint", () => {
-  it("returns the first pi_agent_msg owner hint from thread replies", () => {
+  it("returns the latest pi_agent_msg owner hint from thread replies", () => {
     expect(
       extractPiAgentThreadOwnerHint([
         {
@@ -203,8 +203,8 @@ describe("extractPiAgentThreadOwnerHint", () => {
         },
       ]),
     ).toEqual({
-      agentName: "Pixel Lime Hippo",
-      agentOwner: "owner:hippo",
+      agentName: "Aurora Pearl Cobra",
+      agentOwner: "owner:cobra",
     });
   });
 

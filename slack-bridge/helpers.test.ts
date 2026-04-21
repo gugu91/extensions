@@ -75,6 +75,9 @@ import {
   syncFollowerInboxEntries,
   resolveFollowerThreadChannel,
   isDirectMessageChannel,
+  buildFollowerRuntimeDiagnostic,
+  formatFollowerRuntimeDiagnosticHealth,
+  formatFollowerRuntimeDiagnosticNextStep,
   getFollowerReconnectUiUpdate,
   agentOwnsThread,
   normalizeOwnedThreads,
@@ -489,6 +492,60 @@ describe("formatInboxMessages", () => {
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain('will: Clicked Slack "Approve" (action_id: review.approve).');
     expect(result).toContain('metadata={"kind":"slack_block_action","actionId":"review.approve"');
+  });
+
+  it("includes a compact canvas metadata suffix with a comment-read hint", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C123",
+        threadTs: "123.456",
+        userId: "U1",
+        text: "Alice mentioned you in a comment",
+        timestamp: "123.789",
+        metadata: {
+          slackFiles: [
+            {
+              id: "F_CANVAS_1",
+              title: "Launch plan",
+              permalink: "https://example.slack.com/docs/T/F_CANVAS_1",
+            },
+          ],
+        },
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain("will: Alice mentioned you in a comment");
+    expect(result).toContain('canvas={"canvasId":"F_CANVAS_1"');
+    expect(result).toContain('"title":"Launch plan"');
+    expect(result).toContain('"permalink":"https://example.slack.com/docs/T/F_CANVAS_1"');
+    expect(result).toContain('"toolHint":"slack_canvas_comments_read canvas_id=F_CANVAS_1"');
+  });
+
+  it("keeps generic Slack file metadata out of the canvas-only suffix", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C123",
+        threadTs: "123.456",
+        userId: "U1",
+        text: "See attached note",
+        timestamp: "123.789",
+        metadata: {
+          slackFiles: [
+            {
+              id: "F123",
+              title: "Incident notes",
+              permalink: "https://files.example/incident.md",
+            },
+          ],
+        },
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain("will: See attached note");
+    expect(result).not.toContain("slack_canvas_comments_read");
+    expect(result).not.toContain(" | canvas=");
   });
 });
 
@@ -2975,6 +3032,83 @@ describe("resolveFollowerThreadChannel", () => {
       channelId: null,
       changed: false,
     });
+  });
+});
+
+// ─── follower runtime diagnostics ─────────────────────────
+
+describe("buildFollowerRuntimeDiagnostic", () => {
+  it("builds disconnect diagnostics", () => {
+    const diagnostic = buildFollowerRuntimeDiagnostic("broker_disconnect");
+
+    expect(diagnostic).toEqual({
+      kind: "broker_disconnect",
+      state: "reconnecting",
+      reason: "broker disconnected",
+      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+    });
+    expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
+      "reconnecting — broker disconnected",
+    );
+    expect(formatFollowerRuntimeDiagnosticNextStep(diagnostic)).toBe(
+      "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+    );
+  });
+
+  it("builds poll failure diagnostics", () => {
+    const diagnostic = buildFollowerRuntimeDiagnostic("poll_failure", {
+      connected: true,
+      detail: "Request timed out: pollInbox",
+    });
+
+    expect(diagnostic).toEqual({
+      kind: "poll_failure",
+      state: "degraded",
+      reason: "inbox polling failed",
+      detail: "Request timed out: pollInbox",
+      nextStep:
+        "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow.",
+    });
+    expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
+      "degraded — inbox polling failed (Request timed out: pollInbox)",
+    );
+  });
+
+  it("builds registration refresh failure diagnostics", () => {
+    const diagnostic = buildFollowerRuntimeDiagnostic("registration_refresh_failure", {
+      detail: "refresh failed once",
+    });
+
+    expect(diagnostic).toEqual({
+      kind: "registration_refresh_failure",
+      state: "degraded",
+      reason: "registration refresh failed after reconnect",
+      detail: "refresh failed once",
+      nextStep:
+        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+    });
+    expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
+      "degraded — registration refresh failed after reconnect (refresh failed once)",
+    );
+  });
+
+  it("builds reconnect stopped diagnostics and healthy fallbacks", () => {
+    const diagnostic = buildFollowerRuntimeDiagnostic("reconnect_stopped", {
+      detail: 'Agent name "Reserved Crane" is already reserved.',
+    });
+
+    expect(diagnostic).toEqual({
+      kind: "reconnect_stopped",
+      state: "error",
+      reason: "automatic reconnect stopped",
+      detail: 'Agent name "Reserved Crane" is already reserved.',
+      nextStep: "Fix the reported error, then run /pinet-follow to retry.",
+    });
+    expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
+      'error — automatic reconnect stopped (Agent name "Reserved Crane" is already reserved.)',
+    );
+    expect(formatFollowerRuntimeDiagnosticHealth(null)).toBe("healthy");
+    expect(formatFollowerRuntimeDiagnosticNextStep(null)).toBe("None.");
   });
 });
 

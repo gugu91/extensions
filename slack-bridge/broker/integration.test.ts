@@ -192,6 +192,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
       }),
     );
     expect(rpcConflictError.data as Record<string, unknown>).not.toHaveProperty("ownerAgentId");
+    expect(rpcConflictError.data as Record<string, unknown>).not.toHaveProperty("ownerStableId");
 
     client2.disconnect();
   });

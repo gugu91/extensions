@@ -1,10 +1,12 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
+  type FollowerRuntimeDiagnostic,
   type FollowerThreadState,
   type InboxMessage,
   type PinetControlCommand,
   type PinetRemoteControlRequestResult,
   type SlackBridgeSettings,
+  buildFollowerRuntimeDiagnostic,
   buildPinetOwnerToken,
   extractPinetControlCommand,
   extractPinetSkinUpdate,
@@ -74,6 +76,8 @@ export interface FollowerRuntimeDeps {
   runRemoteControl: (command: PinetControlCommand, ctx: ExtensionContext) => void;
   deliverFollowUpMessage: (text: string) => boolean;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
+  getRuntimeDiagnostic: () => FollowerRuntimeDiagnostic | null;
+  setRuntimeDiagnostic: (diagnostic: FollowerRuntimeDiagnostic | null) => void;
   handleTerminalReconnectFailure: (ctx: ExtensionContext, error: Error) => Promise<void> | void;
   formatError: (error: unknown) => string;
   deliveryState: FollowerDeliveryState;
@@ -257,6 +261,9 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
         followerPollRunning = true;
         try {
           const entries = await client.pollInbox();
+          if (deps.getRuntimeDiagnostic()?.kind === "poll_failure") {
+            deps.setRuntimeDiagnostic(null);
+          }
           const newEntries = entries.filter(
             (entry) => !isFollowerInboxIdTracked(deps.deliveryState, entry.inboxId),
           );
@@ -366,8 +373,13 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
             deps.updateBadge();
             deps.maybeDrainInboxIfIdle(ctx);
           }
-        } catch {
-          /* broker may be restarting */
+        } catch (error) {
+          deps.setRuntimeDiagnostic(
+            buildFollowerRuntimeDiagnostic("poll_failure", {
+              detail: deps.formatError(error),
+              connected: client.isConnected(),
+            }),
+          );
         } finally {
           void syncDesiredStatus(deps.getDesiredAgentStatus()).catch(() => {
             /* best effort */
@@ -380,6 +392,7 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
     try {
       await client.connect();
       await registerFollowerRuntime();
+      deps.setRuntimeDiagnostic(null);
 
       syncedFollowerStatus = "idle";
       clientRef = {
@@ -396,6 +409,7 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
           return;
         }
         stopPolling();
+        deps.setRuntimeDiagnostic(buildFollowerRuntimeDiagnostic("broker_disconnect"));
         deps.setExtStatus(ctx, "reconnecting");
         const uiUpdate = getFollowerReconnectUiUpdate("disconnect", wasDisconnected);
         wasDisconnected = uiUpdate.nextWasDisconnected;
@@ -411,9 +425,15 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
           }
           try {
             await registerFollowerRuntime();
+            deps.setRuntimeDiagnostic(null);
           } catch (error) {
             console.error(
               `[slack-bridge] follower reconnect registration refresh failed: ${deps.formatError(error)}`,
+            );
+            deps.setRuntimeDiagnostic(
+              buildFollowerRuntimeDiagnostic("registration_refresh_failure", {
+                detail: deps.formatError(error),
+              }),
             );
             const registration = client.getRegisteredIdentity();
             if (registration) {
@@ -442,10 +462,13 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
         if (clientRef?.client !== client) {
           return;
         }
-        void deps.handleTerminalReconnectFailure(
-          ctx,
-          error instanceof Error ? error : new Error(String(error)),
+        const reconnectError = error instanceof Error ? error : new Error(String(error));
+        deps.setRuntimeDiagnostic(
+          buildFollowerRuntimeDiagnostic("reconnect_stopped", {
+            detail: deps.formatError(reconnectError),
+          }),
         );
+        void deps.handleTerminalReconnectFailure(ctx, reconnectError);
       });
 
       await resumeThreadClaims();

@@ -3,7 +3,10 @@ import {
   generateAgentName,
   agentOwnsThread,
   describeSlackUserAccess,
+  formatFollowerRuntimeDiagnosticHealth,
+  formatFollowerRuntimeDiagnosticNextStep,
   resolveAllowAllWorkspaceUsers,
+  type FollowerRuntimeDiagnostic,
   type SlackBridgeSettings,
 } from "./helpers.js";
 import { formatRecentActivityLogEntries, type LoggedActivityLogEntry } from "./activity-log.js";
@@ -29,6 +32,7 @@ export interface PinetCommandsDeps {
   botUserId: () => string | null;
   activeSkinTheme: () => string | null;
   lastDmChannel: () => string | null;
+  followerRuntimeDiagnostic: () => FollowerRuntimeDiagnostic | null;
   threads: () => Map<string, { owner?: string }>;
   allowedUsers: () => Set<string> | null;
   inboxLength: () => number;
@@ -284,6 +288,9 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       const activityLogInfo = s.logChannel
         ? `Activity log: ${s.logChannel} (${s.logLevel ?? "actions"})`
         : "Activity log: disabled";
+      const runtimeDiagnostic = deps.followerRuntimeDiagnostic();
+      const runtimeHealthInfo = `Runtime health: ${formatFollowerRuntimeDiagnosticHealth(runtimeDiagnostic)}`;
+      const runtimeNextStepInfo = `Next step: ${formatFollowerRuntimeDiagnosticNextStep(runtimeDiagnostic)}`;
       const slackToolHealthInfo = `Slack tool health: ${formatSlackScopeDiagnosticsStatus(deps.slackScopeDiagnostics())}`;
       const lbm = deps.lastBrokerMaintenance();
       const brokerHealthInfo =
@@ -324,6 +331,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
           `Agent: ${deps.agentEmoji()} ${deps.agentName()}`,
           `Bot: ${deps.botUserId() ?? "unknown"}`,
           `Connection: ${deps.runtimeConnected() ? "connected" : "disconnected"}`,
+          runtimeHealthInfo,
+          runtimeNextStepInfo,
           `Skin: ${deps.activeSkinTheme() ?? "(legacy/manual)"}`,
           ...(deps.agentPersonality() ? [`Persona: ${deps.agentPersonality()}`] : []),
           `Threads: ${deps.threads().size} (${ownedCount} owned by ${deps.agentName()})`,
