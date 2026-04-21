@@ -208,6 +208,7 @@ describe("registerSlackTools", () => {
       null;
     const noteThreadReply = vi.fn();
     const clearPendingAttention = vi.fn();
+    const requireToolPolicy = vi.fn();
 
     registerSlackTools(pi, {
       getBotToken: () => botToken,
@@ -228,7 +229,7 @@ describe("registerSlackTools", () => {
       },
       resolveChannel: async (nameOrId) => `resolved:${nameOrId}`,
       rememberChannel: () => {},
-      requireToolPolicy: () => {},
+      requireToolPolicy,
       registerConfirmationRequest: () => ({ status: "created" }),
       getBotUserId: () => "U_BOT",
     });
@@ -275,6 +276,7 @@ describe("registerSlackTools", () => {
       },
       noteThreadReply,
       clearPendingAttention,
+      requireToolPolicy,
     };
   }
 
@@ -315,7 +317,7 @@ describe("registerSlackTools", () => {
   });
 
   it("deletes a single bot-posted message when confirm=true", async () => {
-    const { slack, tools, setBotToken, setDefaultChannel } = setup();
+    const { slack, tools, setBotToken, setDefaultChannel, requireToolPolicy } = setup();
     setBotToken("xoxb-reloaded");
     setDefaultChannel("ops-alerts");
 
@@ -324,6 +326,11 @@ describe("registerSlackTools", () => {
       confirm: true,
     });
 
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "slack_delete",
+      undefined,
+      "channel=ops-alerts | thread_ts= | ts=123.789 | thread=false",
+    );
     expect(slack).toHaveBeenCalledWith("chat.delete", "xoxb-reloaded", {
       channel: "resolved:ops-alerts",
       ts: "123.789",
@@ -339,7 +346,7 @@ describe("registerSlackTools", () => {
   });
 
   it("requires confirm=true before deleting Slack messages", async () => {
-    const { tools, setDefaultChannel } = setup();
+    const { tools, setDefaultChannel, requireToolPolicy } = setup();
     setDefaultChannel("ops-alerts");
 
     await expect(
@@ -349,6 +356,7 @@ describe("registerSlackTools", () => {
     ).rejects.toThrow(
       "Deleting Slack messages is irreversible. Re-run with confirm=true once you've verified the target.",
     );
+    expect(requireToolPolicy).not.toHaveBeenCalled();
   });
 
   it("uses read-through thread resolution for slack_read", async () => {
@@ -550,7 +558,11 @@ describe("registerSlackTools", () => {
     setConversationsReplies([
       {
         ok: true,
-        messages: [{ ts: "123.456" }, { ts: "123.457" }, { ts: "123.458" }],
+        messages: [
+          { ts: "123.456", user: "U_BOT" },
+          { ts: "123.457", user: "U_BOT" },
+          { ts: "123.458", user: "U_BOT" },
+        ],
         response_metadata: { next_cursor: "" },
       } as SlackResult,
     ]);
@@ -588,18 +600,47 @@ describe("registerSlackTools", () => {
     });
   });
 
-  it("requires the thread root ts when deleting an entire thread", async () => {
-    const { tools, setConversationsReplies } = setup();
+  it("rejects whole-thread deletion when the thread includes other authors", async () => {
+    const { slack, tools, setConversationsReplies } = setup();
     setConversationsReplies([
       {
         ok: true,
-        messages: [{ ts: "123.000" }, { ts: "123.789" }],
+        messages: [
+          { ts: "123.456", user: "U_BOT" },
+          { ts: "123.457", user: "U_HUMAN" },
+        ],
         response_metadata: { next_cursor: "" },
       } as SlackResult,
     ]);
 
     await expect(
       tools.get("slack_delete")!.execute("tool-6c", {
+        channel: "deployments",
+        ts: "123.456",
+        thread: true,
+        confirm: true,
+      }),
+    ).rejects.toThrow(
+      "Cannot delete thread 123.456 because it includes message(s) not posted by the current bot: 123.457. Delete those messages individually instead.",
+    );
+    expect(slack.mock.calls.filter(([method]) => method === "chat.delete")).toHaveLength(0);
+  });
+
+  it("requires the thread root ts when deleting an entire thread", async () => {
+    const { tools, setConversationsReplies } = setup();
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [
+          { ts: "123.000", user: "U_BOT" },
+          { ts: "123.789", user: "U_BOT" },
+        ],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    await expect(
+      tools.get("slack_delete")!.execute("tool-6d", {
         channel: "deployments",
         ts: "123.789",
         thread: true,

@@ -201,6 +201,32 @@ function normalizeSlackBookmarkUrl(url: string): string {
   return parsed.toString();
 }
 
+function isPiAgentSlackMessage(
+  message: Record<string, unknown>,
+  botUserId: string | null,
+): boolean {
+  if (botUserId && message.user === botUserId) {
+    return true;
+  }
+
+  const metadata = message.metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return false;
+  }
+
+  return (metadata as { event_type?: unknown }).event_type === "pi_agent_msg";
+}
+
+function summarizeSlackDeleteAction(input: {
+  channel?: string;
+  defaultChannel?: string;
+  threadTs?: string;
+  ts: string;
+  thread?: boolean;
+}): string {
+  return `channel=${input.channel ?? input.defaultChannel ?? ""} | thread_ts=${input.threadTs ?? ""} | ts=${input.ts} | thread=${input.thread ?? false}`;
+}
+
 export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDeps): void {
   const {
     getBotToken,
@@ -379,6 +405,15 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     }
     if (threadRootTs !== targetTs) {
       throw new Error("When thread=true, ts must be the thread root timestamp.");
+    }
+
+    const undeletableMessages = messages
+      .filter((message) => !isPiAgentSlackMessage(message, getBotUserId()))
+      .map((message) => (typeof message.ts === "string" ? message.ts : "unknown-ts"));
+    if (undeletableMessages.length > 0) {
+      throw new Error(
+        `Cannot delete thread ${targetTs} because it includes message(s) not posted by the current bot: ${undeletableMessages.join(", ")}. Delete those messages individually instead.`,
+      );
     }
 
     const messageTsList = messages
@@ -1827,17 +1862,23 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       ),
     }),
     async execute(_id, params) {
-      requireToolPolicy(
-        "slack_delete",
-        params.thread_ts,
-        `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | ts=${params.ts} | thread=${params.thread ?? false} | confirm=${params.confirm ?? false}`,
-      );
-
       if (params.confirm !== true) {
         throw new Error(
           "Deleting Slack messages is irreversible. Re-run with confirm=true once you've verified the target.",
         );
       }
+
+      requireToolPolicy(
+        "slack_delete",
+        params.thread_ts,
+        summarizeSlackDeleteAction({
+          channel: params.channel,
+          defaultChannel: getDefaultChannel(),
+          threadTs: params.thread_ts,
+          ts: params.ts,
+          thread: params.thread,
+        }),
+      );
 
       const deleteThread = params.thread === true;
       const { channelId, messageTsList } = await resolveSlackDeleteTargets({
