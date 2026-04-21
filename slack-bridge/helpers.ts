@@ -1228,8 +1228,15 @@ export function evaluateRalphLoopCycle(
     }
 
     const hasAssignedWork = workload.pendingInboxCount > 0 || workload.ownedThreadCount > 0;
-    const lastSeenMs = parseIsoMs(workload.lastSeen) ?? parseIsoMs(workload.lastHeartbeat);
-    const idleAgeMs = lastSeenMs == null ? null : Math.max(0, nowMs - lastSeenMs);
+    const lastSeenMs = parseIsoMs(workload.lastSeen);
+    const lastHeartbeatMs = parseIsoMs(workload.lastHeartbeat);
+    const lastContactMs =
+      lastSeenMs == null
+        ? lastHeartbeatMs
+        : lastHeartbeatMs == null
+          ? lastSeenMs
+          : Math.max(lastSeenMs, lastHeartbeatMs);
+    const idleAgeMs = lastContactMs == null ? null : Math.max(0, nowMs - lastContactMs);
 
     if (
       hasAssignedWork &&

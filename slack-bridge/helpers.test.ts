@@ -1957,7 +1957,6 @@ describe("evaluateRalphLoopCycle", () => {
           status: "idle",
           metadata: { role: "worker" },
           lastSeen: "2026-04-01T00:00:00.000Z",
-          lastHeartbeat: "2026-04-01T00:01:55.000Z",
           pendingInboxCount: 2,
           ownedThreadCount: 1,
         },
@@ -2055,7 +2054,6 @@ describe("evaluateRalphLoopCycle", () => {
           status: "idle",
           metadata: { role: "worker" },
           lastSeen: "2026-04-01T00:00:00.000Z",
-          lastHeartbeat: "2026-04-01T00:01:55.000Z",
           pendingInboxCount: 1,
           ownedThreadCount: 1,
         },
@@ -2074,6 +2072,33 @@ describe("evaluateRalphLoopCycle", () => {
       result.anomalies.some((item) => item.includes("Broker Llama idle with assigned work")),
     ).toBe(false);
     expect(result.anomalies).toContain("Busy Fox idle with assigned work (1 inbox, 1 threads)");
+  });
+
+  it("does not nudge healthy idle workers with assigned work when heartbeats are fresh", () => {
+    const result = evaluateRalphLoopCycle(
+      [
+        {
+          emoji: "🦫",
+          name: "Quiet Beaver",
+          id: "quiet-idle",
+          status: "idle",
+          metadata: { role: "worker" },
+          lastSeen: "2026-04-01T00:00:00.000Z",
+          lastHeartbeat: "2026-04-01T00:01:55.000Z",
+          pendingInboxCount: 1,
+          ownedThreadCount: 1,
+        },
+      ],
+      {
+        now: Date.parse("2026-04-01T00:02:00.000Z"),
+        idleWithWorkThresholdMs: 60_000,
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    expect(result.nudgeAgentIds).toEqual([]);
+    expect(result.anomalies).toEqual([]);
   });
 
   it("detects stuck agents when quiet activity crosses the threshold under queue pressure", () => {
