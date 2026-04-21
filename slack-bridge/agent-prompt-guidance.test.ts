@@ -67,6 +67,9 @@ describe("createAgentPromptGuidance", () => {
     const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
 
     expect(result.systemPrompt).toContain("You are 🦩 Cobalt Olive Crane, the Pinet BROKER.");
+    expect(result.systemPrompt).toContain("TRIAGE, THEN DELEGATE:");
+    expect(result.systemPrompt).toContain("Delegate before any deep repo/source inspection.");
+    expect(result.systemPrompt).toContain("DEEP INSPECTION BELONGS TO WORKERS:");
     expect(result.systemPrompt).toContain("🚫 BROKER TOOL RESTRICTION:");
     expect(result.systemPrompt).not.toContain("TASK WORKFLOW:");
   });
@@ -86,5 +89,22 @@ describe("createAgentPromptGuidance", () => {
     expect(result.systemPrompt).toContain("REPLY TOOL RULES:");
     expect(result.systemPrompt).not.toContain("Pinet BROKER");
     expect(result.systemPrompt).not.toContain("🚫 BROKER TOOL RESTRICTION:");
+  });
+
+  it("keeps identity guidance ahead of follower workflow guidance", async () => {
+    const guidance = createAgentPromptGuidance(
+      createDeps({
+        getBrokerRole: () => "follower",
+      }),
+    );
+
+    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
+
+    expect(result.systemPrompt.indexOf("IDENTITY 1")).toBeLessThan(
+      result.systemPrompt.indexOf("TASK WORKFLOW:"),
+    );
+    expect(result.systemPrompt.indexOf("TASK WORKFLOW:")).toBeLessThan(
+      result.systemPrompt.indexOf("PINET DELEGATION RULES:"),
+    );
   });
 });
