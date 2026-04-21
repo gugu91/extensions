@@ -1310,7 +1310,9 @@ describe("slack-bridge top-level shutdown", () => {
     );
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("Slack access is default-deny because no allowedUsers are configured."),
+      expect.stringContaining(
+        "Slack access is default-deny because no allowedUsers are configured.",
+      ),
       "warning",
     );
 
