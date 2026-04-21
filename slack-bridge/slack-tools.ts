@@ -351,6 +351,49 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     return messages;
   }
 
+  async function resolveSlackDeleteTargets(input: {
+    channel?: string;
+    threadTs?: string;
+    ts: string;
+    thread?: boolean;
+  }): Promise<{ channelId: string; messageTsList: string[] }> {
+    const channelId = await resolveSlackTargetChannel(input.threadTs, input.channel);
+    const targetTs = input.ts.trim();
+    if (!targetTs) {
+      throw new Error("ts is required.");
+    }
+
+    if (!input.thread) {
+      return { channelId, messageTsList: [targetTs] };
+    }
+
+    const messages = await fetchSlackThreadMessages(channelId, targetTs);
+    const threadRootTs =
+      messages.length > 0 && typeof messages[0]?.ts === "string"
+        ? (messages[0].ts as string)
+        : undefined;
+    if (!threadRootTs) {
+      throw new Error(
+        `Slack did not return a thread rooted at ${targetTs} in channel ${input.channel ?? channelId}.`,
+      );
+    }
+    if (threadRootTs !== targetTs) {
+      throw new Error("When thread=true, ts must be the thread root timestamp.");
+    }
+
+    const messageTsList = messages
+      .map((message) => (typeof message.ts === "string" ? message.ts : undefined))
+      .filter((messageTs): messageTs is string => messageTs != null && messageTs.length > 0);
+    if (messageTsList.length === 0) {
+      throw new Error(`Slack did not return any deletable messages for thread ${targetTs}.`);
+    }
+
+    return {
+      channelId,
+      messageTsList: [...messageTsList.slice(1), messageTsList[0]],
+    };
+  }
+
   async function buildSlackExportPayload(messages: Record<string, unknown>[]): Promise<{
     mentionNames: Record<string, string>;
     authors: string[];
@@ -1744,6 +1787,93 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           },
         ],
         details: { ts, channel: channelId, blocksCount: params.blocks?.length ?? 0 },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "slack_delete",
+    label: "Slack Delete",
+    description:
+      "Delete a Slack message posted by the bot, or delete an entire thread rooted at a bot-posted message.",
+    promptSnippet:
+      "Delete a bot-posted Slack message. This is destructive — set confirm=true, and prefer explicit approval before deleting whole threads.",
+    parameters: Type.Object({
+      ts: Type.String({
+        description:
+          "Timestamp (ts) of the message to delete. When thread=true, this must be the thread root timestamp.",
+      }),
+      channel: Type.Optional(
+        Type.String({
+          description:
+            "Channel name or ID. Omit to use the current thread channel, active DM, or defaultChannel.",
+        }),
+      ),
+      thread_ts: Type.Optional(
+        Type.String({
+          description:
+            "Optional thread timestamp used to resolve the current channel when channel is omitted.",
+        }),
+      ),
+      thread: Type.Optional(
+        Type.Boolean({
+          description: "Delete the entire thread rooted at ts (default false).",
+        }),
+      ),
+      confirm: Type.Optional(
+        Type.Boolean({
+          description: "Must be true to confirm this irreversible deletion.",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      requireToolPolicy(
+        "slack_delete",
+        params.thread_ts,
+        `channel=${params.channel ?? getDefaultChannel() ?? ""} | thread_ts=${params.thread_ts ?? ""} | ts=${params.ts} | thread=${params.thread ?? false} | confirm=${params.confirm ?? false}`,
+      );
+
+      if (params.confirm !== true) {
+        throw new Error(
+          "Deleting Slack messages is irreversible. Re-run with confirm=true once you've verified the target.",
+        );
+      }
+
+      const deleteThread = params.thread === true;
+      const { channelId, messageTsList } = await resolveSlackDeleteTargets({
+        channel: params.channel,
+        threadTs: params.thread_ts,
+        ts: params.ts,
+        thread: deleteThread,
+      });
+
+      for (const messageTs of messageTsList) {
+        await slack("chat.delete", getBotToken(), {
+          channel: channelId,
+          ts: messageTs,
+        });
+      }
+
+      const targetTs = params.ts.trim();
+      const deletedCount = messageTsList.length;
+      const channelLabel = params.channel ?? channelId;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: deleteThread
+              ? `Deleted thread rooted at ${targetTs} in channel ${channelLabel} (${deletedCount} message${deletedCount === 1 ? "" : "s"}).`
+              : `Deleted message ${targetTs} from channel ${channelLabel}.`,
+          },
+        ],
+        details: {
+          channel: channelId,
+          ts: targetTs,
+          thread: deleteThread,
+          deleted_count: deletedCount,
+          deleted_ts: messageTsList,
+        },
       };
     },
   });

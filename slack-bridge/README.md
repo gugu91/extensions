@@ -190,6 +190,7 @@ Messages queue while the agent is busy. When the agent finishes, it automaticall
 | `slack_upload`               | Upload files, snippets, or diffs into Slack                                       |
 | `slack_schedule`             | Schedule a message for later delivery                                             |
 | `slack_post_channel`         | Post to a channel (by name or ID)                                                 |
+| `slack_delete`               | Delete a bot-posted message or an entire thread                                   |
 | `slack_read_channel`         | Read channel history or a thread in a channel                                     |
 | `slack_create_channel`       | Create a new Slack channel                                                        |
 | `slack_project_create`       | Create a project channel + RFC canvas + bot invite in one call                    |

@@ -95,6 +95,7 @@ describe("isToolBlocked", () => {
   it("classifies Slack mutation tools as write-only", () => {
     expect(WRITE_TOOLS.has("slack_create_channel")).toBe(true);
     expect(WRITE_TOOLS.has("slack_post_channel")).toBe(true);
+    expect(WRITE_TOOLS.has("slack_delete")).toBe(true);
     expect(WRITE_TOOLS.has("slack_upload")).toBe(true);
     expect(WRITE_TOOLS.has("slack_schedule")).toBe(true);
     expect(WRITE_TOOLS.has("slack_pin")).toBe(true);
@@ -107,6 +108,7 @@ describe("isToolBlocked", () => {
     expect(READ_ONLY_TOOLS.has("slack_presence")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack_create_channel")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_post_channel")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_delete")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_upload")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_schedule")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack_pin")).toBe(false);

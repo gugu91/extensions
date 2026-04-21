@@ -78,6 +78,16 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
+      if (method === "chat.delete") {
+        return {
+          ok: true,
+          token,
+          body,
+          channel: typeof body?.channel === "string" ? body.channel : "C123",
+          ts: typeof body?.ts === "string" ? body.ts : "123.456",
+        } as SlackResult;
+      }
+
       if (method === "views.open" || method === "views.push" || method === "views.update") {
         return {
           ok: true,
@@ -304,6 +314,43 @@ describe("registerSlackTools", () => {
     );
   });
 
+  it("deletes a single bot-posted message when confirm=true", async () => {
+    const { slack, tools, setBotToken, setDefaultChannel } = setup();
+    setBotToken("xoxb-reloaded");
+    setDefaultChannel("ops-alerts");
+
+    const response = await tools.get("slack_delete")!.execute("tool-2b", {
+      ts: "123.789",
+      confirm: true,
+    });
+
+    expect(slack).toHaveBeenCalledWith("chat.delete", "xoxb-reloaded", {
+      channel: "resolved:ops-alerts",
+      ts: "123.789",
+    });
+    expect(response.content?.[0]?.text).toContain("Deleted message 123.789");
+    expect(response.details).toMatchObject({
+      channel: "resolved:ops-alerts",
+      ts: "123.789",
+      thread: false,
+      deleted_count: 1,
+      deleted_ts: ["123.789"],
+    });
+  });
+
+  it("requires confirm=true before deleting Slack messages", async () => {
+    const { tools, setDefaultChannel } = setup();
+    setDefaultChannel("ops-alerts");
+
+    await expect(
+      tools.get("slack_delete")!.execute("tool-2c", {
+        ts: "123.789",
+      }),
+    ).rejects.toThrow(
+      "Deleting Slack messages is irreversible. Re-run with confirm=true once you've verified the target.",
+    );
+  });
+
   it("uses read-through thread resolution for slack_read", async () => {
     const { slack, tools, setResolveThreadChannel } = setup();
     setResolveThreadChannel(async (threadTs: string | undefined) => {
@@ -317,6 +364,25 @@ describe("registerSlackTools", () => {
       channel: "C-DB",
       ts: "123.456",
       limit: 20,
+    });
+  });
+
+  it("uses thread channel resolution for slack_delete", async () => {
+    const { slack, tools, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return "C-DB";
+    });
+
+    await tools.get("slack_delete")!.execute("tool-3b", {
+      ts: "123.789",
+      thread_ts: "123.456",
+      confirm: true,
+    });
+
+    expect(slack).toHaveBeenCalledWith("chat.delete", "xoxb-initial", {
+      channel: "C-DB",
+      ts: "123.789",
     });
   });
 
@@ -477,6 +543,69 @@ describe("registerSlackTools", () => {
         post_at: Math.floor(Date.parse("2026-04-02T14:30:00.000Z") / 1000),
       }),
     );
+  });
+
+  it("deletes thread replies before deleting the root message", async () => {
+    const { slack, tools, setConversationsReplies } = setup();
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [{ ts: "123.456" }, { ts: "123.457" }, { ts: "123.458" }],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    const response = await tools.get("slack_delete")!.execute("tool-6b", {
+      channel: "deployments",
+      ts: "123.456",
+      thread: true,
+      confirm: true,
+    });
+
+    expect(slack).toHaveBeenNthCalledWith(1, "conversations.replies", "xoxb-initial", {
+      channel: "resolved:deployments",
+      ts: "123.456",
+      limit: 1000,
+    });
+    expect(slack).toHaveBeenNthCalledWith(2, "chat.delete", "xoxb-initial", {
+      channel: "resolved:deployments",
+      ts: "123.457",
+    });
+    expect(slack).toHaveBeenNthCalledWith(3, "chat.delete", "xoxb-initial", {
+      channel: "resolved:deployments",
+      ts: "123.458",
+    });
+    expect(slack).toHaveBeenNthCalledWith(4, "chat.delete", "xoxb-initial", {
+      channel: "resolved:deployments",
+      ts: "123.456",
+    });
+    expect(response.details).toMatchObject({
+      channel: "resolved:deployments",
+      ts: "123.456",
+      thread: true,
+      deleted_count: 3,
+      deleted_ts: ["123.457", "123.458", "123.456"],
+    });
+  });
+
+  it("requires the thread root ts when deleting an entire thread", async () => {
+    const { tools, setConversationsReplies } = setup();
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [{ ts: "123.000" }, { ts: "123.789" }],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    await expect(
+      tools.get("slack_delete")!.execute("tool-6c", {
+        channel: "deployments",
+        ts: "123.789",
+        thread: true,
+        confirm: true,
+      }),
+    ).rejects.toThrow("When thread=true, ts must be the thread root timestamp.");
   });
 
   it("handles already_pinned gracefully", async () => {
