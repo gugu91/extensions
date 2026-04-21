@@ -190,6 +190,56 @@ export function buildSqliteWalFallbackWarning(
   return `[${component}] SQLite WAL mode not available, using ${getSqliteJournalMode(result)} journal mode fallback`;
 }
 
+function extractSlackCanvasIdFromPermalink(permalink: string | undefined): string | undefined {
+  if (!permalink) return undefined;
+
+  const match = permalink.match(/\/docs\/[^/]+\/(F[^/?#]+)/i);
+  return match?.[1];
+}
+
+function extractInboxCanvasReference(metadata: Record<string, unknown> | null | undefined): {
+  canvasId: string;
+  title?: string;
+  permalink?: string;
+} | null {
+  const slackFiles = Array.isArray(metadata?.slackFiles) ? metadata.slackFiles : [];
+
+  for (const file of slackFiles) {
+    if (!file || typeof file !== "object" || Array.isArray(file)) {
+      continue;
+    }
+
+    const record = asRecord(file);
+    if (!record) {
+      continue;
+    }
+
+    const title = asString(record.title) ?? asString(record.name);
+    const permalink = asString(record.permalink);
+    const prettyType = asString(record.prettyType)?.toLowerCase();
+    const filetype = asString(record.filetype)?.toLowerCase();
+    const mimetype = asString(record.mimetype)?.toLowerCase();
+    const canvasId = asString(record.id) ?? extractSlackCanvasIdFromPermalink(permalink);
+    const looksCanvas =
+      Boolean(permalink && permalink.includes("/docs/")) ||
+      prettyType === "canvas" ||
+      filetype === "canvas" ||
+      Boolean(mimetype?.includes("slack-doc"));
+
+    if (!looksCanvas || !canvasId) {
+      continue;
+    }
+
+    return {
+      canvasId,
+      ...(title ? { title } : {}),
+      ...(permalink ? { permalink } : {}),
+    };
+  }
+
+  return null;
+}
+
 function formatInboxMetadata(metadata: Record<string, unknown> | null | undefined): string {
   if (!metadata || Object.keys(metadata).length === 0) return "";
 
@@ -200,6 +250,16 @@ function formatInboxMetadata(metadata: Record<string, unknown> | null | undefine
       blockId: metadata.blockId ?? null,
       value: metadata.value ?? null,
       parsedValue: metadata.parsedValue ?? null,
+    })}`;
+  }
+
+  const canvasReference = extractInboxCanvasReference(metadata);
+  if (canvasReference) {
+    return ` | canvas=${JSON.stringify({
+      canvasId: canvasReference.canvasId,
+      ...(canvasReference.title ? { title: canvasReference.title } : {}),
+      ...(canvasReference.permalink ? { permalink: canvasReference.permalink } : {}),
+      toolHint: `slack_canvas_comments_read canvas_id=${canvasReference.canvasId}`,
     })}`;
   }
 
