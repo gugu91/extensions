@@ -392,6 +392,47 @@ describe("classifyMessage", () => {
     }
   });
 
+  it("preserves fetchable canvas file references for normal mention events", () => {
+    const evt = {
+      type: "message",
+      user: "U1",
+      text: "<@U_BOT> Alice mentioned you in a comment",
+      channel: "C1",
+      channel_type: "channel",
+      ts: "1.1",
+      files: [
+        {
+          id: "F_CANVAS_1",
+          title: "Launch plan",
+          permalink: "https://example.slack.com/docs/T/F_CANVAS_1",
+        },
+      ],
+    };
+
+    const result = classifyMessage(evt, botId, emptyTracked);
+    expect(result.relevant).toBe(true);
+    if (result.relevant) {
+      expect(result.isChannelMention).toBe(true);
+      expect(result.text).toBe(
+        [
+          "Alice mentioned you in a comment",
+          "",
+          "Slack message context:",
+          "- Launch plan — id=F_CANVAS_1 — https://example.slack.com/docs/T/F_CANVAS_1",
+        ].join("\n"),
+      );
+      expect(result.metadata).toEqual({
+        slackFiles: [
+          {
+            id: "F_CANVAS_1",
+            title: "Launch plan",
+            permalink: "https://example.slack.com/docs/T/F_CANVAS_1",
+          },
+        ],
+      });
+    }
+  });
+
   it("does not strip mention in tracked threads", () => {
     const tracked = new Set(["1.1"]);
     const evt = {
