@@ -17,23 +17,40 @@ function createDeps(overrides: Partial<BrokerThreadOwnerHintsDeps> = {}) {
 }
 
 describe("createBrokerThreadOwnerHints", () => {
-  it("caches resolved broker thread-owner hints per channel/thread pair", async () => {
+  it("re-fetches resolved broker thread-owner hints so ownership changes stay fresh", async () => {
     const { deps, slack } = createDeps({
-      slack: vi.fn(async () => ({
-        ok: true,
-        messages: [
-          {
-            bot_id: "B123",
-            metadata: {
-              event_type: "pi_agent_msg",
-              event_payload: {
-                agent_owner: "owner:crane",
-                agent: "Cobalt Olive Crane",
+      slack: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          messages: [
+            {
+              bot_id: "B123",
+              metadata: {
+                event_type: "pi_agent_msg",
+                event_payload: {
+                  agent_owner: "owner:crane",
+                  agent: "Cobalt Olive Crane",
+                },
               },
             },
-          },
-        ],
-      })),
+          ],
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          messages: [
+            {
+              bot_id: "B123",
+              metadata: {
+                event_type: "pi_agent_msg",
+                event_payload: {
+                  agent_owner: "owner:moth",
+                  agent: "Silent Slate Mantis",
+                },
+              },
+            },
+          ],
+        }),
     });
     const brokerThreadOwnerHints = createBrokerThreadOwnerHints(deps);
 
@@ -46,12 +63,18 @@ describe("createBrokerThreadOwnerHints", () => {
     await expect(
       brokerThreadOwnerHints.resolveBrokerThreadOwnerHint("C123", "100.1"),
     ).resolves.toEqual({
-      agentOwner: "owner:crane",
-      agentName: "Cobalt Olive Crane",
+      agentOwner: "owner:moth",
+      agentName: "Silent Slate Mantis",
     });
 
-    expect(slack).toHaveBeenCalledTimes(1);
-    expect(slack).toHaveBeenCalledWith("conversations.replies", "xoxb-test", {
+    expect(slack).toHaveBeenCalledTimes(2);
+    expect(slack).toHaveBeenNthCalledWith(1, "conversations.replies", "xoxb-test", {
+      channel: "C123",
+      ts: "100.1",
+      limit: 200,
+      include_all_metadata: true,
+    });
+    expect(slack).toHaveBeenNthCalledWith(2, "conversations.replies", "xoxb-test", {
       channel: "C123",
       ts: "100.1",
       limit: 200,
