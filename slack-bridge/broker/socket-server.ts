@@ -592,6 +592,8 @@ export class BrokerSocketServer {
     if (explicitNameRequest) {
       const conflict = this.db.findAgentNameConflict(finalName, candidateId, stableId);
       if (conflict) {
+        // Do not expose raw ownerStableId on this client-visible payload (#495).
+        // The message + code + requestedName are enough to drive the retry path.
         return rpcError(
           req.id,
           RPC_AGENT_NAME_CONFLICT,
@@ -599,7 +601,6 @@ export class BrokerSocketServer {
           {
             code: "AGENT_NAME_CONFLICT",
             requestedName: finalName,
-            ownerStableId: conflict.stableId,
             retryable: true,
           },
         );
