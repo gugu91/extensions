@@ -4185,4 +4185,208 @@ describe("slack-bridge broker startup backlog recovery", () => {
     );
     expect(setStatus).toHaveBeenCalled();
   });
+
+  it("keeps exactly one live broker row and clears stranded broker-targeted pending backlog across startup and reload", async () => {
+    const stableBrokerId = "stable-broker-id";
+    const priorBrokerId = "broker-prev";
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const seededDb = new BrokerDB(dbPath);
+    seededDb.initialize();
+    seededDb.registerAgent(
+      priorBrokerId,
+      "Previous Broker",
+      "🦔",
+      101,
+      { role: "broker" },
+      stableBrokerId,
+    );
+    seededDb.registerAgent("sender", "Sender", "📤", 202);
+    seededDb.createThread(`a2a:sender:${priorBrokerId}`, "agent", "", "sender");
+    seededDb.queueMessage(priorBrokerId, {
+      source: "agent",
+      threadId: `a2a:sender:${priorBrokerId}`,
+      channel: "",
+      userId: "sender",
+      text: "recover this through startup and reload",
+      timestamp: "123.456",
+    });
+    expect(seededDb.requeueUndeliveredMessages(priorBrokerId)).toBe(1);
+    seededDb.disconnectAgent(priorBrokerId);
+    seededDb.close();
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const notify = vi.fn();
+    const setStatus = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [
+          {
+            type: "custom",
+            customType: "slack-bridge-state",
+            data: {
+              brokerStableId: stableBrokerId,
+              lastPinetRole: "broker",
+            },
+          },
+        ],
+        getHeader: () => null,
+        getLeafId: () => "broker-reload-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-broker-reload-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const brokerRuntimes: Array<{
+      db: BrokerDB;
+      stop: ReturnType<typeof vi.fn>;
+    }> = [];
+
+    const inspectHealthyBrokerState = () => {
+      const inspectDb = new DatabaseSync(dbPath);
+      const brokerRows = inspectDb
+        .prepare("SELECT id, stable_id, metadata, disconnected_at FROM agents")
+        .all() as Array<{
+        id: string;
+        stable_id: string | null;
+        metadata: string | null;
+        disconnected_at: string | null;
+      }>;
+      const liveBrokerRows = brokerRows.filter((row) => {
+        const metadata = row.metadata
+          ? (JSON.parse(row.metadata) as Record<string, unknown>)
+          : null;
+        return metadata?.role === "broker" && row.disconnected_at === null;
+      });
+      expect(liveBrokerRows).toHaveLength(1);
+      expect(liveBrokerRows[0]).toMatchObject({
+        id: priorBrokerId,
+        stable_id: stableBrokerId,
+        disconnected_at: null,
+      });
+
+      const recoveredBacklog = inspectDb
+        .prepare(
+          `SELECT status, assigned_agent_id
+             FROM unrouted_backlog
+            WHERE preferred_agent_id = ?
+            ORDER BY id DESC
+            LIMIT 1`,
+        )
+        .get(priorBrokerId) as {
+        status: string;
+        assigned_agent_id: string | null;
+      };
+      expect(recoveredBacklog).toMatchObject({
+        status: "assigned",
+        assigned_agent_id: priorBrokerId,
+      });
+
+      const strandedPending = inspectDb
+        .prepare(
+          `SELECT COUNT(*) AS count
+             FROM unrouted_backlog backlog
+             LEFT JOIN agents preferred ON preferred.id = backlog.preferred_agent_id
+            WHERE backlog.status = 'pending'
+              AND backlog.preferred_agent_id = ?
+              AND (preferred.id IS NULL OR preferred.disconnected_at IS NOT NULL)`,
+        )
+        .get(priorBrokerId) as { count: number };
+      expect(strandedPending.count).toBe(0);
+      inspectDb.close();
+    };
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const stop = vi.fn(async () => {
+        db.close();
+      });
+      brokerRuntimes.push({ db, stop });
+      return {
+        db,
+        server: {
+          setAgentRegistrationResolver: vi.fn(),
+          onAgentMessage: vi.fn(),
+          onAgentStatusChange: vi.fn(),
+        },
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters: [],
+        addAdapter: vi.fn(),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+
+    expect(startBrokerSpy).toHaveBeenCalledTimes(1);
+    inspectHealthyBrokerState();
+
+    await pinetStart?.handler("", ctx);
+
+    expect(startBrokerSpy).toHaveBeenCalledTimes(2);
+    expect(brokerRuntimes).toHaveLength(2);
+    expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      "Pinet broker already running — reloading current runtime",
+      "info",
+    );
+    inspectHealthyBrokerState();
+
+    await sessionShutdown?.({}, ctx);
+    expect(notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Pinet broker failed"),
+      "error",
+    );
+    expect(setStatus).toHaveBeenCalled();
+  });
 });
