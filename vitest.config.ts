@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@gugu910/pi-broker-core": fileURLToPath(new URL("./broker-core/index.ts", import.meta.url)),
       "@gugu910/pi-imessage-bridge": fileURLToPath(
         new URL("./imessage-bridge/index.ts", import.meta.url),
       ),

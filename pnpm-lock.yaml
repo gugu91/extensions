@@ -41,6 +41,12 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2(@types/node@22.19.11)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@22.19.11)(jiti@2.6.1)(yaml@2.8.2))
 
+  broker-core:
+    dependencies:
+      "@gugu910/pi-transport-core":
+        specifier: workspace:*
+        version: link:../transport-core
+
   imessage-bridge:
     dependencies:
       "@gugu910/pi-transport-core":
@@ -69,6 +75,9 @@ importers:
 
   slack-bridge:
     dependencies:
+      "@gugu910/pi-broker-core":
+        specifier: workspace:*
+        version: link:../broker-core
       "@gugu910/pi-imessage-bridge":
         specifier: workspace:*
         version: link:../imessage-bridge

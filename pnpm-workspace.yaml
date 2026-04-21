@@ -1,5 +1,6 @@
 packages:
   - transport-core
+  - broker-core
   - slack-bridge
   - slack-api
   - imessage-bridge

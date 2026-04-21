@@ -11,12 +11,15 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
+      "@gugu910/pi-broker-core": ["./broker-core/index.ts"],
+      "@gugu910/pi-broker-core/*": ["./broker-core/*.ts"],
       "@gugu910/pi-imessage-bridge": ["./imessage-bridge/index.ts"],
       "@gugu910/pi-transport-core": ["./transport-core/index.ts"]
     }
   },
   "include": [
     "transport-core/**/*.ts",
+    "broker-core/**/*.ts",
     "imessage-bridge/**/*.ts",
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",
