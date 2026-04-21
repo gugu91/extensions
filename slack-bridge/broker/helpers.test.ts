@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as net from "node:net";
+import { BrokerDB as CoreBrokerDB } from "@gugu910/pi-broker-core/schema";
 import { BrokerDB, CURRENT_BROKER_SCHEMA_VERSION } from "./schema.js";
 import { LeaderLock } from "./leader.js";
 import { startBroker, type Broker } from "./index.js";
@@ -109,6 +110,21 @@ describe("BrokerDB", () => {
   it("creates tables without error", () => {
     // initialize() already ran — just verify we can query
     expect(db.getAgents()).toEqual([]);
+  });
+
+  it("keeps RALPH cycle storage out of the broker-core base schema", () => {
+    const coreDbPath = path.join(dir, "core.db");
+    const coreDb = new CoreBrokerDB(coreDbPath);
+    coreDb.initialize();
+    coreDb.close();
+
+    const inspectDb = new DatabaseSync(coreDbPath);
+    const ralphTable = inspectDb
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ralph_cycles'")
+      .get() as { name?: string } | undefined;
+    inspectDb.close();
+
+    expect(ralphTable).toBeUndefined();
   });
 
   it("migrates a legacy agents table and stamps the schema version", () => {
