@@ -1234,6 +1234,115 @@ describe("slack-bridge top-level shutdown", () => {
     expect(firstSocket.close).toHaveBeenCalled();
   });
 
+  it("warns on default-deny Slack access at startup and reports it in pinet-status", async () => {
+    const originalAllowedUsersEnv = process.env.SLACK_ALLOWED_USERS;
+    const originalAllowAllEnv = process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS;
+    delete process.env.SLACK_ALLOWED_USERS;
+    delete process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS;
+
+    const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
+    fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ "slack-bridge": { runtimeMode: "single" } }));
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+    const FakeWebSocket = createFakeWebSocketClass();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "single-default-deny-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-single-default-deny-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, url: "wss://slack.example/socket" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStatus = commands.get("pinet-status");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStatus).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await Promise.resolve();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://slack.com/api/apps.connections.open",
+      expect.any(Object),
+    );
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Slack access is default-deny because no allowedUsers are configured."),
+      "warning",
+    );
+
+    await pinetStatus?.handler("", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Allowed users: none (default deny; set allowedUsers or allowAllWorkspaceUsers: true)",
+      ),
+      "info",
+    );
+
+    await sessionShutdown?.({}, ctx);
+    const firstSocket = FakeWebSocket.instances[0];
+    expect(firstSocket).toBeDefined();
+    if (!firstSocket) {
+      throw new Error("Expected a default-deny single-mode websocket instance");
+    }
+    expect(firstSocket.close).toHaveBeenCalled();
+
+    if (originalAllowedUsersEnv === undefined) {
+      delete process.env.SLACK_ALLOWED_USERS;
+    } else {
+      process.env.SLACK_ALLOWED_USERS = originalAllowedUsersEnv;
+    }
+    if (originalAllowAllEnv === undefined) {
+      delete process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS;
+    } else {
+      process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS = originalAllowAllEnv;
+    }
+  });
+
   it("warns and reports status when live Slack scope drift is detected at startup", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });

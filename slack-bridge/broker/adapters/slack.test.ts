@@ -1033,41 +1033,116 @@ describe("SlackAdapter", () => {
 // ─── SlackAdapter — allowlist filtering ──────────────────
 
 describe("SlackAdapter — allowlist filtering", () => {
-  it("filters unauthorized users via classifyMessage + isUserAllowed flow", async () => {
-    // This tests the integration: classifyMessage marks message as relevant,
-    // but the adapter's onMessage checks the allowlist before emitting
-    const evt = {
+  let originalFetch: typeof globalThis.fetch;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchMock = vi.fn<typeof fetch>();
+    globalThis.fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function mockSlackResponse(data: Record<string, unknown> = {}) {
+    return new Response(JSON.stringify({ ok: true, ...data }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("blocks inbound DM events by default when no allowlist is configured", async () => {
+    fetchMock.mockImplementation(async () => {
+      throw new Error("default-deny path should not call Slack APIs");
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
       type: "message",
-      user: "U_UNAUTHORIZED",
-      text: "hello",
+      user: "U_BLOCKED",
+      text: "hello from Slack",
       channel: "D1",
       channel_type: "im",
       ts: "1.1",
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(adapter.getTrackedThreadIds()).toEqual(new Set(["1.1"]));
+  });
+
+  it("admits inbound DM events when allowAllWorkspaceUsers is explicitly enabled", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        expect(parsedBody).toEqual({ channel: "D1", timestamp: "1.1", name: "eyes" });
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
     };
-    // classifyMessage sees it as relevant (it's a DM)
-    const result = classifyMessage(evt, "U_BOT", new Set());
-    expect(result.relevant).toBe(true);
+    adapterPort.botUserId = "U_BOT";
 
-    // But the adapter with an allowlist would filter it out
-    // (We test the helper directly since the adapter's onMessage is private)
-    const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
-    const allowlist = buildAllowlist({ allowedUsers: ["U_AUTHORIZED"] }, undefined);
-    expect(isUserAllowed(allowlist, "U_UNAUTHORIZED")).toBe(false);
-    expect(isUserAllowed(allowlist, "U_AUTHORIZED")).toBe(true);
-  });
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello from Slack",
+      channel: "D1",
+      channel_type: "im",
+      ts: "1.1",
+    });
 
-  it("rejects all users by default when no allowlist is configured", async () => {
-    const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
-    const allowlist = buildAllowlist({}, undefined, undefined);
-    expect(allowlist).toEqual(new Set());
-    expect(isUserAllowed(allowlist, "U_ANYONE")).toBe(false);
-  });
-
-  it("still supports explicit allow-all mode", async () => {
-    const { isUserAllowed, buildAllowlist } = await import("../../helpers.js");
-    const allowlist = buildAllowlist({ allowAllWorkspaceUsers: true }, undefined, undefined);
-    expect(allowlist).toBeNull();
-    expect(isUserAllowed(allowlist, "U_ANYONE")).toBe(true);
+    expect(handler).toHaveBeenCalledWith({
+      source: "slack",
+      threadId: "1.1",
+      channel: "D1",
+      userId: "U_ALLOWED",
+      userName: "Alice Example",
+      text: "hello from Slack",
+      timestamp: "1.1",
+    });
+    await waitForAssertion(() => {
+      const endpoints = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(endpoints).toContain("https://slack.com/api/users.info");
+      expect(endpoints).toContain("https://slack.com/api/reactions.add");
+    });
   });
 });
 
