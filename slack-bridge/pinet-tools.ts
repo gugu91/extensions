@@ -24,6 +24,7 @@ export interface PinetToolsAgentRecord {
   lastSeen?: string;
   disconnectedAt?: string | null;
   resumableUntil?: string | null;
+  outboundCount?: number;
 }
 
 export interface RegisterPinetToolsDeps {

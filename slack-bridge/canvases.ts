@@ -340,8 +340,3 @@ export function extractSlackCanvasCommentsPage(
     ...(nextCursor ? { nextCursor } : {}),
   };
 }
-
-export function extractExistingChannelCanvasId(response: Record<string, unknown>): string | null {
-  const canvasId = extractSlackChannelCanvasId(response);
-  return canvasId;
-}

@@ -40,6 +40,7 @@ function createBrokerDeps(overrides: Partial<PinetMeshOpsDeps> = {}) {
       stableId: "stable-worker-1",
       name: "Worker One",
       emoji: "🦊",
+      outboundCount: 3,
     }),
     makeAgent({
       id: "worker-2",
@@ -159,6 +160,7 @@ function createFollowerDeps(overrides: Partial<PinetMeshOpsDeps> = {}) {
       lastSeen: "2026-04-15T13:09:30.000Z",
       disconnectedAt: null,
       resumableUntil: null,
+      outboundCount: 2,
     },
   ]);
   const followerClient: PinetMeshOpsFollowerClientPort = {
@@ -306,12 +308,22 @@ describe("createPinetMeshOps", () => {
 
     expect(brokerMeshOps.listBrokerAgents()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "worker-1", status: "idle", name: "Worker One" }),
+        expect.objectContaining({
+          id: "worker-1",
+          status: "idle",
+          name: "Worker One",
+          outboundCount: 3,
+        }),
         expect.objectContaining({ id: "worker-2", status: "idle", name: "Worker Two" }),
       ]),
     );
     await expect(followerMeshOps.listFollowerAgents(true)).resolves.toEqual([
-      expect.objectContaining({ id: "worker-2", status: "idle", name: "Worker Two" }),
+      expect.objectContaining({
+        id: "worker-2",
+        status: "idle",
+        name: "Worker Two",
+        outboundCount: 2,
+      }),
     ]);
     expect(follower.listAgents).toHaveBeenCalledWith(true);
   });

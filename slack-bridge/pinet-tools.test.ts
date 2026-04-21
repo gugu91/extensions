@@ -158,11 +158,11 @@ describe("registerPinetTools", () => {
     expect(result.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
   });
 
-  it("renders broker pinet_agents output with routing hints", async () => {
+  it("renders broker pinet_agents output with routing hints and outbound counts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
-    const listBrokerAgents = vi.fn(() => [makeAgent()]);
+    const listBrokerAgents = vi.fn(() => [makeAgent({ outboundCount: 3 })]);
     const deps = createDeps({ listBrokerAgents });
     const tools = registerWithDeps(deps);
 
@@ -180,6 +180,7 @@ describe("registerPinetTools", () => {
       "Agent routing hints: repo=extensions · tools=read,edit · task=review #395",
     );
     expect(result.content[0]?.text).toContain("Golden Chalk Rabbit");
+    expect(result.content[0]?.text).toContain("outbound: 3 this session");
     expect(result.details.hint).toEqual({
       repo: "extensions",
       branch: undefined,
