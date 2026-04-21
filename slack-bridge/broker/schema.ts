@@ -1,1 +1,1 @@
-export * from "@gugu910/pi-broker-core";
+export * from "@gugu910/pi-broker-core/schema";
