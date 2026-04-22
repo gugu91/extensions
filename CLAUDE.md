@@ -34,7 +34,7 @@ are skipped on re-runs.
 - NEVER work directly on `main` or checkout feature branches in the main repo directory.
 - ALWAYS create a git worktree: `git worktree add .worktrees/<name> -b <branch>` and `cd` into it before making changes.
 - In a fresh worktree, run `pnpm install --frozen-lockfile` before `pnpm lint`, `pnpm typecheck`, `pnpm test`, or `pnpm prepush`. Dependency bootstrap is per checkout/worktree, not a one-time repo setup step.
-- If the lane touches `.pi/extensions/browser-playwright`, also run `cd .pi/extensions/browser-playwright && npm install` in that worktree.
+- If the lane exercises live browser launches and no compatible host browser is available, run `cd browser-playwright && npx playwright install chromium` in that worktree.
 - If you are already in a worktree, stay there. Do not `cd` back to the main checkout.
 - When your PR is merged, clean up: `git worktree remove .worktrees/<name>` from the main checkout.
 - NEVER run `git checkout <branch>` or `git switch <branch>` in the main repo checkout. It must always be on `main`.

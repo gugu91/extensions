@@ -45,7 +45,7 @@ import type {
   Route,
 } from "playwright";
 
-type PlaywrightModule = typeof import("playwright");
+type PlaywrightModule = Record<BrowserEngine, BrowserType>;
 
 type BrowserEngine = SupportedBrowserEngine;
 type BrowserNewContextOptions = Exclude<Parameters<Browser["newContext"]>[0], undefined>;
@@ -148,7 +148,7 @@ async function loadPlaywright(browserEngine: BrowserEngine): Promise<PlaywrightM
   } catch (error) {
     throw new Error(
       buildInstallInstructions(
-        "Playwright is not installed for `.pi/extensions/browser-playwright`.",
+        "Playwright is not installed for `browser-playwright`.",
         true,
         browserEngine,
         INSTALL_ROOT,

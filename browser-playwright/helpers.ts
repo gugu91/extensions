@@ -33,7 +33,7 @@ interface ChromiumExecutableLookupOptions {
   accessImpl?: typeof access;
 }
 
-export const EXTENSION_RELATIVE_DIR = ".pi/extensions/browser-playwright";
+export const EXTENSION_RELATIVE_DIR = "browser-playwright";
 export const STORAGE_STATE_RELATIVE_DIR = ".pi/state/browser-playwright";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
@@ -119,7 +119,7 @@ export function buildInstallInstructions(
   browserEngine: SupportedBrowserEngine = "chromium",
   extensionDir = EXTENSION_RELATIVE_DIR,
 ): string {
-  const commands = [`cd \"${extensionDir}\"`, ...(includeNpmInstall ? ["npm install"] : [])];
+  const commands = [`cd "${extensionDir}"`, ...(includeNpmInstall ? ["npm install"] : [])];
   if (browserEngine === "chromium") {
     commands.push("npx playwright install chromium");
   } else {
@@ -142,7 +142,7 @@ export function buildInstallInstructions(
     ...browserInstallHeading,
     ...commands.map((command) => `  ${command}`),
     "",
-    "If you've symlinked the extension into `~/.pi/extensions`, run the same commands from that symlink path or the source directory.",
+    "If you've symlinked the extension into `~/.pi/agent/extensions`, run the same commands from that symlink path or the source directory.",
   ].join("\n");
 }
 

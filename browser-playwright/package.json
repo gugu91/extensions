@@ -1,0 +1,41 @@
+{
+  "name": "@gugu910/pi-browser-playwright",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Single-tool, Playwright-first browser extension for pi",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu91/extensions.git",
+    "directory": "browser-playwright"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "test": "node --experimental-strip-types --test *.test.ts"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.65.2",
+    "@mariozechner/pi-coding-agent": "^0.65.2",
+    "@types/node": "^22.13.1",
+    "typescript": "^5.9.3"
+  }
+}

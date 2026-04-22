@@ -126,7 +126,7 @@ test("buildInstallInstructions includes npm install only when requested", () => 
   assert.match(full, /npm install/);
   assert.match(full, /npx playwright install chromium/);
   assert.match(full, /host Chrome\/Chromium executable/i);
-  assert.match(full, /symlinked the extension into `~\/\.pi\/extensions`/i);
+  assert.match(full, /symlinked the extension into `~\/\.pi\/agent\/extensions`/i);
 
   const browserOnly = buildInstallInstructions("missing", false);
   assert.doesNotMatch(browserOnly, /npm install/);

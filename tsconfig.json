@@ -20,6 +20,7 @@
   "include": [
     "transport-core/**/*.ts",
     "broker-core/**/*.ts",
+    "browser-playwright/**/*.ts",
     "imessage-bridge/**/*.ts",
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",

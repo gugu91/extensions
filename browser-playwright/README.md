@@ -190,14 +190,20 @@ pi
 /reload
 ```
 
-Or start a fresh Pi session in the repo after the files exist.
+Or start a fresh Pi session in the repo after the workspace is bootstrapped.
 
 ## Install Playwright
 
-If the extension dependencies are not installed yet:
+In this repo or any linked worktree, `pnpm install` at the repo root installs
+this package's dependencies because `browser-playwright/` is a normal workspace
+package.
+
+If you're using the package directly from its own directory (for example via a
+symlink under `~/.pi/agent/extensions/browser-playwright`), install its local
+runtime dependency from the package directory:
 
 ```bash
-cd .pi/extensions/browser-playwright
+cd browser-playwright
 npm install
 ```
 
@@ -263,16 +269,23 @@ Screenshot responses include an `artifacts` array in the shared envelope.
 
 ## Development
 
+Lint the extension:
+
+```bash
+cd browser-playwright
+pnpm lint
+```
+
 Type-check the extension:
 
 ```bash
-cd .pi/extensions/browser-playwright
-npm run check
+cd browser-playwright
+pnpm typecheck
 ```
 
 Run tests:
 
 ```bash
-cd .pi/extensions/browser-playwright
-npm test
+cd browser-playwright
+pnpm test
 ```
