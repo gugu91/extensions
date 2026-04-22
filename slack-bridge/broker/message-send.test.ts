@@ -135,6 +135,40 @@ describe("sendBrokerMessage", () => {
     });
   });
 
+  it("persists the canonical content text when it differs from the raw body", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+
+    const result = await sendBrokerMessage(
+      {
+        db,
+        adapters: [{ name: "slack", send }],
+      },
+      {
+        threadId: "100.201",
+        body: "  raw body that should not win  ",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C123",
+        content: {
+          text: "canonical text",
+          markdown: "**canonical text**",
+        },
+      },
+    );
+
+    expect(send).toHaveBeenCalledWith({
+      threadId: "100.201",
+      channel: "C123",
+      text: "canonical text",
+      content: {
+        text: "canonical text",
+        markdown: "**canonical text**",
+      },
+    });
+    expect(result.message.body).toBe("canonical text");
+  });
+
   it("reuses the stored thread transport when source and channel are omitted", async () => {
     const db = createFakeDb();
     db.createThread("imessage:chat:bob", "imessage", "chat:bob", "agent-1");

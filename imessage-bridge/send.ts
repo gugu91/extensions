@@ -85,9 +85,9 @@ export function assertIMessageSendCapability(
 export function resolveIMessageBody(
   options: Pick<SendIMessageOptions, "text" | "markdown">,
 ): string {
-  const markdown = options.markdown?.trim();
   const text = options.text.trim();
-  const body = markdown && markdown.length > 0 ? markdown : text;
+  const markdown = options.markdown?.trim();
+  const body = text || markdown || "";
   if (!body) {
     throw new Error("iMessage text is required.");
   }

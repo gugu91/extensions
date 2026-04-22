@@ -181,7 +181,6 @@ describe("registerIMessageTools", () => {
       channel: "+15555550123",
       content: {
         text: "follower hello",
-        markdown: "follower hello",
       },
       agentName: "Cobalt Olive Crane",
       agentEmoji: "🦩",

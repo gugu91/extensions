@@ -148,11 +148,13 @@ export const RPC_AGENT_STABLE_ID_CONFLICT = -32003;
 
 import type {
   InboundMessage as _InboundMessage,
+  NormalizedMessageContent as _NormalizedMessageContent,
   OutboundMessage as _OutboundMessage,
   MessageAdapter as _MessageAdapter,
 } from "@gugu910/pi-transport-core";
 
 export type InboundMessage = _InboundMessage;
+export type NormalizedMessageContent = _NormalizedMessageContent;
 export type OutboundMessage = _OutboundMessage;
 export type MessageAdapter = _MessageAdapter;
 

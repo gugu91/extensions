@@ -17,6 +17,7 @@ import type {
   JsonRpcResponse,
   JsonRpcError,
   MessageAdapter,
+  NormalizedMessageContent,
 } from "./types.js";
 import {
   RPC_PARSE_ERROR,
@@ -759,27 +760,34 @@ export class BrokerSocketServer {
           (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
         )
       : undefined;
-    const content =
-      params.content && typeof params.content === "object"
-        ? (() => {
-            const raw = params.content as Record<string, unknown>;
-            const text = typeof raw.text === "string" ? raw.text : null;
-            if (!text) {
-              return undefined;
-            }
-            const markdown = typeof raw.markdown === "string" ? raw.markdown : undefined;
-            const slackBlocks = Array.isArray(raw.slackBlocks)
-              ? raw.slackBlocks.filter(
-                  (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
-                )
-              : undefined;
-            return {
-              text,
-              ...(markdown ? { markdown } : {}),
-              ...(slackBlocks && slackBlocks.length > 0 ? { slackBlocks } : {}),
-            };
-          })()
+    let content: NormalizedMessageContent | undefined;
+    if (params.content !== undefined) {
+      if (!params.content || typeof params.content !== "object" || Array.isArray(params.content)) {
+        return rpcError(req.id, RPC_INVALID_PARAMS, "content must be an object");
+      }
+
+      const raw = params.content as Record<string, unknown>;
+      const text = typeof raw.text === "string" ? raw.text.trim() : "";
+      if (!text) {
+        return rpcError(
+          req.id,
+          RPC_INVALID_PARAMS,
+          "content.text is required when content is provided",
+        );
+      }
+
+      const markdown = typeof raw.markdown === "string" ? raw.markdown.trim() : undefined;
+      const slackBlocks = Array.isArray(raw.slackBlocks)
+        ? raw.slackBlocks.filter(
+            (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+          )
         : undefined;
+      content = {
+        text,
+        ...(markdown ? { markdown } : {}),
+        ...(slackBlocks && slackBlocks.length > 0 ? { slackBlocks } : {}),
+      };
+    }
     const metadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)

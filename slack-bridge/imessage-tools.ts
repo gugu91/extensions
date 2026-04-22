@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { NormalizedMessageContent } from "@gugu910/pi-transport-core";
 import { Type } from "@sinclair/typebox";
 import {
   getDefaultIMessageThreadId,
@@ -12,10 +13,7 @@ export interface IMessageToolSendInput {
   body: string;
   source: "imessage";
   channel: string;
-  content: {
-    text: string;
-    markdown: string;
-  };
+  content: NormalizedMessageContent;
   agentName: string;
   agentEmoji: string;
   agentOwnerToken: string;
@@ -87,7 +85,6 @@ export function registerIMessageTools(pi: ExtensionAPI, deps: RegisterIMessageTo
         channel: recipient,
         content: {
           text,
-          markdown: text,
         },
         agentName: name,
         agentEmoji: emoji,

@@ -756,6 +756,44 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     });
   });
 
+  it("message.send rejects non-object content payloads", async () => {
+    server.setOutboundMessageAdapters([{ name: "slack", send: async () => undefined }]);
+    await client.register("transport-agent", "📦");
+
+    const rpcClient = client as unknown as {
+      request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    };
+
+    await expect(
+      rpcClient.request("message.send", {
+        threadId: "100.200",
+        body: "fallback text",
+        source: "slack",
+        channel: "C123",
+        content: "oops",
+      }),
+    ).rejects.toThrow("content must be an object");
+  });
+
+  it("message.send rejects content payloads without canonical text", async () => {
+    server.setOutboundMessageAdapters([{ name: "slack", send: async () => undefined }]);
+    await client.register("transport-agent", "📦");
+
+    const rpcClient = client as unknown as {
+      request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    };
+
+    await expect(
+      rpcClient.request("message.send", {
+        threadId: "100.200",
+        body: "fallback text",
+        source: "slack",
+        channel: "C123",
+        content: { markdown: "**fallback text**" },
+      }),
+    ).rejects.toThrow("content.text is required when content is provided");
+  });
+
   it("thread.claim claims ownership for the calling agent", async () => {
     await client.register("claimer-agent", "🏷️");
 

@@ -27,13 +27,19 @@ describe("iMessage send helpers", () => {
     ]);
   });
 
-  it("prefers markdown when present for outbound iMessage rendering", () => {
+  it("prefers plain text when markdown is also present for outbound iMessage rendering", () => {
     expect(resolveIMessageBody({ text: "hello from pi", markdown: "**hello** from pi" })).toBe(
+      "hello from pi",
+    );
+  });
+
+  it("falls back to markdown only when the plain text body is missing", () => {
+    expect(resolveIMessageBody({ text: "   ", markdown: "**hello** from pi" })).toBe(
       "**hello** from pi",
     );
   });
 
-  it("runs osascript with argv-based recipient and transport-aware body values", async () => {
+  it("runs osascript with argv-based recipient and canonical plain-text body values", async () => {
     const runAppleScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
     await sendIMessage({
@@ -46,7 +52,7 @@ describe("iMessage send helpers", () => {
     expect(runAppleScript).toHaveBeenCalledWith({
       osascriptPath: APPLESCRIPT_BINARY_PATH,
       scriptLines: buildIMessageSendAppleScript(),
-      args: ["chat:alice", "**hello** from pi"],
+      args: ["chat:alice", "hello from pi"],
     });
   });
 });

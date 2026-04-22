@@ -27,13 +27,14 @@ This package exists to keep transport contracts transport-neutral while other pa
 When richer transport-aware rendering is available, callers may also send `OutboundMessage.content`:
 
 - `content.text`: canonical plain-text body
-- `content.markdown`: optional markdown-friendly representation for markdown/iMessage-style rendering
+- `content.markdown`: optional markdown-friendly representation for markdown-capable text renderers or exports
 - `content.slackBlocks`: optional prebuilt Slack Block Kit payload
 
-Transports should prefer their transport-specific representation when present, then fall back in this order:
+Transports should prefer their transport-specific representation when present, then fall back to the canonical plain-text body:
 
 1. transport-native content (`slackBlocks` for Slack)
-2. `markdown` when a transport only needs text output
-3. plain `text`
+2. plain `text`
 
-This keeps Slack, markdown-oriented exports, and plain-text/iMessage sends aligned without requiring every caller to collapse everything into one presentation string upfront.
+`markdown` is supplementary for markdown-aware surfaces and should not replace the canonical plain-text body on plain-text transports like iMessage.
+
+This keeps Slack, markdown-oriented exports, and plain-text sends aligned without requiring every caller to collapse everything into one presentation string upfront.
