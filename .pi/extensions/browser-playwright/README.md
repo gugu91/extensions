@@ -97,7 +97,14 @@ Current blocker is specific and technical, not a missing adapter shape:
   the daemon fails on startup because binding its local session socket returns
   `EPERM` / `Operation not permitted`
 
-A future backend can still be honest in one of two ways:
+Truthful posture in this harness:
+
+- `backend=playwright` is the real local backend
+- `backend=agent-browser` stays explicitly unavailable-locally
+- the only viable future support shape here is **remote/optional executor**
+  unless upstream ships a real published embeddable JS SDK
+
+That means a future backend can still be honest in one of two ways:
 
 - consume a real published JS SDK if/when upstream exposes one
 - wrap the CLI/runtime in an approved **remote** environment (for example an

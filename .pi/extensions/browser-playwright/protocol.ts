@@ -138,7 +138,8 @@ export function buildCapabilities(backend: BrowserBackend): BrowserCapabilities 
     supported_actions: [...BROWSER_ACTION_VALUES],
     notes: [
       "agent-browser is scaffolded behind the same one-tool contract.",
-      "This sandbox does not currently have a working SDK/runtime path wired behind that adapter.",
+      "Local agent-browser support is unavailable in this harness.",
+      "Truthful future support is remote/optional executor mode unless upstream ships a real embeddable SDK.",
     ],
   };
 }
