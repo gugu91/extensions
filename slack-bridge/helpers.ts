@@ -312,11 +312,14 @@ export type SlackBrokerReloadParseResult =
 
 const BROKER_RELOAD_COMMAND_PATTERN = /^(?:\/pinet-reload|pinet-reload|pinet\s+reload)\b(.*)$/i;
 
+// pi's agent events currently expose stopReason/errorMessage/provider/model, but not
+// structured provider error codes or HTTP statuses. Keep these text matchers
+// conservative so Slack pause/retry notices do not overreact to incidental text.
 const RETRYABLE_ASSISTANT_ERROR_PATTERN =
-  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
+  /overloaded(?:_error)?|provider.?returned.?error|rate.?limit(?:ed)?|too many requests|(?:http\s*)?429|(?:http\s*)?(?:500|502|503|504)|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|(?:request|connection|network|upstream|provider).{0,24}(?:timed? out|timeout)|(?:timed? out|timeout).{0,24}(?:request|connection|network|upstream|provider)|terminated after|retry delay/i;
 
 const TERMINAL_BROKER_PROVIDER_ERROR_PATTERN =
-  /out of (?:extra )?usage|quota|billing|payment required|insufficient credits|invalid[_\s-]?api[_\s-]?key|unauthorized|forbidden|auth(?:entication)?\s+failed|claude\.ai\/settings\/usage/i;
+  /out of (?:extra )?usage|quota exceeded|billing(?: issue| error)?|payment required|insufficient credits|invalid[_\s-]?(?:api|auth|access)[_\s-]?key|api key .*invalid|auth(?:entication)?\s+failed|claude\.ai\/settings\/usage/i;
 
 function normalizeSlackMessageFirstLine(text: string | undefined): string {
   const firstLine = text?.split(/\r?\n/, 1)[0] ?? "";

@@ -8,6 +8,8 @@ function createDeps(overrides: Partial<AgentEventRuntimeDeps> = {}) {
   const beforeAgentStart = vi.fn(async (event: { systemPrompt: string }) => ({
     systemPrompt: event.systemPrompt + "\nextra guidance",
   }));
+  const onBrokerTurnMessageEnd = vi.fn(async () => {});
+  const onBrokerTurnAgentEnd = vi.fn(async () => {});
   const onCompletionAgentEnd = vi.fn(async () => {});
   const setDeliverTrackedSlackFollowUpMessage = vi.fn();
 
@@ -19,6 +21,8 @@ function createDeps(overrides: Partial<AgentEventRuntimeDeps> = {}) {
     formatError: (error) => (error instanceof Error ? error.message : String(error)),
     deliverFollowUpMessage,
     beforeAgentStart,
+    onBrokerTurnMessageEnd,
+    onBrokerTurnAgentEnd,
     onCompletionAgentEnd,
     setDeliverTrackedSlackFollowUpMessage,
     ...overrides,
@@ -29,6 +33,8 @@ function createDeps(overrides: Partial<AgentEventRuntimeDeps> = {}) {
     deliverFollowUpMessage,
     requireToolPolicy,
     beforeAgentStart,
+    onBrokerTurnMessageEnd,
+    onBrokerTurnAgentEnd,
     onCompletionAgentEnd,
     setDeliverTrackedSlackFollowUpMessage,
   };
@@ -47,7 +53,13 @@ function createPi() {
 
 describe("createAgentEventRuntime", () => {
   it("registers the pinned agent event wiring in order and preserves agent_end ordering", () => {
-    const { deps, beforeAgentStart, onCompletionAgentEnd } = createDeps();
+    const {
+      deps,
+      beforeAgentStart,
+      onBrokerTurnMessageEnd,
+      onBrokerTurnAgentEnd,
+      onCompletionAgentEnd,
+    } = createDeps();
     const runtime = createAgentEventRuntime(deps);
     const { pi, registrations } = createPi();
 
@@ -60,14 +72,19 @@ describe("createAgentEventRuntime", () => {
       "agent_end",
       "tool_call",
       "before_agent_start",
+      "message_end",
+      "agent_end",
       "agent_end",
     ]);
 
     const agentEndHandlers = registrations.filter(({ eventName }) => eventName === "agent_end");
-    expect(agentEndHandlers).toHaveLength(2);
+    expect(agentEndHandlers).toHaveLength(3);
+    expect(agentEndHandlers[0]?.handler).not.toBe(onBrokerTurnAgentEnd);
     expect(agentEndHandlers[0]?.handler).not.toBe(onCompletionAgentEnd);
-    expect(agentEndHandlers[1]?.handler).toBe(onCompletionAgentEnd);
+    expect(agentEndHandlers[1]?.handler).toBe(onBrokerTurnAgentEnd);
+    expect(agentEndHandlers[2]?.handler).toBe(onCompletionAgentEnd);
     expect(registrations[5]?.handler).toBe(beforeAgentStart);
+    expect(registrations[6]?.handler).toBe(onBrokerTurnMessageEnd);
   });
 
   it("hands off tracked Slack follow-up delivery from the created tool-policy runtime", async () => {

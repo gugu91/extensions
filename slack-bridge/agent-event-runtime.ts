@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentCompletionRuntime } from "./agent-completion-runtime.js";
 import type { AgentPromptGuidance } from "./agent-prompt-guidance.js";
 import {
@@ -7,8 +7,28 @@ import {
   type SlackToolPolicyRuntimeDeps,
 } from "./slack-tool-policy-runtime.js";
 
+interface BrokerTurnMessageEndEvent {
+  message: {
+    role: string;
+    stopReason?: string;
+    errorMessage?: string;
+  };
+}
+
+interface BrokerTurnAgentEndEvent {
+  messages: readonly {
+    role: string;
+    stopReason?: string;
+    errorMessage?: string;
+    provider?: string;
+    model?: string;
+  }[];
+}
+
 export interface AgentEventRuntimeDeps extends SlackToolPolicyRuntimeDeps {
   beforeAgentStart: AgentPromptGuidance["beforeAgentStart"];
+  onBrokerTurnMessageEnd: (event: BrokerTurnMessageEndEvent) => Promise<void>;
+  onBrokerTurnAgentEnd: (event: BrokerTurnAgentEndEvent, ctx: ExtensionContext) => Promise<void>;
   onCompletionAgentEnd: AgentCompletionRuntime["onAgentEnd"];
   setDeliverTrackedSlackFollowUpMessage: (
     deliver: SlackToolPolicyRuntime["deliverTrackedSlackFollowUpMessage"],
@@ -40,6 +60,8 @@ export function createAgentEventRuntime(deps: AgentEventRuntimeDeps): AgentEvent
     pi.on("agent_end", slackToolPolicyRuntime.onAgentEnd);
     pi.on("tool_call", slackToolPolicyRuntime.onToolCall);
     pi.on("before_agent_start", deps.beforeAgentStart);
+    pi.on("message_end", deps.onBrokerTurnMessageEnd);
+    pi.on("agent_end", deps.onBrokerTurnAgentEnd);
     pi.on("agent_end", deps.onCompletionAgentEnd);
   }
 

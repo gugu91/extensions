@@ -657,10 +657,17 @@ describe("Pinet control helpers", () => {
       ),
     ).toBe(true);
     expect(isBrokerTerminalProviderError("Authentication failed: invalid API key")).toBe(true);
+    expect(isBrokerTerminalProviderError("HTTP 401 unauthorized from upstream gateway")).toBe(
+      false,
+    );
     expect(isBrokerTerminalProviderError("Error: fetch failed")).toBe(false);
 
     expect(isLikelyRetryableAssistantError("provider returned error: overloaded_error")).toBe(true);
     expect(isLikelyRetryableAssistantError("network timeout while calling upstream")).toBe(true);
+    expect(isLikelyRetryableAssistantError("HTTP 503 Service Unavailable")).toBe(true);
+    expect(isLikelyRetryableAssistantError("User mentioned the word timeout in a pasted log")).toBe(
+      false,
+    );
     expect(isLikelyRetryableAssistantError("You're out of extra usage")).toBe(false);
   });
 
