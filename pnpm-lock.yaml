@@ -67,6 +67,15 @@ importers:
 
   openai-execution-shaping: {}
 
+  pinet-core:
+    dependencies:
+      "@gugu910/pi-broker-core":
+        specifier: workspace:*
+        version: link:../broker-core
+      "@gugu910/pi-transport-core":
+        specifier: workspace:*
+        version: link:../transport-core
+
   slack-api:
     dependencies:
       "@slack/web-api":
