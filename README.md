@@ -12,16 +12,16 @@ interactive browsing and screenshots.
 
 ## Extensions
 
-| Package                                     | Description                                                                |
-| ------------------------------------------- | -------------------------------------------------------------------------- |
-| [`transport-core`](transport-core/)         | Transport-neutral message contracts shared across transport packages       |
-| [`browser-playwright`](browser-playwright/) | Single-tool browser extension with a Playwright local backend              |
-| [`slack-bridge`](slack-bridge/)             | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling |
-| [`slack-api`](slack-api/)                   | Typed Slack Web API client + CLI generated from OpenAPI                    |
-| [`imessage-bridge`](imessage-bridge/)       | macOS/iMessage send-first transport package + readiness helpers            |
-| [`nvim-bridge`](nvim-bridge/)               | Neovim editor context sync + PiComms persistent comments                   |
-| [`neon-psql`](neon-psql/)                   | Config-driven Neon tunnel + `psql` tool                                    |
-| [`types`](types/)                           | Shared ambient type declarations                                           |
+| Package                                     | Description                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`transport-core`](transport-core/)         | Transport-neutral message contracts shared across transport packages            |
+| [`browser-playwright`](browser-playwright/) | Supported Anthropic-sandbox browsing path; Playwright-first single browser tool |
+| [`slack-bridge`](slack-bridge/)             | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling      |
+| [`slack-api`](slack-api/)                   | Typed Slack Web API client + CLI generated from OpenAPI                         |
+| [`imessage-bridge`](imessage-bridge/)       | macOS/iMessage send-first transport package + readiness helpers                 |
+| [`nvim-bridge`](nvim-bridge/)               | Neovim editor context sync + PiComms persistent comments                        |
+| [`neon-psql`](neon-psql/)                   | Config-driven Neon tunnel + `psql` tool                                         |
+| [`types`](types/)                           | Shared ambient type declarations                                                |
 
 ## Current state snapshot
 
@@ -33,8 +33,10 @@ interactive browsing and screenshots.
   for pushing `slack-bridge/manifest.yaml` via the Slack App Manifest API.
 - **Browser automation** — the repo now carries a dedicated
   [`browser-playwright`](browser-playwright/README.md)
-  workspace package with reusable sessions, multi-tab browsing, request
-  guardrails, and workspace-local screenshot artifacts.
+  workspace package as the supported browsing path in the Anthropic sandbox,
+  with reusable sessions, multi-tab browsing, request guardrails, and
+  workspace-local screenshot artifacts. Local `agent-browser` daemon
+  compatibility is explicitly not a support goal for this path.
 - **Recent wave** — browser-playwright landed alongside the Pinet v0.1.1 prep,
   mesh-secret optionality, auth-mismatch clarification, and refreshed mesh-auth
   docs ([#282](https://github.com/gugu91/extensions/pull/282),
@@ -155,7 +157,7 @@ extensions/
 │   ├── index.ts        #   canonical transport message contracts
 │   └── package.json    #   workspace package
 ├── browser-playwright/ # @gugu910/pi-browser-playwright
-│   ├── index.ts        #   single typed `browser` tool entry point
+│   ├── index.ts        #   Playwright-first single `browser` tool entry point
 │   ├── helpers.ts      #   security defaults + install guidance
 │   └── package.json    #   workspace package + pi manifest
 ├── slack-bridge/       # @gugu910/pi-slack-bridge
