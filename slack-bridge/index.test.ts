@@ -3027,6 +3027,10 @@ describe("slack-bridge Pinet reconnect", () => {
         "error",
       );
     });
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Stop or disconnect the other worker"),
+      "error",
+    );
     expect(notify).not.toHaveBeenCalledWith(
       expect.stringContaining("Update slack-bridge.agentName/agentEmoji or PI_NICKNAME"),
       "error",

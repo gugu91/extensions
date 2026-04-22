@@ -1609,7 +1609,7 @@ describe("BrokerClient — onReconnect callback", () => {
     await mock.close();
   }, 20000);
 
-  it("stops reconnecting and surfaces a terminal error when stableId reconnect collides", async () => {
+  it("keeps retrying when a retryable stableId reconnect conflict clears on a later attempt", async () => {
     let mock = await createMockServer();
     const port = mock.port;
     const client = new BrokerClient(mock.connectOpts);
@@ -1659,19 +1659,19 @@ describe("BrokerClient — onReconnect callback", () => {
     mock = await createMockServer(port);
     await waitFor(() => mock.received.length > 0, 5000);
 
-    const reRegisterReq = JSON.parse(mock.received[0]) as {
+    const firstReRegisterReq = JSON.parse(mock.received[0]) as {
       id: number;
       method: string;
       params: { name: string; emoji: string; stableId?: string };
     };
-    expect(reRegisterReq.method).toBe("register");
-    expect(reRegisterReq.params.name).toBe("Worker");
-    expect(reRegisterReq.params.emoji).toBe("🦙");
-    expect(reRegisterReq.params.stableId).toBe("host:session:/tmp/worker");
+    expect(firstReRegisterReq.method).toBe("register");
+    expect(firstReRegisterReq.params.name).toBe("Worker");
+    expect(firstReRegisterReq.params.emoji).toBe("🦙");
+    expect(firstReRegisterReq.params.stableId).toBe("host:session:/tmp/worker");
 
     mock.respondError(
       mock.connections[0],
-      reRegisterReq.id,
+      firstReRegisterReq.id,
       RPC_AGENT_STABLE_ID_CONFLICT,
       'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying.',
       {
@@ -1681,6 +1681,114 @@ describe("BrokerClient — onReconnect callback", () => {
         retryable: true,
       },
     );
+
+    await waitFor(() => mock.received.length >= 2, 5000);
+    const secondReRegisterReq = JSON.parse(mock.received[1]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(secondReRegisterReq.method).toBe("register");
+    expect(secondReRegisterReq.params.stableId).toBe("host:session:/tmp/worker");
+    expect(reconnectFailed).toBeNull();
+    expect(reconnectFired).toBe(false);
+
+    const latestConnection = mock.connections[mock.connections.length - 1];
+    mock.respondTo(latestConnection, secondReRegisterReq.id, {
+      agentId: "worker-1",
+      name: "Worker",
+      emoji: "🦙",
+    });
+
+    await waitFor(() => reconnectFired, 5000);
+    expect(reconnectFailed).toBeNull();
+    expect(client.isConnected()).toBe(true);
+    expect(client.getReconnectAttempt()).toBe(0);
+    expect(client.getRegisteredIdentity()).toEqual({
+      agentId: "worker-1",
+      name: "Worker",
+      emoji: "🦙",
+    });
+
+    client.disconnect();
+    await mock.close();
+  }, 20000);
+
+  it("stops reconnecting after repeated retryable stableId reconnect conflicts", async () => {
+    let mock = await createMockServer();
+    const port = mock.port;
+    const client = new BrokerClient(mock.connectOpts);
+    let disconnectFired = false;
+    let reconnectFired = false;
+    let reconnectFailed: Error | null = null;
+
+    client.onDisconnect(() => {
+      disconnectFired = true;
+    });
+    client.onReconnect(() => {
+      reconnectFired = true;
+    });
+    client.onReconnectFailed((err) => {
+      reconnectFailed = err;
+    });
+
+    await client.connect();
+    const registerPromise = client.register(
+      "Worker",
+      "🦙",
+      { cwd: "/repo", branch: "main" },
+      "host:session:/tmp/worker",
+    );
+
+    await waitFor(() => mock.received.length > 0);
+    const registerReq = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { name: string; emoji: string; stableId?: string };
+    };
+    expect(registerReq.method).toBe("register");
+    expect(registerReq.params.name).toBe("Worker");
+    expect(registerReq.params.emoji).toBe("🦙");
+    expect(registerReq.params.stableId).toBe("host:session:/tmp/worker");
+    mock.respondTo(mock.connections[0], registerReq.id, {
+      agentId: "worker-1",
+      name: "Worker",
+      emoji: "🦙",
+    });
+    await registerPromise;
+
+    await mock.close();
+    await waitFor(() => disconnectFired, 2000);
+    await waitFor(() => client.getReconnectAttempt() >= 2, 5000);
+
+    mock = await createMockServer(port);
+
+    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex++) {
+      await waitFor(() => mock.received.length > attemptIndex, 10000);
+      const reRegisterReq = JSON.parse(mock.received[attemptIndex]) as {
+        id: number;
+        method: string;
+        params: { name: string; emoji: string; stableId?: string };
+      };
+      expect(reRegisterReq.method).toBe("register");
+      expect(reRegisterReq.params.name).toBe("Worker");
+      expect(reRegisterReq.params.emoji).toBe("🦙");
+      expect(reRegisterReq.params.stableId).toBe("host:session:/tmp/worker");
+
+      const latestConnection = mock.connections[mock.connections.length - 1];
+      mock.respondError(
+        latestConnection,
+        reRegisterReq.id,
+        RPC_AGENT_STABLE_ID_CONFLICT,
+        'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying.',
+        {
+          code: "AGENT_STABLE_ID_CONFLICT",
+          stableId: "host:session:/tmp/worker",
+          ownerAgentId: "worker-2",
+          retryable: true,
+        },
+      );
+    }
 
     await waitFor(() => reconnectFailed !== null, 5000);
     if (!reconnectFailed) {
@@ -1706,7 +1814,7 @@ describe("BrokerClient — onReconnect callback", () => {
     expect(client.getRegisteredIdentity()).toBeNull();
 
     await new Promise((resolve) => setTimeout(resolve, INITIAL_RECONNECT_DELAY_MS + 250));
-    expect(mock.received).toHaveLength(1);
+    expect(mock.received).toHaveLength(3);
 
     client.disconnect();
     await mock.close();

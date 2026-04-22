@@ -19,7 +19,6 @@ import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import { DEFAULT_SOCKET_PATH, isRpcAgentStableIdConflictError } from "./broker/client.js";
-import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { createCommandRegistrationRuntime } from "./command-registration-runtime.js";
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
@@ -1206,7 +1205,7 @@ export default function (pi: ExtensionAPI) {
       setExtStatus(ctx, "error");
       const reconnectFailureMessage = msg(error);
       const reconnectGuidance = isRpcAgentStableIdConflictError(error)
-        ? `Another worker is still connected with this session identity. Wait about ${Math.ceil(DEFAULT_HEARTBEAT_TIMEOUT_MS / 1000)}s for the old socket to clear, then run /pinet-follow again.`
+        ? "Another worker is still connected with this session identity. Stop or disconnect the other worker, or wait for it to fully disconnect, then run /pinet-follow again."
         : "Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.";
       ctx.ui.notify(
         `Pinet reconnect stopped: ${reconnectFailureMessage} ${reconnectGuidance}`,

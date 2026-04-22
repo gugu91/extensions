@@ -66,6 +66,7 @@ export const RECONNECT_DELAY_MS = 3000;
 export const INITIAL_RECONNECT_DELAY_MS = 1000;
 export const MAX_RECONNECT_DELAY_MS = 30000;
 export const HEARTBEAT_INTERVAL_MS = 5000;
+const MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS = 3;
 
 /** Compute reconnect delay with exponential backoff and jitter. */
 export function computeReconnectDelay(attempt: number, random = Math.random()): number {
@@ -145,6 +146,14 @@ export function isRpcAgentStableIdConflictError(err: unknown): err is BrokerRpcR
   return isRpcConflictError(err, RPC_AGENT_STABLE_ID_CONFLICT, "AGENT_STABLE_ID_CONFLICT");
 }
 
+function isRpcRetryableError(err: BrokerRpcRequestError): boolean {
+  if (typeof err.data !== "object" || err.data == null) {
+    return false;
+  }
+
+  return (err.data as { retryable?: unknown }).retryable === true;
+}
+
 function getMeshAuthCompatibilityError(): Error {
   return new Error(
     "Broker does not support Pinet mesh auth (`auth`). Upgrade the broker or disable follower mesh auth when connecting to older/no-auth brokers.",
@@ -204,6 +213,7 @@ export class BrokerClient {
   private reconnectHandler: (() => void) | null = null;
   private reconnectFailedHandler: ((error: Error) => void) | null = null;
   private reconnectAttempt = 0;
+  private stableIdConflictAttempt = 0;
   private registrationSnapshot: RegistrationSnapshot | null = null;
   private registeredIdentity: RegistrationResult | null = null;
 
@@ -243,6 +253,7 @@ export class BrokerClient {
 
   async connect(): Promise<void> {
     this.shuttingDown = false;
+    this.stableIdConflictAttempt = 0;
     await this.connectSocket();
     try {
       await this.authenticateIfNeeded();
@@ -267,6 +278,7 @@ export class BrokerClient {
     }
     this.socket = null;
     this.connected = false;
+    this.stableIdConflictAttempt = 0;
   }
 
   async disconnectGracefully(): Promise<void> {
@@ -692,6 +704,7 @@ export class BrokerClient {
         await this.performRegister(this.registrationSnapshot);
       }
       this.reconnectAttempt = 0;
+      this.stableIdConflictAttempt = 0;
       this.reconnectHandler?.();
     } catch (err) {
       // Re-registration failed after the socket connected. Clear the connection
@@ -712,14 +725,33 @@ export class BrokerClient {
       } catch {
         /* ignore */
       }
-      if (
-        isRpcAgentNameConflictError(reconnectError) ||
-        isRpcAgentStableIdConflictError(reconnectError)
-      ) {
+      if (isRpcAgentNameConflictError(reconnectError)) {
         this.reconnectAttempt = 0;
+        this.stableIdConflictAttempt = 0;
         this.reconnectFailedHandler?.(reconnectError);
         return;
       }
+
+      if (isRpcAgentStableIdConflictError(reconnectError)) {
+        const retryableStableIdConflict = isRpcRetryableError(reconnectError);
+        this.stableIdConflictAttempt = retryableStableIdConflict
+          ? this.stableIdConflictAttempt + 1
+          : 0;
+        const shouldKeepRetrying =
+          retryableStableIdConflict &&
+          this.stableIdConflictAttempt < MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS;
+        if (!shouldKeepRetrying) {
+          this.reconnectAttempt = 0;
+          this.stableIdConflictAttempt = 0;
+          this.reconnectFailedHandler?.(reconnectError);
+          return;
+        }
+
+        this.scheduleReconnect();
+        return;
+      }
+
+      this.stableIdConflictAttempt = 0;
       this.scheduleReconnect();
     }
   }
