@@ -938,12 +938,21 @@ export default function (pi: ExtensionAPI) {
     return scope.length > 0 ? ` with ${scope}` : "";
   }
 
-  function validateBrokerReloadOverrideSupport(command: {
-    modelRef: string | null;
-    thinkingLevel: BrokerThinkingLevel | null;
-  }): void {
+  function validateBrokerReloadOverrideSupport(
+    command: {
+      modelRef: string | null;
+      thinkingLevel: BrokerThinkingLevel | null;
+    },
+    ctx: ExtensionContext,
+  ): void {
     if (command.modelRef && !hasObjectMethod(pi, "setModel")) {
       throw new Error("This pi build does not expose setModel for Slack-driven reloads.");
+    }
+    if (command.modelRef) {
+      const modelRegistry = getObjectProperty(ctx, "modelRegistry");
+      if (!hasObjectMethod(modelRegistry, "find")) {
+        throw new Error("This pi build does not expose runtime model switching via Slack reload.");
+      }
     }
     if (command.thinkingLevel && !hasObjectMethod(pi, "setThinkingLevel")) {
       throw new Error("This pi build does not expose thinking-level controls for Slack reload.");
@@ -957,7 +966,7 @@ export default function (pi: ExtensionAPI) {
     },
     ctx: ExtensionContext,
   ): Promise<{ modelRef: string | null; thinkingLevel: BrokerThinkingLevel | null }> {
-    validateBrokerReloadOverrideSupport(command);
+    validateBrokerReloadOverrideSupport(command, ctx);
 
     let provider: string | null = null;
     let modelId: string | null = null;
@@ -1016,10 +1025,9 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const nextCommand = event.getLatestNextCommand();
     const settledRequest = activeBrokerReloadRequest;
-    activeBrokerReloadRequest = nextCommand === "reload" ? queuedBrokerReloadRequest : null;
-    queuedBrokerReloadRequest = null;
+    const pauseWasActive = brokerAutoDrainPause !== null;
+    let overridesApplied = true;
 
     if (!event.success) {
       if (settledRequest) {
@@ -1031,13 +1039,7 @@ export default function (pi: ExtensionAPI) {
           },
         );
       }
-      return;
-    }
-
-    const pauseWasActive = brokerAutoDrainPause !== null;
-    let overridesApplied = true;
-
-    if (settledRequest && hasBrokerReloadOverrides(settledRequest.command)) {
+    } else if (settledRequest && hasBrokerReloadOverrides(settledRequest.command)) {
       try {
         const applied = await applyBrokerReloadOverrides(settledRequest.command, event.ctx);
         await postPendingBrokerReloadNotice(
@@ -1073,7 +1075,11 @@ export default function (pi: ExtensionAPI) {
       });
     }
 
-    if (!pauseWasActive || overridesApplied) {
+    const nextCommand = event.getLatestNextCommand();
+    activeBrokerReloadRequest = nextCommand === "reload" ? queuedBrokerReloadRequest : null;
+    queuedBrokerReloadRequest = null;
+
+    if (event.success && (!pauseWasActive || overridesApplied)) {
       brokerAutoDrainPause = null;
       brokerPauseNotifiedThreads.clear();
       if (nextCommand === null) {
@@ -1110,7 +1116,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      validateBrokerReloadOverrideSupport(parsed.command);
+      validateBrokerReloadOverrideSupport(parsed.command, ctx);
 
       const queued = requestRemoteControl("reload", ctx);
       if (queued.scheduledCommand !== "reload") {

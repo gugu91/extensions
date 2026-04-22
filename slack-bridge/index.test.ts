@@ -1097,6 +1097,452 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionShutdown?.({}, ctx);
   });
 
+  it("preserves late-queued reload overrides until the queued reload settles", async () => {
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+    const resolvedModel = { provider: "openai", id: "gpt-5.4" };
+    const setModel = vi.fn(async () => true);
+    const setThinkingLevel = vi.fn(async () => undefined);
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+      setModel,
+      setThinkingLevel,
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const modelRegistry = {
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai" && modelId === "gpt-5.4") {
+          return resolvedModel;
+        }
+        return null;
+      }),
+    };
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      modelRegistry,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-reload-late-queue-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-broker-reload-late-queue-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    let releaseCompletionNotice: (() => void) | null = null;
+    const completionNoticeGate = new Promise<void>((resolve) => {
+      releaseCompletionNotice = resolve;
+    });
+    const postedMessages: Array<{ thread_ts?: string; text?: string }> = [];
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/chat.postMessage") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          thread_ts?: string;
+          text?: string;
+        };
+        postedMessages.push(body);
+        if (
+          body.thread_ts === "1700.1" &&
+          body.text === "✅ Broker reload complete with model `openai/gpt-5.4` + thinking `xhigh`."
+        ) {
+          await completionNoticeGate;
+        }
+        return new Response(JSON.stringify({ ok: true, message: { ts: "300.1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/conversations.replies") {
+        return new Response(JSON.stringify({ ok: true, messages: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+
+    const brokerRuntimes: Array<{
+      db: BrokerDB;
+      server: {
+        setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        onAgentMessage: ReturnType<typeof vi.fn>;
+        onAgentStatusChange: ReturnType<typeof vi.fn>;
+      };
+      stop: ReturnType<typeof vi.fn>;
+      adapters: Array<{ name?: string }>;
+    }> = [];
+    let releaseReloadStop: (() => void) | null = null;
+    const reloadStopGate = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("Broker reload did not unblock"));
+      }, 1_000);
+      releaseReloadStop = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const runtimeIndex = brokerRuntimes.length;
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const adapters: Array<{ name?: string }> = [];
+      const server = {
+        setAgentRegistrationResolver: vi.fn(),
+        onAgentMessage: vi.fn(),
+        onAgentStatusChange: vi.fn(),
+      };
+      const stop = vi.fn(async () => {
+        if (runtimeIndex === 0) {
+          await reloadStopGate;
+        }
+        db.close();
+      });
+      brokerRuntimes.push({ db, server, stop, adapters });
+      return {
+        db,
+        server,
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters,
+        addAdapter: vi.fn((adapter) => {
+          adapters.push(adapter as { name?: string });
+        }),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+
+    const slackAdapter = brokerRuntimes[0]?.adapters.find((adapter) => adapter.name === "slack") as
+      | {
+          inboundHandler?: (message: {
+            source: string;
+            threadId: string;
+            channel: string;
+            userId: string;
+            text: string;
+            timestamp: string;
+            metadata: Record<string, unknown> | null;
+          }) => void;
+        }
+      | undefined;
+    expect(slackAdapter).toBeDefined();
+    expect(slackAdapter?.inboundHandler).toBeDefined();
+
+    slackAdapter?.inboundHandler?.({
+      source: "slack",
+      threadId: "1700.1",
+      channel: "C1700",
+      userId: "U_SENDER",
+      text: "pinet reload openai/gpt-5.4 xhigh",
+      timestamp: "1700.2",
+      metadata: null,
+    });
+
+    await vi.waitFor(() => {
+      expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
+    });
+
+    const unblockReloadStop: () => void =
+      releaseReloadStop ??
+      (() => {
+        throw new Error("Expected broker reload stop gate to be available");
+      });
+    unblockReloadStop();
+
+    await vi.waitFor(() => {
+      expect(
+        postedMessages.some(
+          (message) =>
+            message.thread_ts === "1700.1" &&
+            message.text ===
+              "✅ Broker reload complete with model `openai/gpt-5.4` + thinking `xhigh`.",
+        ),
+      ).toBe(true);
+    });
+
+    await vi.waitFor(() => {
+      expect(startBrokerSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const reloadedSlackAdapter = brokerRuntimes[1]?.adapters.find(
+      (adapter) => adapter.name === "slack",
+    ) as
+      | {
+          inboundHandler?: (message: {
+            source: string;
+            threadId: string;
+            channel: string;
+            userId: string;
+            text: string;
+            timestamp: string;
+            metadata: Record<string, unknown> | null;
+          }) => void;
+        }
+      | undefined;
+    expect(reloadedSlackAdapter).toBeDefined();
+    expect(reloadedSlackAdapter?.inboundHandler).toBeDefined();
+
+    reloadedSlackAdapter?.inboundHandler?.({
+      source: "slack",
+      threadId: "1701.1",
+      channel: "C1701",
+      userId: "U_SENDER",
+      text: "pinet reload openai/gpt-5.4 xhigh",
+      timestamp: "1701.2",
+      metadata: null,
+    });
+
+    const releaseACompletionNotice: () => void =
+      releaseCompletionNotice ??
+      (() => {
+        throw new Error("Expected completion notice gate to be available");
+      });
+    releaseACompletionNotice();
+
+    await vi.waitFor(() => {
+      expect(startBrokerSpy).toHaveBeenCalledTimes(3);
+    });
+
+    await vi.waitFor(() => {
+      expect(setModel).toHaveBeenCalledTimes(2);
+      expect(setThinkingLevel).toHaveBeenCalledTimes(2);
+    });
+
+    expect(
+      postedMessages.some(
+        (message) =>
+          message.thread_ts === "1701.1" &&
+          message.text ===
+            "✅ Broker reload complete with model `openai/gpt-5.4` + thinking `xhigh`.",
+      ),
+    ).toBe(true);
+
+    await sessionShutdown?.({}, ctx);
+  });
+
+  it("rejects model override reloads before restart when model resolution is unavailable", async () => {
+    const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const commands = new Map<string, CommandDefinition>();
+    const events = new Map<string, EventHandler>();
+
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+        commands.set(name, definition);
+      }),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+      setModel: vi.fn(async () => true),
+    } as unknown as ExtensionAPI;
+
+    const setStatus = vi.fn();
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+        },
+        notify,
+        setStatus,
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "broker-reload-no-model-registry-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-broker-reload-no-model-registry-session.json",
+      },
+    } as unknown as ExtensionContext;
+
+    const postedMessages: Array<{ thread_ts?: string; text?: string }> = [];
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/chat.postMessage") {
+        postedMessages.push(
+          JSON.parse(String(init?.body ?? "{}")) as { thread_ts?: string; text?: string },
+        );
+        return new Response(JSON.stringify({ ok: true, message: { ts: "300.1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/conversations.replies") {
+        return new Response(JSON.stringify({ ok: true, messages: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+
+    const brokerRuntimes: Array<{
+      db: BrokerDB;
+      server: {
+        setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        onAgentMessage: ReturnType<typeof vi.fn>;
+        onAgentStatusChange: ReturnType<typeof vi.fn>;
+      };
+      stop: ReturnType<typeof vi.fn>;
+      adapters: Array<{ name?: string }>;
+    }> = [];
+    const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
+      const db = new BrokerDB(dbPath);
+      db.initialize();
+      const adapters: Array<{ name?: string }> = [];
+      const server = {
+        setAgentRegistrationResolver: vi.fn(),
+        onAgentMessage: vi.fn(),
+        onAgentStatusChange: vi.fn(),
+      };
+      const stop = vi.fn(async () => {
+        db.close();
+      });
+      brokerRuntimes.push({ db, server, stop, adapters });
+      return {
+        db,
+        server,
+        lock: {
+          isLeader: () => true,
+          release: vi.fn(),
+        },
+        adapters,
+        addAdapter: vi.fn((adapter) => {
+          adapters.push(adapter as { name?: string });
+        }),
+        stop,
+      } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
+    });
+    vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
+      reapedAgentIds: [],
+      repairedThreadClaims: 0,
+      assignedBacklogCount: 0,
+      nudgedAgentIds: [],
+      pendingBacklogCount: db.getBacklogCount("pending"),
+      anomalies: [],
+    }));
+    vi.spyOn(SlackAdapter.prototype, "connect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
+    vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
+
+    slackBridge(pi);
+
+    const sessionStart = events.get("session_start");
+    const sessionShutdown = events.get("session_shutdown");
+    const pinetStart = commands.get("pinet-start");
+
+    expect(sessionStart).toBeDefined();
+    expect(sessionShutdown).toBeDefined();
+    expect(pinetStart).toBeDefined();
+
+    await sessionStart?.({}, ctx);
+    await pinetStart?.handler("", ctx);
+
+    const slackAdapter = brokerRuntimes[0]?.adapters.find((adapter) => adapter.name === "slack") as
+      | {
+          inboundHandler?: (message: {
+            source: string;
+            threadId: string;
+            channel: string;
+            userId: string;
+            text: string;
+            timestamp: string;
+            metadata: Record<string, unknown> | null;
+          }) => void;
+        }
+      | undefined;
+    expect(slackAdapter).toBeDefined();
+    expect(slackAdapter?.inboundHandler).toBeDefined();
+
+    slackAdapter?.inboundHandler?.({
+      source: "slack",
+      threadId: "1750.1",
+      channel: "C1750",
+      userId: "U_SENDER",
+      text: "pinet reload openai/gpt-5.4",
+      timestamp: "1750.2",
+      metadata: null,
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        postedMessages.some(
+          (message) =>
+            message.thread_ts === "1750.1" &&
+            message.text ===
+              "⚠️ Broker reload failed: This pi build does not expose runtime model switching via Slack reload.",
+        ),
+      ).toBe(true);
+    });
+    expect(startBrokerSpy).toHaveBeenCalledTimes(1);
+    expect(brokerRuntimes[0]?.stop).not.toHaveBeenCalled();
+
+    await sessionShutdown?.({}, ctx);
+  });
+
   it("restores the previous broker runtime if /pinet-start reload fails", async () => {
     const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
