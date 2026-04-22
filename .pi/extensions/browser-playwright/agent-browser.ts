@@ -14,9 +14,15 @@ export function buildAgentBrowserModeResult(request: BrowserToolRequest): {
       status: "blocked",
       available: false,
       reason:
-        "agent-browser SDK mode is scaffolded behind the single browser tool, but this workspace does not yet have a working local agent-browser runtime path.",
+        "agent-browser is not currently runnable behind this extension in the active sandbox.",
+      constraints: {
+        packaging:
+          "The published `agent-browser` npm package is CLI/bin-oriented and does not expose an importable JS SDK entrypoint for the documented BrowserManager-style API.",
+        runtime:
+          "The local agent-browser runtime uses a client-daemon architecture. In this Unix sandbox the daemon fails during startup because binding its local session socket returns EPERM (`Failed to bind socket: Operation not permitted`).",
+      },
       hint:
-        "Use backend=playwright in this sandbox, or wire the agent-browser SDK/runtime on a host that allows the required browser and socket integration.",
+        "Use backend=playwright in this sandbox. A future agent-browser backend likely needs either a real published JS SDK or an approved remote wrapper strategy (for example running the CLI in an external sandbox/runtime instead of this local Unix sandbox).",
     },
     artifacts: [],
   };

@@ -88,6 +88,22 @@ This backend is **scaffolded behind the same contract**, but in this sandbox it
 returns a capability-aware blocked/unavailable result instead of pretending the
 old daemon/CLI path is viable.
 
+Current blocker is specific and technical, not a missing adapter shape:
+
+- the published `agent-browser` npm package is CLI/bin-oriented and does not
+  currently expose a stable importable JS SDK entrypoint for the documented
+  BrowserManager-style API
+- the local runtime uses a client-daemon architecture, and in this Unix sandbox
+  the daemon fails on startup because binding its local session socket returns
+  `EPERM` / `Operation not permitted`
+
+A future backend can still be honest in one of two ways:
+
+- consume a real published JS SDK if/when upstream exposes one
+- wrap the CLI/runtime in an approved **remote** environment (for example an
+  external sandbox/runtime) instead of assuming the local Unix daemon path is
+  always allowed
+
 ## Playwright runtime behavior
 
 The underlying Playwright runtime remains the same safety-first host browser
