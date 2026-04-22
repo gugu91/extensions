@@ -220,6 +220,57 @@ describe("createPinetRemoteControl", () => {
     );
   });
 
+  it("keeps the current command reserved until settle callbacks finish", async () => {
+    const pinetRemoteControlRef: {
+      current?: ReturnType<typeof createPinetRemoteControl>;
+    } = {};
+    const onCommandSettled = vi.fn(
+      async (event: {
+        command: "reload" | "exit";
+        ctx: ExtensionContext;
+        getLatestNextCommand: () => "reload" | "exit" | null;
+      }) => {
+        if (event.command !== "reload") {
+          return;
+        }
+
+        const pinetRemoteControl = pinetRemoteControlRef.current;
+        expect(pinetRemoteControl).toBeDefined();
+        const queued = pinetRemoteControl!.requestRemoteControl("exit", event.ctx);
+        expect(queued).toMatchObject({
+          shouldStartNow: false,
+          status: "queued",
+          scheduledCommand: "exit",
+        });
+        expect(event.getLatestNextCommand()).toBe("exit");
+      },
+    );
+    const { deps, flushDeferredRemoteControlAcks, reloadPinetRuntime } = createDeps({
+      onCommandSettled,
+    });
+    const shutdown = vi.fn();
+    const pinetRemoteControl = createPinetRemoteControl(deps);
+    pinetRemoteControlRef.current = pinetRemoteControl;
+    const { ctx, notify } = createCtx({ idle: true, shutdown });
+
+    pinetRemoteControl.requestRemoteControl("reload", ctx);
+    pinetRemoteControl.runRemoteControl("reload", ctx);
+    await settleRemoteControl();
+
+    expect(reloadPinetRuntime).toHaveBeenCalledTimes(1);
+    expect(flushDeferredRemoteControlAcks).toHaveBeenNthCalledWith(1, "reload");
+    expect(flushDeferredRemoteControlAcks).toHaveBeenNthCalledWith(2, "exit");
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenNthCalledWith(1, "Pinet remote control requested: /reload", "warning");
+    expect(notify).toHaveBeenNthCalledWith(2, "Pinet remote control queued: /exit", "warning");
+    expect(notify).toHaveBeenNthCalledWith(
+      3,
+      "Pinet remote control continuing with queued /exit",
+      "warning",
+    );
+    expect(notify).toHaveBeenNthCalledWith(4, "Pinet remote control requested: /exit", "warning");
+  });
+
   it("reports remote-control failures and resets cleanly", async () => {
     const { deps, flushDeferredRemoteControlAcks } = createDeps();
     const pinetRemoteControl = createPinetRemoteControl(deps);

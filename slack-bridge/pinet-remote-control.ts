@@ -21,6 +21,7 @@ export interface PinetRemoteControlDeps {
     success: boolean;
     error: unknown;
     nextCommand: PinetControlCommand | null;
+    getLatestNextCommand: () => PinetControlCommand | null;
     ctx: ExtensionContext;
   }) => void | Promise<void>;
 }
@@ -79,22 +80,25 @@ export function createPinetRemoteControl(deps: PinetRemoteControlDeps): PinetRem
         commandError = err;
         ctx.ui.notify(`Pinet remote control failed: ${deps.formatError(err)}`, "error");
       } finally {
-        const next = finishPinetRemoteControl(remoteControlState);
-        remoteControlState = {
-          currentCommand: next.currentCommand,
-          queuedCommand: next.queuedCommand,
-        };
+        const nextBeforeSettle = finishPinetRemoteControl(remoteControlState);
         try {
           await deps.onCommandSettled?.({
             command,
             success,
             error: commandError,
-            nextCommand: next.nextCommand,
+            nextCommand: nextBeforeSettle.nextCommand,
+            getLatestNextCommand: () => finishPinetRemoteControl(remoteControlState).nextCommand,
             ctx,
           });
         } catch {
           /* best effort */
         }
+
+        const next = finishPinetRemoteControl(remoteControlState);
+        remoteControlState = {
+          currentCommand: next.currentCommand,
+          queuedCommand: next.queuedCommand,
+        };
         if (next.nextCommand) {
           ctx.ui.notify(
             `Pinet remote control continuing with queued /${next.nextCommand}`,

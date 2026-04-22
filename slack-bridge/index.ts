@@ -1009,14 +1009,16 @@ export default function (pi: ExtensionAPI) {
     success: boolean;
     error: unknown;
     nextCommand: "reload" | "exit" | null;
+    getLatestNextCommand: () => "reload" | "exit" | null;
     ctx: ExtensionContext;
   }): Promise<void> {
     if (event.command !== "reload") {
       return;
     }
 
+    const nextCommand = event.getLatestNextCommand();
     const settledRequest = activeBrokerReloadRequest;
-    activeBrokerReloadRequest = event.nextCommand === "reload" ? queuedBrokerReloadRequest : null;
+    activeBrokerReloadRequest = nextCommand === "reload" ? queuedBrokerReloadRequest : null;
     queuedBrokerReloadRequest = null;
 
     if (!event.success) {
@@ -1074,7 +1076,7 @@ export default function (pi: ExtensionAPI) {
     if (!pauseWasActive || overridesApplied) {
       brokerAutoDrainPause = null;
       brokerPauseNotifiedThreads.clear();
-      if (event.nextCommand === null) {
+      if (nextCommand === null) {
         maybeDrainInboxIfIdle(event.ctx);
       }
     }
@@ -1612,9 +1614,12 @@ export default function (pi: ExtensionAPI) {
 
   async function stopPinetRuntime(
     ctx: ExtensionContext,
-    options: { releaseIdentity: boolean },
+    options: { releaseIdentity: boolean; preserveBrokerTurnState?: boolean },
   ): Promise<void> {
     flushPersist();
+    if (!options.preserveBrokerTurnState) {
+      resetBrokerTurnRuntimeState();
+    }
     await brokerRuntime.disconnect({ releaseIdentity: options.releaseIdentity });
 
     if (brokerClient) {
@@ -1657,7 +1662,10 @@ export default function (pi: ExtensionAPI) {
         }
       },
       stopRuntime: async () => {
-        await stopPinetRuntime(ctx, { releaseIdentity: false });
+        await stopPinetRuntime(ctx, {
+          releaseIdentity: false,
+          preserveBrokerTurnState: true,
+        });
         // Reload intentionally keeps the extension alive in-process, so restore a
         // fresh top-level Slack request tracker after aborting the previous
         // generation. This preserves shutdown abort semantics without leaving
