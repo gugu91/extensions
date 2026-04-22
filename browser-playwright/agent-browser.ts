@@ -14,14 +14,14 @@ export function buildAgentBrowserModeResult(request: BrowserToolRequest): {
       status: "blocked",
       available: false,
       reason:
-        "agent-browser is not currently runnable behind this extension in the active sandbox.",
+        "agent-browser is not a supported local browsing path behind this extension in the active sandbox.",
       constraints: {
         packaging:
           "The published `agent-browser` npm package is CLI/bin-oriented and does not expose an importable JS SDK entrypoint for the documented BrowserManager-style API.",
         runtime:
           "The local agent-browser runtime uses a client-daemon architecture. In this Unix sandbox the daemon fails during startup because binding its local session socket returns EPERM (`Failed to bind socket: Operation not permitted`).",
       },
-      hint: "Use backend=playwright in this sandbox. The only truthful future path here is remote/optional executor mode unless upstream ships a real embeddable JS SDK; local embedded agent-browser support should stay unavailable in this harness.",
+      hint: "Use the default browser tool path in this Anthropic sandbox. Playwright is the supported local backend here; any future agent-browser path would need remote/provider-backed execution rather than local daemon compatibility.",
     },
     artifacts: [],
   };
