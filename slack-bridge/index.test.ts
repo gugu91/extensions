@@ -4,8 +4,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DatabaseSync } from "node:sqlite";
-import { BrokerClient } from "./broker/client.js";
+import { BrokerClient, type BrokerRpcRequestError } from "./broker/client.js";
 import * as brokerModule from "./broker/index.js";
+import { RPC_AGENT_STABLE_ID_CONFLICT } from "./broker/types.js";
 import * as maintenanceModule from "./broker/maintenance.js";
 import { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
@@ -3000,13 +3001,21 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const triggerDisconnect = disconnectHandler as () => void;
     const triggerReconnectFailed = reconnectFailedHandler as (error: Error) => void;
+    const stableIdReconnectError = new Error(
+      'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying.',
+    ) as BrokerRpcRequestError;
+    stableIdReconnectError.name = "BrokerRpcRequestError";
+    stableIdReconnectError.code = RPC_AGENT_STABLE_ID_CONFLICT;
+    stableIdReconnectError.data = {
+      code: "AGENT_STABLE_ID_CONFLICT",
+      stableId: "host:session:/tmp/worker",
+      ownerAgentId: "worker-2",
+      retryable: true,
+    };
+    stableIdReconnectError.method = "register";
 
     triggerDisconnect();
-    triggerReconnectFailed(
-      new Error(
-        'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying. code=AGENT_STABLE_ID_CONFLICT',
-      ),
-    );
+    triggerReconnectFailed(stableIdReconnectError);
 
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Pinet broker disconnected — reconnecting..."),
@@ -3018,6 +3027,10 @@ describe("slack-bridge Pinet reconnect", () => {
         "error",
       );
     });
+    expect(notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Update slack-bridge.agentName/agentEmoji or PI_NICKNAME"),
+      "error",
+    );
 
     await sessionShutdown?.({}, ctx);
   });

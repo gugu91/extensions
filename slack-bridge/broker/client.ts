@@ -2,7 +2,11 @@ import * as net from "node:net";
 import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
-import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
+import {
+  RPC_AGENT_NAME_CONFLICT,
+  RPC_AGENT_STABLE_ID_CONFLICT,
+  RPC_METHOD_NOT_FOUND,
+} from "./types.js";
 import type { ClientAgentInfo } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -81,7 +85,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-interface BrokerRpcRequestError extends Error {
+export interface BrokerRpcRequestError extends Error {
   code?: number;
   data?: unknown;
   method?: string;
@@ -112,13 +116,17 @@ function isRpcMethodNotFoundError(err: unknown, method: string): boolean {
   return rpcErr.code === RPC_METHOD_NOT_FOUND || err.message === `Unknown method: ${method}`;
 }
 
-function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError {
+function isRpcConflictError(
+  err: unknown,
+  rpcCode: number,
+  dataCode: string,
+): err is BrokerRpcRequestError {
   if (!(err instanceof Error)) {
     return false;
   }
 
   const rpcErr = err as BrokerRpcRequestError;
-  if (rpcErr.code === RPC_AGENT_NAME_CONFLICT) {
+  if (rpcErr.code === rpcCode) {
     return true;
   }
 
@@ -126,7 +134,15 @@ function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError
     return false;
   }
 
-  return (rpcErr.data as { code?: unknown }).code === "AGENT_NAME_CONFLICT";
+  return (rpcErr.data as { code?: unknown }).code === dataCode;
+}
+
+function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError {
+  return isRpcConflictError(err, RPC_AGENT_NAME_CONFLICT, "AGENT_NAME_CONFLICT");
+}
+
+export function isRpcAgentStableIdConflictError(err: unknown): err is BrokerRpcRequestError {
+  return isRpcConflictError(err, RPC_AGENT_STABLE_ID_CONFLICT, "AGENT_STABLE_ID_CONFLICT");
 }
 
 function getMeshAuthCompatibilityError(): Error {
@@ -696,7 +712,10 @@ export class BrokerClient {
       } catch {
         /* ignore */
       }
-      if (isRpcAgentNameConflictError(reconnectError)) {
+      if (
+        isRpcAgentNameConflictError(reconnectError) ||
+        isRpcAgentStableIdConflictError(reconnectError)
+      ) {
         this.reconnectAttempt = 0;
         this.reconnectFailedHandler?.(reconnectError);
         return;
