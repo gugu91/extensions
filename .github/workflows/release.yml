@@ -32,17 +32,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Setup StyLua
-        uses: JohnnyMorganz/stylua-action@v4
-        with:
-          version: 2.4.1
+      - name: Install StyLua
+        run: npm install --global @johnnymorganz/stylua-bin@2.0.2
 
       - name: Run checks
         run: pnpm check
@@ -51,7 +49,7 @@ jobs:
         run: pnpm test
 
       - name: Create release PR or publish packages
-        uses: changesets/action@v1
+        uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1.7.0
         with:
           commit: Version Packages
           title: Version Packages
