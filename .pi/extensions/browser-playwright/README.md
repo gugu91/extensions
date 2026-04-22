@@ -1,32 +1,103 @@
 # browser-playwright
 
-A Pi extension for reusable host-side browser access through Playwright, with a local-development-friendly setup for repo-local use or a global symlink install.
+A Pi browser extension built around **one tool only**.
 
-It is designed for real browsing and lightweight web interaction, not just test automation:
+Instead of exposing a wide `browser_*` tool surface, the extension now exposes a
+single `browser` tool that acts as a narrow command/channel into the browser
+runtime. The extension owns the session, security, artifact, proxy, and runtime
+complexity behind that one interface.
 
-- start and reuse browser sessions across tool calls
-- navigate public sites
-- snapshot and extract page content
-- click, fill, press, wait, inspect tabs, and capture screenshots
-- keep screenshots, artifacts, and saved browser state inside the active workspace
-- allow **direct localhost local-dev navigations** by default while still blocking broader private/internal network targets — and keeping arbitrary public-page localhost subrequests blocked by default
+## Goals
 
-## Location
+- radically reduce the browser tool surface
+- keep browser support feeling like one narrow ARC/comment channel
+- preserve the existing safe Playwright runtime underneath
+- make room for a second backend mode: `agent-browser`
 
-Source location in this repo:
+## Current modes
 
-- `.pi/extensions/browser-playwright/`
+The single tool supports two runtime modes:
 
-Pi can load it either:
+- `playwright` — **implemented now** in this extension
+- `agent-browser` — **scaffolded behind the same contract**, but may report a
+  runtime blocker in environments where the SDK/runtime path is not available
 
-- directly from this repo's `.pi/extensions/` directory, or
-- from a global symlink such as `~/.pi/extensions/browser-playwright`
+## Tool contract
 
-Workspace artifacts and saved browser state follow the **active Pi working directory**, not the extension install path, so a global symlink still keeps browser artifacts under the project you are currently working in.
+Tool: `browser`
+
+Parameters:
+
+- `mode` — optional, `playwright` or `agent-browser` (defaults to `playwright`)
+- `session_id` — optional session handle for commands that operate on an
+  existing session
+- `page_id` — optional page/tab handle for commands that target a specific page
+- `command` — the command-channel message sent to the runtime
+- `payload_json` — optional JSON object merged with inline command arguments
+
+### Command style
+
+Use concise command messages with inline `key=value` arguments.
+
+Examples:
+
+```json
+{ "command": "start url=https://example.com" }
+```
+
+```json
+{ "session_id": "browser_123", "command": "navigate url=https://example.com/docs new_tab=true" }
+```
+
+```json
+{ "session_id": "browser_123", "page_id": "page_abc", "command": "click selector=button" }
+```
+
+If quoting is awkward, pass structured arguments through `payload_json`:
+
+```json
+{
+  "session_id": "browser_123",
+  "command": "fill",
+  "payload_json": "{\"page_id\":\"page_abc\",\"selector\":\"input[name='q']\",\"value\":\"Playwright docs\"}"
+}
+```
+
+## Implemented Playwright commands
+
+Supported commands in `mode=playwright`:
+
+- `start`
+- `info`
+- `navigate`
+- `snapshot`
+- `extract`
+- `click`
+- `fill`
+- `press`
+- `wait`
+- `screenshot`
+- `tabs`
+- `close`
+
+Legacy command names like `browser_navigate` and `browser_wait_for` are accepted
+as aliases **inside the single tool command channel**, but the extension does
+not register those old tools anymore.
+
+## Playwright runtime behavior
+
+The underlying Playwright runtime is still the same safety-first host browser
+implementation:
+
+- reusable in-memory sessions keyed by `session_id`
+- multiple tabs/pages keyed by `page_id`
+- safe public-web defaults
+- direct localhost top-level navigation allowed by default for local-app testing
+- localhost/private-network subrequest guardrails remain enforced
+- screenshots saved under `.pi/artifacts/browser-playwright/`
+- explicit storage-state reuse from `.pi/state/browser-playwright/`
 
 ## Enable in this workspace
-
-### Repo-local usage
 
 From the repo root:
 
@@ -37,139 +108,62 @@ pi
 
 Or start a fresh Pi session in the repo after the files exist.
 
-### Global symlink usage
-
-A convenient local-dev setup is:
-
-```bash
-mkdir -p ~/.pi/extensions
-ln -s ~/src/gugu910/extensions/.pi/extensions/browser-playwright ~/.pi/extensions/browser-playwright
-```
-
-If `~/.pi/extensions/browser-playwright` already exists, inspect it first instead of overwriting it blindly.
-
-Then reload Pi:
-
-```bash
-pi
-/reload
-```
-
 ## Install Playwright
 
-If the extension has not been installed yet, install its local dependencies from the extension directory:
+If the extension dependencies are not installed yet:
 
 ```bash
 cd .pi/extensions/browser-playwright
 npm install
 ```
 
-For the default `chromium` engine, the extension now **prefers a host Chrome/Chromium executable automatically** when one is available. In the common local-dev case, that means no extra Playwright browser download is required.
+For the default `chromium` engine, the extension prefers a host
+Chrome/Chromium executable automatically when one is available.
 
-If no compatible host Chrome/Chromium is available, install Playwright Chromium explicitly:
+If no compatible host browser is available, install the matching Playwright
+browser binaries:
 
 ```bash
 npx playwright install chromium
-```
-
-If you start a session with `browser: "firefox"` or
-`browser: "webkit"`, install matching browser binaries instead:
-
-```bash
 npx playwright install firefox
 npx playwright install webkit
 ```
 
-The extension intentionally fails with exact engine-aware commands when:
-
-- the `playwright` package is missing
-- no compatible host Chrome/Chromium is found and the requested Playwright browser binaries are missing
-- the requested `firefox` / `webkit` browser engine binaries are missing
-
 ## Security defaults
-
-The extension now favors the common local-dev path while keeping the routed-request guardrails narrow.
 
 Allowed by default:
 
 - `http://...`
 - `https://...`
 - public internet targets
-- **direct top-level navigation** to `localhost`, `127.0.0.1`, and `::1` for trusted local-app testing
+- direct top-level navigation to `localhost`, `127.0.0.1`, and `::1`
 
 Blocked by default:
 
 - localhost subrequests from arbitrary non-localhost pages
 - private IPv4 ranges like `10.x`, `172.16-31.x`, `192.168.x`
 - link-local / internal ranges when detectable
-- obvious internal hostnames like `*.local`, `*.internal`, `host.docker.internal`, and single-label internal names
+- obvious internal hostnames like `*.local`, `*.internal`,
+  `host.docker.internal`, and single-label internal names
 - non-HTTP(S) protocols
 
-Environment controls:
+Optional env overrides:
 
 ```bash
-# optional broader localhost override for advanced workflows
 export BROWSER_ALLOW_LOCALHOST=true
-
-# optional trusted-network override
 export BROWSER_ALLOW_PRIVATE_NETWORK=true
 ```
 
-Recommended practice:
-
-- use direct `browser_navigate` / initial session URLs for trusted localhost apps
-- keep broader private-network access off unless you explicitly need it
-- leave arbitrary public-page localhost subrequests blocked unless you have consciously opted into a wider localhost policy
-
-## Session model
-
-- sessions are stored in memory and keyed by `session_id`
-- each session owns one Playwright browser + one browser context
-- each session can contain multiple tabs/pages keyed by `page_id`
-- artifacts and saved browser state stay rooted in the active workspace (`process.cwd()`), which keeps global symlink installs project-local in practice
-- `browser_navigate` can reuse the active tab or open a new one
-- `browser_tabs` lists pages and can switch the active page
-- `browser_close` can close a tab or the entire session
-- sessions are cleaned up on Pi shutdown
-- idle sessions are also swept automatically after `BROWSER_PLAYWRIGHT_IDLE_TIMEOUT_MS` (default: 15 minutes)
-- saved login state reuse is **explicit opt-in only** via Playwright `storageState` JSON import
-
-Important limitations:
-
-- live browser sessions are still process-local and in-memory only
-- a Pi reload or process restart still drops live browser sessions
-- only explicit Playwright `storageState` JSON reuse is supported — not arbitrary browser-profile mounting
-- storage state is never auto-saved on close, reload, or shutdown
-
 ## Stored browser state
 
-Saved Playwright login/session state is supported in a deliberately narrow, safety-first way.
+Saved Playwright login/session state is supported in a narrow, explicit way.
 
-How it works:
+- place trusted Playwright `storageState` JSON files under
+  `.pi/state/browser-playwright/`
+- reuse one explicitly via the `start` command and `storage_state_name=...`
+- the extension never auto-saves browser state on close or shutdown
 
-- place a trusted Playwright `storageState` JSON file under `.pi/state/browser-playwright/`
-- reuse it explicitly by passing `storage_state_name` to `browser_session_start`
-- names are sanitized to `<name>.json`
-- raw cookies / localStorage values are **not** echoed in tool output
-
-Current scope:
-
-- explicit **import/reuse** is supported
-- built-in export/save is intentionally **not** provided in this first safety-focused version
-- browser state is never auto-saved on close, reload, or shutdown
-
-Guardrails:
-
-- no arbitrary absolute host paths
-- no directory traversal inputs
-- no symlink escapes for saved state files or the saved-state root
-- no automatic persistence of auth state
-
-Treat `.pi/state/browser-playwright/` as secret-bearing auth material:
-
-- do not commit it
-- do not share it casually
-- delete saved state files when they are no longer needed
+Treat `.pi/state/browser-playwright/` as secret-bearing auth material.
 
 ## Artifacts
 
@@ -177,128 +171,62 @@ Screenshots are written under:
 
 - `.pi/artifacts/browser-playwright/`
 
-Current screenshot layout:
+Current layout:
 
 - `.pi/artifacts/browser-playwright/<session_id>/<timestamp>-<label>.png`
 
-`browser_screenshot` returns structured metadata including:
+## Example flows
 
-- `path`
-- `url`
-- `title`
-- `timestamp`
-- `full_page`
-
-## Tool surface
-
-Required tools provided:
-
-1. `browser_session_start`
-2. `browser_session_info`
-3. `browser_navigate`
-4. `browser_snapshot`
-5. `browser_extract`
-6. `browser_click`
-7. `browser_fill`
-8. `browser_press`
-9. `browser_wait_for`
-10. `browser_screenshot`
-11. `browser_tabs`
-12. `browser_close`
-
-## Usage flows
-
-### 1. Navigate to a public docs site and extract text
+### Start a session and snapshot a page
 
 ```json
-{ "session_id": "<from browser_session_start>", "url": "https://example.com" }
+{ "command": "start url=https://example.com" }
 ```
 
-Tool: `browser_navigate`
+Then:
 
 ```json
-{ "session_id": "<session_id>" }
+{ "session_id": "<from previous result>", "command": "snapshot" }
 ```
 
-Tool: `browser_snapshot`
+### Search and capture a screenshot
 
 ```json
-{ "session_id": "<session_id>", "selector": "h1" }
+{ "command": "start url=https://duckduckgo.com" }
 ```
-
-Tool: `browser_extract`
-
-### 2. Search a public site and take a screenshot
 
 ```json
-{ "session_id": "<session_id>", "url": "https://duckduckgo.com" }
+{
+  "session_id": "<session_id>",
+  "command": "fill",
+  "payload_json": "{\"selector\":\"input[name='q']\",\"value\":\"Playwright docs\"}"
+}
 ```
-
-Tool: `browser_navigate`
 
 ```json
-{ "session_id": "<session_id>", "selector": "input[name='q']", "value": "Playwright docs" }
+{ "session_id": "<session_id>", "command": "press key=Enter" }
 ```
-
-Tool: `browser_fill`
 
 ```json
-{ "session_id": "<session_id>", "key": "Enter" }
+{ "session_id": "<session_id>", "command": "wait text=Playwright timeout_ms=10000" }
 ```
-
-Tool: `browser_press`
 
 ```json
-{ "session_id": "<session_id>", "text": "Playwright", "timeout_ms": 10000 }
+{ "session_id": "<session_id>", "command": "screenshot label=search-results full_page=true" }
 ```
 
-Tool: `browser_wait_for`
+## Development
 
-```json
-{ "session_id": "<session_id>", "label": "search-results", "full_page": true }
-```
-
-Tool: `browser_screenshot`
-
-### 3. Reuse a trusted saved `storageState` JSON file
-
-Place a trusted Playwright `storageState` JSON file at:
-
-- `.pi/state/browser-playwright/github-login.json`
-
-Then start a new session that reuses that saved state:
-
-```json
-{ "storage_state_name": "github-login" }
-```
-
-Tool: `browser_session_start`
-
-This is explicit opt-in only. The extension does not auto-save state, and tool output does not print raw cookies or localStorage values.
-
-### 4. Trusted local app on localhost
-
-Direct localhost navigation is allowed by default, so you can navigate directly:
-
-```json
-{ "session_id": "<session_id>", "url": "http://localhost:3000" }
-```
-
-Tool: `browser_navigate`
-
-That trusted-localhost allowance is scoped to the page you explicitly navigate to localhost. A random public page does **not** get localhost subrequest access by default.
-
-If you want a broader localhost override for an advanced workflow, set:
+Type-check the extension:
 
 ```bash
-export BROWSER_ALLOW_LOCALHOST=true
+cd .pi/extensions/browser-playwright
+npm run check
 ```
 
-## Notes for agents
+Run tests:
 
-- start with `browser_session_start`
-- reuse the same `session_id` for a multi-step browsing task
-- keep `page_id` from previous results when a task depends on a specific tab
-- use `browser_snapshot` before interacting when you need a quick page map
-- use `browser_extract` for selector-specific text/attribute reads
-- close sessions you no longer need with `browser_close`
+```bash
+cd .pi/extensions/browser-playwright
+npm test
+```

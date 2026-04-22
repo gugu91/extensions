@@ -19,6 +19,17 @@ import {
   truncateText,
   type SupportedBrowserEngine,
 } from "./helpers.ts";
+import { buildAgentBrowserModeResult } from "./agent-browser.ts";
+import {
+  BROWSER_MODE_VALUES,
+  describePlaywrightCommands,
+  getBooleanArg,
+  getNumberArg,
+  getStringArg,
+  parseBrowserToolRequest,
+  requireStringArg,
+  type BrowserToolRequest,
+} from "./protocol.ts";
 import { loadStoredStorageState, type StorageStateSummary } from "./storage-state.ts";
 import type {
   Browser,
@@ -611,779 +622,599 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     });
   }
 
-  registerCommonHandlers();
+  function respond(request: BrowserToolRequest, details: Record<string, unknown>) {
+    const result = {
+      mode: request.mode,
+      command: request.action,
+      raw_command: request.rawCommand,
+      ...details,
+    };
 
-  pi.registerTool({
-    name: "browser_session_start",
-    label: "Browser Session Start",
-    description:
-      "Start a Playwright browser session for reusable multi-step browsing with safe network defaults.",
-    promptSnippet:
-      "Start a reusable Playwright browser session before navigating or interacting with pages.",
-    promptGuidelines: [
-      "Reuse browser session_id values across related browsing steps instead of starting a fresh browser every time.",
-      "Use browser_navigate to visit public sites and browser_tabs to inspect or switch tabs.",
-    ],
-    parameters: Type.Object({
-      browser: Type.Optional(
-        StringEnum(["chromium", "firefox", "webkit"] as const, {
-          description: "Browser engine. Defaults to chromium.",
-        }),
-      ),
-      headless: Type.Optional(Type.Boolean({ description: "Launch headless. Defaults to true." })),
-      url: Type.Optional(Type.String({ description: "Optional initial URL to open." })),
-      viewport_width: Type.Optional(Type.Number({ description: "Viewport width in pixels." })),
-      viewport_height: Type.Optional(Type.Number({ description: "Viewport height in pixels." })),
-      storage_state_name: Type.Optional(
-        Type.String({
-          description:
-            "Optional saved storage state name to import from `.pi/state/browser-playwright/<name>.json`.",
-        }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) {
-        throw new Error("Cancelled before starting a browser session.");
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      details: result,
+    };
+  }
+
+  function requireSessionId(request: BrowserToolRequest): string {
+    if (!request.sessionId) {
+      throw new Error("browser command requires `session_id` for this operation.");
+    }
+    return request.sessionId;
+  }
+
+  function resolveBrowserEngine(value: string | undefined): BrowserEngine {
+    if (!value || value === "chromium" || value === "firefox" || value === "webkit") {
+      return (value ?? "chromium") as BrowserEngine;
+    }
+    throw new Error("browser start command only supports browser=chromium, firefox, or webkit.");
+  }
+
+  async function executeStart(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) {
+      throw new Error("Cancelled before starting a browser session.");
+    }
+
+    await cleanupExpiredSessions();
+    await ensureArtifactsDir();
+
+    const browserEngine = resolveBrowserEngine(getStringArg(request.args, "browser"));
+    const playwright = await loadPlaywright(browserEngine);
+    const browserType = playwright[browserEngine] as BrowserType;
+    const headless = getBooleanArg(request.args, "headless") ?? true;
+    const loadedStorageState = getStringArg(request.args, "storage_state_name")
+      ? await loadStoredStorageState(getStringArg(request.args, "storage_state_name")!, {
+          workspaceRoot: WORKSPACE_ROOT,
+        })
+      : null;
+
+    const { browser, browserBinary } = await launchBrowser(browserType, browserEngine, headless);
+
+    try {
+      const viewportWidth = getNumberArg(request.args, "viewport_width");
+      const viewportHeight = getNumberArg(request.args, "viewport_height");
+      const contextOptions: BrowserNewContextOptions = {
+        viewport:
+          viewportWidth && viewportHeight
+            ? { width: viewportWidth, height: viewportHeight }
+            : { width: 1280, height: 800 },
+      };
+      if (loadedStorageState) {
+        contextOptions.storageState =
+          loadedStorageState.storageState as BrowserNewContextOptions["storageState"];
       }
 
-      await cleanupExpiredSessions();
-      await ensureArtifactsDir();
+      const context = await browser.newContext(contextOptions);
 
-      const browserEngine = (params.browser ?? "chromium") as BrowserEngine;
-      const playwright = await loadPlaywright(browserEngine);
-      const browserType = playwright[browserEngine] as BrowserType;
-      const headless = params.headless ?? true;
-      const loadedStorageState = params.storage_state_name
-        ? await loadStoredStorageState(params.storage_state_name, { workspaceRoot: WORKSPACE_ROOT })
-        : null;
+      const session: BrowserSession = {
+        id: `browser_${randomUUID()}`,
+        browserEngine,
+        browser,
+        context,
+        createdAt: nowIso(),
+        lastActivityAt: nowIso(),
+        headless,
+        pages: new Map(),
+        pageIds: new WeakMap(),
+        activePageId: null,
+        consoleEntries: [],
+        blockedRequests: [],
+        networkSummary: {
+          total_requests: 0,
+          blocked_requests: 0,
+          failed_requests: 0,
+        },
+        mountedStorageState: loadedStorageState?.summary ?? null,
+        browserBinary,
+      };
 
-      const { browser, browserBinary } = await launchBrowser(browserType, browserEngine, headless);
-
-      try {
-        const contextOptions: BrowserNewContextOptions = {
-          viewport:
-            params.viewport_width && params.viewport_height
-              ? { width: params.viewport_width, height: params.viewport_height }
-              : { width: 1280, height: 800 },
-        };
-        if (loadedStorageState) {
-          contextOptions.storageState =
-            loadedStorageState.storageState as BrowserNewContextOptions["storageState"];
+      await context.route("**/*", async (route: Route) => {
+        const requestRecord: Request = route.request();
+        session.networkSummary.total_requests += 1;
+        const pageId = safeRequestPageId(requestRecord, (page) => session.pageIds.get(page) ?? null);
+        const pageRecord = pageId ? (session.pages.get(pageId) ?? null) : null;
+        const decision = assessUrl(
+          requestRecord.url(),
+          resolveRouteSecurityOptions(getSecurityOptions(), {
+            trustedLocalhostPage: pageRecord?.trustedLocalhostMode ?? false,
+          }),
+        );
+        if (!decision.allowed) {
+          recordBlockedRequest(session, {
+            timestamp: nowIso(),
+            page_id: pageId,
+            url: requestRecord.url(),
+            resource_type: requestRecord.resourceType(),
+            reason: [decision.reason, decision.hint].filter(Boolean).join("\n"),
+          });
+          await route.abort("blockedbyclient");
+          return;
         }
+        await route.continue();
+      });
 
-        const context = await browser.newContext(contextOptions);
+      context.on("page", (page) => {
+        void registerPage(session, page);
+      });
 
-        const session: BrowserSession = {
-          id: `browser_${randomUUID()}`,
-          browserEngine,
-          browser,
-          context,
-          createdAt: nowIso(),
-          lastActivityAt: nowIso(),
-          headless,
-          pages: new Map(),
-          pageIds: new WeakMap(),
-          activePageId: null,
-          consoleEntries: [],
-          blockedRequests: [],
-          networkSummary: {
-            total_requests: 0,
-            blocked_requests: 0,
-            failed_requests: 0,
-          },
-          mountedStorageState: loadedStorageState?.summary ?? null,
-          browserBinary,
-        };
+      const pageRecord = await createTrackedPage(session);
+      sessions.set(session.id, session);
 
-        await context.route("**/*", async (route: Route) => {
-          const request: Request = route.request();
-          session.networkSummary.total_requests += 1;
-          const pageId = safeRequestPageId(request, (page) => session.pageIds.get(page) ?? null);
-          const pageRecord = pageId ? (session.pages.get(pageId) ?? null) : null;
-          const decision = assessUrl(
-            request.url(),
-            resolveRouteSecurityOptions(getSecurityOptions(), {
-              trustedLocalhostPage: pageRecord?.trustedLocalhostMode ?? false,
-            }),
+      const initialUrl = getStringArg(request.args, "url");
+      if (initialUrl) {
+        try {
+          await gotoWithSafety(
+            session,
+            pageRecord,
+            initialUrl,
+            "domcontentloaded",
+            DEFAULT_NAVIGATION_TIMEOUT_MS,
           );
-          if (!decision.allowed) {
-            recordBlockedRequest(session, {
-              timestamp: nowIso(),
-              page_id: pageId,
-              url: request.url(),
-              resource_type: request.resourceType(),
-              reason: [decision.reason, decision.hint].filter(Boolean).join("\n"),
-            });
-            await route.abort("blockedbyclient");
-            return;
-          }
-          await route.continue();
-        });
-
-        context.on("page", (page) => {
-          void registerPage(session, page);
-        });
-
-        const pageRecord = await createTrackedPage(session);
-        sessions.set(session.id, session);
-
-        if (params.url) {
-          try {
-            await gotoWithSafety(
-              session,
-              pageRecord,
-              params.url,
-              "domcontentloaded",
-              DEFAULT_NAVIGATION_TIMEOUT_MS,
-            );
-          } catch (error) {
-            sessions.delete(session.id);
-            await closeSession(session);
-            throw error;
-          }
+        } catch (error) {
+          sessions.delete(session.id);
+          await closeSession(session);
+          throw error;
         }
-
-        const pages = await listPages(session);
-        const activePage = session.activePageId
-          ? getPageRecord(session, session.activePageId)
-          : null;
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  session_id: session.id,
-                  browser: session.browserEngine,
-                  headless: session.headless,
-                  created_at: session.createdAt,
-                  active_page_id: activePage?.id ?? null,
-                  pages,
-                  artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
-                  storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
-                  mounted_storage_state: session.mountedStorageState,
-                  browser_binary: session.browserBinary,
-                  safety: {
-                    ...getSecurityOptions(),
-                    localhost_direct_navigation: true,
-                    localhost_subrequests_require_trusted_page: true,
-                  },
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-          details: {
-            session_id: session.id,
-            browser: session.browserEngine,
-            headless: session.headless,
-            created_at: session.createdAt,
-            active_page_id: activePage?.id ?? null,
-            pages,
-            artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
-            storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
-            mounted_storage_state: session.mountedStorageState,
-            browser_binary: session.browserBinary,
-            safety: {
-              ...getSecurityOptions(),
-              localhost_direct_navigation: true,
-              localhost_subrequests_require_trusted_page: true,
-            },
-          },
-        };
-      } catch (error) {
-        await browser.close().catch(() => undefined);
-        throw error;
       }
-    },
-  });
 
-  pi.registerTool({
-    name: "browser_session_info",
-    label: "Browser Session Info",
-    description: "Inspect browser session state, tabs, and concise console/network summaries.",
-    promptSnippet:
-      "Inspect an existing browser session and list its tabs, active page, and recent browser activity.",
-    parameters: Type.Object({
-      session_id: Type.String({
-        description: "Browser session_id returned by browser_session_start.",
-      }),
-    }),
-    async execute(_toolCallId, params) {
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
       const pages = await listPages(session);
-      const result = {
+      const activePage = session.activePageId
+        ? getPageRecord(session, session.activePageId)
+        : null;
+      return respond(request, {
         session_id: session.id,
         browser: session.browserEngine,
         headless: session.headless,
         created_at: session.createdAt,
-        last_activity_at: session.lastActivityAt,
-        active_page_id: session.activePageId,
-        page_count: pages.length,
+        active_page_id: activePage?.id ?? null,
         pages,
+        artifact_dir: relativeFromWorkspace(ARTIFACT_ROOT),
+        storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
         mounted_storage_state: session.mountedStorageState,
         browser_binary: session.browserBinary,
-        storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
-        network_summary: session.networkSummary,
-        recent_console: session.consoleEntries,
-        blocked_requests: session.blockedRequests,
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_navigate",
-    label: "Browser Navigate",
-    description: "Navigate an existing tab or a new tab to a public URL with safe network checks.",
-    promptSnippet: "Navigate a browser session tab to a URL, optionally opening a new tab.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      url: Type.String({
-        description: "Destination URL. Only public http/https URLs are allowed by default.",
-      }),
-      page_id: Type.Optional(
-        Type.String({ description: "Existing page_id to reuse. Defaults to the active page." }),
-      ),
-      new_tab: Type.Optional(
-        Type.Boolean({
-          description: "Open the URL in a new tab instead of reusing the current one.",
-        }),
-      ),
-      wait_until: Type.Optional(
-        Type.String({ description: "One of load, domcontentloaded, networkidle, commit." }),
-      ),
-      timeout_ms: Type.Optional(
-        Type.Number({ description: "Navigation timeout in milliseconds." }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Cancelled before navigation.");
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const waitUntil = normalizeWaitUntil(params.wait_until);
-      const timeoutMs = params.timeout_ms ?? DEFAULT_NAVIGATION_TIMEOUT_MS;
-      const pageRecord = params.new_tab
-        ? await createTrackedPage(session)
-        : await resolvePageRecord(session, params.page_id, true);
-
-      await gotoWithSafety(session, pageRecord, params.url, waitUntil, timeoutMs);
-
-      const result = {
-        session_id: session.id,
-        page: await buildPageSummary(session, pageRecord),
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_snapshot",
-    label: "Browser Snapshot",
-    description:
-      "Capture a concise structured snapshot of the current page: title, visible text, links, buttons, and fields.",
-    promptSnippet:
-      "Capture a concise structured page snapshot for the active tab or a specific page.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-    }),
-    async execute(_toolCallId, params) {
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const inspection = await buildPageInspection(pageRecord);
-
-      const result = {
-        session_id: session.id,
-        page_id: pageRecord.id,
-        ...inspection,
-      };
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_extract",
-    label: "Browser Extract",
-    description:
-      "Extract visible text or selector-matched data from a page without arbitrary page evaluation.",
-    promptSnippet:
-      "Extract visible text or selector-matched fields from a page in a structured way.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-      selector: Type.Optional(
-        Type.String({ description: "Optional Playwright selector to extract from." }),
-      ),
-      attribute: Type.Optional(
-        Type.String({ description: "Optional attribute name to extract instead of text." }),
-      ),
-      max_items: Type.Optional(
-        Type.Number({ description: "Maximum matched items to return. Defaults to 5." }),
-      ),
-    }),
-    async execute(_toolCallId, params) {
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const page = pageRecord.page;
-      const maxItems = params.max_items ?? 5;
-
-      const result: {
-        session_id: string;
-        page_id: string;
-        selector: string | null;
-        attribute: string | null;
-        url: string;
-        title: string | null;
-        text: string | null;
-        match_count: number | null;
-        items: Record<string, unknown>[];
-        truncated: boolean;
-      } = {
-        session_id: session.id,
-        page_id: pageRecord.id,
-        selector: params.selector ?? null,
-        attribute: params.attribute ?? null,
-        url: page.url(),
-        title: await safeTitle(page),
-        text: null,
-        match_count: null,
-        items: [],
-        truncated: false,
-      };
-
-      if (!params.selector) {
-        const text = await page
-          .locator("body")
-          .innerText()
-          .catch(() => "");
-        result.text = truncateText(text, MAX_SNAPSHOT_TEXT_CHARS, 180);
-      } else {
-        const extracted = await collectElements(
-          page.locator(params.selector),
-          maxItems,
-          params.attribute,
-        );
-        result.match_count = extracted.count;
-        result.items = extracted.items;
-        result.truncated = extracted.truncated;
-      }
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_click",
-    label: "Browser Click",
-    description: "Click a page element by selector and report the resulting tab or URL state.",
-    promptSnippet: "Click a selector in the browser and report the resulting URL or active tab.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      selector: Type.String({ description: "Playwright selector to click." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-      timeout_ms: Type.Optional(Type.Number({ description: "Click timeout in milliseconds." })),
-      double_click: Type.Optional(
-        Type.Boolean({ description: "Use a double click instead of a single click." }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Cancelled before click.");
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-      const page = pageRecord.page;
-      const locator = page.locator(params.selector).first();
-      const previousUrl = page.url();
-      const blockedCountBefore = session.blockedRequests.length;
-
-      await locator.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
-      if (params.double_click) {
-        await locator.dblclick({ timeout: timeoutMs });
-      } else {
-        await locator.click({ timeout: timeoutMs });
-      }
-      await waitForPossibleNavigation(page, previousUrl, timeoutMs);
-
-      const activePage = await resolvePageRecord(
-        session,
-        session.activePageId ?? pageRecord.id,
-        false,
-      );
-      const blockedRequest =
-        session.blockedRequests.length > blockedCountBefore
-          ? session.blockedRequests[session.blockedRequests.length - 1]
-          : null;
-      const result = {
-        session_id: session.id,
-        clicked_selector: params.selector,
-        previous_url: previousUrl,
-        active_page: await buildPageSummary(session, activePage),
-        blocked_request: blockedRequest,
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_fill",
-    label: "Browser Fill",
-    description: "Fill an input or textarea by selector.",
-    promptSnippet: "Fill a page field by selector with text input.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      selector: Type.String({ description: "Playwright selector for the field to fill." }),
-      value: Type.String({ description: "Value to type into the field." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-      timeout_ms: Type.Optional(Type.Number({ description: "Fill timeout in milliseconds." })),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Cancelled before fill.");
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-      const locator = pageRecord.page.locator(params.selector).first();
-
-      await locator.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
-      await locator.fill(params.value, { timeout: timeoutMs });
-      touchPage(pageRecord);
-
-      const result = {
-        session_id: session.id,
-        page_id: pageRecord.id,
-        selector: params.selector,
-        value_length: params.value.length,
-        url: pageRecord.page.url(),
-        title: await safeTitle(pageRecord.page),
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_press",
-    label: "Browser Press",
-    description: "Press a keyboard key on the page or on a selected element.",
-    promptSnippet: "Press a keyboard key on the page or a selected element.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      key: Type.String({ description: "Keyboard key, e.g. Enter, Tab, ArrowDown, Escape." }),
-      selector: Type.Optional(
-        Type.String({ description: "Optional selector to focus before pressing the key." }),
-      ),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-      timeout_ms: Type.Optional(
-        Type.Number({ description: "Optional timeout for selector-based press actions." }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Cancelled before key press.");
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-      const previousUrl = pageRecord.page.url();
-      const blockedCountBefore = session.blockedRequests.length;
-
-      if (params.selector) {
-        const locator = pageRecord.page.locator(params.selector).first();
-        await locator.press(params.key, { timeout: timeoutMs });
-      } else {
-        await pageRecord.page.keyboard.press(params.key);
-      }
-
-      await waitForPossibleNavigation(pageRecord.page, previousUrl, timeoutMs);
-      touchPage(pageRecord);
-      const blockedRequest =
-        session.blockedRequests.length > blockedCountBefore
-          ? session.blockedRequests[session.blockedRequests.length - 1]
-          : null;
-      const result = {
-        session_id: session.id,
-        page_id: pageRecord.id,
-        selector: params.selector ?? null,
-        key: params.key,
-        previous_url: previousUrl,
-        url: pageRecord.page.url(),
-        title: await safeTitle(pageRecord.page),
-        blocked_request: blockedRequest,
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_wait_for",
-    label: "Browser Wait For",
-    description:
-      "Wait for a selector, text, URL fragment, load state, or explicit delay within a browser session.",
-    promptSnippet:
-      "Wait for a selector, text, load state, URL fragment, or short delay in the browser.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-      selector: Type.Optional(
-        Type.String({ description: "Wait for this selector to become visible." }),
-      ),
-      text: Type.Optional(Type.String({ description: "Wait for visible text to appear." })),
-      url_includes: Type.Optional(
-        Type.String({ description: "Wait until the URL contains this substring." }),
-      ),
-      load_state: Type.Optional(
-        Type.String({ description: "Wait for load, domcontentloaded, or networkidle." }),
-      ),
-      delay_ms: Type.Optional(
-        Type.Number({ description: "Wait for an explicit delay in milliseconds." }),
-      ),
-      timeout_ms: Type.Optional(Type.Number({ description: "Maximum wait time in milliseconds." })),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Cancelled before wait.");
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const page = pageRecord.page;
-      const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-      let matched = "";
-
-      if (params.selector) {
-        await page
-          .locator(params.selector)
-          .first()
-          .waitFor({ state: "visible", timeout: timeoutMs });
-        matched = `selector:${params.selector}`;
-      } else if (params.text) {
-        await page.getByText(params.text, { exact: false }).first().waitFor({
-          state: "visible",
-          timeout: timeoutMs,
-        });
-        matched = `text:${params.text}`;
-      } else if (params.url_includes) {
-        await page.waitForURL((current) => current.toString().includes(params.url_includes ?? ""), {
-          timeout: timeoutMs,
-        });
-        matched = `url_includes:${params.url_includes}`;
-      } else if (params.load_state) {
-        const loadState = normalizeWaitUntil(params.load_state);
-        if (loadState === "commit") {
-          await page.waitForURL(() => true, { timeout: timeoutMs, waitUntil: "commit" });
-        } else {
-          await page.waitForLoadState(loadState, { timeout: timeoutMs });
-        }
-        matched = `load_state:${params.load_state}`;
-      } else if (params.delay_ms) {
-        await page.waitForTimeout(params.delay_ms);
-        matched = `delay_ms:${params.delay_ms}`;
-      } else {
-        throw new Error(
-          "browser_wait_for requires one of selector, text, url_includes, load_state, or delay_ms.",
-        );
-      }
-
-      touchPage(pageRecord);
-      const result = {
-        session_id: session.id,
-        page_id: pageRecord.id,
-        matched,
-        url: page.url(),
-        title: await safeTitle(page),
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_screenshot",
-    label: "Browser Screenshot",
-    description:
-      "Capture a screenshot into `.pi/artifacts/browser-playwright/` and return structured artifact metadata.",
-    promptSnippet:
-      "Capture a screenshot and store it under the workspace-local browser-playwright artifacts directory.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id. Defaults to the active page." }),
-      ),
-      full_page: Type.Optional(
-        Type.Boolean({ description: "Capture the full page. Defaults to false." }),
-      ),
-      label: Type.Optional(
-        Type.String({ description: "Optional label used in the screenshot filename." }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Cancelled before screenshot.");
-      await cleanupExpiredSessions();
-      await ensureArtifactsDir();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      const pageRecord = await resolvePageRecord(session, params.page_id, false);
-      const page = pageRecord.page;
-      const sessionArtifactDir = resolve(ARTIFACT_ROOT, session.id);
-      await mkdir(sessionArtifactDir, { recursive: true });
-
-      const timestamp = nowIso().replace(/[:.]/g, "-");
-      const fileName = `${timestamp}-${sanitizeLabel(params.label)}.png`;
-      const absolutePath = resolve(sessionArtifactDir, fileName);
-      await page.screenshot({
-        path: absolutePath,
-        fullPage: params.full_page ?? false,
-        type: "png",
+        safety: {
+          ...getSecurityOptions(),
+          localhost_direct_navigation: true,
+          localhost_subrequests_require_trusted_page: true,
+        },
       });
-      touchPage(pageRecord);
+    } catch (error) {
+      await browser.close().catch(() => undefined);
+      throw error;
+    }
+  }
 
-      const relativePath = relativeFromWorkspace(absolutePath);
-      const result = {
+  async function executeInfo(request: BrowserToolRequest) {
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pages = await listPages(session);
+    return respond(request, {
+      session_id: session.id,
+      browser: session.browserEngine,
+      headless: session.headless,
+      created_at: session.createdAt,
+      last_activity_at: session.lastActivityAt,
+      active_page_id: session.activePageId,
+      page_count: pages.length,
+      pages,
+      mounted_storage_state: session.mountedStorageState,
+      browser_binary: session.browserBinary,
+      storage_state_dir: STORAGE_STATE_RELATIVE_DIR,
+      network_summary: session.networkSummary,
+      recent_console: session.consoleEntries,
+      blocked_requests: session.blockedRequests,
+    });
+  }
+
+  async function executeNavigate(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) throw new Error("Cancelled before navigation.");
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const waitUntil = normalizeWaitUntil(getStringArg(request.args, "wait_until"));
+    const timeoutMs = getNumberArg(request.args, "timeout_ms") ?? DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const pageRecord = getBooleanArg(request.args, "new_tab")
+      ? await createTrackedPage(session)
+      : await resolvePageRecord(session, request.pageId, true);
+
+    await gotoWithSafety(
+      session,
+      pageRecord,
+      requireStringArg(request.args, "url"),
+      waitUntil,
+      timeoutMs,
+    );
+
+    return respond(request, {
+      session_id: session.id,
+      page: await buildPageSummary(session, pageRecord),
+    });
+  }
+
+  async function executeSnapshot(request: BrowserToolRequest) {
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const inspection = await buildPageInspection(pageRecord);
+
+    return respond(request, {
+      session_id: session.id,
+      page_id: pageRecord.id,
+      ...inspection,
+    });
+  }
+
+  async function executeExtract(request: BrowserToolRequest) {
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const page = pageRecord.page;
+    const maxItems = getNumberArg(request.args, "max_items") ?? 5;
+    const selector = getStringArg(request.args, "selector");
+    const attribute = getStringArg(request.args, "attribute");
+
+    const result: {
+      session_id: string;
+      page_id: string;
+      selector: string | null;
+      attribute: string | null;
+      url: string;
+      title: string | null;
+      text: string | null;
+      match_count: number | null;
+      items: Record<string, unknown>[];
+      truncated: boolean;
+    } = {
+      session_id: session.id,
+      page_id: pageRecord.id,
+      selector: selector ?? null,
+      attribute: attribute ?? null,
+      url: page.url(),
+      title: await safeTitle(page),
+      text: null,
+      match_count: null,
+      items: [],
+      truncated: false,
+    };
+
+    if (!selector) {
+      const text = await page.locator("body").innerText().catch(() => "");
+      result.text = truncateText(text, MAX_SNAPSHOT_TEXT_CHARS, 180);
+    } else {
+      const extracted = await collectElements(page.locator(selector), maxItems, attribute);
+      result.match_count = extracted.count;
+      result.items = extracted.items;
+      result.truncated = extracted.truncated;
+    }
+
+    return respond(request, result);
+  }
+
+  async function executeClick(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) throw new Error("Cancelled before click.");
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const timeoutMs = getNumberArg(request.args, "timeout_ms") ?? DEFAULT_TIMEOUT_MS;
+    const selector = requireStringArg(request.args, "selector");
+    const page = pageRecord.page;
+    const locator = page.locator(selector).first();
+    const previousUrl = page.url();
+    const blockedCountBefore = session.blockedRequests.length;
+
+    await locator.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
+    if (getBooleanArg(request.args, "double_click")) {
+      await locator.dblclick({ timeout: timeoutMs });
+    } else {
+      await locator.click({ timeout: timeoutMs });
+    }
+    await waitForPossibleNavigation(page, previousUrl, timeoutMs);
+
+    const activePage = await resolvePageRecord(session, session.activePageId ?? pageRecord.id, false);
+    const blockedRequest =
+      session.blockedRequests.length > blockedCountBefore
+        ? session.blockedRequests[session.blockedRequests.length - 1]
+        : null;
+    return respond(request, {
+      session_id: session.id,
+      clicked_selector: selector,
+      previous_url: previousUrl,
+      active_page: await buildPageSummary(session, activePage),
+      blocked_request: blockedRequest,
+    });
+  }
+
+  async function executeFill(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) throw new Error("Cancelled before fill.");
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const timeoutMs = getNumberArg(request.args, "timeout_ms") ?? DEFAULT_TIMEOUT_MS;
+    const selector = requireStringArg(request.args, "selector");
+    const value = requireStringArg(request.args, "value");
+    const locator = pageRecord.page.locator(selector).first();
+
+    await locator.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
+    await locator.fill(value, { timeout: timeoutMs });
+    touchPage(pageRecord);
+
+    return respond(request, {
+      session_id: session.id,
+      page_id: pageRecord.id,
+      selector,
+      value_length: value.length,
+      url: pageRecord.page.url(),
+      title: await safeTitle(pageRecord.page),
+    });
+  }
+
+  async function executePress(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) throw new Error("Cancelled before key press.");
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const timeoutMs = getNumberArg(request.args, "timeout_ms") ?? DEFAULT_TIMEOUT_MS;
+    const previousUrl = pageRecord.page.url();
+    const blockedCountBefore = session.blockedRequests.length;
+    const key = requireStringArg(request.args, "key");
+    const selector = getStringArg(request.args, "selector");
+
+    if (selector) {
+      const locator = pageRecord.page.locator(selector).first();
+      await locator.press(key, { timeout: timeoutMs });
+    } else {
+      await pageRecord.page.keyboard.press(key);
+    }
+
+    await waitForPossibleNavigation(pageRecord.page, previousUrl, timeoutMs);
+    touchPage(pageRecord);
+    const blockedRequest =
+      session.blockedRequests.length > blockedCountBefore
+        ? session.blockedRequests[session.blockedRequests.length - 1]
+        : null;
+    return respond(request, {
+      session_id: session.id,
+      page_id: pageRecord.id,
+      selector: selector ?? null,
+      key,
+      previous_url: previousUrl,
+      url: pageRecord.page.url(),
+      title: await safeTitle(pageRecord.page),
+      blocked_request: blockedRequest,
+    });
+  }
+
+  async function executeWait(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) throw new Error("Cancelled before wait.");
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const page = pageRecord.page;
+    const timeoutMs = getNumberArg(request.args, "timeout_ms") ?? DEFAULT_TIMEOUT_MS;
+    const selector = getStringArg(request.args, "selector");
+    const text = getStringArg(request.args, "text");
+    const urlIncludes = getStringArg(request.args, "url_includes");
+    const loadState = getStringArg(request.args, "load_state");
+    const delayMs = getNumberArg(request.args, "delay_ms");
+    let matched = "";
+
+    if (selector) {
+      await page.locator(selector).first().waitFor({ state: "visible", timeout: timeoutMs });
+      matched = `selector:${selector}`;
+    } else if (text) {
+      await page.getByText(text, { exact: false }).first().waitFor({
+        state: "visible",
+        timeout: timeoutMs,
+      });
+      matched = `text:${text}`;
+    } else if (urlIncludes) {
+      await page.waitForURL((current) => current.toString().includes(urlIncludes), {
+        timeout: timeoutMs,
+      });
+      matched = `url_includes:${urlIncludes}`;
+    } else if (loadState) {
+      const normalized = normalizeWaitUntil(loadState);
+      if (normalized === "commit") {
+        await page.waitForURL(() => true, { timeout: timeoutMs, waitUntil: "commit" });
+      } else {
+        await page.waitForLoadState(normalized, { timeout: timeoutMs });
+      }
+      matched = `load_state:${loadState}`;
+    } else if (delayMs) {
+      await page.waitForTimeout(delayMs);
+      matched = `delay_ms:${delayMs}`;
+    } else {
+      throw new Error(
+        "wait command requires one of selector, text, url_includes, load_state, or delay_ms.",
+      );
+    }
+
+    touchPage(pageRecord);
+    return respond(request, {
+      session_id: session.id,
+      page_id: pageRecord.id,
+      matched,
+      url: page.url(),
+      title: await safeTitle(page),
+    });
+  }
+
+  async function executeScreenshot(request: BrowserToolRequest, signal: AbortSignal | undefined) {
+    if (signal?.aborted) throw new Error("Cancelled before screenshot.");
+    await cleanupExpiredSessions();
+    await ensureArtifactsDir();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const pageRecord = await resolvePageRecord(session, request.pageId, false);
+    const page = pageRecord.page;
+    const sessionArtifactDir = resolve(ARTIFACT_ROOT, session.id);
+    await mkdir(sessionArtifactDir, { recursive: true });
+
+    const timestamp = nowIso().replace(/[:.]/g, "-");
+    const fileName = `${timestamp}-${sanitizeLabel(getStringArg(request.args, "label"))}.png`;
+    const absolutePath = resolve(sessionArtifactDir, fileName);
+    await page.screenshot({
+      path: absolutePath,
+      fullPage: getBooleanArg(request.args, "full_page") ?? false,
+      type: "png",
+    });
+    touchPage(pageRecord);
+
+    return respond(request, {
+      session_id: session.id,
+      page_id: pageRecord.id,
+      path: relativeFromWorkspace(absolutePath),
+      url: page.url(),
+      title: await safeTitle(page),
+      timestamp: nowIso(),
+      full_page: getBooleanArg(request.args, "full_page") ?? false,
+    });
+  }
+
+  async function executeTabs(request: BrowserToolRequest) {
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const activatePageId = getStringArg(request.args, "activate_page_id");
+    if (activatePageId) {
+      getPageRecord(session, activatePageId);
+      session.activePageId = activatePageId;
+    }
+    const pages = await listPages(session);
+    return respond(request, {
+      session_id: session.id,
+      active_page_id: session.activePageId,
+      page_count: pages.length,
+      pages,
+    });
+  }
+
+  async function executeClose(request: BrowserToolRequest) {
+    await cleanupExpiredSessions();
+    const session = getSessionOrThrow(sessions, requireSessionId(request));
+    const closeSessionFlag = getBooleanArg(request.args, "close_session") ?? false;
+
+    if (closeSessionFlag || !request.pageId) {
+      await closeSession(session);
+      sessions.delete(session.id);
+      return respond(request, {
         session_id: session.id,
-        page_id: pageRecord.id,
-        path: relativePath,
-        url: page.url(),
-        title: await safeTitle(page),
-        timestamp: nowIso(),
-        full_page: params.full_page ?? false,
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
+        closed: "session",
+      });
+    }
 
-  pi.registerTool({
-    name: "browser_tabs",
-    label: "Browser Tabs",
-    description: "List tabs for a browser session and optionally switch the active tab.",
-    promptSnippet: "List session tabs and optionally switch the active page_id.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      activate_page_id: Type.Optional(
-        Type.String({ description: "Optional page_id to make active." }),
-      ),
-    }),
-    async execute(_toolCallId, params) {
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-      if (params.activate_page_id) {
-        getPageRecord(session, params.activate_page_id);
-        session.activePageId = params.activate_page_id;
-      }
-      const pages = await listPages(session);
-      const result = {
-        session_id: session.id,
-        active_page_id: session.activePageId,
-        page_count: pages.length,
-        pages,
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_close",
-    label: "Browser Close",
-    description: "Close a single tab or an entire browser session.",
-    promptSnippet: "Close a browser tab or the entire session when you are done with it.",
-    parameters: Type.Object({
-      session_id: Type.String({ description: "Browser session_id." }),
-      page_id: Type.Optional(
-        Type.String({ description: "Optional page_id to close. Omit to close the whole session." }),
-      ),
-      close_session: Type.Optional(
-        Type.Boolean({ description: "Force closing the whole session." }),
-      ),
-    }),
-    async execute(_toolCallId, params) {
-      await cleanupExpiredSessions();
-      const session = getSessionOrThrow(sessions, params.session_id);
-
-      if (params.close_session || !params.page_id) {
-        await closeSession(session);
-        sessions.delete(session.id);
-        const result = {
-          session_id: session.id,
-          closed: "session",
-        };
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          details: result,
-        };
-      }
-
-      const pageRecord = getPageRecord(session, params.page_id);
-      await pageRecord.page.close();
-      const remainingPages = await listPages(session);
-      if (remainingPages.length === 0) {
-        await closeSession(session);
-        sessions.delete(session.id);
-        const result = {
-          session_id: session.id,
-          closed: "page",
-          page_id: params.page_id,
-          session_closed: true,
-        };
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          details: result,
-        };
-      }
-
-      const result = {
+    const pageRecord = getPageRecord(session, request.pageId);
+    await pageRecord.page.close();
+    const remainingPages = await listPages(session);
+    if (remainingPages.length === 0) {
+      await closeSession(session);
+      sessions.delete(session.id);
+      return respond(request, {
         session_id: session.id,
         closed: "page",
+        page_id: request.pageId,
+        session_closed: true,
+      });
+    }
+
+    return respond(request, {
+      session_id: session.id,
+      closed: "page",
+      page_id: request.pageId,
+      session_closed: false,
+      active_page_id: session.activePageId,
+      pages: remainingPages,
+    });
+  }
+
+  async function executePlaywrightCommand(
+    request: BrowserToolRequest,
+    signal: AbortSignal | undefined,
+  ) {
+    switch (request.action) {
+      case "start":
+        return executeStart(request, signal);
+      case "info":
+        return executeInfo(request);
+      case "navigate":
+        return executeNavigate(request, signal);
+      case "snapshot":
+        return executeSnapshot(request);
+      case "extract":
+        return executeExtract(request);
+      case "click":
+        return executeClick(request, signal);
+      case "fill":
+        return executeFill(request, signal);
+      case "press":
+        return executePress(request, signal);
+      case "wait":
+        return executeWait(request, signal);
+      case "screenshot":
+        return executeScreenshot(request, signal);
+      case "tabs":
+        return executeTabs(request);
+      case "close":
+        return executeClose(request);
+      default:
+        throw new Error(
+          `Unsupported playwright browser command \`${request.action}\`. Use one of: ${describePlaywrightCommands()}.`,
+        );
+    }
+  }
+
+  registerCommonHandlers();
+
+  pi.registerTool({
+    name: "browser",
+    label: "Browser",
+    description:
+      "Single narrow browser command channel for Playwright and agent-browser runtime modes.",
+    promptSnippet:
+      "Use the single browser tool as a narrow command/comment channel. Pass a mode plus a high-level browser command; the extension owns the runtime, session, and proxy details.",
+    promptGuidelines: [
+      "Prefer the single browser tool over many browser_* actions; send concise commands like `start`, `navigate`, `snapshot`, `click`, or `screenshot`.",
+      "Playwright mode is implemented in this extension today. agent-browser mode shares the same interface but may report a runtime blocker if the SDK path is unavailable in the current environment.",
+      "Use inline key=value command arguments or payload_json when selectors and values are awkward to quote.",
+    ],
+    parameters: Type.Object({
+      mode: Type.Optional(
+        StringEnum(BROWSER_MODE_VALUES, {
+          description: "Browser runtime mode. Defaults to playwright.",
+        }),
+      ),
+      session_id: Type.Optional(
+        Type.String({
+          description: "Optional browser session_id for commands that operate on an existing session.",
+        }),
+      ),
+      page_id: Type.Optional(
+        Type.String({
+          description: "Optional page_id for commands that target a specific page or tab.",
+        }),
+      ),
+      command: Type.String({
+        description:
+          "Command-channel message for the browser runtime. Examples: `start url=https://example.com`, `navigate url=https://example.com`, `click selector=button`, `snapshot`, `screenshot label=home full_page=true`.",
+      }),
+      payload_json: Type.Optional(
+        Type.String({
+          description:
+            "Optional JSON object merged with inline command arguments. Useful when selectors or values are awkward to quote in the command string.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const request = parseBrowserToolRequest({
+        mode: params.mode,
+        session_id: params.session_id,
         page_id: params.page_id,
-        session_closed: false,
-        active_page_id: session.activePageId,
-        pages: remainingPages,
-      };
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-      };
+        command: params.command,
+        payload_json: params.payload_json,
+      });
+
+      if (request.mode === "agent-browser") {
+        return buildAgentBrowserModeResult(request);
+      }
+
+      return executePlaywrightCommand(request, signal);
     },
   });
 }
