@@ -51,7 +51,7 @@ name: code-reviewer
 description: GitHub PR reviewer that defaults to twin, posts to PiComms and GitHub, and uses a playful self-chosen signature
 model: twin
 fallbackModels: anthropic/claude-opus-4-7, anthropic/claude-sonnet-4-5
-tools: read, bash, grep, find, ls
+tools: read, bash, grep, find, ls, comment_add, comment_list
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
@@ -60,13 +60,13 @@ inheritSkills: false
 
 ### Field-by-field
 
-| Old field                             | New field / semantics                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                                | Same. Identity used by `subagent` tool and `/run code-reviewer`.                                                                                                                                                                                                                                                                                        |
-| `description`                         | Same. Surfaces in `/agents` TUI and LLM-facing agent list.                                                                                                                                                                                                                                                                                              |
-| `model: twin`                         | Kept as stated default (see §3 for caveat).                                                                                                                                                                                                                                                                                                             |
-| `tools: …, comment_add, comment_list` | **Dropped** `comment_add` / `comment_list` from `tools`. In `pi-subagents`, `tools` is a **builtin allowlist only** — extension-provided tools (PiComms from `nvim-bridge`) come in through the `extensions` mechanism, not `tools`. Listing non-builtin names there is ignored at best, errored at worst. Keep builtins: `read, bash, grep, find, ls`. |
-| _(implicit extensions)_               | Leave `extensions` **absent** → all extensions load, which is what we want: `nvim-bridge` is the one registering `comment_add` / `comment_list` (verified in `nvim-bridge/index.ts`, lines 351 and 414). Explicit allowlisting is fragile across machines with different extension paths.                                                               |
+| Old field                             | New field / semantics                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                | Same. Identity used by `subagent` tool and `/run code-reviewer`.                                                                                                                                                                                                                                                                                                                              |
+| `description`                         | Same. Surfaces in `/agents` TUI and LLM-facing agent list.                                                                                                                                                                                                                                                                                                                                    |
+| `model: twin`                         | Kept as stated default (see §3 for caveat).                                                                                                                                                                                                                                                                                                                                                   |
+| `tools: …, comment_add, comment_list` | Keep `comment_add` / `comment_list` in `tools`. In `pi-subagents`, a present `tools:` field becomes Pi's `--tools` allowlist, and Pi applies that allowlist to **both builtin and extension tool names**. `comment_add` / `comment_list` are extension tools from `nvim-bridge`, so dropping them would break PiComms posting. Keep: `read, bash, grep, find, ls, comment_add, comment_list`. |
+| _(implicit extensions)_               | Leave `extensions` **absent** so `nvim-bridge` and the rest of the normal extension set still load. Extension loading alone is not enough when `tools:` is present — the loaded tool names must also survive the `--tools` allowlist. Explicit extension-path allowlisting is still fragile across machines.                                                                                  |
 
 ### Added fields (explicit, even though they're defaults)
 
@@ -210,20 +210,18 @@ GitHub itself; the delegating agent just relays the summary.
    `model=anthropic/claude-opus-4-7` until `twin` is back, or rely on
    `fallbackModels`. See §3.
 
-3. **Extension-tool allowlisting is not supported.** If we ever want a
-   reviewer that _only_ sees `read, bash, comment_add, comment_list` and no
-   other extension tools, we'd need `pi-subagents` to support listing
-   extension tools in the `tools` allowlist (or a separate extension-level
-   allowlist). Today the only levers are all-extensions (absent) or
-   no-extensions (empty) or extension-path allowlist (fragile across
-   machines).
+3. **`tools:` constrains extension tools too.** In `pi-subagents`, a
+   present `tools:` field becomes Pi's `--tools` allowlist, and Pi applies
+   that list to both builtin and extension tool names. For this reviewer,
+   `comment_add` and `comment_list` must stay in the list or PiComms posting
+   will fail.
 
-4. **PiComms posting depends on `nvim-bridge` being loaded in the child.**
-   Since `extensions:` is absent, all extensions — including `nvim-bridge`
-   — load, so `comment_add` / `comment_list` are available. If a future
-   reviewer variant sets `extensions:` to an allowlist, the allowlist must
-   include the `nvim-bridge` extension path or PiComms posting will fail
-   and the reviewer will correctly report that failure in its final output.
+4. **PiComms posting depends on both extension loading and tool allowlisting.**
+   Leaving `extensions:` absent ensures `nvim-bridge` loads in the child,
+   and keeping `comment_add` / `comment_list` in `tools:` ensures those
+   extension tools remain callable. If a future reviewer variant sets
+   `extensions:` to an allowlist, that allowlist must still include the
+   `nvim-bridge` extension path.
 
 5. **Built-in `Agent` tool is currently broken.** Separate from this port.
    Every `Agent` call across every `subagent_type` fails with
@@ -237,22 +235,30 @@ GitHub itself; the delegating agent just relays the summary.
 **Install** (human runs after approving this mapping):
 
 ```bash
+mkdir -p ~/.pi/agent/agents
+if [ -f ~/.pi/agent/agents/code-reviewer.md ]; then
+  cp ~/.pi/agent/agents/code-reviewer.md ~/.pi/agent/agents/code-reviewer.md.pre-pi-subagents.bak
+fi
 cp plans/reviewer-code-reviewer.nicopreme.md ~/.pi/agent/agents/code-reviewer.md
 ```
 
-**Rollback** (restore the pre-port file):
+**Rollback** (restore the pre-port file or pre-install absence):
 
 ```bash
-git -C ~/.pi/agent show HEAD:agents/code-reviewer.md > ~/.pi/agent/agents/code-reviewer.md
+if [ -f ~/.pi/agent/agents/code-reviewer.md.pre-pi-subagents.bak ]; then
+  cp ~/.pi/agent/agents/code-reviewer.md.pre-pi-subagents.bak ~/.pi/agent/agents/code-reviewer.md
+else
+  rm -f ~/.pi/agent/agents/code-reviewer.md
+fi
 ```
 
-(`~/.pi/agent` is not assumed to be a git repo on every box. If it isn't,
-just back up the current file before overwriting.)
+This keeps rollback copy-based and backup-first, with no assumption that
+`~/.pi/agent` is itself a git repo.
 
 ## 8. Smoke test after install
 
 ```
-/run code-reviewer[model=anthropic/claude-opus-4-7] "Sanity-check yourself: print your frontmatter back and state your signature rule. Do not post anywhere."
+/run code-reviewer[model=anthropic/claude-opus-4-7] "Sanity-check yourself: print your frontmatter back, state your signature rule, and confirm that `comment_add` and `comment_list` remain available. Do not post anywhere."
 ```
 
 Expected:
@@ -260,6 +266,8 @@ Expected:
 - Response begins with `*Will's reviewer agent <ChosenName>*`
 - Agent acknowledges `model: twin` as the stated default but recognizes the
   `model=anthropic/claude-opus-4-7` override.
+- Agent confirms `comment_add` and `comment_list` remain available, preserving
+  the PiComms posting path.
 - No PiComms comment, no GitHub comment (we told it not to).
 
 If the self-check passes, run it against a low-stakes real PR with
