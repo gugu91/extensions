@@ -1328,6 +1328,29 @@ describe("BrokerClient — onReconnect callback", () => {
     expect(scheduleReconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("resets the stableId conflict streak when reconnect fails before re-registering", async () => {
+    const client = new BrokerClient({ host: "127.0.0.1", port: 1 });
+    const scheduleReconnect = vi.fn();
+
+    (
+      client as unknown as {
+        connectSocket: () => Promise<void>;
+        stableIdConflictAttempt: number;
+      }
+    ).connectSocket = vi.fn(async () => {
+      throw new Error("connect failed");
+    });
+    (client as unknown as { stableIdConflictAttempt: number }).stableIdConflictAttempt = 2;
+    (client as unknown as { scheduleReconnect: () => void }).scheduleReconnect = scheduleReconnect;
+
+    await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+
+    expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+    expect((client as unknown as { stableIdConflictAttempt: number }).stableIdConflictAttempt).toBe(
+      0,
+    );
+  });
+
   it("scheduleReconnect fires onDisconnect then onReconnect after server restart", async () => {
     const mock = await createMockServer();
     const port = mock.port;

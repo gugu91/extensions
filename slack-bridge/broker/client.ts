@@ -694,6 +694,7 @@ export class BrokerClient {
     try {
       await this.connectSocket();
     } catch {
+      this.stableIdConflictAttempt = 0;
       this.scheduleReconnect();
       return;
     }
