@@ -9,7 +9,8 @@
     "extensions": [
       "./slack-bridge/index.ts",
       "./nvim-bridge/index.ts",
-      "./neon-psql/index.ts"
+      "./neon-psql/index.ts",
+      "./browser-playwright/index.ts"
     ]
   },
   "scripts": {

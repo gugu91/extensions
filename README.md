@@ -7,20 +7,21 @@ Current state: the repo has moved from the initial **50+ merged PRs in a
 single day** sprint into a broader Pinet stabilization and docs pass, with a
 broker/follower Slack mesh, persistent PiComms, Slack canvases, scheduled
 wake-ups, worktree guardrails, checked-in Slack manifest deploy tooling,
-optional mesh auth, and a project-local browser-playwright extension for
+optional mesh auth, and a browser-playwright workspace package for
 interactive browsing and screenshots.
 
 ## Extensions
 
-| Package                               | Description                                                                |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| [`transport-core`](transport-core/)   | Transport-neutral message contracts shared across transport packages       |
-| [`slack-bridge`](slack-bridge/)       | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling |
-| [`slack-api`](slack-api/)             | Typed Slack Web API client + CLI generated from OpenAPI                    |
-| [`imessage-bridge`](imessage-bridge/) | macOS/iMessage send-first transport package + readiness helpers            |
-| [`nvim-bridge`](nvim-bridge/)         | Neovim editor context sync + PiComms persistent comments                   |
-| [`neon-psql`](neon-psql/)             | Config-driven Neon tunnel + `psql` tool                                    |
-| [`types`](types/)                     | Shared ambient type declarations                                           |
+| Package                                     | Description                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------- |
+| [`transport-core`](transport-core/)         | Transport-neutral message contracts shared across transport packages       |
+| [`browser-playwright`](browser-playwright/) | Single-tool browser extension with a Playwright local backend              |
+| [`slack-bridge`](slack-bridge/)             | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling |
+| [`slack-api`](slack-api/)                   | Typed Slack Web API client + CLI generated from OpenAPI                    |
+| [`imessage-bridge`](imessage-bridge/)       | macOS/iMessage send-first transport package + readiness helpers            |
+| [`nvim-bridge`](nvim-bridge/)               | Neovim editor context sync + PiComms persistent comments                   |
+| [`neon-psql`](neon-psql/)                   | Config-driven Neon tunnel + `psql` tool                                    |
+| [`types`](types/)                           | Shared ambient type declarations                                           |
 
 ## Current state snapshot
 
@@ -30,10 +31,10 @@ interactive browsing and screenshots.
 - **Slack tooling** — the Slack extension includes canvases, uploads,
   modals, bookmarks, pinning, exports, and a root `pnpm deploy:slack` command
   for pushing `slack-bridge/manifest.yaml` via the Slack App Manifest API.
-- **Browser automation** — the repo now carries a project-local
-  [`browser-playwright`](.pi/extensions/browser-playwright/README.md)
-  extension with reusable sessions, multi-tab browsing, request guardrails,
-  and workspace-local screenshot artifacts.
+- **Browser automation** — the repo now carries a dedicated
+  [`browser-playwright`](browser-playwright/README.md)
+  workspace package with reusable sessions, multi-tab browsing, request
+  guardrails, and workspace-local screenshot artifacts.
 - **Recent wave** — browser-playwright landed alongside the Pinet v0.1.1 prep,
   mesh-secret optionality, auth-mismatch clarification, and refreshed mesh-auth
   docs ([#282](https://github.com/gugu91/extensions/pull/282),
@@ -103,11 +104,12 @@ pnpm install --frozen-lockfile
 ```
 
 Dependency bootstrap is per checkout/worktree, not a one-time repo setup step.
-If the lane touches `.pi/extensions/browser-playwright`, also run:
+If the lane exercises live browser launches and no compatible host browser is
+available, install the Playwright browser binaries from the package directory:
 
 ```bash
-cd .pi/extensions/browser-playwright
-npm install
+cd browser-playwright
+npx playwright install chromium
 ```
 
 ## Local extension development
@@ -119,9 +121,10 @@ package target.
 For local development, load individual extensions directly:
 
 ```bash
-ln -s "$(pwd)/slack-bridge" ~/.pi/agent/extensions/slack-bridge
-ln -s "$(pwd)/nvim-bridge"  ~/.pi/agent/extensions/nvim-bridge
-ln -s "$(pwd)/neon-psql"    ~/.pi/agent/extensions/neon-psql
+ln -s "$(pwd)/slack-bridge"       ~/.pi/agent/extensions/slack-bridge
+ln -s "$(pwd)/nvim-bridge"        ~/.pi/agent/extensions/nvim-bridge
+ln -s "$(pwd)/neon-psql"          ~/.pi/agent/extensions/neon-psql
+ln -s "$(pwd)/browser-playwright" ~/.pi/agent/extensions/browser-playwright
 ```
 
 See each extension's README for configuration details.
@@ -151,6 +154,10 @@ extensions/
 ├── transport-core/     # @gugu910/pi-transport-core
 │   ├── index.ts        #   canonical transport message contracts
 │   └── package.json    #   workspace package
+├── browser-playwright/ # @gugu910/pi-browser-playwright
+│   ├── index.ts        #   single typed `browser` tool entry point
+│   ├── helpers.ts      #   security defaults + install guidance
+│   └── package.json    #   workspace package + pi manifest
 ├── slack-bridge/       # @gugu910/pi-slack-bridge
 │   ├── broker/         #   message routing, socket server, adapters
 │   ├── index.ts        #   extension entry point
