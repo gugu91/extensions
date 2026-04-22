@@ -637,8 +637,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         request.sessionId ??
         (typeof result.session_id === "string" ? (result.session_id as string) : null),
       page_id:
-        request.pageId ??
-        (typeof result.page_id === "string" ? (result.page_id as string) : null),
+        request.pageId ?? (typeof result.page_id === "string" ? (result.page_id as string) : null),
       capabilities: buildCapabilities(request.backend),
       result,
       artifacts,
@@ -725,7 +724,10 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       await context.route("**/*", async (route: Route) => {
         const requestRecord: Request = route.request();
         session.networkSummary.total_requests += 1;
-        const pageId = safeRequestPageId(requestRecord, (page) => session.pageIds.get(page) ?? null);
+        const pageId = safeRequestPageId(
+          requestRecord,
+          (page) => session.pageIds.get(page) ?? null,
+        );
         const pageRecord = pageId ? (session.pages.get(pageId) ?? null) : null;
         const decision = assessUrl(
           requestRecord.url(),
@@ -772,9 +774,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       }
 
       const pages = await listPages(session);
-      const activePage = session.activePageId
-        ? getPageRecord(session, session.activePageId)
-        : null;
+      const activePage = session.activePageId ? getPageRecord(session, session.activePageId) : null;
       return respond(request, {
         session_id: session.id,
         browser: session.browserEngine,
@@ -891,7 +891,10 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     };
 
     if (!selector) {
-      const text = await page.locator("body").innerText().catch(() => "");
+      const text = await page
+        .locator("body")
+        .innerText()
+        .catch(() => "");
       result.text = truncateText(text, MAX_SNAPSHOT_TEXT_CHARS, 180);
     } else {
       const extracted = await collectElements(page.locator(selector), maxItems, attribute);
@@ -923,7 +926,11 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     }
     await waitForPossibleNavigation(page, previousUrl, timeoutMs);
 
-    const activePage = await resolvePageRecord(session, session.activePageId ?? pageRecord.id, false);
+    const activePage = await resolvePageRecord(
+      session,
+      session.activePageId ?? pageRecord.id,
+      false,
+    );
     const blockedRequest =
       session.blockedRequests.length > blockedCountBefore
         ? session.blockedRequests[session.blockedRequests.length - 1]
@@ -1211,7 +1218,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       }),
       session_id: Type.Optional(
         Type.String({
-          description: "Optional browser session_id for actions that operate on an existing session.",
+          description:
+            "Optional browser session_id for actions that operate on an existing session.",
         }),
       ),
       page_id: Type.Optional(

@@ -21,8 +21,7 @@ export function buildAgentBrowserModeResult(request: BrowserToolRequest): {
         runtime:
           "The local agent-browser runtime uses a client-daemon architecture. In this Unix sandbox the daemon fails during startup because binding its local session socket returns EPERM (`Failed to bind socket: Operation not permitted`).",
       },
-      hint:
-        "Use backend=playwright in this sandbox. The only truthful future path here is remote/optional executor mode unless upstream ships a real embeddable JS SDK; local embedded agent-browser support should stay unavailable in this harness.",
+      hint: "Use backend=playwright in this sandbox. The only truthful future path here is remote/optional executor mode unless upstream ships a real embeddable JS SDK; local embedded agent-browser support should stay unavailable in this harness.",
     },
     artifacts: [],
   };

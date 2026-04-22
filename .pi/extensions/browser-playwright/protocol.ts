@@ -50,7 +50,9 @@ function parseInputJson(raw: string | undefined): BrowserArgs {
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`input_json must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `input_json must be valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
