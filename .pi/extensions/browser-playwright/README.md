@@ -1,71 +1,73 @@
 # browser-playwright
 
-A Pi browser extension built around **one tool only**.
+A Pi browser extension built around **one typed tool only**.
 
-Instead of exposing a wide `browser_*` tool surface, the extension now exposes a
-single `browser` tool that acts as a narrow command/channel into the browser
-runtime. The extension owns the session, security, artifact, proxy, and runtime
-complexity behind that one interface.
+Instead of exposing a wide `browser_*` family, the extension now exposes a
+single `browser` tool with a shared envelope:
+
+- `backend`
+- `action`
+- `session_id?`
+- `page_id?`
+- `input_json?`
+
+The extension owns the runtime, process, proxy, socket, and artifact complexity
+behind that one interface.
 
 ## Goals
 
-- radically reduce the browser tool surface
+- radically reduce the public browser tool surface
 - keep browser support feeling like one narrow ARC/comment channel
-- preserve the existing safe Playwright runtime underneath
-- make room for a second backend mode: `agent-browser`
+- keep Playwright as the real working backend
+- add an explicit `agent-browser` adapter slot behind the same contract
+- avoid pretending both backends have identical capabilities in every sandbox
 
-## Current modes
-
-The single tool supports two runtime modes:
-
-- `playwright` — **implemented now** in this extension
-- `agent-browser` — **scaffolded behind the same contract**, but may report a
-  runtime blocker in environments where the SDK/runtime path is not available
-
-## Tool contract
+## Public tool contract
 
 Tool: `browser`
 
 Parameters:
 
-- `mode` — optional, `playwright` or `agent-browser` (defaults to `playwright`)
-- `session_id` — optional session handle for commands that operate on an
-  existing session
-- `page_id` — optional page/tab handle for commands that target a specific page
-- `command` — the command-channel message sent to the runtime
-- `payload_json` — optional JSON object merged with inline command arguments
+- `backend` — optional, `playwright` or `agent-browser` (defaults to `playwright`)
+- `action` — typed enum:
+  - `start`
+  - `info`
+  - `navigate`
+  - `snapshot`
+  - `extract`
+  - `click`
+  - `fill`
+  - `press`
+  - `wait`
+  - `screenshot`
+  - `tabs`
+  - `close`
+- `session_id` — optional session handle for actions that operate on an existing session
+- `page_id` — optional page/tab handle for actions that target a specific page
+- `input_json` — optional JSON object with action-specific inputs such as `url`,
+  `selector`, `value`, `timeout_ms`, `label`, or `full_page`
 
-### Command style
+## Response shape
 
-Use concise command messages with inline `key=value` arguments.
+Every call returns one shared envelope:
 
-Examples:
+- `backend`
+- `action`
+- `session_id`
+- `page_id`
+- `capabilities`
+- `result`
+- `artifacts`
 
-```json
-{ "command": "start url=https://example.com" }
-```
+This keeps backend differences explicit instead of overpromising parity.
 
-```json
-{ "session_id": "browser_123", "command": "navigate url=https://example.com/docs new_tab=true" }
-```
+## Backend status
 
-```json
-{ "session_id": "browser_123", "page_id": "page_abc", "command": "click selector=button" }
-```
+### `backend=playwright`
 
-If quoting is awkward, pass structured arguments through `payload_json`:
+This is the **real working backend** in this extension today.
 
-```json
-{
-  "session_id": "browser_123",
-  "command": "fill",
-  "payload_json": "{\"page_id\":\"page_abc\",\"selector\":\"input[name='q']\",\"value\":\"Playwright docs\"}"
-}
-```
-
-## Implemented Playwright commands
-
-Supported commands in `mode=playwright`:
+Supported actions:
 
 - `start`
 - `info`
@@ -80,13 +82,15 @@ Supported commands in `mode=playwright`:
 - `tabs`
 - `close`
 
-Legacy command names like `browser_navigate` and `browser_wait_for` are accepted
-as aliases **inside the single tool command channel**, but the extension does
-not register those old tools anymore.
+### `backend=agent-browser`
+
+This backend is **scaffolded behind the same contract**, but in this sandbox it
+returns a capability-aware blocked/unavailable result instead of pretending the
+old daemon/CLI path is viable.
 
 ## Playwright runtime behavior
 
-The underlying Playwright runtime is still the same safety-first host browser
+The underlying Playwright runtime remains the same safety-first host browser
 implementation:
 
 - reusable in-memory sessions keyed by `session_id`
@@ -96,6 +100,63 @@ implementation:
 - localhost/private-network subrequest guardrails remain enforced
 - screenshots saved under `.pi/artifacts/browser-playwright/`
 - explicit storage-state reuse from `.pi/state/browser-playwright/`
+
+## Example requests
+
+### Start a session
+
+```json
+{
+  "backend": "playwright",
+  "action": "start",
+  "input_json": "{\"url\":\"https://example.com\"}"
+}
+```
+
+### Navigate in an existing session
+
+```json
+{
+  "backend": "playwright",
+  "action": "navigate",
+  "session_id": "browser_123",
+  "input_json": "{\"url\":\"https://example.com/docs\",\"new_tab\":true}"
+}
+```
+
+### Fill a field
+
+```json
+{
+  "backend": "playwright",
+  "action": "fill",
+  "session_id": "browser_123",
+  "page_id": "page_abc",
+  "input_json": "{\"selector\":\"input[name='q']\",\"value\":\"Playwright docs\"}"
+}
+```
+
+### Wait for text
+
+```json
+{
+  "backend": "playwright",
+  "action": "wait",
+  "session_id": "browser_123",
+  "input_json": "{\"text\":\"Playwright\",\"timeout_ms\":10000}"
+}
+```
+
+### Capture a screenshot
+
+```json
+{
+  "backend": "playwright",
+  "action": "screenshot",
+  "session_id": "browser_123",
+  "input_json": "{\"label\":\"search-results\",\"full_page\":true}"
+}
+```
 
 ## Enable in this workspace
 
@@ -160,7 +221,7 @@ Saved Playwright login/session state is supported in a narrow, explicit way.
 
 - place trusted Playwright `storageState` JSON files under
   `.pi/state/browser-playwright/`
-- reuse one explicitly via the `start` command and `storage_state_name=...`
+- reuse one explicitly via the `start` action and `storage_state_name` inside `input_json`
 - the extension never auto-saves browser state on close or shutdown
 
 Treat `.pi/state/browser-playwright/` as secret-bearing auth material.
@@ -175,45 +236,7 @@ Current layout:
 
 - `.pi/artifacts/browser-playwright/<session_id>/<timestamp>-<label>.png`
 
-## Example flows
-
-### Start a session and snapshot a page
-
-```json
-{ "command": "start url=https://example.com" }
-```
-
-Then:
-
-```json
-{ "session_id": "<from previous result>", "command": "snapshot" }
-```
-
-### Search and capture a screenshot
-
-```json
-{ "command": "start url=https://duckduckgo.com" }
-```
-
-```json
-{
-  "session_id": "<session_id>",
-  "command": "fill",
-  "payload_json": "{\"selector\":\"input[name='q']\",\"value\":\"Playwright docs\"}"
-}
-```
-
-```json
-{ "session_id": "<session_id>", "command": "press key=Enter" }
-```
-
-```json
-{ "session_id": "<session_id>", "command": "wait text=Playwright timeout_ms=10000" }
-```
-
-```json
-{ "session_id": "<session_id>", "command": "screenshot label=search-results full_page=true" }
-```
+Screenshot responses include an `artifacts` array in the shared envelope.
 
 ## Development
 

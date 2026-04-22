@@ -21,13 +21,16 @@ import {
 } from "./helpers.ts";
 import { buildAgentBrowserModeResult } from "./agent-browser.ts";
 import {
-  BROWSER_MODE_VALUES,
-  describePlaywrightCommands,
+  BROWSER_ACTION_VALUES,
+  BROWSER_BACKEND_VALUES,
+  buildCapabilities,
+  describeBrowserActions,
   getBooleanArg,
   getNumberArg,
   getStringArg,
   parseBrowserToolRequest,
   requireStringArg,
+  type BrowserAction,
   type BrowserToolRequest,
 } from "./protocol.ts";
 import { loadStoredStorageState, type StorageStateSummary } from "./storage-state.ts";
@@ -622,23 +625,34 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     });
   }
 
-  function respond(request: BrowserToolRequest, details: Record<string, unknown>) {
-    const result = {
-      mode: request.mode,
-      command: request.action,
-      raw_command: request.rawCommand,
-      ...details,
+  function respond(
+    request: BrowserToolRequest,
+    result: Record<string, unknown>,
+    artifacts: Array<Record<string, unknown>> = [],
+  ) {
+    const envelope = {
+      backend: request.backend,
+      action: request.action,
+      session_id:
+        request.sessionId ??
+        (typeof result.session_id === "string" ? (result.session_id as string) : null),
+      page_id:
+        request.pageId ??
+        (typeof result.page_id === "string" ? (result.page_id as string) : null),
+      capabilities: buildCapabilities(request.backend),
+      result,
+      artifacts,
     };
 
     return {
-      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      details: result,
+      content: [{ type: "text" as const, text: JSON.stringify(envelope, null, 2) }],
+      details: envelope,
     };
   }
 
   function requireSessionId(request: BrowserToolRequest): string {
     if (!request.sessionId) {
-      throw new Error("browser command requires `session_id` for this operation.");
+      throw new Error("browser action requires `session_id` for this operation.");
     }
     return request.sessionId;
   }
@@ -647,7 +661,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     if (!value || value === "chromium" || value === "firefox" || value === "webkit") {
       return (value ?? "chromium") as BrowserEngine;
     }
-    throw new Error("browser start command only supports browser=chromium, firefox, or webkit.");
+    throw new Error("browser start action only supports browser=chromium, firefox, or webkit.");
   }
 
   async function executeStart(request: BrowserToolRequest, signal: AbortSignal | undefined) {
@@ -1024,7 +1038,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       matched = `delay_ms:${delayMs}`;
     } else {
       throw new Error(
-        "wait command requires one of selector, text, url_includes, load_state, or delay_ms.",
+        "wait action requires one of selector, text, url_includes, load_state, or delay_ms.",
       );
     }
 
@@ -1058,15 +1072,25 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     });
     touchPage(pageRecord);
 
-    return respond(request, {
-      session_id: session.id,
-      page_id: pageRecord.id,
-      path: relativeFromWorkspace(absolutePath),
-      url: page.url(),
-      title: await safeTitle(page),
-      timestamp: nowIso(),
-      full_page: getBooleanArg(request.args, "full_page") ?? false,
-    });
+    const artifactPath = relativeFromWorkspace(absolutePath);
+    return respond(
+      request,
+      {
+        session_id: session.id,
+        page_id: pageRecord.id,
+        path: artifactPath,
+        url: page.url(),
+        title: await safeTitle(page),
+        timestamp: nowIso(),
+        full_page: getBooleanArg(request.args, "full_page") ?? false,
+      },
+      [
+        {
+          kind: "screenshot",
+          path: artifactPath,
+        },
+      ],
+    );
   }
 
   async function executeTabs(request: BrowserToolRequest) {
@@ -1155,7 +1179,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         return executeClose(request);
       default:
         throw new Error(
-          `Unsupported playwright browser command \`${request.action}\`. Use one of: ${describePlaywrightCommands()}.`,
+          `Unsupported playwright browser action \`${request.action}\`. Use one of: ${describeBrowserActions()}.`,
         );
     }
   }
@@ -1166,51 +1190,52 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     name: "browser",
     label: "Browser",
     description:
-      "Single narrow browser command channel for Playwright and agent-browser runtime modes.",
+      "Single typed browser tool with backend-aware actions. The extension owns the runtime, proxy, socket, and session complexity behind one narrow interface.",
     promptSnippet:
-      "Use the single browser tool as a narrow command/comment channel. Pass a mode plus a high-level browser command; the extension owns the runtime, session, and proxy details.",
+      "Use the single browser tool with a backend plus typed action enum. Keep browser runtime complexity inside the extension instead of calling a large browser_* tool family.",
     promptGuidelines: [
-      "Prefer the single browser tool over many browser_* actions; send concise commands like `start`, `navigate`, `snapshot`, `click`, or `screenshot`.",
-      "Playwright mode is implemented in this extension today. agent-browser mode shares the same interface but may report a runtime blocker if the SDK path is unavailable in the current environment.",
-      "Use inline key=value command arguments or payload_json when selectors and values are awkward to quote.",
+      "Prefer the single browser tool over many browser_* actions.",
+      "Set backend=playwright for the working runtime in this environment.",
+      "Use backend=agent-browser only when you specifically want that adapter path; capability-aware responses may report it as unavailable in restricted environments.",
+      "Pass action-specific fields through input_json so the public tool surface stays narrow.",
     ],
     parameters: Type.Object({
-      mode: Type.Optional(
-        StringEnum(BROWSER_MODE_VALUES, {
-          description: "Browser runtime mode. Defaults to playwright.",
+      backend: Type.Optional(
+        StringEnum(BROWSER_BACKEND_VALUES, {
+          description: "Browser backend. Defaults to playwright.",
         }),
       ),
+      action: StringEnum(BROWSER_ACTION_VALUES, {
+        description:
+          "Typed browser action enum shared across backends: start, info, navigate, snapshot, extract, click, fill, press, wait, screenshot, tabs, close.",
+      }),
       session_id: Type.Optional(
         Type.String({
-          description: "Optional browser session_id for commands that operate on an existing session.",
+          description: "Optional browser session_id for actions that operate on an existing session.",
         }),
       ),
       page_id: Type.Optional(
         Type.String({
-          description: "Optional page_id for commands that target a specific page or tab.",
+          description: "Optional page_id for actions that target a specific page or tab.",
         }),
       ),
-      command: Type.String({
-        description:
-          "Command-channel message for the browser runtime. Examples: `start url=https://example.com`, `navigate url=https://example.com`, `click selector=button`, `snapshot`, `screenshot label=home full_page=true`.",
-      }),
-      payload_json: Type.Optional(
+      input_json: Type.Optional(
         Type.String({
           description:
-            "Optional JSON object merged with inline command arguments. Useful when selectors or values are awkward to quote in the command string.",
+            "Optional JSON object carrying action-specific inputs such as url, selector, value, timeout_ms, label, or full_page.",
         }),
       ),
     }),
     async execute(_toolCallId, params, signal) {
       const request = parseBrowserToolRequest({
-        mode: params.mode,
+        backend: params.backend,
+        action: params.action as BrowserAction,
         session_id: params.session_id,
         page_id: params.page_id,
-        command: params.command,
-        payload_json: params.payload_json,
+        input_json: params.input_json,
       });
 
-      if (request.mode === "agent-browser") {
+      if (request.backend === "agent-browser") {
         return buildAgentBrowserModeResult(request);
       }
 
