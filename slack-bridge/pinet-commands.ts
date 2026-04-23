@@ -178,7 +178,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
   });
 
   pi.registerCommand("pinet-reload", {
-    description: "Tell a connected Pinet agent to reload itself",
+    description:
+      "Tell a connected Pinet agent to reload itself (same workspace/install or instance by default)",
     handler: async (args, ctx) => {
       const target = args.trim();
       if (!target) {
@@ -196,7 +197,8 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
   });
 
   pi.registerCommand("pinet-exit", {
-    description: "Tell a connected Pinet agent to exit gracefully",
+    description:
+      "Tell a connected Pinet agent to exit gracefully (same workspace/install or instance by default)",
     handler: async (args, ctx) => {
       const target = args.trim();
       if (!target) {

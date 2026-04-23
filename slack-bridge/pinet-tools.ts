@@ -87,7 +87,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     label: "Pinet Message",
     description: "Send a message to a connected Pinet agent or broker-only broadcast channel.",
     promptSnippet:
-      "Send a message to a connected Pinet agent by name/ID, or to a broker-only broadcast channel. Use repo-scoped channels such as #extensions for repo-specific issue/policy broadcasts; do not use #all for repo-specific announcements. When assigning work, include the expected ack/work/ask/report flow.",
+      "Send a message to a connected Pinet agent by name or ID, or to a broker-only broadcast channel. Use it to delegate work, reply in a Pinet thread, or send `/reload` / `/exit`; admin control stays same-scope by default, so cross-workspace/install or cross-instance control needs explicit authorization metadata. Use repo-scoped channels such as #extensions for repo-specific issue/policy broadcasts; avoid #all for repo-specific announcements. Include the expected `ack/work/ask/report` flow when assigning work.",
     parameters: Type.Object({
       to: Type.String({
         description:
