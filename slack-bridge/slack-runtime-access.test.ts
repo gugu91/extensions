@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SinglePlayerThreadInfo } from "./single-player-runtime.js";
 import { createSlackRuntimeAccess, type SlackRuntimeAccessDeps } from "./slack-runtime-access.js";
+import { buildSlackCompatibilityScope } from "./helpers.js";
 import { TtlCache } from "./ttl-cache.js";
 
 function createDeps(overrides: Partial<SlackRuntimeAccessDeps> = {}) {
@@ -99,7 +100,11 @@ describe("createSlackRuntimeAccess", () => {
       threadTs: "100.1",
       userId: "U123",
       source: "slack",
-      context: { channelId: "C_STALE", teamId: "T1" },
+      context: {
+        channelId: "C_STALE",
+        teamId: "T1",
+        scope: buildSlackCompatibilityScope({ teamId: "T1", channelId: "C_STALE" }),
+      },
     });
     const access = createSlackRuntimeAccess(deps);
 
@@ -110,7 +115,11 @@ describe("createSlackRuntimeAccess", () => {
       threadTs: "100.1",
       userId: "U123",
       source: "slack",
-      context: { channelId: "C_STALE", teamId: "T1" },
+      context: {
+        channelId: "C_STALE",
+        teamId: "T1",
+        scope: buildSlackCompatibilityScope({ teamId: "T1", channelId: "C_STALE" }),
+      },
     });
     expect(persistState).toHaveBeenCalledTimes(1);
   });

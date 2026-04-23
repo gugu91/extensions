@@ -1746,6 +1746,7 @@ export class BrokerDB implements BrokerDBInterface {
       userId: message.userId,
       timestamp: message.timestamp,
       ...(message.isChannelMention ? { isChannelMention: true } : {}),
+      ...(message.scope ? { scope: message.scope } : {}),
     };
     this.insertMessage(
       message.threadId,

@@ -8,6 +8,7 @@ import {
   buildIdentityReplyGuidelines,
   buildPinetOwnerToken,
   buildPinetSkinAssignment,
+  buildSlackCompatibilityScope,
   getSlackUserAccessWarning,
   isUserAllowed as checkUserAllowed,
   loadSettings as loadSettingsFromFile,
@@ -330,10 +331,13 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     const { cwd, repo, repoRoot, branch } = gitContext;
     const resolvedRepoRoot = repoRoot ?? cwd;
     const tools = detectProjectTools(resolvedRepoRoot, cwd);
+    const scope = buildSlackCompatibilityScope();
     const tags = [
       `role:${role}`,
       `repo:${repo}`,
       ...(branch ? [`branch:${branch}`] : []),
+      ...(scope.workspace?.provider ? [`scope-provider:${scope.workspace.provider}`] : []),
+      ...(scope.workspace?.compatibilityKey ? [`scope:${scope.workspace.compatibilityKey}`] : []),
       ...tools.map((tool) => `tool:${tool}`),
     ];
 
@@ -344,6 +348,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       role,
       repo,
       repoRoot,
+      scope,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       ...(deps.getAgentPersonality() ? { personality: deps.getAgentPersonality() } : {}),
       capabilities: {
@@ -353,6 +358,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
         role,
         tools,
         tags,
+        scope,
       },
     };
   }

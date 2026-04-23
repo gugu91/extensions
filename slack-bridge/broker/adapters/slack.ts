@@ -1,5 +1,6 @@
 import {
   addSlackReaction,
+  buildSlackThreadRuntimeScope,
   classifyMessage,
   clearSlackThreadStatus,
   extractAppHomeOpened,
@@ -62,7 +63,7 @@ interface SlackThreadInfo {
   channelId: string;
   threadTs: string;
   userId: string;
-  context?: { channelId: string; teamId: string };
+  context?: ParsedThreadStarted["context"];
 }
 
 export class SlackAdapter implements MessageAdapter {
@@ -152,14 +153,16 @@ export class SlackAdapter implements MessageAdapter {
       text: msg.text,
       thread_ts: msg.threadId,
     };
+    const scope = msg.scope ?? this.resolveScopeForThread(msg.threadId, msg.channel);
 
-    if (msg.agentName ?? msg.agentOwnerToken ?? msg.metadata) {
+    if (msg.agentName ?? msg.agentOwnerToken ?? msg.metadata ?? msg.scope) {
       body.metadata = {
         event_type: "pi_agent_msg",
         event_payload: {
           ...(msg.agentName ? { agent: msg.agentName } : {}),
           ...(msg.agentOwnerToken ? { agent_owner: msg.agentOwnerToken } : {}),
           ...(msg.agentEmoji ? { emoji: msg.agentEmoji } : {}),
+          ...(scope ? { scope } : {}),
           ...msg.metadata,
         },
       };
@@ -189,6 +192,13 @@ export class SlackAdapter implements MessageAdapter {
 
   isConnected(): boolean {
     return this.socketMode?.isConnected() ?? false;
+  }
+
+  private resolveScopeForThread(threadTs: string, channelId: string) {
+    return buildSlackThreadRuntimeScope({
+      channelId,
+      context: this.threads.get(threadTs)?.context ?? null,
+    });
   }
 
   private async onThreadStarted(
@@ -323,6 +333,7 @@ export class SlackAdapter implements MessageAdapter {
           ? reactedMessage.text
           : "(no text)";
 
+      const threadInfo = this.threads.get(threadTs);
       this.inboundHandler?.({
         source: "slack",
         threadId: threadTs,
@@ -340,6 +351,10 @@ export class SlackAdapter implements MessageAdapter {
           reactedMessageAuthor,
         }),
         timestamp: (evt.event_ts as string) ?? item.ts,
+        scope: buildSlackThreadRuntimeScope({
+          channelId: item.channel,
+          context: threadInfo?.context,
+        }),
       });
 
       await this.addReaction(item.channel, item.ts, "white_check_mark");
@@ -380,6 +395,7 @@ export class SlackAdapter implements MessageAdapter {
     const userName = await this.resolveUser(userId);
     if (this.shuttingDown) return;
 
+    const threadInfo = this.threads.get(threadTs);
     this.inboundHandler?.({
       source: "slack",
       threadId: threadTs,
@@ -388,6 +404,10 @@ export class SlackAdapter implements MessageAdapter {
       userName,
       text,
       timestamp: messageTs,
+      scope: buildSlackThreadRuntimeScope({
+        channelId: channel,
+        context: threadInfo?.context,
+      }),
       ...(isChannelMention ? { isChannelMention: true } : {}),
       ...(metadata ? { metadata } : {}),
     });
@@ -420,6 +440,7 @@ export class SlackAdapter implements MessageAdapter {
     const userName = await this.resolveUser(normalized.userId);
     if (this.shuttingDown) return;
 
+    const threadInfo = this.threads.get(normalized.threadTs);
     this.inboundHandler?.({
       source: "slack",
       threadId: normalized.threadTs,
@@ -429,6 +450,10 @@ export class SlackAdapter implements MessageAdapter {
       text: normalized.text,
       timestamp: normalized.timestamp,
       metadata: normalized.metadata,
+      scope: buildSlackThreadRuntimeScope({
+        channelId: normalized.channel,
+        context: threadInfo?.context,
+      }),
     });
   }
 
@@ -442,6 +467,7 @@ export class SlackAdapter implements MessageAdapter {
       userId: "system",
       text: `Bot was added to channel ${event.channel}`,
       timestamp: String(Date.now() / 1000),
+      scope: buildSlackThreadRuntimeScope({ channelId: event.channel }),
     });
   }
 

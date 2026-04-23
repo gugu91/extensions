@@ -291,6 +291,18 @@ describe("single-player-runtime", () => {
       userId: "U_SENDER",
       text: "hello from Slack",
       timestamp: "100.1",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          channelId: "D123",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
     });
     expect(spies.updateBadge).toHaveBeenCalledTimes(1);
     expect(spies.maybeDrainInboxIfIdle).toHaveBeenCalledWith(ctx);
@@ -354,6 +366,18 @@ describe("single-player-runtime", () => {
             mode: "snippet",
           },
         ],
+      },
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          channelId: "D123",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
       },
     });
   });

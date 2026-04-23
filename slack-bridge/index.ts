@@ -707,6 +707,7 @@ export default function (pi: ExtensionAPI) {
             text: routedMessage.text,
             timestamp: routedMessage.timestamp,
             metadata: routedMessage.metadata ?? null,
+            ...(routedMessage.scope ? { scope: routedMessage.scope } : {}),
           });
           updateBadge();
           maybeDrainInboxIfIdle(ctx);

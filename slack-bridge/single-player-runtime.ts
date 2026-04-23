@@ -8,6 +8,7 @@ import {
 import type { SlackInteractiveInboxEvent } from "./slack-block-kit.js";
 import type { SlackToolsThreadContextPort } from "./slack-tools.js";
 import {
+  buildSlackThreadRuntimeScope,
   classifyMessage,
   resolveSlackThreadOwnerHint,
   SlackSocketModeClient,
@@ -322,12 +323,17 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       });
 
       ctx.ui.notify(`${reactorName} reacted with :${reactionName}:`, "info");
+      const threadInfo = threads.get(threadTs);
       deps.pushInboxMessage({
         channel: item.channel,
         threadTs,
         userId: user,
         text: reactionMessage,
         timestamp: (evt.event_ts as string) ?? item.ts,
+        scope: buildSlackThreadRuntimeScope({
+          channelId: item.channel,
+          context: threadInfo?.context,
+        }),
       });
       deps.persistState();
       deps.updateBadge();
@@ -390,12 +396,17 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
     pending.push({ channel, messageTs });
     deps.getPendingEyes().set(threadTs, pending);
 
+    const threadInfo = threads.get(threadTs);
     deps.pushInboxMessage({
       channel,
       threadTs,
       userId,
       text: messageText,
       timestamp: messageTs,
+      scope: buildSlackThreadRuntimeScope({
+        channelId: channel,
+        context: threadInfo?.context,
+      }),
       ...(isChannelMention && { isChannelMention: true }),
       ...(metadata ? { metadata } : {}),
     });
@@ -448,6 +459,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
     if (shuttingDown) return;
     ctx.ui.notify(`${name}: ${normalized.text.slice(0, 100)}`, "info");
 
+    const threadInfo = threads.get(normalized.threadTs);
     deps.pushInboxMessage({
       channel: normalized.channel,
       threadTs: normalized.threadTs,
@@ -455,6 +467,10 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       text: normalized.text,
       timestamp: normalized.timestamp,
       metadata: normalized.metadata,
+      scope: buildSlackThreadRuntimeScope({
+        channelId: normalized.channel,
+        context: threadInfo?.context,
+      }),
     });
     deps.updateBadge();
 

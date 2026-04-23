@@ -28,6 +28,7 @@
     "build": "node ../scripts/build-package.mjs",
     "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test *.test.ts"
   }
 }

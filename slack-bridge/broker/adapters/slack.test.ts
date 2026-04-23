@@ -148,10 +148,23 @@ describe("extractThreadStarted", () => {
     expect(result?.context).toEqual({
       channelId: "C789",
       teamId: "T001",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          workspaceId: "T001",
+          channelId: "C789",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
     });
   });
 
-  it("defaults teamId to empty string when missing", () => {
+  it("keeps teamId unknown when Slack does not provide one", () => {
     const evt = {
       type: "assistant_thread_started",
       assistant_thread: {
@@ -162,7 +175,21 @@ describe("extractThreadStarted", () => {
       },
     };
     const result = extractThreadStarted(evt);
-    expect(result?.context?.teamId).toBe("");
+    expect(result?.context).toEqual({
+      channelId: "C789",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          channelId: "C789",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
+    });
   });
 
   it("omits context when context has no channel_id", () => {
@@ -943,6 +970,18 @@ describe("SlackAdapter", () => {
       userName: "Will",
       text: 'Clicked Slack "Approve" (action_id: review.approve).',
       timestamp: "123.789",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          channelId: "C123",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
       metadata: {
         kind: "slack_block_action",
         triggerId: "trigger-1",
@@ -1048,6 +1087,18 @@ describe("SlackAdapter", () => {
       userName: "Will",
       text: 'Submitted Slack modal (deploy.confirm) "Deploy approval".',
       timestamp: "V123",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          channelId: "C123",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
       metadata: {
         kind: "slack_view_submission",
         triggerId: "trigger-1",
@@ -1178,12 +1229,104 @@ describe("SlackAdapter — allowlist filtering", () => {
       userName: "Alice Example",
       text: "hello from Slack",
       timestamp: "1.1",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          channelId: "D1",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
     });
     await waitForAssertion(() => {
       const endpoints = fetchMock.mock.calls.map(([url]) => String(url));
       expect(endpoints).toContain("https://slack.com/api/users.info");
       expect(endpoints).toContain("https://slack.com/api/reactions.add");
     });
+  });
+
+  it("carries known Slack thread team context into the inbound scope carrier", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as {
+        onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "1.1",
+        user_id: "U_ALLOWED",
+        context: {
+          channel_id: "C_TEAM",
+          team_id: "T001",
+        },
+      },
+    });
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello from scoped Slack",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.1",
+      ts: "1.2",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1.1",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            workspaceId: "T001",
+            channelId: "C_TEAM",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      }),
+    );
   });
 });
 
@@ -1377,6 +1520,18 @@ describe("SlackAdapter — send", () => {
     expect(meta.event_type).toBe("pi_agent_msg");
     expect(meta.event_payload.agent).toBe("TestBot");
     expect(meta.event_payload.emoji).toBe("🤖");
+    expect(meta.event_payload.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        channelId: "C123",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
   });
 
   it("includes agent_owner in metadata when agentOwnerToken is provided", async () => {
@@ -1403,6 +1558,18 @@ describe("SlackAdapter — send", () => {
     };
     expect(meta.event_payload.agent).toBe("TestBot");
     expect(meta.event_payload.agent_owner).toBe("owner:abcd1234efgh5678");
+    expect(meta.event_payload.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        channelId: "C123",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
   });
 
   it("includes metadata when only agentOwnerToken is set (no agentName)", async () => {
@@ -1429,6 +1596,18 @@ describe("SlackAdapter — send", () => {
     expect(meta.event_type).toBe("pi_agent_msg");
     expect(meta.event_payload.agent_owner).toBe("owner:abcd1234efgh5678");
     expect(meta.event_payload.agent).toBeUndefined();
+    expect(meta.event_payload.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        channelId: "C123",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
   });
 
   it("does not include metadata when no agentName or metadata", async () => {
@@ -1735,6 +1914,18 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
         userName: "Alice Example",
         text: "Hello from Slack",
         timestamp: "111.222",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            channelId: "D123",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
       });
     });
 
@@ -1848,6 +2039,18 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
           "- Incident notes — markdown — snippet — id=F123 — https://files.example/incident.md",
         ].join("\n"),
         timestamp: "111.222",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            channelId: "D123",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
         metadata: {
           slackSubtype: "file_share",
           slackFiles: [
