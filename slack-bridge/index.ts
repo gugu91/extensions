@@ -13,6 +13,8 @@ import {
   resolveBrokerStableId,
   resolveAgentStableId,
   resolveAllowAllWorkspaceUsers,
+  resolveSlackDefaultScope,
+  resolveSlackRuntimeSettings,
   trackBrokerInboundThread,
 } from "./helpers.js";
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
@@ -82,10 +84,10 @@ import {
 // Settings and helpers imported from ./helpers.js
 
 export default function (pi: ExtensionAPI) {
-  let settings = loadSettingsFromFile();
+  let settings = resolveSlackRuntimeSettings(loadSettingsFromFile(), process.env);
 
-  let botToken = settings.botToken ?? process.env.SLACK_BOT_TOKEN;
-  let appToken = settings.appToken ?? process.env.SLACK_APP_TOKEN;
+  let botToken = settings.botToken;
+  let appToken = settings.appToken;
 
   if (!botToken || !appToken) return;
 
@@ -580,6 +582,7 @@ export default function (pi: ExtensionAPI) {
     getAgentAliases: () => agentAliases,
     getAgentOwnerToken: () => agentOwnerToken,
     getBotUserId: () => botUserId,
+    getDefaultScope: () => resolveSlackDefaultScope(settings, process.env),
     getThreads: () => threads,
     getPendingEyes: () => pendingEyes,
     getUnclaimedThreads: () => unclaimedThreads,

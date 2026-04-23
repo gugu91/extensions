@@ -1,6 +1,6 @@
 import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
 import {
-  buildSlackCompatibilityScope,
+  buildSlackThreadScope,
   isUserAllowed,
   isChannelId,
   stripBotMention,
@@ -48,13 +48,18 @@ export interface SlackThreadContext {
   scope: RuntimeScopeCarrier;
 }
 
-function buildSlackThreadContext(channelId: string, teamId?: string | null): SlackThreadContext {
+function buildSlackThreadContext(
+  channelId: string,
+  teamId?: string | null,
+  defaultScope?: RuntimeScopeCarrier | null,
+): SlackThreadContext {
   const normalizedTeamId =
     typeof teamId === "string" && teamId.trim().length > 0 ? teamId.trim() : undefined;
   return {
     channelId,
     ...(normalizedTeamId ? { teamId: normalizedTeamId } : {}),
-    scope: buildSlackCompatibilityScope({
+    scope: buildSlackThreadScope({
+      baseScope: defaultScope,
       teamId: normalizedTeamId,
       channelId,
     }),
@@ -64,10 +69,12 @@ function buildSlackThreadContext(channelId: string, teamId?: string | null): Sla
 export function buildSlackThreadRuntimeScope(input: {
   channelId?: string | null;
   context?: SlackThreadContext | null;
+  defaultScope?: RuntimeScopeCarrier | null;
 }): RuntimeScopeCarrier {
   return (
     input.context?.scope ??
-    buildSlackCompatibilityScope({
+    buildSlackThreadScope({
+      baseScope: input.defaultScope,
       teamId: input.context?.teamId,
       channelId: input.context?.channelId ?? input.channelId,
     })
@@ -128,7 +135,10 @@ export interface ParsedThreadStarted {
 /**
  * Extract thread info from an assistant_thread_started event.
  */
-export function extractThreadStarted(evt: Record<string, unknown>): ParsedThreadStarted | null {
+export function extractThreadStarted(
+  evt: Record<string, unknown>,
+  defaultScope?: RuntimeScopeCarrier | null,
+): ParsedThreadStarted | null {
   const t = evt.assistant_thread as Record<string, unknown> | undefined;
   if (!t) return null;
 
@@ -148,7 +158,7 @@ export function extractThreadStarted(evt: Record<string, unknown>): ParsedThread
 
   const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
   if (ctx?.channel_id) {
-    result.context = buildSlackThreadContext(ctx.channel_id, ctx.team_id);
+    result.context = buildSlackThreadContext(ctx.channel_id, ctx.team_id, defaultScope);
   }
 
   return result;
@@ -161,6 +171,7 @@ export interface ParsedThreadContextChanged {
 
 export function extractThreadContextChanged(
   evt: Record<string, unknown>,
+  defaultScope?: RuntimeScopeCarrier | null,
 ): ParsedThreadContextChanged | null {
   const t = evt.assistant_thread as Record<string, unknown> | undefined;
   if (!t) return null;
@@ -173,7 +184,7 @@ export function extractThreadContextChanged(
   const result: ParsedThreadContextChanged = { threadTs };
   const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
   if (ctx?.channel_id) {
-    result.context = buildSlackThreadContext(ctx.channel_id, ctx.team_id);
+    result.context = buildSlackThreadContext(ctx.channel_id, ctx.team_id, defaultScope);
   }
 
   return result;
@@ -496,6 +507,7 @@ export interface SlackSocketModeClientConfig {
   slack: SlackCall;
   botToken: string;
   appToken: string;
+  getDefaultScope?: () => RuntimeScopeCarrier | undefined;
   resolveBotUserIdOnConnect?: boolean;
   reconnectDelayMs?: number;
   dedup?: SlackAccessSet<string>;
@@ -632,14 +644,14 @@ export class SlackSocketModeClient {
       const evt = envelope.event;
       switch (evt.type) {
         case "assistant_thread_started": {
-          const parsed = extractThreadStarted(evt);
+          const parsed = extractThreadStarted(evt, this.config.getDefaultScope?.());
           if (parsed) {
             await this.config.onThreadStarted?.(parsed);
           }
           break;
         }
         case "assistant_thread_context_changed": {
-          const parsed = extractThreadContextChanged(evt);
+          const parsed = extractThreadContextChanged(evt, this.config.getDefaultScope?.());
           if (parsed) {
             await this.config.onThreadContextChanged?.(parsed);
           }

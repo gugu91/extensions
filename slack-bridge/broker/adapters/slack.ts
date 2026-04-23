@@ -51,6 +51,7 @@ export interface SlackAdapterConfig {
   allowAllWorkspaceUsers?: boolean;
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
+  getDefaultScope?: () => InboundMessage["scope"];
   /** Check whether a thread_ts belongs to a known thread in the broker DB. */
   isKnownThread?: (threadTs: string) => boolean;
   /** Persist thread metadata in the broker DB without claiming ownership. */
@@ -113,6 +114,7 @@ export class SlackAdapter implements MessageAdapter {
       slack: this.callSlack.bind(this),
       botToken: this.config.botToken,
       appToken: this.config.appToken,
+      getDefaultScope: this.config.getDefaultScope,
       dedup: this.processedSocketDeliveries,
       abortAndWait: () => this.slackRequests.abortAndWait(),
       onThreadStarted: (event) => this.onThreadStarted(event),
@@ -198,6 +200,7 @@ export class SlackAdapter implements MessageAdapter {
     return buildSlackThreadRuntimeScope({
       channelId,
       context: this.threads.get(threadTs)?.context ?? null,
+      defaultScope: this.config.getDefaultScope?.() ?? null,
     });
   }
 
@@ -354,6 +357,7 @@ export class SlackAdapter implements MessageAdapter {
         scope: buildSlackThreadRuntimeScope({
           channelId: item.channel,
           context: threadInfo?.context,
+          defaultScope: this.config.getDefaultScope?.() ?? null,
         }),
       });
 
@@ -407,6 +411,7 @@ export class SlackAdapter implements MessageAdapter {
       scope: buildSlackThreadRuntimeScope({
         channelId: channel,
         context: threadInfo?.context,
+        defaultScope: this.config.getDefaultScope?.() ?? null,
       }),
       ...(isChannelMention ? { isChannelMention: true } : {}),
       ...(metadata ? { metadata } : {}),
@@ -453,6 +458,7 @@ export class SlackAdapter implements MessageAdapter {
       scope: buildSlackThreadRuntimeScope({
         channelId: normalized.channel,
         context: threadInfo?.context,
+        defaultScope: this.config.getDefaultScope?.() ?? null,
       }),
     });
   }
@@ -467,7 +473,10 @@ export class SlackAdapter implements MessageAdapter {
       userId: "system",
       text: `Bot was added to channel ${event.channel}`,
       timestamp: String(Date.now() / 1000),
-      scope: buildSlackThreadRuntimeScope({ channelId: event.channel }),
+      scope: buildSlackThreadRuntimeScope({
+        channelId: event.channel,
+        defaultScope: this.config.getDefaultScope?.() ?? null,
+      }),
     });
   }
 

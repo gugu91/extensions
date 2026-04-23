@@ -2,15 +2,35 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  DEFAULT_COMPATIBILITY_SCOPE_KEY,
   buildCompatibilityInstanceScope,
   buildCompatibilityWorkspaceScope,
   buildRuntimeScopeCarrier,
   type RuntimeScopeCarrier,
+  type RuntimeScopeSource,
+  type WorkspaceInstallScopeCarrier,
 } from "@gugu910/pi-transport-core";
 import type { ReactionCommandSettings } from "./reaction-triggers.js";
 import { matchesToolPattern } from "./guardrails.js";
 
 // ─── Settings ────────────────────────────────────────────
+
+export interface SlackInstallTopologySettings {
+  installId?: string;
+  workspaceId?: string;
+  botToken?: string;
+  appToken?: string;
+  appId?: string;
+  appConfigToken?: string;
+  defaultChannel?: string;
+  logChannel?: string;
+  logLevel?: "errors" | "actions" | "verbose";
+  controlPlaneCanvasEnabled?: boolean;
+  controlPlaneCanvasId?: string;
+  controlPlaneCanvasChannel?: string;
+  controlPlaneCanvasTitle?: string;
+  homeTabEnabled?: boolean;
+}
 
 export interface SlackBridgeSettings {
   botToken?: string;
@@ -22,6 +42,8 @@ export interface SlackBridgeSettings {
   defaultChannel?: string;
   logChannel?: string;
   logLevel?: "errors" | "actions" | "verbose";
+  defaultInstallId?: string;
+  installs?: SlackInstallTopologySettings[];
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   runtimeMode?: "off" | "single" | "broker" | "follower";
@@ -45,6 +67,40 @@ export interface SlackBridgeSettings {
   };
 }
 
+export interface ResolvedSlackInstallTopology {
+  installId: string;
+  source: RuntimeScopeSource;
+  workspaceId?: string;
+  botToken?: string;
+  appToken?: string;
+  appId?: string;
+  appConfigToken?: string;
+  defaultChannel?: string;
+  logChannel?: string;
+  logLevel?: "errors" | "actions" | "verbose";
+  controlPlaneCanvasEnabled?: boolean;
+  controlPlaneCanvasId?: string;
+  controlPlaneCanvasChannel?: string;
+  controlPlaneCanvasTitle?: string;
+  homeTabEnabled: boolean;
+  scope: RuntimeScopeCarrier;
+}
+
+export type SlackTopologyMode = "compatibility-single" | "explicit-single" | "explicit-multi";
+
+export interface ResolvedSlackTopology {
+  mode: SlackTopologyMode;
+  installs: ResolvedSlackInstallTopology[];
+  defaultInstallId: string;
+  defaultInstall: ResolvedSlackInstallTopology;
+}
+
+export interface SlackTopologySummary {
+  mode: SlackTopologyMode;
+  installCount: number;
+  defaultInstallId: string;
+}
+
 export interface ResolvedPinetMeshAuthSettings {
   meshSecret: string | null;
   meshSecretPath: string | null;
@@ -53,6 +109,68 @@ export interface ResolvedPinetMeshAuthSettings {
 function normalizeOptionalSetting(value?: string | null): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+export function buildSlackWorkspaceScope(
+  options: {
+    source?: RuntimeScopeSource;
+    workspaceId?: string | null;
+    installId?: string | null;
+    channelId?: string | null;
+    compatibilityKey?: string | null;
+  } = {},
+): WorkspaceInstallScopeCarrier {
+  const source = options.source === "explicit" ? "explicit" : "compatibility";
+  if (source === "compatibility") {
+    return buildCompatibilityWorkspaceScope({
+      provider: "slack",
+      workspaceId: normalizeOptionalSetting(options.workspaceId) ?? undefined,
+      installId: normalizeOptionalSetting(options.installId) ?? undefined,
+      channelId: normalizeOptionalSetting(options.channelId) ?? undefined,
+      compatibilityKey: normalizeOptionalSetting(options.compatibilityKey) ?? undefined,
+    });
+  }
+
+  return {
+    provider: "slack",
+    source: "explicit",
+    ...(normalizeOptionalSetting(options.workspaceId)
+      ? { workspaceId: normalizeOptionalSetting(options.workspaceId) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(options.installId)
+      ? { installId: normalizeOptionalSetting(options.installId) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(options.channelId)
+      ? { channelId: normalizeOptionalSetting(options.channelId) ?? undefined }
+      : {}),
+  };
+}
+
+export function buildSlackScope(
+  options: {
+    source?: RuntimeScopeSource;
+    teamId?: string | null;
+    workspaceId?: string | null;
+    channelId?: string | null;
+    installId?: string | null;
+    compatibilityKey?: string | null;
+    instanceId?: string | null;
+    instanceName?: string | null;
+  } = {},
+): RuntimeScopeCarrier {
+  return buildRuntimeScopeCarrier({
+    workspace: buildSlackWorkspaceScope({
+      source: options.source,
+      workspaceId: normalizeOptionalSetting(options.workspaceId ?? options.teamId) ?? undefined,
+      installId: normalizeOptionalSetting(options.installId) ?? undefined,
+      channelId: normalizeOptionalSetting(options.channelId) ?? undefined,
+      compatibilityKey: normalizeOptionalSetting(options.compatibilityKey) ?? undefined,
+    }),
+    instance: buildCompatibilityInstanceScope({
+      instanceId: normalizeOptionalSetting(options.instanceId) ?? undefined,
+      instanceName: normalizeOptionalSetting(options.instanceName) ?? undefined,
+    }),
+  })!;
 }
 
 export function buildSlackCompatibilityScope(
@@ -64,18 +182,270 @@ export function buildSlackCompatibilityScope(
     instanceName?: string | null;
   } = {},
 ): RuntimeScopeCarrier {
+  return buildSlackScope({
+    source: "compatibility",
+    teamId: options.teamId,
+    channelId: options.channelId,
+    installId: options.installId,
+    instanceId: options.instanceId,
+    instanceName: options.instanceName,
+  });
+}
+
+export function buildSlackThreadScope(
+  options: {
+    baseScope?: RuntimeScopeCarrier | null;
+    teamId?: string | null;
+    channelId?: string | null;
+  } = {},
+): RuntimeScopeCarrier {
+  const workspace = options.baseScope?.workspace;
+  const source = workspace?.source === "explicit" ? "explicit" : "compatibility";
+
   return buildRuntimeScopeCarrier({
-    workspace: buildCompatibilityWorkspaceScope({
-      provider: "slack",
-      workspaceId: normalizeOptionalSetting(options.teamId) ?? undefined,
-      installId: normalizeOptionalSetting(options.installId) ?? undefined,
-      channelId: normalizeOptionalSetting(options.channelId) ?? undefined,
+    workspace: buildSlackWorkspaceScope({
+      source,
+      workspaceId: normalizeOptionalSetting(options.teamId) ?? workspace?.workspaceId,
+      installId: workspace?.installId,
+      channelId: normalizeOptionalSetting(options.channelId) ?? workspace?.channelId,
+      compatibilityKey:
+        source === "compatibility"
+          ? (workspace?.compatibilityKey ?? DEFAULT_COMPATIBILITY_SCOPE_KEY)
+          : undefined,
     }),
-    instance: buildCompatibilityInstanceScope({
-      instanceId: normalizeOptionalSetting(options.instanceId) ?? undefined,
-      instanceName: normalizeOptionalSetting(options.instanceName) ?? undefined,
-    }),
+    instance: options.baseScope?.instance ?? buildCompatibilityInstanceScope(),
   })!;
+}
+
+function normalizeSlackInstallId(install: SlackInstallTopologySettings, index: number): string {
+  return (
+    normalizeOptionalSetting(install.installId) ??
+    normalizeOptionalSetting(install.workspaceId) ??
+    `install-${index + 1}`
+  );
+}
+
+function resolveCompatibilityInstall(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): ResolvedSlackInstallTopology {
+  return {
+    installId: DEFAULT_COMPATIBILITY_SCOPE_KEY,
+    source: "compatibility",
+    ...((normalizeOptionalSetting(settings.botToken) ??
+    normalizeOptionalSetting(env.SLACK_BOT_TOKEN))
+      ? {
+          botToken:
+            normalizeOptionalSetting(settings.botToken) ??
+            normalizeOptionalSetting(env.SLACK_BOT_TOKEN) ??
+            undefined,
+        }
+      : {}),
+    ...((normalizeOptionalSetting(settings.appToken) ??
+    normalizeOptionalSetting(env.SLACK_APP_TOKEN))
+      ? {
+          appToken:
+            normalizeOptionalSetting(settings.appToken) ??
+            normalizeOptionalSetting(env.SLACK_APP_TOKEN) ??
+            undefined,
+        }
+      : {}),
+    ...(normalizeOptionalSetting(settings.appId)
+      ? { appId: normalizeOptionalSetting(settings.appId) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(settings.appConfigToken)
+      ? { appConfigToken: normalizeOptionalSetting(settings.appConfigToken) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(settings.defaultChannel)
+      ? { defaultChannel: normalizeOptionalSetting(settings.defaultChannel) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(settings.logChannel)
+      ? { logChannel: normalizeOptionalSetting(settings.logChannel) ?? undefined }
+      : {}),
+    ...(settings.logLevel ? { logLevel: settings.logLevel } : {}),
+    ...(typeof settings.controlPlaneCanvasEnabled === "boolean"
+      ? { controlPlaneCanvasEnabled: settings.controlPlaneCanvasEnabled }
+      : {}),
+    ...(normalizeOptionalSetting(settings.controlPlaneCanvasId)
+      ? {
+          controlPlaneCanvasId:
+            normalizeOptionalSetting(settings.controlPlaneCanvasId) ?? undefined,
+        }
+      : {}),
+    ...(normalizeOptionalSetting(settings.controlPlaneCanvasChannel)
+      ? {
+          controlPlaneCanvasChannel:
+            normalizeOptionalSetting(settings.controlPlaneCanvasChannel) ?? undefined,
+        }
+      : {}),
+    ...(normalizeOptionalSetting(settings.controlPlaneCanvasTitle)
+      ? {
+          controlPlaneCanvasTitle:
+            normalizeOptionalSetting(settings.controlPlaneCanvasTitle) ?? undefined,
+        }
+      : {}),
+    homeTabEnabled: true,
+    scope: buildSlackScope({
+      source: "compatibility",
+      installId: DEFAULT_COMPATIBILITY_SCOPE_KEY,
+      compatibilityKey: DEFAULT_COMPATIBILITY_SCOPE_KEY,
+    }),
+  };
+}
+
+function resolveExplicitInstall(
+  install: SlackInstallTopologySettings,
+  index: number,
+): ResolvedSlackInstallTopology {
+  const installId = normalizeSlackInstallId(install, index);
+  const workspaceId = normalizeOptionalSetting(install.workspaceId) ?? undefined;
+
+  return {
+    installId,
+    source: "explicit",
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(normalizeOptionalSetting(install.botToken)
+      ? { botToken: normalizeOptionalSetting(install.botToken) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(install.appToken)
+      ? { appToken: normalizeOptionalSetting(install.appToken) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(install.appId)
+      ? { appId: normalizeOptionalSetting(install.appId) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(install.appConfigToken)
+      ? { appConfigToken: normalizeOptionalSetting(install.appConfigToken) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(install.defaultChannel)
+      ? { defaultChannel: normalizeOptionalSetting(install.defaultChannel) ?? undefined }
+      : {}),
+    ...(normalizeOptionalSetting(install.logChannel)
+      ? { logChannel: normalizeOptionalSetting(install.logChannel) ?? undefined }
+      : {}),
+    ...(install.logLevel ? { logLevel: install.logLevel } : {}),
+    ...(typeof install.controlPlaneCanvasEnabled === "boolean"
+      ? { controlPlaneCanvasEnabled: install.controlPlaneCanvasEnabled }
+      : {}),
+    ...(normalizeOptionalSetting(install.controlPlaneCanvasId)
+      ? {
+          controlPlaneCanvasId: normalizeOptionalSetting(install.controlPlaneCanvasId) ?? undefined,
+        }
+      : {}),
+    ...(normalizeOptionalSetting(install.controlPlaneCanvasChannel)
+      ? {
+          controlPlaneCanvasChannel:
+            normalizeOptionalSetting(install.controlPlaneCanvasChannel) ?? undefined,
+        }
+      : {}),
+    ...(normalizeOptionalSetting(install.controlPlaneCanvasTitle)
+      ? {
+          controlPlaneCanvasTitle:
+            normalizeOptionalSetting(install.controlPlaneCanvasTitle) ?? undefined,
+        }
+      : {}),
+    homeTabEnabled: install.homeTabEnabled ?? true,
+    scope: buildSlackScope({
+      source: "explicit",
+      workspaceId,
+      installId,
+    }),
+  };
+}
+
+export function resolveSlackTopology(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): ResolvedSlackTopology {
+  const explicitInstalls = (settings.installs ?? []).filter(
+    (install) => install && typeof install === "object",
+  );
+  if (explicitInstalls.length === 0) {
+    const defaultInstall = resolveCompatibilityInstall(settings, env);
+    return {
+      mode: "compatibility-single",
+      installs: [defaultInstall],
+      defaultInstallId: defaultInstall.installId,
+      defaultInstall,
+    };
+  }
+
+  const installs = explicitInstalls.map((install, index) => resolveExplicitInstall(install, index));
+  const configuredDefaultInstallId = normalizeOptionalSetting(settings.defaultInstallId);
+  const defaultInstall =
+    installs.find((install) => install.installId === configuredDefaultInstallId) ?? installs[0]!;
+
+  return {
+    mode: installs.length === 1 ? "explicit-single" : "explicit-multi",
+    installs,
+    defaultInstallId: defaultInstall.installId,
+    defaultInstall,
+  };
+}
+
+export function summarizeSlackTopology(topology: ResolvedSlackTopology): SlackTopologySummary {
+  return {
+    mode: topology.mode,
+    installCount: topology.installs.length,
+    defaultInstallId: topology.defaultInstallId,
+  };
+}
+
+export function resolveSlackDefaultScope(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): RuntimeScopeCarrier {
+  return resolveSlackTopology(settings, env).defaultInstall.scope;
+}
+
+export function resolveSlackRuntimeSettings(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): SlackBridgeSettings {
+  const topology = resolveSlackTopology(settings, env);
+  const defaultInstall = topology.defaultInstall;
+
+  return {
+    ...settings,
+    defaultInstallId: topology.defaultInstallId,
+    botToken:
+      defaultInstall.botToken ??
+      normalizeOptionalSetting(settings.botToken) ??
+      normalizeOptionalSetting(env.SLACK_BOT_TOKEN) ??
+      undefined,
+    appToken:
+      defaultInstall.appToken ??
+      normalizeOptionalSetting(settings.appToken) ??
+      normalizeOptionalSetting(env.SLACK_APP_TOKEN) ??
+      undefined,
+    appId: defaultInstall.appId ?? normalizeOptionalSetting(settings.appId) ?? undefined,
+    appConfigToken:
+      defaultInstall.appConfigToken ??
+      normalizeOptionalSetting(settings.appConfigToken) ??
+      undefined,
+    defaultChannel:
+      defaultInstall.defaultChannel ??
+      normalizeOptionalSetting(settings.defaultChannel) ??
+      undefined,
+    logChannel:
+      defaultInstall.logChannel ?? normalizeOptionalSetting(settings.logChannel) ?? undefined,
+    logLevel: defaultInstall.logLevel ?? settings.logLevel,
+    controlPlaneCanvasEnabled:
+      typeof defaultInstall.controlPlaneCanvasEnabled === "boolean"
+        ? defaultInstall.controlPlaneCanvasEnabled
+        : settings.controlPlaneCanvasEnabled,
+    controlPlaneCanvasId:
+      defaultInstall.controlPlaneCanvasId ??
+      normalizeOptionalSetting(settings.controlPlaneCanvasId) ??
+      undefined,
+    controlPlaneCanvasChannel:
+      defaultInstall.controlPlaneCanvasChannel ??
+      normalizeOptionalSetting(settings.controlPlaneCanvasChannel) ??
+      undefined,
+    controlPlaneCanvasTitle:
+      defaultInstall.controlPlaneCanvasTitle ??
+      normalizeOptionalSetting(settings.controlPlaneCanvasTitle) ??
+      undefined,
+  };
 }
 
 export function resolvePinetMeshAuth(
@@ -782,6 +1152,7 @@ export interface AgentCapabilities {
   tools?: string[];
   tags?: string[];
   scope?: RuntimeScopeCarrier | null;
+  topology?: SlackTopologySummary | null;
 }
 
 export type AgentHealth = "healthy" | "stale" | "ghost" | "resumable";
@@ -868,6 +1239,34 @@ function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const strings = value.map(asString).filter((item): item is string => Boolean(item));
   return strings.length > 0 ? strings : undefined;
+}
+
+function asSlackTopologyMode(value: unknown): SlackTopologyMode | undefined {
+  return value === "compatibility-single" ||
+    value === "explicit-single" ||
+    value === "explicit-multi"
+    ? value
+    : undefined;
+}
+
+function extractSlackTopologySummary(value: unknown): SlackTopologySummary | null {
+  const record = asRecord(value);
+  const mode = asSlackTopologyMode(record?.mode);
+  if (!record || !mode) {
+    return null;
+  }
+
+  const installCountRaw = record.installCount;
+  const installCount =
+    typeof installCountRaw === "number" && Number.isFinite(installCountRaw)
+      ? Math.max(0, Math.trunc(installCountRaw))
+      : 0;
+
+  return {
+    mode,
+    installCount,
+    defaultInstallId: asString(record.defaultInstallId) ?? DEFAULT_COMPATIBILITY_SCOPE_KEY,
+  };
 }
 
 function extractRuntimeScopeCarrier(value: unknown): RuntimeScopeCarrier | null {
@@ -996,6 +1395,7 @@ export function extractAgentCapabilities(
     tools: asStringArray(capabilitiesRecord?.tools),
     tags: asStringArray(capabilitiesRecord?.tags),
     scope: extractRuntimeScopeCarrier(capabilitiesRecord?.scope ?? record?.scope),
+    topology: extractSlackTopologySummary(capabilitiesRecord?.topology ?? record?.topology),
   };
 }
 
@@ -1014,11 +1414,19 @@ export function buildAgentCapabilityTags(capabilities: AgentCapabilities): strin
   if (capabilities.scope?.workspace?.workspaceId) {
     tags.add(`workspace:${capabilities.scope.workspace.workspaceId}`);
   }
+  if (capabilities.scope?.workspace?.installId) {
+    tags.add(`install:${capabilities.scope.workspace.installId}`);
+  }
   if (capabilities.scope?.instance?.instanceId) {
     tags.add(`instance:${capabilities.scope.instance.instanceId}`);
   }
   if (capabilities.scope?.instance?.instanceName) {
     tags.add(`instance-name:${capabilities.scope.instance.instanceName}`);
+  }
+  if (capabilities.topology?.mode) {
+    tags.add(`topology-mode:${capabilities.topology.mode}`);
+    tags.add(`topology-installs:${capabilities.topology.installCount}`);
+    tags.add(`topology-default:${capabilities.topology.defaultInstallId}`);
   }
   for (const tool of capabilities.tools ?? []) {
     tags.add(`tool:${tool}`);

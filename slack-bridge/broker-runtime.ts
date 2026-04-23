@@ -9,6 +9,7 @@ import {
   buildPinetSkinAssignment,
   DEFAULT_PINET_SKIN_THEME,
   resolvePinetMeshAuth,
+  resolveSlackDefaultScope,
   syncBrokerInboxEntries,
 } from "./helpers.js";
 import { startBroker, type Broker } from "./broker/index.js";
@@ -546,6 +547,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         allowAllWorkspaceUsers: deps.shouldAllowAllWorkspaceUsers(),
         suggestedPrompts: settings.suggestedPrompts,
         reactionCommands: settings.reactionCommands,
+        getDefaultScope: () => resolveSlackDefaultScope(deps.getSettings(), process.env),
         isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
         rememberKnownThread: (threadTs: string, channelId: string) => {
           broker.db.updateThread(threadTs, { source: "slack", channel: channelId });

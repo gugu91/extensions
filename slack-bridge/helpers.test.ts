@@ -4,6 +4,9 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   loadSettings,
+  resolveSlackDefaultScope,
+  resolveSlackRuntimeSettings,
+  resolveSlackTopology,
   resolvePinetMeshAuth,
   resolveAllowAllWorkspaceUsers,
   buildAllowlist,
@@ -261,6 +264,158 @@ describe("loadSettings", () => {
     expect(result.controlPlaneCanvasChannel).toBe("ops-control");
     expect(result.controlPlaneCanvasTitle).toBe("Mesh Status");
   });
+
+  it("returns explicit install topology settings", () => {
+    const p = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(
+      p,
+      JSON.stringify({
+        "slack-bridge": {
+          defaultInstallId: "primary",
+          installs: [
+            {
+              installId: "primary",
+              workspaceId: "T_PRIMARY",
+              botToken: "xoxb-primary",
+              appToken: "xapp-primary",
+              defaultChannel: "C_PRIMARY",
+              logChannel: "C_LOGS",
+              controlPlaneCanvasChannel: "C_CTRL",
+              homeTabEnabled: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = loadSettings(p);
+    expect(result.defaultInstallId).toBe("primary");
+    expect(result.installs).toEqual([
+      {
+        installId: "primary",
+        workspaceId: "T_PRIMARY",
+        botToken: "xoxb-primary",
+        appToken: "xapp-primary",
+        defaultChannel: "C_PRIMARY",
+        logChannel: "C_LOGS",
+        controlPlaneCanvasChannel: "C_CTRL",
+        homeTabEnabled: true,
+      },
+    ]);
+  });
+});
+
+describe("Slack topology helpers", () => {
+  it("maps legacy singleton settings into one compatibility install", () => {
+    const topology = resolveSlackTopology(
+      {
+        botToken: " xoxb-legacy ",
+        appToken: " xapp-legacy ",
+        defaultChannel: " C_DEFAULT ",
+        logChannel: " C_LOGS ",
+        controlPlaneCanvasChannel: " C_CONTROL ",
+      },
+      {},
+    );
+
+    expect(topology).toMatchObject({
+      mode: "compatibility-single",
+      defaultInstallId: "default",
+      defaultInstall: {
+        installId: "default",
+        source: "compatibility",
+        defaultChannel: "C_DEFAULT",
+        logChannel: "C_LOGS",
+        controlPlaneCanvasChannel: "C_CONTROL",
+        homeTabEnabled: true,
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            installId: "default",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      },
+    });
+    expect(resolveSlackDefaultScope({ defaultChannel: "C_DEFAULT" }, {})).toEqual(
+      topology.defaultInstall.scope,
+    );
+  });
+
+  it("keeps explicit install topology distinct and resolves the selected default install", () => {
+    const topology = resolveSlackTopology(
+      {
+        defaultInstallId: "workspace-b",
+        installs: [
+          {
+            installId: "workspace-a",
+            workspaceId: "T_WORKSPACE_A",
+            defaultChannel: "C_ALPHA",
+          },
+          {
+            installId: "workspace-b",
+            workspaceId: "T_WORKSPACE_B",
+            defaultChannel: "C_BETA",
+            logChannel: "C_BETA_LOGS",
+            controlPlaneCanvasChannel: "C_BETA_CONTROL",
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(topology).toMatchObject({
+      mode: "explicit-multi",
+      defaultInstallId: "workspace-b",
+      defaultInstall: {
+        installId: "workspace-b",
+        source: "explicit",
+        workspaceId: "T_WORKSPACE_B",
+        defaultChannel: "C_BETA",
+        logChannel: "C_BETA_LOGS",
+        controlPlaneCanvasChannel: "C_BETA_CONTROL",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "explicit",
+            workspaceId: "T_WORKSPACE_B",
+            installId: "workspace-b",
+          },
+        },
+      },
+    });
+
+    expect(
+      resolveSlackRuntimeSettings(
+        {
+          defaultInstallId: "workspace-b",
+          installs: [
+            {
+              installId: "workspace-a",
+              workspaceId: "T_WORKSPACE_A",
+              defaultChannel: "C_ALPHA",
+            },
+            {
+              installId: "workspace-b",
+              workspaceId: "T_WORKSPACE_B",
+              defaultChannel: "C_BETA",
+              logChannel: "C_BETA_LOGS",
+            },
+          ],
+        },
+        {},
+      ),
+    ).toMatchObject({
+      defaultInstallId: "workspace-b",
+      defaultChannel: "C_BETA",
+      logChannel: "C_BETA_LOGS",
+    });
+  });
 });
 
 describe("resolvePinetMeshAuth", () => {
@@ -315,6 +470,160 @@ describe("resolvePinetMeshAuth", () => {
     ).toEqual({
       meshSecret: null,
       meshSecretPath: "/settings/secret",
+    });
+  });
+});
+
+describe("resolveSlackTopology", () => {
+  it("maps singleton settings into one default compatibility install", () => {
+    const topology = resolveSlackTopology(
+      {
+        botToken: "xoxb-single",
+        appToken: "xapp-single",
+        defaultChannel: "C_DEFAULT",
+        logChannel: "C_LOGS",
+        controlPlaneCanvasChannel: "C_CTRL",
+      },
+      {},
+    );
+
+    expect(topology.mode).toBe("compatibility-single");
+    expect(topology.defaultInstallId).toBe("default");
+    expect(topology.installs).toHaveLength(1);
+    expect(topology.defaultInstall).toMatchObject({
+      installId: "default",
+      source: "compatibility",
+      botToken: "xoxb-single",
+      appToken: "xapp-single",
+      defaultChannel: "C_DEFAULT",
+      logChannel: "C_LOGS",
+      controlPlaneCanvasChannel: "C_CTRL",
+      homeTabEnabled: true,
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+          installId: "default",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
+    });
+  });
+
+  it("keeps explicit install topology and selects the configured default install", () => {
+    const topology = resolveSlackTopology(
+      {
+        defaultInstallId: "workspace-b",
+        installs: [
+          {
+            installId: "workspace-a",
+            workspaceId: "T_A",
+            botToken: "xoxb-a",
+            appToken: "xapp-a",
+            defaultChannel: "C_A",
+          },
+          {
+            installId: "workspace-b",
+            workspaceId: "T_B",
+            botToken: "xoxb-b",
+            appToken: "xapp-b",
+            defaultChannel: "C_B",
+            logChannel: "C_B_LOGS",
+            controlPlaneCanvasChannel: "C_B_CTRL",
+            homeTabEnabled: false,
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(topology.mode).toBe("explicit-multi");
+    expect(topology.defaultInstallId).toBe("workspace-b");
+    expect(topology.defaultInstall).toMatchObject({
+      installId: "workspace-b",
+      workspaceId: "T_B",
+      source: "explicit",
+      defaultChannel: "C_B",
+      logChannel: "C_B_LOGS",
+      controlPlaneCanvasChannel: "C_B_CTRL",
+      homeTabEnabled: false,
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_B",
+          installId: "workspace-b",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
+    });
+  });
+});
+
+describe("resolveSlackRuntimeSettings", () => {
+  it("projects the selected default install into the singleton runtime settings", () => {
+    const settings = resolveSlackRuntimeSettings(
+      {
+        defaultInstallId: "primary",
+        installs: [
+          {
+            installId: "primary",
+            workspaceId: "T_PRIMARY",
+            botToken: "xoxb-primary",
+            appToken: "xapp-primary",
+            defaultChannel: "C_PRIMARY",
+            logChannel: "C_PRIMARY_LOGS",
+            controlPlaneCanvasChannel: "C_PRIMARY_CTRL",
+            homeTabEnabled: true,
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(settings.botToken).toBe("xoxb-primary");
+    expect(settings.appToken).toBe("xapp-primary");
+    expect(settings.defaultChannel).toBe("C_PRIMARY");
+    expect(settings.logChannel).toBe("C_PRIMARY_LOGS");
+    expect(settings.controlPlaneCanvasChannel).toBe("C_PRIMARY_CTRL");
+    expect(settings.defaultInstallId).toBe("primary");
+  });
+
+  it("retains one-workspace compatibility defaults when installs are omitted", () => {
+    const settings = resolveSlackRuntimeSettings(
+      {
+        defaultChannel: "C_LEGACY",
+        logChannel: "C_LOGS",
+      },
+      {
+        ...process.env,
+        SLACK_BOT_TOKEN: "xoxb-env",
+        SLACK_APP_TOKEN: "xapp-env",
+      },
+    );
+
+    expect(settings.botToken).toBe("xoxb-env");
+    expect(settings.appToken).toBe("xapp-env");
+    expect(settings.defaultChannel).toBe("C_LEGACY");
+    expect(settings.logChannel).toBe("C_LOGS");
+    expect(resolveSlackDefaultScope(settings, {})).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        installId: "default",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
     });
   });
 });
@@ -3513,7 +3822,16 @@ describe("scope compatibility helpers", () => {
       capabilities: {
         repo: "extensions",
         role: "worker",
-        scope: buildSlackCompatibilityScope({ teamId: "T123", channelId: "C123" }),
+        scope: buildSlackCompatibilityScope({
+          teamId: "T123",
+          channelId: "C123",
+          installId: "install-primary",
+        }),
+        topology: {
+          mode: "explicit-multi",
+          installCount: 2,
+          defaultInstallId: "install-primary",
+        },
       },
     });
 
@@ -3523,6 +3841,7 @@ describe("scope compatibility helpers", () => {
         source: "compatibility",
         compatibilityKey: "default",
         workspaceId: "T123",
+        installId: "install-primary",
         channelId: "C123",
       },
       instance: {
@@ -3530,8 +3849,21 @@ describe("scope compatibility helpers", () => {
         compatibilityKey: "default",
       },
     });
+    expect(capabilities.topology).toEqual({
+      mode: "explicit-multi",
+      installCount: 2,
+      defaultInstallId: "install-primary",
+    });
     expect(buildAgentCapabilityTags(capabilities)).toEqual(
-      expect.arrayContaining(["scope-provider:slack", "scope:default", "workspace:T123"]),
+      expect.arrayContaining([
+        "scope-provider:slack",
+        "scope:default",
+        "workspace:T123",
+        "install:install-primary",
+        "topology-mode:explicit-multi",
+        "topology-installs:2",
+        "topology-default:install-primary",
+      ]),
     );
   });
 });
