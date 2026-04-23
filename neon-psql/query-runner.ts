@@ -19,7 +19,7 @@ export interface RunPsqlQueryWithTunnelDependencies<
   TState extends PsqlTunnelState = PsqlTunnelState,
 > {
   ensureTunnel: (config: ResolvedConfig, ctx: TContext) => Promise<TState>;
-  buildInjectedValues: (config: ResolvedConfig, state: TState) => Record<string, string>;
+  buildPsqlEnv: (config: ResolvedConfig, state: TState) => Record<string, string>;
   resolvePsqlBin: (options: { configuredPath?: string }) => string;
   executePsqlQuery: (
     options: ExecutePsqlQueryOptions,
@@ -49,7 +49,7 @@ export async function runPsqlQueryWithTunnel<
   }
 
   const state = await dependencies.ensureTunnel(config, ctx);
-  const injected = dependencies.buildInjectedValues(config, state);
+  const psqlEnv = dependencies.buildPsqlEnv(config, state);
 
   return dependencies.executePsqlQuery({
     psqlBin: dependencies.resolvePsqlBin({ configuredPath: config.psqlBin }),
@@ -57,7 +57,7 @@ export async function runPsqlQueryWithTunnel<
     query,
     format,
     state,
-    injectedEnv: injected,
+    psqlEnv,
     signal,
     onUpdate,
     truncateOutput: dependencies.truncateOutput,

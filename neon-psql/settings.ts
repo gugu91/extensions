@@ -13,6 +13,10 @@ const DEFAULT_SOURCE_ENV = {
   database: "DB_NAME",
 } as const;
 
+const DEFAULT_PSQL_ENV: Record<string, string> = {
+  NEON_TUNNEL_DATABASE_URL: "postgres_url",
+};
+
 const DEFAULT_INJECT_ENV: Record<string, string> = {
   NEON_TUNNEL_DATABASE_URL: "postgres_url",
   NEON_TUNNEL_SQLALCHEMY_URL: "sqlalchemy_url",
@@ -57,6 +61,7 @@ export interface FileConfig {
   logPath?: string;
   psqlBin?: string;
   sourceEnv?: Partial<SourceEnvConfig>;
+  psqlEnv?: Record<string, string>;
   injectEnv?: Record<string, string>;
 }
 
@@ -67,6 +72,7 @@ export interface ResolvedConfig {
   logPath: string;
   psqlBin?: string;
   sourceEnv: SourceEnvConfig;
+  psqlEnv: Record<string, string>;
   injectEnv: Record<string, string>;
 }
 
@@ -128,8 +134,8 @@ function normalizeConfig(cwd: string, source: RawConfigSource): ResolvedConfig |
 
   return {
     path: source.pathLabel,
-    injectIntoBash: raw.injectIntoBash ?? true,
-    injectPythonShim: raw.injectPythonShim ?? true,
+    injectIntoBash: raw.injectIntoBash ?? false,
+    injectPythonShim: raw.injectPythonShim ?? false,
     logPath: resolveLogPath(cwd, raw.logPath),
     psqlBin: raw.psqlBin?.trim() || undefined,
     sourceEnv: {
@@ -138,6 +144,10 @@ function normalizeConfig(cwd: string, source: RawConfigSource): ResolvedConfig |
       user: raw.sourceEnv?.user ?? DEFAULT_SOURCE_ENV.user,
       password: raw.sourceEnv?.password ?? DEFAULT_SOURCE_ENV.password,
       database: raw.sourceEnv?.database ?? DEFAULT_SOURCE_ENV.database,
+    },
+    psqlEnv: {
+      ...DEFAULT_PSQL_ENV,
+      ...(raw.psqlEnv ?? {}),
     },
     injectEnv: {
       ...DEFAULT_INJECT_ENV,

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildInjectedValues,
+  buildPsqlEnv,
   deriveEndpoint,
   encodeConnectionUrl,
+  formatInjectionModeSummary,
+  getInjectionModeWarning,
   isReadOnlyQuery,
   mergePathValue,
   needsSsl,
@@ -73,8 +76,31 @@ describe("encodeConnectionUrl", () => {
   });
 });
 
+describe("buildPsqlEnv", () => {
+  it("keeps the read-only psql env narrow by default", () => {
+    const result = buildPsqlEnv(
+      {
+        path: "/tmp/config.json",
+        psqlEnv: {
+          NEON_TUNNEL_DATABASE_URL: "postgres_url",
+        },
+      },
+      state,
+      {
+        pythonShimDir: "/opt/pi/python",
+        env: { PYTHONPATH: "/workspace/site-packages" },
+      },
+    );
+
+    expect(result).toEqual({
+      NEON_TUNNEL_DATABASE_URL:
+        "postgresql://user%40example.com:pa%3Ass%2Fword%3F@127.0.0.1:6543/db%2Fname?sslmode=require&options=endpoint%3Dep-cool-river",
+    });
+  });
+});
+
 describe("buildInjectedValues", () => {
-  it("builds the injected connection env values", () => {
+  it("builds the higher-power injected connection env values", () => {
     const result = buildInjectedValues(
       {
         path: "/tmp/config.json",
@@ -118,6 +144,40 @@ describe("buildInjectedValues", () => {
 
     expect(result.PGSSLMODE).toBe("disable");
     expect(result.PGOPTIONS).toBe("");
+  });
+});
+
+describe("injection mode messaging", () => {
+  it("formats the safe default mode summary", () => {
+    expect(
+      formatInjectionModeSummary({
+        injectIntoBash: false,
+        injectPythonShim: false,
+      }),
+    ).toBe("Mode: read-only psql inspection only (shell/Python injection disabled).");
+    expect(
+      getInjectionModeWarning({
+        path: "/tmp/config.json",
+        injectIntoBash: false,
+        injectPythonShim: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("warns clearly when shell and python injection are explicitly enabled", () => {
+    expect(
+      formatInjectionModeSummary({
+        injectIntoBash: true,
+        injectPythonShim: true,
+      }),
+    ).toContain("higher-power process injection");
+    expect(
+      getInjectionModeWarning({
+        path: "/tmp/config.json",
+        injectIntoBash: true,
+        injectPythonShim: true,
+      }),
+    ).toContain("higher-power shell/Python injection mode is enabled");
   });
 });
 

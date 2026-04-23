@@ -1,6 +1,14 @@
 # neon-psql
 
-Config-driven tunnel + `psql` + tunnel-aware bash for pi.
+Config-driven Neon tunnel + read-only `psql` inspection for pi.
+
+By default, `neon-psql` is now **safe-first**:
+
+- the `psql` tool and `/psql` command stay available for read-only DB inspection
+- shell env injection is **off** unless you explicitly enable it
+- the Python `sitecustomize.py` asyncpg shim is **off** unless you explicitly enable it
+
+That keeps the default operator story narrow: read-only `psql` inspection is separate from the higher-power mode that copies tunnel credentials into shell/Python subprocesses.
 
 ## Install / configure
 
@@ -31,8 +39,8 @@ Global (`~/.pi/agent/settings.json`):
 {
   "neon-psql": {
     "enabled": true,
-    "injectIntoBash": true,
-    "injectPythonShim": true,
+    "injectIntoBash": false,
+    "injectPythonShim": false,
     "logPath": ".pi/neon-psql-tunnel.log",
     "psqlBin": "/custom/path/to/psql",
     "sourceEnv": {
@@ -41,12 +49,51 @@ Global (`~/.pi/agent/settings.json`):
       "user": "DB_USER",
       "password": "DB_PASSWORD",
       "database": "DB_NAME"
+    },
+    "psqlEnv": {
+      "NEON_TUNNEL_DATABASE_URL": "postgres_url"
     }
   }
 }
 ```
 
 Project-local (`.pi/settings.json`) works too and takes priority over the global settings.
+
+#### Safe default vs higher-power injection mode
+
+**Safe default**
+
+- keep `injectIntoBash: false`
+- keep `injectPythonShim: false`
+- use the `psql` tool and `/psql` command for read-only inspection only
+
+**Higher-power injection mode**
+
+- set `injectIntoBash: true` to copy tunnel env into agent `bash` and user shell commands
+- optionally set `injectPythonShim: true` to prepend the asyncpg shim to `PYTHONPATH`
+- when either injection option is enabled, the extension emits an operator-visible warning and `/psql-tunnel status` shows the elevated mode
+
+Example higher-power mode:
+
+```json
+{
+  "neon-psql": {
+    "enabled": true,
+    "injectIntoBash": true,
+    "injectPythonShim": true,
+    "injectEnv": {
+      "DATABASE_URL": "postgres_url",
+      "DB_HOST": "tunnel_host",
+      "DB_PORT": "tunnel_port",
+      "DB_USER": "source_user",
+      "DB_PASSWORD": "source_password",
+      "DB_NAME": "source_database"
+    }
+  }
+}
+```
+
+`injectPythonShim` is only useful when shell injection is enabled, because the shim is applied through the injected process environment.
 
 #### Legacy config files still supported
 
@@ -82,6 +129,23 @@ cp ~/.pi/agent/extensions/neon-psql/config.example.json ~/.pi/agent/extensions/n
 - optional bash env injection for agent `bash` and user `!` / `!!` commands
 - optional Python `sitecustomize.py` shim for `asyncpg` / SQLAlchemy asyncpg
 - automatic reuse of the sandbox SOCKS proxy when the `sandbox` extension is installed
+
+## Config semantics
+
+- `injectIntoBash` — default `false`; enables higher-power shell env injection
+- `injectPythonShim` — default `false`; enables the asyncpg shim inside injected Python subprocesses
+- `psqlEnv` — narrow env used by the read-only `psql` tool/command path
+- `injectEnv` — broader env used only for shell/Python injection mode
+
+The default `psqlEnv` is intentionally narrow:
+
+```json
+{
+  "NEON_TUNNEL_DATABASE_URL": "postgres_url"
+}
+```
+
+The default `injectEnv` is broader because it is meant for explicit shell/Python opt-in workflows.
 
 ## Common config tokens
 

@@ -16,8 +16,12 @@ const config: ResolvedConfig = {
     password: "DB_PASSWORD",
     database: "DB_NAME",
   },
-  injectEnv: {
+  psqlEnv: {
     NEON_TUNNEL_DATABASE_URL: "postgresql://user:pass@127.0.0.1:6543/app",
+  },
+  injectEnv: {
+    DATABASE_URL: "postgresql://user:pass@127.0.0.1:6543/app",
+    PYTHONPATH: "/danger-zone",
   },
 };
 
@@ -37,14 +41,14 @@ const state: PsqlTunnelState = {
 describe("runPsqlQueryWithTunnel", () => {
   it("rejects mutating queries before trying to start the tunnel", async () => {
     const ensureTunnel = vi.fn();
-    const buildInjectedValues = vi.fn();
+    const buildPsqlEnv = vi.fn();
     const resolvePsqlBin = vi.fn();
     const executePsqlQuery = vi.fn();
 
     await expect(
       runPsqlQueryWithTunnel(config, "DELETE FROM users", "table", {}, undefined, undefined, {
         ensureTunnel,
-        buildInjectedValues,
+        buildPsqlEnv,
         resolvePsqlBin,
         executePsqlQuery,
         truncateOutput: vi.fn(),
@@ -57,14 +61,14 @@ describe("runPsqlQueryWithTunnel", () => {
     );
 
     expect(ensureTunnel).not.toHaveBeenCalled();
-    expect(buildInjectedValues).not.toHaveBeenCalled();
+    expect(buildPsqlEnv).not.toHaveBeenCalled();
     expect(resolvePsqlBin).not.toHaveBeenCalled();
     expect(executePsqlQuery).not.toHaveBeenCalled();
   });
 
   it("starts the tunnel and delegates to executePsqlQuery for read-only queries", async () => {
     const ensureTunnel = vi.fn(async () => state);
-    const buildInjectedValues = vi.fn(() => config.injectEnv);
+    const buildPsqlEnv = vi.fn(() => config.psqlEnv);
     const resolvePsqlBin = vi.fn(() => "/custom/bin/psql");
     const executePsqlQuery = vi.fn(async () => ({
       text: "id,name\n1,Alice",
@@ -100,7 +104,7 @@ describe("runPsqlQueryWithTunnel", () => {
       onUpdate,
       {
         ensureTunnel,
-        buildInjectedValues,
+        buildPsqlEnv,
         resolvePsqlBin,
         executePsqlQuery,
         truncateOutput,
@@ -111,7 +115,7 @@ describe("runPsqlQueryWithTunnel", () => {
     );
 
     expect(ensureTunnel).toHaveBeenCalledWith(config, { hasUI: false });
-    expect(buildInjectedValues).toHaveBeenCalledWith(config, state);
+    expect(buildPsqlEnv).toHaveBeenCalledWith(config, state);
     expect(resolvePsqlBin).toHaveBeenCalledWith({ configuredPath: config.psqlBin });
     expect(executePsqlQuery).toHaveBeenCalledWith({
       psqlBin: "/custom/bin/psql",
@@ -119,7 +123,7 @@ describe("runPsqlQueryWithTunnel", () => {
       query: "SELECT 1",
       format: "table",
       state,
-      injectedEnv: config.injectEnv,
+      psqlEnv: config.psqlEnv,
       signal,
       onUpdate,
       truncateOutput,

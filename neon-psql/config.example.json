@@ -1,7 +1,7 @@
 {
   "enabled": true,
-  "injectIntoBash": true,
-  "injectPythonShim": true,
+  "injectIntoBash": false,
+  "injectPythonShim": false,
   "logPath": ".pi/neon-psql-tunnel.log",
   "psqlBin": "/custom/path/to/psql",
   "sourceEnv": {
@@ -10,6 +10,9 @@
     "user": "DB_USER",
     "password": "DB_PASSWORD",
     "database": "DB_NAME"
+  },
+  "psqlEnv": {
+    "NEON_TUNNEL_DATABASE_URL": "postgres_url"
   },
   "injectEnv": {
     "NEON_TUNNEL_DATABASE_URL": "postgres_url",

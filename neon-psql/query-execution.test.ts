@@ -65,9 +65,13 @@ const config: ResolvedConfig = {
     password: "DB_PASSWORD",
     database: "DB_NAME",
   },
-  injectEnv: {
+  psqlEnv: {
     NEON_TUNNEL_DATABASE_URL:
       "postgresql://user%40example.com:super-secret@127.0.0.1:6543/app?sslmode=require",
+  },
+  injectEnv: {
+    DATABASE_URL: "postgresql://user%40example.com:super-secret@127.0.0.1:6543/app?sslmode=require",
+    PYTHONPATH: "/danger-zone",
   },
 };
 
@@ -78,7 +82,7 @@ function makeOptions(overrides: Partial<ExecutePsqlQueryOptions> = {}): ExecuteP
     query: "SELECT 1",
     format: "table",
     state,
-    injectedEnv: config.injectEnv,
+    psqlEnv: config.psqlEnv,
     spawnProcess: vi.fn(() => new FakePsqlProcess()),
     truncateOutput: (text) => ({
       content: text,
@@ -108,7 +112,7 @@ describe("executePsqlQuery", () => {
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 
-  it("spawns psql with the injected connection env and streams partial updates", async () => {
+  it("spawns psql with the narrow psql execution env and streams partial updates", async () => {
     const child = new FakePsqlProcess();
     const spawnProcess = vi.fn(() => child);
     const updates: string[] = [];
@@ -133,7 +137,7 @@ describe("executePsqlQuery", () => {
     expect(spawnProcess).toHaveBeenCalledWith(
       "/custom/bin/psql",
       [
-        config.injectEnv.NEON_TUNNEL_DATABASE_URL,
+        config.psqlEnv.NEON_TUNNEL_DATABASE_URL,
         "-v",
         "ON_ERROR_STOP=1",
         "-P",
@@ -144,7 +148,7 @@ describe("executePsqlQuery", () => {
       ],
       expect.objectContaining({
         env: expect.objectContaining({
-          NEON_TUNNEL_DATABASE_URL: config.injectEnv.NEON_TUNNEL_DATABASE_URL,
+          NEON_TUNNEL_DATABASE_URL: config.psqlEnv.NEON_TUNNEL_DATABASE_URL,
           PGPASSWORD: source.password,
           PGAPPNAME: "pi-extension-psql",
         }),
@@ -173,7 +177,7 @@ describe("executePsqlQuery", () => {
     expect(spawnProcess).toHaveBeenCalledWith(
       "/custom/bin/psql",
       [
-        config.injectEnv.NEON_TUNNEL_DATABASE_URL,
+        config.psqlEnv.NEON_TUNNEL_DATABASE_URL,
         "-v",
         "ON_ERROR_STOP=1",
         "-P",

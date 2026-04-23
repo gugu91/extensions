@@ -127,8 +127,10 @@ export function encodeConnectionUrl(
   return `${scheme}://${user}:${password}@127.0.0.1:${port}/${database}${query ? `?${query}` : ""}`;
 }
 
-export function buildInjectedValues(
-  config: Pick<ResolvedConfig, "injectEnv" | "injectPythonShim" | "path">,
+function buildResolvedEnvValues(
+  envSpecs: Record<string, string>,
+  configPath: string,
+  includePythonShim: boolean,
   state: InjectedValuesState,
   options: BuildInjectedValuesOptions = {},
 ): Record<string, string> {
@@ -175,13 +177,13 @@ export function buildInjectedValues(
     source_user: source.user,
     source_password: source.password,
     source_database: source.database,
-    config_path: config.path,
+    config_path: configPath,
     log_path: state.logPath,
     "1": "1",
   };
 
   const resolved: Record<string, string> = {};
-  for (const [envName, spec] of Object.entries(config.injectEnv)) {
+  for (const [envName, spec] of Object.entries(envSpecs)) {
     if (spec.startsWith("source:")) {
       resolved[envName] = readEnv(spec.slice("source:".length)) ?? "";
       continue;
@@ -189,7 +191,7 @@ export function buildInjectedValues(
     resolved[envName] = tokens[spec] ?? spec;
   }
 
-  if (config.injectPythonShim && options.pythonShimDir) {
+  if (includePythonShim && options.pythonShimDir) {
     resolved.PYTHONPATH = mergePathValue(
       options.pythonShimDir,
       resolved.PYTHONPATH ?? env.PYTHONPATH,
@@ -197,6 +199,66 @@ export function buildInjectedValues(
   }
 
   return resolved;
+}
+
+export function buildPsqlEnv(
+  config: Pick<ResolvedConfig, "path" | "psqlEnv">,
+  state: InjectedValuesState,
+  options: BuildInjectedValuesOptions = {},
+): Record<string, string> {
+  return buildResolvedEnvValues(config.psqlEnv, config.path, false, state, options);
+}
+
+export function buildInjectedValues(
+  config: Pick<ResolvedConfig, "injectEnv" | "injectPythonShim" | "path">,
+  state: InjectedValuesState,
+  options: BuildInjectedValuesOptions = {},
+): Record<string, string> {
+  return buildResolvedEnvValues(
+    config.injectEnv,
+    config.path,
+    config.injectPythonShim,
+    state,
+    options,
+  );
+}
+
+export function hasInjectionEnabled(
+  config: Pick<ResolvedConfig, "injectIntoBash" | "injectPythonShim">,
+): boolean {
+  return config.injectIntoBash || config.injectPythonShim;
+}
+
+export function formatInjectionModeSummary(
+  config: Pick<ResolvedConfig, "injectIntoBash" | "injectPythonShim">,
+): string {
+  if (!hasInjectionEnabled(config)) {
+    return "Mode: read-only psql inspection only (shell/Python injection disabled).";
+  }
+
+  return [
+    "Mode: read-only psql inspection plus higher-power process injection.",
+    `- Bash env injection: ${config.injectIntoBash ? "enabled" : "disabled"}`,
+    `- Python asyncpg shim: ${config.injectPythonShim ? "enabled" : "disabled"}`,
+  ].join("\n");
+}
+
+export function getInjectionModeWarning(
+  config: Pick<ResolvedConfig, "path" | "injectIntoBash" | "injectPythonShim">,
+): string | null {
+  if (!hasInjectionEnabled(config)) {
+    return null;
+  }
+
+  if (config.injectIntoBash && config.injectPythonShim) {
+    return `neon-psql: higher-power shell/Python injection mode is enabled via ${config.path}. Bash and user shell commands will receive tunnel DB env, and Python subprocesses will also receive the asyncpg shim. The psql tool itself remains the safe read-only inspection path.`;
+  }
+
+  if (config.injectIntoBash) {
+    return `neon-psql: higher-power shell injection mode is enabled via ${config.path}. Bash and user shell commands will receive tunnel DB env beyond the safe read-only psql inspection path.`;
+  }
+
+  return `neon-psql: injectPythonShim is enabled in ${config.path}, but it only takes effect when injectIntoBash is also enabled.`;
 }
 
 function readDollarQuoteTag(sql: string, index: number): string | null {

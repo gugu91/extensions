@@ -25,13 +25,12 @@ describe("loadConfig", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("loads top-level project settings", () => {
+  it("loads top-level project settings with default-off injection and narrow psql env", () => {
     fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
     fs.writeFileSync(
       path.join(cwd, ".pi", "settings.json"),
       JSON.stringify({
         "neon-psql": {
-          injectIntoBash: false,
           sourceEnv: { host: "PROJECT_DB_HOST" },
         },
       }),
@@ -42,7 +41,7 @@ describe("loadConfig", () => {
     expect(result).toMatchObject({
       path: path.join(cwd, ".pi", "settings.json") + "#neon-psql",
       injectIntoBash: false,
-      injectPythonShim: true,
+      injectPythonShim: false,
       sourceEnv: {
         host: "PROJECT_DB_HOST",
         port: "DB_PORT",
@@ -50,8 +49,12 @@ describe("loadConfig", () => {
         password: "DB_PASSWORD",
         database: "DB_NAME",
       },
+      psqlEnv: {
+        NEON_TUNNEL_DATABASE_URL: "postgres_url",
+      },
     });
     expect(result?.logPath).toBe(path.join(cwd, ".pi", "neon-psql-tunnel.log"));
+    expect(result?.injectEnv.DATABASE_URL).toBe("postgres_url");
   });
 
   it("prefers project settings over global settings", () => {
@@ -86,18 +89,49 @@ describe("loadConfig", () => {
 
     expect(result).toMatchObject({
       path: path.join(agentDir, "settings.json") + "#neon-psql",
-      injectIntoBash: true,
+      injectIntoBash: false,
       injectPythonShim: false,
     });
     expect(result?.logPath).toBe(path.join(cwd, "logs", "neon.log"));
   });
 
-  it("prefers explicit env config file over settings", () => {
-    const explicitPath = path.join(tmpDir, "explicit.json");
-    fs.writeFileSync(explicitPath, JSON.stringify({ injectIntoBash: false }));
+  it("keeps explicit injection opt-ins and separate psql env overrides", () => {
     fs.writeFileSync(
       path.join(agentDir, "settings.json"),
-      JSON.stringify({ "neon-psql": { injectIntoBash: true } }),
+      JSON.stringify({
+        "neon-psql": {
+          injectIntoBash: true,
+          injectPythonShim: true,
+          psqlEnv: {
+            NEON_TUNNEL_DATABASE_URL: "psql_url",
+          },
+          injectEnv: {
+            DATABASE_URL: "postgres_url",
+            ASYNCPG_DSN: "asyncpg_dsn",
+          },
+        },
+      }),
+    );
+
+    const result = loadConfig({ cwd, agentDir, extensionDir, env: {} });
+
+    expect(result?.injectIntoBash).toBe(true);
+    expect(result?.injectPythonShim).toBe(true);
+    expect(result?.psqlEnv).toEqual({
+      NEON_TUNNEL_DATABASE_URL: "psql_url",
+    });
+    expect(result?.injectEnv).toMatchObject({
+      DATABASE_URL: "postgres_url",
+      ASYNCPG_DSN: "asyncpg_dsn",
+    });
+  });
+
+  it("prefers explicit env config file over settings", () => {
+    const explicitPath = path.join(tmpDir, "explicit.json");
+    fs.writeFileSync(explicitPath, JSON.stringify({ injectIntoBash: true }));
+    fs.writeFileSync(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ "neon-psql": { injectIntoBash: false } }),
     );
 
     const result = loadConfig({
@@ -108,7 +142,7 @@ describe("loadConfig", () => {
     });
 
     expect(result?.path).toBe(explicitPath);
-    expect(result?.injectIntoBash).toBe(false);
+    expect(result?.injectIntoBash).toBe(true);
   });
 
   it("falls back to legacy config files", () => {

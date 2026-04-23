@@ -18,7 +18,11 @@ import { Type } from "@sinclair/typebox";
 
 import {
   buildInjectedValues as computeInjectedValues,
+  buildPsqlEnv as computePsqlEnv,
   deriveEndpoint,
+  formatInjectionModeSummary,
+  getInjectionModeWarning,
+  hasInjectionEnabled,
   needsSsl,
   type SourceValues,
 } from "./helpers.js";
@@ -72,6 +76,7 @@ let tunnel: TunnelState | null = null;
 let tunnelPromise: Promise<TunnelState> | null = null;
 let injectedEnvBackup = new Map<string, string | undefined>();
 let warnedBashTunnelUnavailable = false;
+let warnedInjectionMode = false;
 let sandboxManagerPromise: Promise<SandboxManagerLike | null> | null = null;
 
 function readRuntimeEnv(envName: string): string | undefined {
@@ -95,7 +100,10 @@ function requireSourceEnv(config: ResolvedConfig): SourceValues {
   };
 }
 
-function buildInjectedValues(config: ResolvedConfig, state: TunnelState): Record<string, string> {
+function buildShellInjectedValues(
+  config: ResolvedConfig,
+  state: TunnelState,
+): Record<string, string> {
   return computeInjectedValues(config, state, {
     env: process.env,
     pythonShimDir: PYTHON_SHIM_DIR,
@@ -103,8 +111,15 @@ function buildInjectedValues(config: ResolvedConfig, state: TunnelState): Record
   });
 }
 
+function buildPsqlEnv(config: ResolvedConfig, state: TunnelState): Record<string, string> {
+  return computePsqlEnv(config, state, {
+    env: process.env,
+    readEnv: readRuntimeEnv,
+  });
+}
+
 function applyInjectedEnvToProcess(config: ResolvedConfig, state: TunnelState): void {
-  for (const [key, value] of Object.entries(buildInjectedValues(config, state))) {
+  for (const [key, value] of Object.entries(buildShellInjectedValues(config, state))) {
     if (!injectedEnvBackup.has(key)) {
       injectedEnvBackup.set(key, process.env[key]);
     }
@@ -342,7 +357,7 @@ async function runPsqlQuery(
 ): Promise<{ text: string; details: PsqlDetails }> {
   return runPsqlQueryWithTunnel(config, query, format, ctx, signal, onUpdate, {
     ensureTunnel,
-    buildInjectedValues,
+    buildPsqlEnv,
     resolvePsqlBin,
     executePsqlQuery,
     truncateOutput: truncateHead,
@@ -357,8 +372,17 @@ function redactValue(key: string, value: string): string {
   return value.replace(/:\/\/([^:@/]+):([^@/]+)@/g, "://$1:***@");
 }
 
-function formatInjectedEnv(config: ResolvedConfig, state: TunnelState): string {
-  const injected = buildInjectedValues(config, state);
+function formatResolvedEnvSection(title: string, envValues: Record<string, string>): string[] {
+  const lines = [title];
+  for (const key of Object.keys(envValues).sort()) {
+    lines.push(`${key}=${redactValue(key, envValues[key])}`);
+  }
+  return lines;
+}
+
+function formatTunnelEnvReport(config: ResolvedConfig, state: TunnelState): string {
+  const psqlEnv = buildPsqlEnv(config, state);
+  const injected = buildShellInjectedValues(config, state);
   const lines = [
     `config: ${config.path}`,
     `source: ${state.source.host}:${state.source.port}/${state.source.database}`,
@@ -366,11 +390,17 @@ function formatInjectedEnv(config: ResolvedConfig, state: TunnelState): string {
     `endpoint: ${state.endpoint || "(none)"}`,
     `log: ${state.logPath}`,
     "",
-    "Injected env:",
+    formatInjectionModeSummary(config),
+    "",
+    ...formatResolvedEnvSection("Read-only psql env:", psqlEnv),
   ];
-  for (const key of Object.keys(injected).sort()) {
-    lines.push(`${key}=${redactValue(key, injected[key])}`);
+
+  if (hasInjectionEnabled(config)) {
+    lines.push("", ...formatResolvedEnvSection("Shell/Python injection env:", injected));
+  } else {
+    lines.push("", "Shell/Python injection env:", "(disabled — safe default)");
   }
+
   return lines.join("\n");
 }
 
@@ -482,13 +512,25 @@ export default function (pi: ExtensionAPI) {
         const action = args.trim() || "status";
         switch (action) {
           case "status": {
+            const tone = hasInjectionEnabled(config) ? "warning" : "info";
             if (!tunnelAlive()) {
-              ctx.ui.notify(`Tunnel is not running (config: ${config.path})`, "info");
+              ctx.ui.notify(
+                [
+                  `Tunnel is not running (config: ${config.path})`,
+                  "",
+                  formatInjectionModeSummary(config),
+                ].join("\n"),
+                tone,
+              );
               return;
             }
             ctx.ui.notify(
-              `Tunnel: 127.0.0.1:${tunnel?.port} -> ${tunnel?.source.host}:${tunnel?.source.port} (${config.path})`,
-              "info",
+              [
+                `Tunnel: 127.0.0.1:${tunnel?.port} -> ${tunnel?.source.host}:${tunnel?.source.port} (${config.path})`,
+                "",
+                formatInjectionModeSummary(config),
+              ].join("\n"),
+              tone,
             );
             return;
           }
@@ -522,7 +564,7 @@ export default function (pi: ExtensionAPI) {
             const state = await ensureTunnel(config, ctx);
             pi.sendMessage({
               customType: "psql-tunnel-env",
-              content: formatInjectedEnv(config, state),
+              content: formatTunnelEnvReport(config, state),
               display: true,
               details: { path: config.path },
             });
@@ -561,6 +603,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    const injectionWarning = getInjectionModeWarning(config);
+    if (injectionWarning && ctx.hasUI && !warnedInjectionMode) {
+      ctx.ui.notify(injectionWarning, "warning");
+      warnedInjectionMode = true;
+    }
+
     if (tunnelAlive()) {
       await setTunnelStatus(ctx, `psql tunnel 127.0.0.1:${tunnel?.port}`);
     }

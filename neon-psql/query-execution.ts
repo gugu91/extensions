@@ -52,7 +52,7 @@ export interface ExecutePsqlQueryOptions {
   query: string;
   format: OutputFormat;
   state: PsqlExecutionState;
-  injectedEnv: Record<string, string>;
+  psqlEnv: Record<string, string>;
   signal?: AbortSignal;
   onUpdate?: (update: PsqlPartialUpdate) => void;
   processEnv?: NodeJS.ProcessEnv;
@@ -89,7 +89,7 @@ export async function executePsqlQuery(
     query,
     format,
     state,
-    injectedEnv,
+    psqlEnv,
     signal,
     onUpdate,
     processEnv = process.env,
@@ -118,7 +118,7 @@ export async function executePsqlQuery(
     );
   }
 
-  const connection = injectedEnv.NEON_TUNNEL_DATABASE_URL;
+  const connection = psqlEnv.NEON_TUNNEL_DATABASE_URL;
   const args = [connection, "-v", "ON_ERROR_STOP=1", "-P", "pager=off"];
   if (format === "csv") args.push("--csv");
   if (format === "tsv") args.push("-A", "-F", "\t");
@@ -152,7 +152,7 @@ export async function executePsqlQuery(
   const child = spawnPsqlProcess(psqlBin, args, {
     env: {
       ...processEnv,
-      ...injectedEnv,
+      ...psqlEnv,
       PGPASSWORD: state.source.password,
       PGAPPNAME: "pi-extension-psql",
     },
