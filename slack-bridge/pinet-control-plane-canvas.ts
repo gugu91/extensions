@@ -105,8 +105,14 @@ function getInstallCanvasTitle(install: ResolvedSlackInstallTopology): string {
   return normalizeOptionalSetting(install.controlPlaneCanvasTitle) ?? "Pinet Broker Control Plane";
 }
 
-function isInstallCanvasEnabled(install: ResolvedSlackInstallTopology): boolean {
-  return install.controlPlaneCanvasEnabled ?? true;
+function isInstallCanvasEnabled(
+  install: ResolvedSlackInstallTopology,
+  defaultInstallId: string,
+): boolean {
+  if (typeof install.controlPlaneCanvasEnabled === "boolean") {
+    return install.controlPlaneCanvasEnabled;
+  }
+  return install.installId === defaultInstallId;
 }
 
 export function createPinetControlPlaneCanvas(
@@ -229,13 +235,15 @@ export function createPinetControlPlaneCanvas(
     ctx: ExtensionContext,
     input: PinetControlPlaneCanvasRefreshInput,
   ): Promise<void> {
-    const installs = deps.getSlackSurfaceInstalls().filter(isInstallCanvasEnabled);
+    const defaultInstallId = deps.getDefaultSlackInstallId();
+    const installs = deps
+      .getSlackSurfaceInstalls()
+      .filter((install) => isInstallCanvasEnabled(install, defaultInstallId));
     if (installs.length === 0) {
       deps.setLastControlPlaneCanvasError(null);
       return;
     }
 
-    const defaultInstallId = deps.getDefaultSlackInstallId();
     const snapshot = buildBrokerControlPlaneDashboardSnapshot({
       ...input,
       homedir: os.homedir(),

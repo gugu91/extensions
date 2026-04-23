@@ -232,6 +232,22 @@ function normalizeSlackInstallId(install: SlackInstallTopologySettings, index: n
   );
 }
 
+function applyExplicitOperatorSurfaceDefaults(
+  install: ResolvedSlackInstallTopology,
+  rawInstall: SlackInstallTopologySettings,
+  isDefaultInstall: boolean,
+): ResolvedSlackInstallTopology {
+  return {
+    ...install,
+    controlPlaneCanvasEnabled:
+      typeof rawInstall.controlPlaneCanvasEnabled === "boolean"
+        ? rawInstall.controlPlaneCanvasEnabled
+        : isDefaultInstall,
+    homeTabEnabled:
+      typeof rawInstall.homeTabEnabled === "boolean" ? rawInstall.homeTabEnabled : isDefaultInstall,
+  };
+}
+
 function validateExplicitSlackInstalls(
   installs: ReadonlyArray<ResolvedSlackInstallTopology>,
   configuredDefaultInstallId: string | null,
@@ -251,7 +267,6 @@ function validateExplicitSlackInstalls(
     );
   }
 }
-
 function resolveCompatibilityInstall(
   settings: SlackBridgeSettings,
   env = process.env,
@@ -350,9 +365,7 @@ function resolveExplicitInstall(
       ? { logChannel: normalizeOptionalSetting(install.logChannel) ?? undefined }
       : {}),
     ...(install.logLevel ? { logLevel: install.logLevel } : {}),
-    ...(typeof install.controlPlaneCanvasEnabled === "boolean"
-      ? { controlPlaneCanvasEnabled: install.controlPlaneCanvasEnabled }
-      : {}),
+    controlPlaneCanvasEnabled: install.controlPlaneCanvasEnabled ?? false,
     ...(normalizeOptionalSetting(install.controlPlaneCanvasId)
       ? {
           controlPlaneCanvasId: normalizeOptionalSetting(install.controlPlaneCanvasId) ?? undefined,
@@ -370,7 +383,7 @@ function resolveExplicitInstall(
             normalizeOptionalSetting(install.controlPlaneCanvasTitle) ?? undefined,
         }
       : {}),
-    homeTabEnabled: install.homeTabEnabled ?? true,
+    homeTabEnabled: install.homeTabEnabled ?? false,
     scope: buildSlackScope({
       source: "explicit",
       workspaceId,
@@ -399,12 +412,23 @@ export function resolveSlackTopology(
   const installs = explicitInstalls.map((install, index) => resolveExplicitInstall(install, index));
   const configuredDefaultInstallId = normalizeOptionalSetting(settings.defaultInstallId);
   validateExplicitSlackInstalls(installs, configuredDefaultInstallId);
-  const defaultInstall =
+  const unresolvedDefaultInstall =
     installs.find((install) => install.installId === configuredDefaultInstallId) ?? installs[0]!;
+  const installsWithOperatorSurfaceDefaults = installs.map((install, index) =>
+    applyExplicitOperatorSurfaceDefaults(
+      install,
+      explicitInstalls[index]!,
+      install.installId === unresolvedDefaultInstall.installId,
+    ),
+  );
+  const defaultInstall =
+    installsWithOperatorSurfaceDefaults.find(
+      (install) => install.installId === unresolvedDefaultInstall.installId,
+    ) ?? installsWithOperatorSurfaceDefaults[0]!;
 
   return {
-    mode: installs.length === 1 ? "explicit-single" : "explicit-multi",
-    installs,
+    mode: installsWithOperatorSurfaceDefaults.length === 1 ? "explicit-single" : "explicit-multi",
+    installs: installsWithOperatorSurfaceDefaults,
     defaultInstallId: defaultInstall.installId,
     defaultInstall,
   };

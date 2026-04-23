@@ -414,7 +414,7 @@ describe("createPinetControlPlaneCanvas", () => {
     );
   });
 
-  it("refreshes canvases for every configured surface install", async () => {
+  it("skips non-default installs unless broker canvas access is explicitly enabled", async () => {
     const { deps, slack, resolveChannel } = createDeps({
       slack: vi.fn(async (method: string) => {
         if (method === "conversations.canvases.create") {
@@ -447,6 +447,71 @@ describe("createPinetControlPlaneCanvas", () => {
           source: "explicit",
           workspaceId: "T_SECONDARY",
           botToken: "xoxb-secondary",
+          controlPlaneCanvasChannel: "ops-secondary",
+          homeTabEnabled: true,
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "explicit",
+              workspaceId: "T_SECONDARY",
+              installId: "secondary",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+      ],
+    });
+    const canvas = createPinetControlPlaneCanvas(deps);
+    const { ctx } = createContext();
+
+    await canvas.refreshBrokerControlPlaneCanvasDashboard(ctx, createRefreshInput());
+
+    expect(resolveChannel).toHaveBeenCalledWith("default", "ops-control");
+    expect(resolveChannel).not.toHaveBeenCalledWith("secondary", "ops-secondary");
+    expect(slack).not.toHaveBeenCalledWith(
+      "conversations.canvases.create",
+      "xoxb-secondary",
+      expect.anything(),
+    );
+  });
+
+  it("refreshes canvases for every configured surface install that explicitly opts in", async () => {
+    const { deps, slack, resolveChannel } = createDeps({
+      slack: vi.fn(async (method: string) => {
+        if (method === "conversations.canvases.create") {
+          return { ok: true, canvas_id: "FNEWCANVAS" };
+        }
+        return { ok: true };
+      }),
+      getSlackSurfaceInstalls: () => [
+        {
+          installId: "default",
+          source: "compatibility",
+          botToken: "xoxb-default",
+          controlPlaneCanvasChannel: "ops-control",
+          homeTabEnabled: true,
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "compatibility",
+              compatibilityKey: "default",
+              installId: "default",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+        {
+          installId: "secondary",
+          source: "explicit",
+          workspaceId: "T_SECONDARY",
+          botToken: "xoxb-secondary",
+          controlPlaneCanvasEnabled: true,
           controlPlaneCanvasChannel: "ops-secondary",
           homeTabEnabled: true,
           scope: {
