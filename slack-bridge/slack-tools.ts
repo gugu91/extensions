@@ -302,8 +302,33 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     };
   }
 
+  const botUserIdCache = new TtlCache<string, string | null>({
+    maxSize: 16,
+    ttlMs: 60 * 60 * 1000,
+  });
+
   async function resolveSlackToken(threadTs?: string): Promise<string> {
     return (await resolveScopedInstallContext(threadTs)).token;
+  }
+
+  async function resolveSlackBotUserId(threadTs?: string): Promise<string | null> {
+    const token = await resolveSlackToken(threadTs);
+    const cachedBotUserId = botUserIdCache.get(token);
+    if (cachedBotUserId !== undefined) {
+      return cachedBotUserId;
+    }
+
+    const defaultBotToken = getBotToken();
+    const knownBotUserId = getBotUserId();
+    if (knownBotUserId && token === defaultBotToken) {
+      botUserIdCache.set(token, knownBotUserId);
+      return knownBotUserId;
+    }
+
+    const response = await slack("auth.test", token);
+    const botUserId = typeof response.user_id === "string" ? response.user_id : null;
+    botUserIdCache.set(token, botUserId);
+    return botUserId;
   }
 
   async function resolveScopedChannelId(nameOrId: string, threadTs?: string): Promise<string> {
@@ -489,8 +514,9 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       throw new Error("When thread=true, ts must be the thread root timestamp.");
     }
 
+    const botUserId = await resolveSlackBotUserId(input.threadTs);
     const undeletableMessages = messages
-      .filter((message) => !isPiAgentSlackMessage(message, getBotUserId(), getAgentOwnerToken()))
+      .filter((message) => !isPiAgentSlackMessage(message, botUserId, getAgentOwnerToken()))
       .map((message) => (typeof message.ts === "string" ? message.ts : "unknown-ts"));
     if (undeletableMessages.length > 0) {
       throw new Error(
@@ -1095,7 +1121,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
       try {
         const view = await buildSlackModalView(params.view, params.thread_ts);
-        const response = await slack("views.open", getBotToken(), {
+        const response = await slack("views.open", await resolveSlackToken(params.thread_ts), {
           trigger_id: params.trigger_id,
           view,
         });
@@ -1148,7 +1174,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
       try {
         const view = await buildSlackModalView(params.view, params.thread_ts);
-        const response = await slack("views.push", getBotToken(), {
+        const response = await slack("views.push", await resolveSlackToken(params.thread_ts), {
           trigger_id: params.trigger_id,
           view,
         });
@@ -1211,7 +1237,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
       try {
         const view = await buildSlackModalView(params.view, params.thread_ts);
-        const response = await slack("views.update", getBotToken(), {
+        const response = await slack("views.update", await resolveSlackToken(params.thread_ts), {
           ...(params.view_id ? { view_id: params.view_id } : {}),
           ...(params.external_id ? { external_id: params.external_id } : {}),
           ...(params.hash ? { hash: params.hash } : {}),

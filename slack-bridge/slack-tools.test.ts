@@ -165,6 +165,15 @@ describe("registerSlackTools", () => {
         );
       }
 
+      if (method === "auth.test") {
+        return {
+          ok: true,
+          token,
+          body,
+          user_id: token === "xoxb-secondary" ? "U_SECONDARY_BOT" : "U_BOT",
+        } as SlackResult;
+      }
+
       if (method === "users.list") {
         return usersListResponse;
       }
@@ -788,6 +797,59 @@ describe("registerSlackTools", () => {
     expect(slack.mock.calls.filter(([method]) => method === "chat.delete")).toHaveLength(0);
   });
 
+  it("deletes secondary-install bot threads using the scoped bot identity", async () => {
+    const {
+      slack,
+      tools,
+      setConversationsReplies,
+      setResolveThreadChannel,
+      setResolveThreadScope,
+    } = setup();
+    setResolveThreadChannel(async () => "C_SECONDARY");
+    setResolveThreadScope(async () => ({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_SECONDARY",
+        installId: "secondary",
+      },
+    }));
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [
+          { ts: "200.100", user: "U_SECONDARY_BOT" },
+          { ts: "200.101", user: "U_SECONDARY_BOT" },
+        ],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    const response = await tools.get("slack_delete")!.execute("tool-6c-secondary", {
+      thread_ts: "200.100",
+      ts: "200.100",
+      thread: true,
+      confirm: true,
+    });
+
+    expect(slack).toHaveBeenCalledWith("auth.test", "xoxb-secondary");
+    expect(slack).toHaveBeenCalledWith("chat.delete", "xoxb-secondary", {
+      channel: "C_SECONDARY",
+      ts: "200.101",
+    });
+    expect(slack).toHaveBeenCalledWith("chat.delete", "xoxb-secondary", {
+      channel: "C_SECONDARY",
+      ts: "200.100",
+    });
+    expect(response.details).toMatchObject({
+      channel: "C_SECONDARY",
+      ts: "200.100",
+      thread: true,
+      deleted_count: 2,
+      deleted_ts: ["200.101", "200.100"],
+    });
+  });
+
   it("requires the thread root ts when deleting an entire thread", async () => {
     const { tools, setConversationsReplies } = setup();
     setConversationsReplies([
@@ -1179,6 +1241,71 @@ describe("registerSlackTools", () => {
       thread_ts: "123.456",
       view_id: "V123",
     });
+  });
+
+  it("uses the scoped install token for modal actions in tracked threads", async () => {
+    const { slack, tools, setResolveThreadChannel, setResolveThreadScope } = setup();
+    setResolveThreadChannel(async () => "C_SECONDARY");
+    setResolveThreadScope(async () => ({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_SECONDARY",
+        installId: "secondary",
+      },
+    }));
+
+    await tools.get("slack_modal_open")!.execute("tool-19b", {
+      trigger_id: "trigger-open",
+      thread_ts: "200.3",
+      view: {
+        type: "modal",
+        title: { type: "plain_text", text: "Open" },
+        submit: { type: "plain_text", text: "Go" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [],
+      },
+    });
+
+    await tools.get("slack_modal_push")!.execute("tool-19c", {
+      trigger_id: "trigger-push",
+      thread_ts: "200.3",
+      view: {
+        type: "modal",
+        title: { type: "plain_text", text: "Push" },
+        submit: { type: "plain_text", text: "Next" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [],
+      },
+    });
+
+    await tools.get("slack_modal_update")!.execute("tool-19d", {
+      external_id: "modal-secondary",
+      thread_ts: "200.3",
+      view: {
+        type: "modal",
+        title: { type: "plain_text", text: "Update" },
+        submit: { type: "plain_text", text: "Save" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [],
+      },
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "views.open",
+      "xoxb-secondary",
+      expect.objectContaining({ trigger_id: "trigger-open" }),
+    );
+    expect(slack).toHaveBeenCalledWith(
+      "views.push",
+      "xoxb-secondary",
+      expect.objectContaining({ trigger_id: "trigger-push" }),
+    );
+    expect(slack).toHaveBeenCalledWith(
+      "views.update",
+      "xoxb-secondary",
+      expect.objectContaining({ external_id: "modal-secondary" }),
+    );
   });
 
   it("updates a modal by view_id", async () => {
