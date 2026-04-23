@@ -39,13 +39,31 @@ function resolveRepoInfo(cwd: string): RepoInfo | null {
   }
 }
 
+function ensureSocketDirectory(dir: string): void {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // Best effort only: same-host trust is the primary boundary here.
+  }
+}
+
+function tightenSocketPermissions(socketPath: string): void {
+  try {
+    fs.chmodSync(socketPath, 0o600);
+  } catch {
+    // Best effort only: keep any hardening here deliberately narrow.
+  }
+}
+
 function computeSocketPath(repoInfo: RepoInfo): string {
   const key = `${repoInfo.repoRoot}:${repoInfo.branch}`;
   const hash = crypto.createHash("sha256").update(key).digest("hex");
   const dir = "/tmp/pi-nvim";
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureSocketDirectory(dir);
   return path.join(dir, `${hash}.sock`);
 }
 
@@ -571,6 +589,10 @@ export default function (pi: ExtensionAPI) {
     });
 
     server.listen(socketPath, () => {
+      const activeSocketPath = socketPath;
+      if (activeSocketPath) {
+        tightenSocketPermissions(activeSocketPath);
+      }
       // Socket is ready, waiting for nvim to connect.
       setBridgeStatus(false);
     });

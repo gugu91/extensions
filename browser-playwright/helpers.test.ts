@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assessUrl,
+  buildBrowserTrustBoundaryNotes,
   buildInstallInstructions,
   buildStorageStateFileName,
   findPreferredChromiumExecutable,
@@ -138,6 +139,17 @@ test("buildInstallInstructions is browser-engine aware", () => {
   assert.match(firefox, /firefox browser binaries/);
   assert.match(firefox, /npx playwright install firefox/);
   assert.doesNotMatch(firefox, /host Chrome\/Chromium executable/i);
+});
+
+test("buildBrowserTrustBoundaryNotes calls out localhost and trusted storage-state assumptions", () => {
+  const notes = buildBrowserTrustBoundaryNotes({
+    mountedStorageStatePath: ".pi/state/browser-playwright/example-session.json",
+  });
+
+  assert.equal(notes.length, 3);
+  assert.match(notes[0] ?? "", /localhost navigation is intentionally allowed/i);
+  assert.match(notes[1] ?? "", /trusted, secret-bearing auth material/i);
+  assert.match(notes[2] ?? "", /example-session\.json/);
 });
 
 test("findPreferredChromiumExecutable prefers an explicit env override", async () => {

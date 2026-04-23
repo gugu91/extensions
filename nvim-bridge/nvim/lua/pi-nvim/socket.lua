@@ -275,6 +275,8 @@ local function handle_server_message(msg)
 end
 
 --- Connect to the Unix socket.
+--- This socket is intentionally same-host and trust-based; there is no peer
+--- authentication handshake beyond the local socket path and local file permissions.
 function M.connect()
   should_reconnect = true
 

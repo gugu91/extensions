@@ -22,6 +22,17 @@ The current implementation is intentionally narrow:
 
 That means outbound sends can work even when the local Messages database is unavailable, while startup/readiness reporting still makes the history blocker explicit.
 
+## Trust boundary notes
+
+`@gugu910/pi-imessage-bridge` is an intentional **same-host local-power surface**.
+
+- When enabled, outbound sends run through the local Messages app via `/usr/bin/osascript` as the current macOS user.
+- There is no extra approval or policy layer inside this package today; the trust boundary is local operator intent on the same host.
+- The current MVP is still **send-first**, so outbound capability can be ready even when local history access is unavailable.
+- Missing `chat.db` only blocks local history/readiness depth. It does **not** remove the outbound send power when AppleScript remains available.
+
+Treat this as explicit local outbound power, not as a remote-safe transport or a generic policy-enforced messaging surface.
+
 In the current repo bring-up path, enable the adapter with `slack-bridge.imessage.enabled: true` and start the broker runtime with `/pinet-start`.
 
 ## What stays in this package

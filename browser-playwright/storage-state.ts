@@ -102,7 +102,7 @@ export async function loadStoredStorageState(
     const fileName = buildStorageStateFileName(name).replace(/\.json$/i, "");
     if (code === "ENOENT") {
       throw new Error(
-        `Stored browser state \`${fileName}\` was not found in \`${STORAGE_STATE_RELATIVE_DIR}\`. Place a trusted Playwright storageState JSON file there first.`,
+        `Stored browser state \`${fileName}\` was not found in \`${STORAGE_STATE_RELATIVE_DIR}\`. Place a trusted, secret-bearing Playwright storageState JSON file there first.`,
       );
     }
     throw error;
@@ -138,7 +138,7 @@ export async function loadStoredStorageState(
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (code === "ENOENT") {
       throw new Error(
-        `Stored browser state \`${resolvedState.name}\` was not found at \`${resolvedState.relativePath}\`. Place a trusted Playwright storageState JSON file there first.`,
+        `Stored browser state \`${resolvedState.name}\` was not found at \`${resolvedState.relativePath}\`. Place a trusted, secret-bearing Playwright storageState JSON file there first.`,
       );
     }
     if (code === "ELOOP") {
