@@ -10,6 +10,7 @@ import {
   type SlackBridgeSettings,
 } from "./helpers.js";
 import { formatRecentActivityLogEntries, type LoggedActivityLogEntry } from "./activity-log.js";
+import { formatRuntimeGuardrailsPosture } from "./guardrails.js";
 import type { PinetRuntimeControlContext } from "./pinet-remote-control.js";
 import {
   formatSlackScopeDiagnosticsStatus,
@@ -288,6 +289,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       const activityLogInfo = s.logChannel
         ? `Activity log: ${s.logChannel} (${s.logLevel ?? "actions"})`
         : "Activity log: disabled";
+      const guardrailsInfo = `Guardrails: ${formatRuntimeGuardrailsPosture(s.security ?? {})}`;
       const runtimeDiagnostic = deps.followerRuntimeDiagnostic();
       const runtimeHealthInfo = `Runtime health: ${formatFollowerRuntimeDiagnosticHealth(runtimeDiagnostic)}`;
       const runtimeNextStepInfo = `Next step: ${formatFollowerRuntimeDiagnosticNextStep(runtimeDiagnostic)}`;
@@ -338,6 +340,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
           `Threads: ${deps.threads().size} (${ownedCount} owned by ${deps.agentName()})`,
           `DM channel: ${deps.lastDmChannel() ?? "none yet"}`,
           allowlistInfo,
+          guardrailsInfo,
           defaultChInfo,
           activityLogInfo,
           slackToolHealthInfo,

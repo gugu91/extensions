@@ -296,6 +296,7 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 - **User access**: Slack access is default-deny. Set `allowedUsers` for a narrow allowlist, or `allowAllWorkspaceUsers: true` only if you explicitly want workspace-wide access
 - **Tool guardrails**: `security.readOnly`, `security.requireConfirmation`, and `security.blockedTools` are runtime-enforced for Slack-triggered turns, including core tools such as `bash`, `edit`, and `write`
+- **Guardrail posture**: If Slack/Pinet access is enabled for admitted users and `security.readOnly`, `security.blockedTools`, and `security.requireConfirmation` are all effectively empty (`readOnly !== true` and both arrays are absent or empty), the bridge emits a startup/runtime warning and `/pinet-status` shows `Guardrails: empty (warn-first posture; behavior unchanged)`. This is visibility-only: it does **not** auto-enable `readOnly`, block startup, or require an acknowledgement flow.
 - **Mesh authentication**: Optional. Configure `meshSecret` or `meshSecretPath` (or `PINET_MESH_SECRET` / `PINET_MESH_SECRET_PATH`) to require a shared secret; leave them unset to disable shared-secret auth. Configured followers fail closed on missing secret files or older/no-auth brokers rather than silently downgrading.
 
 Find Slack user IDs: click a user's profile → **More** → **Copy member ID**.

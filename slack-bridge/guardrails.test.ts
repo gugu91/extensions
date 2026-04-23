@@ -4,6 +4,9 @@ import {
   isToolBlocked,
   toolNeedsConfirmation,
   buildSecurityPrompt,
+  getEmptyRuntimeGuardrailsWarning,
+  hasEffectivelyEmptyRuntimeGuardrails,
+  formatRuntimeGuardrailsPosture,
   isConfirmationApproval,
   isConfirmationRejection,
   isBrokerForbiddenTool,
@@ -171,6 +174,55 @@ describe("toolNeedsConfirmation", () => {
   it("returns false with empty requireConfirmation array", () => {
     const g: SecurityGuardrails = { requireConfirmation: [] };
     expect(toolNeedsConfirmation("bash", g)).toBe(false);
+  });
+});
+
+// ─── runtime guardrail posture helpers ────────────────────
+
+describe("hasEffectivelyEmptyRuntimeGuardrails", () => {
+  it("treats an empty guardrail config as effectively empty", () => {
+    expect(hasEffectivelyEmptyRuntimeGuardrails({})).toBe(true);
+    expect(hasEffectivelyEmptyRuntimeGuardrails({ readOnly: false })).toBe(true);
+    expect(
+      hasEffectivelyEmptyRuntimeGuardrails({ blockedTools: [], requireConfirmation: [] }),
+    ).toBe(true);
+  });
+
+  it("returns false when readOnly is enabled", () => {
+    expect(hasEffectivelyEmptyRuntimeGuardrails({ readOnly: true })).toBe(false);
+  });
+
+  it("returns false when blocked tools are configured", () => {
+    expect(hasEffectivelyEmptyRuntimeGuardrails({ blockedTools: ["bash"] })).toBe(false);
+  });
+
+  it("returns false when confirmations are configured", () => {
+    expect(hasEffectivelyEmptyRuntimeGuardrails({ requireConfirmation: ["bash"] })).toBe(false);
+  });
+});
+
+describe("formatRuntimeGuardrailsPosture", () => {
+  it("formats the empty guardrail posture", () => {
+    expect(formatRuntimeGuardrailsPosture({})).toBe(
+      "empty (warn-first posture; behavior unchanged)",
+    );
+  });
+
+  it("formats configured guardrails with a concise summary", () => {
+    expect(
+      formatRuntimeGuardrailsPosture({
+        readOnly: true,
+        blockedTools: ["bash"],
+        requireConfirmation: ["edit", "write"],
+      }),
+    ).toBe("configured (readOnly, blockedTools:1, requireConfirmation:2)");
+  });
+});
+
+describe("getEmptyRuntimeGuardrailsWarning", () => {
+  it("returns a warning only when guardrails are effectively empty", () => {
+    expect(getEmptyRuntimeGuardrailsWarning({})).toContain("effectively empty");
+    expect(getEmptyRuntimeGuardrailsWarning({ blockedTools: ["bash"] })).toBeNull();
   });
 });
 
