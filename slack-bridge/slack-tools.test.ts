@@ -210,6 +210,21 @@ describe("registerSlackTools", () => {
     let resolveThreadScope: (
       threadTs: string | undefined,
     ) => Promise<RuntimeScopeCarrier | null> = async () => null;
+    let resolveInstallIdForScope: (
+      scope: RuntimeScopeCarrier | null | undefined,
+    ) => string | null = (scope) => scope?.workspace?.installId ?? null;
+    let getBotTokenForInstall: (installId: string | null | undefined) => string | undefined = (
+      installId,
+    ) => (installId === "secondary" ? "xoxb-secondary" : botToken);
+    let getDefaultChannelForInstall: (
+      installId: string | null | undefined,
+    ) => string | undefined = (installId) =>
+      installId === "secondary" ? "secondary-alerts" : defaultChannel;
+    let resolveChannelForInstall: (
+      installId: string | null | undefined,
+      nameOrId: string,
+    ) => Promise<string | null> = async (installId, nameOrId) =>
+      installId ? `resolved:${installId}:${nameOrId}` : null;
     const noteThreadReply = vi.fn();
     const clearPendingAttention = vi.fn();
     const requireToolPolicy = vi.fn();
@@ -229,6 +244,11 @@ describe("registerSlackTools", () => {
           compatibilityKey: "default",
         },
       }),
+      resolveInstallIdForScope: (scope) => resolveInstallIdForScope(scope),
+      getBotTokenForInstall: (installId) => getBotTokenForInstall(installId),
+      getDefaultChannelForInstall: (installId) => getDefaultChannelForInstall(installId),
+      resolveChannelForInstall: (installId, nameOrId) =>
+        resolveChannelForInstall(installId, nameOrId),
       getSecurityPrompt: () => securityPrompt,
       inbox,
       slack,
@@ -296,6 +316,26 @@ describe("registerSlackTools", () => {
       ) => {
         resolveThreadScope = fn;
       },
+      setResolveInstallIdForScope: (
+        fn: (scope: RuntimeScopeCarrier | null | undefined) => string | null,
+      ) => {
+        resolveInstallIdForScope = fn;
+      },
+      setGetBotTokenForInstall: (
+        fn: (installId: string | null | undefined) => string | undefined,
+      ) => {
+        getBotTokenForInstall = fn;
+      },
+      setGetDefaultChannelForInstall: (
+        fn: (installId: string | null | undefined) => string | undefined,
+      ) => {
+        getDefaultChannelForInstall = fn;
+      },
+      setResolveChannelForInstall: (
+        fn: (installId: string | null | undefined, nameOrId: string) => Promise<string | null>,
+      ) => {
+        resolveChannelForInstall = fn;
+      },
       noteThreadReply,
       clearPendingAttention,
       requireToolPolicy,
@@ -334,6 +374,62 @@ describe("registerSlackTools", () => {
       expect.objectContaining({
         channel: "resolved:ops-alerts",
         text: "hello from reloaded config",
+      }),
+    );
+  });
+
+  it("uses the scoped install token when slack_send replies in a tracked thread", async () => {
+    const { slack, tools, setResolveThreadChannel, setResolveThreadScope } = setup();
+    setResolveThreadChannel(async () => "C_SECONDARY");
+    setResolveThreadScope(async () => ({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_SECONDARY",
+        installId: "secondary",
+      },
+    }));
+
+    await tools.get("slack_send")!.execute("tool-2a", {
+      thread_ts: "200.1",
+      text: "hello secondary",
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-secondary",
+      expect.objectContaining({
+        channel: "C_SECONDARY",
+        thread_ts: "200.1",
+        text: "hello secondary",
+      }),
+    );
+  });
+
+  it("uses the scoped default channel when slack_post_channel omits channel inside a tracked thread", async () => {
+    const { slack, tools, setResolveThreadScope, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async () => null);
+    setResolveThreadScope(async () => ({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_SECONDARY",
+        installId: "secondary",
+      },
+    }));
+
+    await tools.get("slack_post_channel")!.execute("tool-2b", {
+      thread_ts: "200.2",
+      text: "post in scoped default channel",
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-secondary",
+      expect.objectContaining({
+        channel: "resolved:secondary:secondary-alerts",
+        thread_ts: "200.2",
+        text: "post in scoped default channel",
       }),
     );
   });
@@ -398,7 +494,7 @@ describe("registerSlackTools", () => {
   });
 
   it("rejects thread-scoped Slack tool actions when the tracked thread scope is unauthorized", async () => {
-    const { tools, setResolveThreadScope } = setup();
+    const { tools, setResolveThreadScope, setResolveInstallIdForScope } = setup();
     setResolveThreadScope(async (threadTs: string | undefined) => {
       expect(threadTs).toBe("123.456");
       return {
@@ -414,6 +510,8 @@ describe("registerSlackTools", () => {
         },
       };
     });
+
+    setResolveInstallIdForScope(() => null);
 
     await expect(
       tools.get("slack_read")!.execute("tool-3-scope", { thread_ts: "123.456" }),
