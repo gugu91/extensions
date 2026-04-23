@@ -952,6 +952,35 @@ describe("buildSlackRequest", () => {
     expect(init.body).toContain("limit=10");
   });
 
+  it("uses form encoding for Slack external file upload methods", () => {
+    const uploadUrlRequest = buildSlackRequest("files.getUploadURLExternal", "xoxb-tok", {
+      filename: "changes.diff",
+      length: 42,
+      snippet_type: "diff",
+    });
+
+    expect((uploadUrlRequest.init.headers as Record<string, string>)["Content-Type"]).toContain(
+      "application/x-www-form-urlencoded",
+    );
+    expect(uploadUrlRequest.init.body).toContain("filename=changes.diff");
+    expect(uploadUrlRequest.init.body).toContain("length=42");
+    expect(uploadUrlRequest.init.body).toContain("snippet_type=diff");
+
+    const completeUploadRequest = buildSlackRequest("files.completeUploadExternal", "xoxb-tok", {
+      files: [{ id: "F123", title: "Latest diff" }],
+      channel_id: "C123",
+      thread_ts: "171234.5678",
+    });
+
+    expect(
+      (completeUploadRequest.init.headers as Record<string, string>)["Content-Type"],
+    ).toContain("application/x-www-form-urlencoded");
+    expect(completeUploadRequest.init.body).toContain("channel_id=C123");
+    expect(completeUploadRequest.init.body).toContain("thread_ts=171234.5678");
+    const formBody = new URLSearchParams(String(completeUploadRequest.init.body));
+    expect(formBody.get("files")).toBe('[{"id":"F123","title":"Latest diff"}]');
+  });
+
   it("includes auth header", () => {
     const { init } = buildSlackRequest("auth.test", "xoxb-secret");
     expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer xoxb-secret");
