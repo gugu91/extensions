@@ -1,3 +1,4 @@
+import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
 import type { SlackResult } from "./slack-api.js";
 
 export type ActivityLogLevel = "errors" | "actions" | "verbose";
@@ -17,10 +18,17 @@ export interface ActivityLogEntry {
   fields?: ActivityLogField[];
   tone?: ActivityLogTone;
   timestamp?: string;
+  scope?: RuntimeScopeCarrier | null;
 }
 
 export interface LoggedActivityLogEntry extends ActivityLogEntry {
   timestamp: string;
+}
+
+export interface ActivityLoggerPort {
+  log(entry: ActivityLogEntry): void;
+  getRecentEntries(limit?: number): LoggedActivityLogEntry[];
+  clearPending(): void;
 }
 
 interface QueuedActivityLogEntry {
@@ -28,10 +36,20 @@ interface QueuedActivityLogEntry {
   attempts: number;
 }
 
+export interface SlackActivityLoggerSurfaceTarget {
+  botToken?: string;
+  logChannel?: string;
+  logLevel?: string;
+  cacheKey?: string;
+}
+
 export interface SlackActivityLoggerDeps {
   getBotToken: () => string | undefined;
   getLogChannel: () => string | undefined;
   getLogLevel: () => string | undefined;
+  resolveSurfaceTarget?: (
+    scope?: RuntimeScopeCarrier | null,
+  ) => SlackActivityLoggerSurfaceTarget | null;
   getAgentName: () => string;
   getAgentEmoji: () => string;
   resolveChannel: (nameOrId: string) => Promise<string>;
@@ -247,26 +265,27 @@ export function formatRecentActivityLogEntries(
     .join("\n");
 }
 
-export class SlackActivityLogger {
+export class SlackActivityLogger implements ActivityLoggerPort {
   private readonly queue: QueuedActivityLogEntry[] = [];
   private readonly recent: LoggedActivityLogEntry[] = [];
   private readonly maxRecentEntries: number;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushRunning = false;
-  private resolvedChannelCache: { raw: string; id: string } | null = null;
-  private dailyThreadCache: { rawChannel: string; dateKey: string; threadTs: string } | null = null;
+  private resolvedChannelCache: { key: string; id: string } | null = null;
+  private dailyThreadCache: { key: string; dateKey: string; threadTs: string } | null = null;
 
   constructor(private readonly deps: SlackActivityLoggerDeps) {
     this.maxRecentEntries = deps.maxRecentEntries ?? DEFAULT_MAX_RECENT_ENTRIES;
   }
 
   log(entry: ActivityLogEntry): void {
-    const rawChannel = this.deps.getLogChannel()?.trim();
+    const target = this.resolveSurfaceTarget(entry.scope);
+    const rawChannel = target.logChannel?.trim();
     if (!rawChannel) {
       return;
     }
 
-    const configuredLevel = normalizeActivityLogLevel(this.deps.getLogLevel());
+    const configuredLevel = normalizeActivityLogLevel(target.logLevel);
     if (!shouldLogActivity(configuredLevel, entry.level)) {
       return;
     }
@@ -335,28 +354,38 @@ export class SlackActivityLogger {
     }
   }
 
-  private async resolveLogChannel(rawChannel: string): Promise<string> {
-    if (this.resolvedChannelCache?.raw === rawChannel) {
+  private resolveSurfaceTarget(
+    scope?: RuntimeScopeCarrier | null,
+  ): SlackActivityLoggerSurfaceTarget {
+    const resolved = this.deps.resolveSurfaceTarget?.(scope) ?? null;
+    const fallbackLogChannel = this.deps.getLogChannel();
+    const fallbackToken = this.deps.getBotToken();
+    return {
+      botToken: resolved?.botToken ?? fallbackToken,
+      logChannel: resolved?.logChannel ?? fallbackLogChannel,
+      logLevel: resolved?.logLevel ?? this.deps.getLogLevel(),
+      cacheKey: resolved?.cacheKey ?? resolved?.logChannel ?? fallbackLogChannel ?? "default",
+    };
+  }
+
+  private async resolveLogChannel(cacheKey: string, rawChannel: string): Promise<string> {
+    if (this.resolvedChannelCache?.key === cacheKey) {
       return this.resolvedChannelCache.id;
     }
 
     const channelId = await this.deps.resolveChannel(rawChannel);
-    this.resolvedChannelCache = { raw: rawChannel, id: channelId };
+    this.resolvedChannelCache = { key: cacheKey, id: channelId };
     return channelId;
   }
 
-  private async ensureDailyThread(rawChannel: string, channelId: string): Promise<string> {
+  private async ensureDailyThread(
+    cacheKey: string,
+    channelId: string,
+    token: string,
+  ): Promise<string> {
     const dateKey = this.getNow().toISOString().slice(0, 10);
-    if (
-      this.dailyThreadCache?.rawChannel === rawChannel &&
-      this.dailyThreadCache.dateKey === dateKey
-    ) {
+    if (this.dailyThreadCache?.key === cacheKey && this.dailyThreadCache.dateKey === dateKey) {
       return this.dailyThreadCache.threadTs;
-    }
-
-    const token = this.deps.getBotToken();
-    if (!token) {
-      throw new Error("Slack bot token unavailable for activity logging.");
     }
 
     const heading = buildActivityLogThreadHeader(
@@ -375,19 +404,21 @@ export class SlackActivityLogger {
       throw new Error("Slack activity log thread creation did not return a ts.");
     }
 
-    this.dailyThreadCache = { rawChannel, dateKey, threadTs };
+    this.dailyThreadCache = { key: cacheKey, dateKey, threadTs };
     return threadTs;
   }
 
   private async postEntry(entry: LoggedActivityLogEntry): Promise<void> {
-    const rawChannel = this.deps.getLogChannel()?.trim();
-    const token = this.deps.getBotToken();
+    const target = this.resolveSurfaceTarget(entry.scope);
+    const rawChannel = target.logChannel?.trim();
+    const token = target.botToken;
     if (!rawChannel || !token) {
       return;
     }
 
-    const channelId = await this.resolveLogChannel(rawChannel);
-    const threadTs = await this.ensureDailyThread(rawChannel, channelId);
+    const cacheKey = `${target.cacheKey}:${rawChannel}`;
+    const channelId = await this.resolveLogChannel(cacheKey, rawChannel);
+    const threadTs = await this.ensureDailyThread(cacheKey, channelId, token);
 
     await this.deps.slack("chat.postMessage", token, {
       channel: channelId,
@@ -395,5 +426,28 @@ export class SlackActivityLogger {
       text: buildActivityLogText(this.deps.getAgentName(), this.deps.getAgentEmoji(), entry),
       blocks: buildActivityLogBlocks(this.deps.getAgentName(), this.deps.getAgentEmoji(), entry),
     });
+  }
+}
+
+export class MultiInstallSlackActivityLogger implements ActivityLoggerPort {
+  constructor(
+    private readonly loggers: ReadonlyArray<ActivityLoggerPort>,
+    private readonly primaryLogger: ActivityLoggerPort | null = loggers[0] ?? null,
+  ) {}
+
+  log(entry: ActivityLogEntry): void {
+    for (const logger of this.loggers) {
+      logger.log(entry);
+    }
+  }
+
+  getRecentEntries(limit = 20): LoggedActivityLogEntry[] {
+    return this.primaryLogger?.getRecentEntries(limit) ?? [];
+  }
+
+  clearPending(): void {
+    for (const logger of this.loggers) {
+      logger.clearPending();
+    }
   }
 }

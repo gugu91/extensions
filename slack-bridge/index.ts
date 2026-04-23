@@ -35,6 +35,7 @@ import {
   SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
   SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
 } from "./slack-access.js";
+import { createSlackTopologyRuntime } from "./slack-topology-runtime.js";
 import {
   createFollowerDeliveryState,
   markFollowerInboxIdsDelivered,
@@ -47,7 +48,7 @@ import {
   type SinglePlayerThreadInfo,
 } from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
-import { SlackActivityLogger } from "./activity-log.js";
+import { MultiInstallSlackActivityLogger, SlackActivityLogger } from "./activity-log.js";
 import { createBrokerDeliveryState, queueBrokerInboxIds } from "./broker-delivery.js";
 import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
@@ -93,6 +94,11 @@ export default function (pi: ExtensionAPI) {
 
   const slackRequestRuntime = createSlackRequestRuntime();
   const { slack } = slackRequestRuntime;
+  const slackTopologyRuntime = createSlackTopologyRuntime({
+    slack,
+    getSettings: () => settings,
+    env: process.env,
+  });
 
   // allowedUsers / allowAllWorkspaceUsers: settings.json takes priority, env vars as fallback
   let allowedUsers = buildAllowlist(
@@ -403,7 +409,9 @@ export default function (pi: ExtensionAPI) {
   } = slackRuntimeAccess;
   const pinetHomeTabs = createPinetHomeTabs({
     slack,
-    getBotToken: () => botToken,
+    getBotToken: (installId) => slackTopologyRuntime.getBotToken(installId),
+    getDefaultInstallId: () => slackTopologyRuntime.getDefaultInstallId(),
+    isHomeTabEnabled: (installId) => slackTopologyRuntime.isHomeTabEnabled(installId),
     formatError: msg,
     getAgentName: () => agentName,
     getAgentEmoji: () => agentEmoji,
@@ -413,7 +421,7 @@ export default function (pi: ExtensionAPI) {
     isSinglePlayerConnected: () => isSinglePlayerConnected(),
     getActiveThreads: () => threads.size,
     getPendingInboxCount: () => inbox.length,
-    getDefaultChannel: () => settings.defaultChannel ?? null,
+    getDefaultChannel: (installId) => slackTopologyRuntime.getDefaultChannel(installId),
     getCurrentBranch: async () => (await probeGitBranch(process.cwd())) ?? null,
     getBrokerHomeTabs: () => brokerRuntime,
   });
@@ -537,17 +545,17 @@ export default function (pi: ExtensionAPI) {
   });
   const { formatTrackedAgent, summarizeTrackedAssignmentStatus } = pinetActivityFormatting;
   const pinetControlPlaneCanvas = createPinetControlPlaneCanvas({
-    getSettings: () => settings,
-    getBotToken: () => botToken,
+    getSlackSurfaceInstalls: () => slackTopologyRuntime.getSurfaceInstalls(),
+    getDefaultSlackInstallId: () => slackTopologyRuntime.getDefaultInstallId(),
     slack,
-    resolveChannel,
+    resolveChannel: async (installId, channelInput) =>
+      await slackTopologyRuntime.resolveChannel(installId, channelInput),
     persistState,
     getActiveBrokerDb,
     getActiveBrokerSelfId,
     heartbeatTimerActive: () => brokerRuntime.heartbeatTimerActive(),
     maintenanceTimerActive: () => brokerRuntime.maintenanceTimerActive(),
     getLastMaintenance: () => brokerRuntime.getLastMaintenance(),
-    isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
     getControlPlaneCanvasRuntimeId: () => brokerRuntime.getControlPlaneCanvasRuntimeId(),
     getControlPlaneCanvasRuntimeChannelId: () =>
       brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
@@ -640,14 +648,17 @@ export default function (pi: ExtensionAPI) {
 
   const brokerThreadOwnerHints = createBrokerThreadOwnerHints({
     slack,
-    getBotToken: () => botToken!,
+    resolveBotToken: (scope) =>
+      slackTopologyRuntime.getBotToken(
+        slackTopologyRuntime.resolveInstallForScope(scope)?.installId ?? null,
+      ) ?? null,
   });
   const { resolveBrokerThreadOwnerHint } = brokerThreadOwnerHints;
 
   const brokerRuntime = createBrokerRuntime({
     getSettings: () => settings,
-    getBotToken: () => botToken!,
-    getAppToken: () => appToken!,
+    getSlackRuntimeInstalls: () => slackTopologyRuntime.getRuntimeInstalls(),
+    getDefaultSlackInstallId: () => slackTopologyRuntime.getDefaultInstallId(),
     getAllowedUsers: () => allowedUsers,
     shouldAllowAllWorkspaceUsers: () =>
       resolveAllowAllWorkspaceUsers(settings, process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS),
@@ -672,7 +683,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const ownerHint =
           message.source === "slack" && message.threadId && message.channel
-            ? await resolveBrokerThreadOwnerHint(message.channel, message.threadId)
+            ? await resolveBrokerThreadOwnerHint(message.channel, message.threadId, message.scope)
             : null;
         const routedMessage =
           ownerHint && (ownerHint.agentOwner || ownerHint.agentName)
@@ -719,8 +730,13 @@ export default function (pi: ExtensionAPI) {
         console.error(`[slack-bridge] broker inbound routing failed: ${msg(err)}`);
       }
     },
-    onAppHomeOpened: async (userId, ctx) => {
-      await pinetHomeTabs.publishCurrentPinetHomeTabSafely(userId, ctx, new Date().toISOString());
+    onAppHomeOpened: async ({ userId, installId }, ctx) => {
+      await pinetHomeTabs.publishCurrentPinetHomeTabSafely(
+        userId,
+        ctx,
+        new Date().toISOString(),
+        installId,
+      );
     },
     pushInboxMessages: (messages) => {
       inbox.push(...messages);
@@ -736,17 +752,38 @@ export default function (pi: ExtensionAPI) {
     },
     formatError: msg,
     deliveryState: brokerDeliveryState,
-    createActivityLogger: (onError) =>
-      new SlackActivityLogger({
-        getBotToken: () => botToken,
-        getLogChannel: () => settings.logChannel,
-        getLogLevel: () => settings.logLevel,
-        getAgentName: () => agentName,
-        getAgentEmoji: () => agentEmoji,
-        resolveChannel,
-        slack,
-        onError,
-      }),
+    createActivityLogger: (onError) => {
+      const installs = slackTopologyRuntime
+        .getSurfaceInstalls()
+        .filter((install) => install.botToken && install.logChannel);
+      const loggers = installs.map(
+        (install) =>
+          new SlackActivityLogger({
+            getBotToken: () => install.botToken,
+            getLogChannel: () => install.logChannel,
+            getLogLevel: () => install.logLevel,
+            getAgentName: () => agentName,
+            getAgentEmoji: () => agentEmoji,
+            resolveChannel: async (channelInput) => {
+              const channelId = await slackTopologyRuntime.resolveChannel(
+                install.installId,
+                channelInput,
+              );
+              if (!channelId) {
+                throw new Error(
+                  `Unable to resolve Slack activity log channel ${JSON.stringify(channelInput)} for install ${install.installId}.`,
+                );
+              }
+              return channelId;
+            },
+            slack,
+            onError,
+          }),
+      );
+      return loggers.length <= 1
+        ? (loggers[0] ?? new MultiInstallSlackActivityLogger([]))
+        : new MultiInstallSlackActivityLogger(loggers, loggers[0]);
+    },
     formatTrackedAgent,
     summarizeTrackedAssignmentStatus,
     sendMaintenanceMessage: (targetAgentId, body) => {
@@ -761,8 +798,8 @@ export default function (pi: ExtensionAPI) {
         input as Parameters<typeof refreshBrokerControlPlaneCanvasDashboard>[1],
       );
     },
-    refreshHomeTabs: async (ctx, snapshot, refreshedAt, userIds) => {
-      await pinetHomeTabs.refreshBrokerControlPlaneHomeTabs(ctx, snapshot, refreshedAt, userIds);
+    refreshHomeTabs: async (ctx, snapshot, refreshedAt, viewers) => {
+      await pinetHomeTabs.refreshBrokerControlPlaneHomeTabs(ctx, snapshot, refreshedAt, viewers);
     },
     buildControlPlaneDashboardSnapshot: (input) =>
       buildBrokerControlPlaneDashboardSnapshot(

@@ -156,12 +156,33 @@ function createDeps(overrides: Partial<PinetControlPlaneCanvasDeps> = {}) {
   };
 
   const slack = vi.fn(async () => ({ ok: true }));
-  const resolveChannel = vi.fn(async () => "C123CANVAS");
+  const resolveChannel = vi.fn(async (_installId: string, _channelInput: string) => "C123CANVAS");
   const persistState = vi.fn();
 
   const deps: PinetControlPlaneCanvasDeps = {
-    getSettings: () => ({}),
-    getBotToken: () => "xoxb-test",
+    getSlackSurfaceInstalls: () => [
+      {
+        installId: "default",
+        source: "compatibility",
+        botToken: "xoxb-test",
+        controlPlaneCanvasChannel: "ops-control",
+        controlPlaneCanvasTitle: "Broker Canvas",
+        homeTabEnabled: true,
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            installId: "default",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      },
+    ],
+    getDefaultSlackInstallId: () => "default",
     slack,
     resolveChannel,
     persistState,
@@ -177,7 +198,6 @@ function createDeps(overrides: Partial<PinetControlPlaneCanvasDeps> = {}) {
       pendingBacklogCount: 3,
       anomalies: [],
     }),
-    isBrokerControlPlaneCanvasEnabled: () => true,
     getControlPlaneCanvasRuntimeId: () => runtimeCanvasId,
     getControlPlaneCanvasRuntimeChannelId: () => runtimeChannelId,
     restoreControlPlaneCanvasRuntimeState: vi.fn((input) => {
@@ -213,13 +233,31 @@ describe("createPinetControlPlaneCanvas", () => {
     vi.mocked(probeGitBranch).mockResolvedValue("main");
   });
 
-  it("normalizes explicit canvas settings and falls back to runtime/default values", () => {
+  it("reads canvas settings from the default surface install and falls back to runtime ids", () => {
     const { deps } = createDeps({
-      getSettings: () => ({
-        controlPlaneCanvasId: "  FEXPLICIT  ",
-        controlPlaneCanvasChannel: "  ops-control  ",
-        controlPlaneCanvasTitle: "  Mesh Control Plane  ",
-      }),
+      getSlackSurfaceInstalls: () => [
+        {
+          installId: "default",
+          source: "compatibility",
+          botToken: "xoxb-test",
+          controlPlaneCanvasId: "  FEXPLICIT  ",
+          controlPlaneCanvasChannel: "  ops-control  ",
+          controlPlaneCanvasTitle: "  Mesh Control Plane  ",
+          homeTabEnabled: true,
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "compatibility",
+              compatibilityKey: "default",
+              installId: "default",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+      ],
       getControlPlaneCanvasRuntimeId: () => "FRUNTIME",
     });
     const canvas = createPinetControlPlaneCanvas(deps);
@@ -231,7 +269,27 @@ describe("createPinetControlPlaneCanvas", () => {
 
     const fallback = createPinetControlPlaneCanvas(
       createDeps({
-        getSettings: () => ({ defaultChannel: "  broker-ops  " }),
+        getSlackSurfaceInstalls: () => [
+          {
+            installId: "default",
+            source: "compatibility",
+            botToken: "xoxb-test",
+            defaultChannel: "  broker-ops  ",
+            homeTabEnabled: true,
+            scope: {
+              workspace: {
+                provider: "slack",
+                source: "compatibility",
+                compatibilityKey: "default",
+                installId: "default",
+              },
+              instance: {
+                source: "compatibility",
+                compatibilityKey: "default",
+              },
+            },
+          },
+        ],
         getControlPlaneCanvasRuntimeId: () => "FRUNTIME",
       }).deps,
     );
@@ -271,9 +329,28 @@ describe("createPinetControlPlaneCanvas", () => {
     expect(snapshot?.recentCycles).toHaveLength(1);
   });
 
-  it("warns once when no canvas destination is configured", async () => {
+  it("warns once when the default install has no canvas destination", async () => {
     const { deps, getLastError } = createDeps({
-      getSettings: () => ({}),
+      getSlackSurfaceInstalls: () => [
+        {
+          installId: "default",
+          source: "compatibility",
+          botToken: "xoxb-test",
+          homeTabEnabled: true,
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "compatibility",
+              compatibilityKey: "default",
+              installId: "default",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+      ],
       getControlPlaneCanvasRuntimeId: () => null,
     });
     const canvas = createPinetControlPlaneCanvas(deps);
@@ -304,10 +381,6 @@ describe("createPinetControlPlaneCanvas", () => {
       getLastRefreshAt,
       getLastError,
     } = createDeps({
-      getSettings: () => ({
-        controlPlaneCanvasChannel: "ops-control",
-        controlPlaneCanvasTitle: "Broker Canvas",
-      }),
       slack: vi.fn(async (method: string) => {
         if (method === "conversations.canvases.create") {
           return { ok: true, canvas_id: "FNEWCANVAS" };
@@ -320,7 +393,7 @@ describe("createPinetControlPlaneCanvas", () => {
 
     await canvas.refreshBrokerControlPlaneCanvasDashboard(ctx, createRefreshInput());
 
-    expect(resolveChannel).toHaveBeenCalledWith("ops-control");
+    expect(resolveChannel).toHaveBeenCalledWith("default", "ops-control");
     expect(slack).toHaveBeenCalledWith(
       "conversations.canvases.create",
       "xoxb-test",
@@ -338,6 +411,70 @@ describe("createPinetControlPlaneCanvas", () => {
     expect(notify).toHaveBeenCalledWith(
       "Pinet broker control plane canvas created: FNEWCANVAS via ops-control",
       "info",
+    );
+  });
+
+  it("refreshes canvases for every configured surface install", async () => {
+    const { deps, slack, resolveChannel } = createDeps({
+      slack: vi.fn(async (method: string) => {
+        if (method === "conversations.canvases.create") {
+          return { ok: true, canvas_id: "FNEWCANVAS" };
+        }
+        return { ok: true };
+      }),
+      getSlackSurfaceInstalls: () => [
+        {
+          installId: "default",
+          source: "compatibility",
+          botToken: "xoxb-default",
+          controlPlaneCanvasChannel: "ops-control",
+          homeTabEnabled: true,
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "compatibility",
+              compatibilityKey: "default",
+              installId: "default",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+        {
+          installId: "secondary",
+          source: "explicit",
+          workspaceId: "T_SECONDARY",
+          botToken: "xoxb-secondary",
+          controlPlaneCanvasChannel: "ops-secondary",
+          homeTabEnabled: true,
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "explicit",
+              workspaceId: "T_SECONDARY",
+              installId: "secondary",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+      ],
+    });
+    const canvas = createPinetControlPlaneCanvas(deps);
+    const { ctx } = createContext();
+
+    await canvas.refreshBrokerControlPlaneCanvasDashboard(ctx, createRefreshInput());
+
+    expect(resolveChannel).toHaveBeenCalledWith("default", "ops-control");
+    expect(resolveChannel).toHaveBeenCalledWith("secondary", "ops-secondary");
+    expect(slack).toHaveBeenCalledWith(
+      "conversations.canvases.create",
+      "xoxb-secondary",
+      expect.objectContaining({ channel_id: "C123CANVAS" }),
     );
   });
 });

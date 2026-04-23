@@ -14,6 +14,7 @@ function createBrokerHomeTabs(): PinetHomeTabsBrokerPort {
     isConnected: vi.fn(() => false),
     publishCurrentHomeTabSafely: vi.fn(async () => false),
     getHomeTabViewerIds: vi.fn(() => []),
+    getHomeTabViewers: vi.fn(() => []),
     getLastHomeTabError: vi.fn(() => lastHomeTabError),
     setLastHomeTabSnapshot: vi.fn(),
     setLastHomeTabRefreshAt: vi.fn(),
@@ -100,6 +101,8 @@ function createDeps(overrides: Partial<PinetHomeTabsDeps> = {}) {
   const deps: PinetHomeTabsDeps = {
     slack,
     getBotToken: () => "xoxb-test",
+    getDefaultInstallId: () => "default",
+    isHomeTabEnabled: () => true,
     formatError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
     getAgentName: () => "Cobalt Olive Crane",
     getAgentEmoji: () => "🦩",
@@ -121,7 +124,10 @@ function createDeps(overrides: Partial<PinetHomeTabsDeps> = {}) {
 describe("createPinetHomeTabs", () => {
   it("refreshes broker control-plane home tabs and stores the latest snapshot state", async () => {
     const brokerHomeTabs = createBrokerHomeTabs();
-    brokerHomeTabs.getHomeTabViewerIds = vi.fn(() => ["U123", "U456"]);
+    brokerHomeTabs.getHomeTabViewers = vi.fn(() => [
+      { userId: "U123", installId: "default" },
+      { userId: "U456", installId: "default" },
+    ]);
     const { deps, slack } = createDeps({
       getBrokerHomeTabs: () => brokerHomeTabs,
     });
@@ -162,12 +168,13 @@ describe("createPinetHomeTabs", () => {
     const homeTabs = createPinetHomeTabs(deps);
     const { ctx } = createContext();
 
-    await homeTabs.publishCurrentPinetHomeTab("U123", ctx, "2026-04-15T00:00:00.000Z");
+    await homeTabs.publishCurrentPinetHomeTab("U123", ctx, "2026-04-15T00:00:00.000Z", "default");
 
     expect(brokerHomeTabs.publishCurrentHomeTabSafely).toHaveBeenCalledWith(
       "U123",
       ctx,
       "2026-04-15T00:00:00.000Z",
+      "default",
     );
     expect(slack).not.toHaveBeenCalled();
   });
@@ -207,6 +214,18 @@ describe("createPinetHomeTabs", () => {
     expect(JSON.stringify(body)).toContain("main");
     expect(JSON.stringify(body)).toContain("Pending inbox");
     expect(brokerHomeTabs.setLastHomeTabError).toHaveBeenCalledWith(null);
+  });
+
+  it("skips publishes for installs with Home tabs disabled", async () => {
+    const { deps, slack } = createDeps({
+      isHomeTabEnabled: (installId) => installId !== "secondary",
+    });
+    const homeTabs = createPinetHomeTabs(deps);
+    const { ctx } = createContext();
+
+    await homeTabs.publishCurrentPinetHomeTab("U123", ctx, undefined, "secondary");
+
+    expect(slack).not.toHaveBeenCalled();
   });
 
   it("reports Home tab publish failures safely", async () => {

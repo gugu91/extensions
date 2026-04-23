@@ -4,10 +4,10 @@ import { probeGitBranch } from "./git-metadata.js";
 import {
   type RalphLoopAgentWorkload,
   type RalphLoopEvaluationOptions,
+  type ResolvedSlackInstallTopology,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   filterAgentsForMeshVisibility,
   evaluateRalphLoopCycle,
-  type SlackBridgeSettings,
 } from "./helpers.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
@@ -54,17 +54,16 @@ export type PinetControlPlaneCanvasRefreshInput = Omit<
 >;
 
 export interface PinetControlPlaneCanvasDeps {
-  getSettings: () => SlackBridgeSettings;
-  getBotToken: () => string | undefined;
+  getSlackSurfaceInstalls: () => ResolvedSlackInstallTopology[];
+  getDefaultSlackInstallId: () => string;
   slack: RefreshBrokerControlPlaneCanvasInput["slack"];
-  resolveChannel: (channelInput: string) => Promise<string | null>;
+  resolveChannel: (installId: string, channelInput: string) => Promise<string | null>;
   persistState: () => void;
   getActiveBrokerDb: () => PinetControlPlaneCanvasBrokerDbPort | null;
   getActiveBrokerSelfId: () => string | null;
   heartbeatTimerActive: () => boolean;
   maintenanceTimerActive: () => boolean;
   getLastMaintenance: () => BrokerMaintenanceResult | null;
-  isBrokerControlPlaneCanvasEnabled: () => boolean;
   getControlPlaneCanvasRuntimeId: () => string | null;
   getControlPlaneCanvasRuntimeChannelId: () => string | null;
   restoreControlPlaneCanvasRuntimeState: (input: {
@@ -95,11 +94,35 @@ function normalizeOptionalSetting(value?: string | null): string | null {
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
+function getInstallCanvasChannel(install: ResolvedSlackInstallTopology): string | null {
+  return (
+    normalizeOptionalSetting(install.controlPlaneCanvasChannel) ??
+    normalizeOptionalSetting(install.defaultChannel)
+  );
+}
+
+function getInstallCanvasTitle(install: ResolvedSlackInstallTopology): string {
+  return normalizeOptionalSetting(install.controlPlaneCanvasTitle) ?? "Pinet Broker Control Plane";
+}
+
+function isInstallCanvasEnabled(install: ResolvedSlackInstallTopology): boolean {
+  return install.controlPlaneCanvasEnabled ?? true;
+}
+
 export function createPinetControlPlaneCanvas(
   deps: PinetControlPlaneCanvasDeps,
 ): PinetControlPlaneCanvas {
+  function getDefaultInstall(): ResolvedSlackInstallTopology | null {
+    const installs = deps.getSlackSurfaceInstalls();
+    return (
+      installs.find((install) => install.installId === deps.getDefaultSlackInstallId()) ??
+      installs[0] ??
+      null
+    );
+  }
+
   function getExplicitBrokerControlPlaneCanvasId(): string | null {
-    return normalizeOptionalSetting(deps.getSettings().controlPlaneCanvasId);
+    return normalizeOptionalSetting(getDefaultInstall()?.controlPlaneCanvasId);
   }
 
   function getConfiguredBrokerControlPlaneCanvasId(): string | null {
@@ -107,17 +130,13 @@ export function createPinetControlPlaneCanvas(
   }
 
   function getConfiguredBrokerControlPlaneCanvasChannel(): string | null {
-    return (
-      normalizeOptionalSetting(deps.getSettings().controlPlaneCanvasChannel) ??
-      normalizeOptionalSetting(deps.getSettings().defaultChannel)
-    );
+    const install = getDefaultInstall();
+    return install ? getInstallCanvasChannel(install) : null;
   }
 
   function getConfiguredBrokerControlPlaneCanvasTitle(): string {
-    return (
-      normalizeOptionalSetting(deps.getSettings().controlPlaneCanvasTitle) ??
-      "Pinet Broker Control Plane"
-    );
+    const install = getDefaultInstall();
+    return install ? getInstallCanvasTitle(install) : "Pinet Broker Control Plane";
   }
 
   async function buildCurrentBrokerControlPlaneDashboardSnapshot(
@@ -210,16 +229,104 @@ export function createPinetControlPlaneCanvas(
     ctx: ExtensionContext,
     input: PinetControlPlaneCanvasRefreshInput,
   ): Promise<void> {
-    const botToken = deps.getBotToken();
-    if (!botToken || !deps.isBrokerControlPlaneCanvasEnabled()) {
+    const installs = deps.getSlackSurfaceInstalls().filter(isInstallCanvasEnabled);
+    if (installs.length === 0) {
       deps.setLastControlPlaneCanvasError(null);
       return;
     }
 
-    const explicitCanvasId = getExplicitBrokerControlPlaneCanvasId();
-    const effectiveCanvasId = getConfiguredBrokerControlPlaneCanvasId();
-    const channelInput = getConfiguredBrokerControlPlaneCanvasChannel();
-    if (!effectiveCanvasId && !channelInput) {
+    const defaultInstallId = deps.getDefaultSlackInstallId();
+    const snapshot = buildBrokerControlPlaneDashboardSnapshot({
+      ...input,
+      homedir: os.homedir(),
+    });
+    const markdown = renderBrokerControlPlaneCanvasMarkdown(snapshot);
+
+    let refreshedInstallCount = 0;
+    const errors: string[] = [];
+    let defaultInstallMissingDestination = false;
+
+    for (const install of installs) {
+      if (!install.botToken) {
+        continue;
+      }
+
+      const explicitCanvasId = normalizeOptionalSetting(install.controlPlaneCanvasId);
+      const channelInput = getInstallCanvasChannel(install);
+      if (!explicitCanvasId && !channelInput) {
+        if (install.installId === defaultInstallId) {
+          defaultInstallMissingDestination = true;
+        }
+        continue;
+      }
+
+      try {
+        const channelId =
+          explicitCanvasId || !channelInput
+            ? null
+            : await deps.resolveChannel(install.installId, channelInput);
+        if (!explicitCanvasId && channelInput && !channelId) {
+          throw new Error(
+            `Unable to resolve Slack channel ${JSON.stringify(channelInput)} for install ${install.installId}.`,
+          );
+        }
+
+        const runtimeCanvasId =
+          install.installId === defaultInstallId ? deps.getControlPlaneCanvasRuntimeId() : null;
+        const runtimeChannelId =
+          install.installId === defaultInstallId
+            ? deps.getControlPlaneCanvasRuntimeChannelId()
+            : null;
+        const reusableRuntimeCanvasId =
+          install.installId === defaultInstallId &&
+          !explicitCanvasId &&
+          runtimeCanvasId &&
+          (!channelId || runtimeChannelId === channelId)
+            ? runtimeCanvasId
+            : null;
+        const result = await refreshBrokerControlPlaneCanvas({
+          slack: deps.slack,
+          token: install.botToken,
+          markdown,
+          canvasId: explicitCanvasId ?? reusableRuntimeCanvasId,
+          channelId,
+          title: getInstallCanvasTitle(install),
+        });
+
+        if (install.installId === defaultInstallId) {
+          if (!explicitCanvasId) {
+            deps.restoreControlPlaneCanvasRuntimeState({
+              canvasId: result.canvasId,
+              channelId,
+            });
+          }
+          if (
+            !explicitCanvasId &&
+            (result.canvasId !== runtimeCanvasId || channelId !== runtimeChannelId)
+          ) {
+            deps.persistState();
+            const destination = channelInput ? ` via ${channelInput}` : "";
+            const action = result.created
+              ? "created"
+              : result.reusedExistingChannelCanvas
+                ? "attached"
+                : "updated";
+            ctx.ui.notify(
+              `Pinet broker control plane canvas ${action}: ${result.canvasId}${destination}`,
+              "info",
+            );
+          }
+        }
+
+        refreshedInstallCount += 1;
+      } catch (error) {
+        errors.push(
+          `install ${install.installId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    if (refreshedInstallCount === 0 && defaultInstallMissingDestination) {
       const warning =
         "Pinet broker control plane canvas skipped: set slack-bridge.controlPlaneCanvasChannel, defaultChannel, or controlPlaneCanvasId.";
       if (deps.getLastControlPlaneCanvasError() !== warning) {
@@ -229,53 +336,17 @@ export function createPinetControlPlaneCanvas(
       return;
     }
 
-    const snapshot = buildBrokerControlPlaneDashboardSnapshot({
-      ...input,
-      homedir: os.homedir(),
-    });
-    const markdown = renderBrokerControlPlaneCanvasMarkdown(snapshot);
-    const channelId =
-      explicitCanvasId || !channelInput ? null : await deps.resolveChannel(channelInput);
-    const runtimeCanvasId = deps.getControlPlaneCanvasRuntimeId();
-    const runtimeChannelId = deps.getControlPlaneCanvasRuntimeChannelId();
-    const reusableRuntimeCanvasId =
-      !explicitCanvasId && runtimeCanvasId && (!channelId || runtimeChannelId === channelId)
-        ? runtimeCanvasId
-        : null;
-    const result = await refreshBrokerControlPlaneCanvas({
-      slack: deps.slack,
-      token: botToken,
-      markdown,
-      canvasId: explicitCanvasId ?? reusableRuntimeCanvasId,
-      channelId,
-      title: getConfiguredBrokerControlPlaneCanvasTitle(),
-    });
-
-    if (!explicitCanvasId) {
-      deps.restoreControlPlaneCanvasRuntimeState({
-        canvasId: result.canvasId,
-        channelId,
-      });
+    if (refreshedInstallCount > 0) {
+      deps.setLastControlPlaneCanvasRefreshAt(input.cycleStartedAt);
     }
-    deps.setLastControlPlaneCanvasRefreshAt(input.cycleStartedAt);
+
+    if (errors.length > 0) {
+      const message = `Pinet broker control plane canvas failed: ${errors.join("; ")}`;
+      deps.setLastControlPlaneCanvasError(message);
+      throw new Error(message);
+    }
+
     deps.setLastControlPlaneCanvasError(null);
-
-    if (
-      !explicitCanvasId &&
-      (result.canvasId !== runtimeCanvasId || channelId !== runtimeChannelId)
-    ) {
-      deps.persistState();
-      const destination = channelInput ? ` via ${channelInput}` : "";
-      const action = result.created
-        ? "created"
-        : result.reusedExistingChannelCanvas
-          ? "attached"
-          : "updated";
-      ctx.ui.notify(
-        `Pinet broker control plane canvas ${action}: ${result.canvasId}${destination}`,
-        "info",
-      );
-    }
   }
 
   return {
