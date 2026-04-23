@@ -11,6 +11,7 @@ import type { SlackToolsThreadContextPort } from "./slack-tools.js";
 import {
   buildSlackThreadRuntimeScope,
   classifyMessage,
+  getSlackScopeAuthorizationError,
   resolveSlackThreadOwnerHint,
   SlackSocketModeClient,
   type ParsedAppHomeOpened,
@@ -199,6 +200,29 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
     return "continue";
   }
 
+  function getThreadScopeAuthorizationError(threadTs: string): string | null {
+    const thread = deps.getThreads().get(threadTs);
+    return getSlackScopeAuthorizationError({
+      actualScope: thread?.context?.scope ?? null,
+      expectedScope: deps.getDefaultScope(),
+      target: `thread ${threadTs}`,
+    });
+  }
+
+  async function denyUnauthorizedThreadScope(channel: string, threadTs: string): Promise<void> {
+    const scopeError = getThreadScopeAuthorizationError(threadTs);
+    if (!scopeError) {
+      return;
+    }
+
+    console.warn(`[slack-bridge] ${scopeError}`);
+    await deps.slack("chat.postMessage", deps.getBotToken(), {
+      channel,
+      thread_ts: threadTs,
+      text: "Sorry, this Slack workspace/install or instance is not authorized for this runtime. Please contact an admin if you need access.",
+    });
+  }
+
   async function onThreadStarted(event: ParsedThreadStarted): Promise<void> {
     if (shuttingDown) return;
 
@@ -214,9 +238,15 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
     }
 
     deps.getThreads().set(info.threadTs, info);
-    deps.setLastDmChannel(info.channelId);
     deps.persistState();
 
+    const scopeError = getThreadScopeAuthorizationError(info.threadTs);
+    if (scopeError) {
+      console.warn(`[slack-bridge] ${scopeError}`);
+      return;
+    }
+
+    deps.setLastDmChannel(info.channelId);
     await deps.setSuggestedPrompts(info.channelId, info.threadTs);
   }
 
@@ -228,6 +258,11 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
 
     existing.context = event.context;
     deps.persistState();
+
+    const scopeError = getThreadScopeAuthorizationError(event.threadTs);
+    if (scopeError) {
+      console.warn(`[slack-bridge] ${scopeError}`);
+    }
   }
 
   async function onAppHomeOpened(event: ParsedAppHomeOpened, ctx: ExtensionContext): Promise<void> {
@@ -325,6 +360,12 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       });
 
       ctx.ui.notify(`${reactorName} reacted with :${reactionName}:`, "info");
+      const scopeError = getThreadScopeAuthorizationError(threadTs);
+      if (scopeError) {
+        console.warn(`[slack-bridge] ${scopeError}`);
+        return;
+      }
+
       const threadInfo = threads.get(threadTs);
       deps.pushInboxMessage({
         channel: item.channel,
@@ -374,6 +415,12 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
         thread_ts: threadTs,
         text: "Sorry, I can only respond to authorized users. Please contact an admin if you need access.",
       });
+      return;
+    }
+
+    const scopeError = getThreadScopeAuthorizationError(threadTs);
+    if (scopeError) {
+      await denyUnauthorizedThreadScope(channel, threadTs);
       return;
     }
 
@@ -454,6 +501,12 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       return;
     }
 
+    const scopeError = getThreadScopeAuthorizationError(normalized.threadTs);
+    if (scopeError) {
+      await denyUnauthorizedThreadScope(normalized.channel, normalized.threadTs);
+      return;
+    }
+
     if (normalized.channel.startsWith("D")) {
       deps.setLastDmChannel(normalized.channel);
     }
@@ -484,6 +537,20 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
 
   const threadContextPort: SlackToolsThreadContextPort = {
     resolveThreadChannel: (threadTs) => deps.resolveThreadChannel(threadTs),
+    resolveThreadScope: async (threadTs) => {
+      if (!threadTs) {
+        return null;
+      }
+      const thread = deps.getThreads().get(threadTs);
+      if (!thread) {
+        return null;
+      }
+      return buildSlackThreadRuntimeScope({
+        channelId: thread.channelId,
+        context: thread.context,
+        defaultScope: deps.getDefaultScope(),
+      });
+    },
     noteThreadReply: (threadTs, channelId) => {
       trackOwnedThread(threadTs, channelId, "slack");
       deps.claimOwnedThread(threadTs, channelId, "slack");

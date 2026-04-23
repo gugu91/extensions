@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { registerSlackTools } from "./slack-tools.js";
 import type { InboxMessage } from "./helpers.js";
@@ -230,6 +231,9 @@ describe("registerSlackTools", () => {
 
     let resolveThreadChannel: (threadTs: string | undefined) => Promise<string | null> = async () =>
       null;
+    let resolveThreadScope: (
+      threadTs: string | undefined,
+    ) => Promise<RuntimeScopeCarrier | null> = async () => null;
     const noteThreadReply = vi.fn();
     const clearPendingAttention = vi.fn();
     const requireToolPolicy = vi.fn();
@@ -237,6 +241,18 @@ describe("registerSlackTools", () => {
     registerSlackTools(pi, {
       getBotToken: () => botToken,
       getDefaultChannel: () => defaultChannel,
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
       getSecurityPrompt: () => securityPrompt,
       inbox,
       slack,
@@ -248,6 +264,7 @@ describe("registerSlackTools", () => {
       resolveUser: async (userId) => resolveUser(userId),
       threadContext: {
         resolveThreadChannel: (threadTs) => resolveThreadChannel(threadTs),
+        resolveThreadScope: (threadTs) => resolveThreadScope(threadTs),
         noteThreadReply,
         clearPendingAttention,
       },
@@ -335,6 +352,11 @@ describe("registerSlackTools", () => {
       },
       setResolveThreadChannel: (fn: (threadTs: string | undefined) => Promise<string | null>) => {
         resolveThreadChannel = fn;
+      },
+      setResolveThreadScope: (
+        fn: (threadTs: string | undefined) => Promise<RuntimeScopeCarrier | null>,
+      ) => {
+        resolveThreadScope = fn;
       },
       noteThreadReply,
       clearPendingAttention,
@@ -435,6 +457,29 @@ describe("registerSlackTools", () => {
       ts: "123.456",
       limit: 20,
     });
+  });
+
+  it("rejects thread-scoped Slack tool actions when the tracked thread scope is unauthorized", async () => {
+    const { tools, setResolveThreadScope } = setup();
+    setResolveThreadScope(async (threadTs: string | undefined) => {
+      expect(threadTs).toBe("123.456");
+      return {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_SECONDARY",
+          installId: "secondary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      };
+    });
+
+    await expect(
+      tools.get("slack_read")!.execute("tool-3-scope", { thread_ts: "123.456" }),
+    ).rejects.toThrow(/authorized workspace\/install or instance boundary for this runtime/i);
   });
 
   it("uses thread channel resolution for slack_delete", async () => {

@@ -7,6 +7,7 @@ import {
   extractThreadContextChanged,
   extractThreadStarted,
   fetchSlackMessageByTs,
+  getSlackScopeAuthorizationError,
   isSlackUserAllowed,
   removeSlackReaction,
   resolveSlackUserName,
@@ -204,6 +205,28 @@ export class SlackAdapter implements MessageAdapter {
     });
   }
 
+  private getThreadScopeAuthorizationError(threadTs: string): string | null {
+    return getSlackScopeAuthorizationError({
+      actualScope: this.threads.get(threadTs)?.context?.scope ?? null,
+      expectedScope: this.config.getDefaultScope?.() ?? null,
+      target: `thread ${threadTs}`,
+    });
+  }
+
+  private async denyUnauthorizedThreadScope(channel: string, threadTs: string): Promise<void> {
+    const scopeError = this.getThreadScopeAuthorizationError(threadTs);
+    if (!scopeError) {
+      return;
+    }
+
+    console.warn(`[slack-adapter] ${scopeError}`);
+    await this.callSlack("chat.postMessage", this.config.botToken, {
+      channel,
+      thread_ts: threadTs,
+      text: "Sorry, this Slack workspace/install or instance is not authorized for this runtime. Please contact an admin if you need access.",
+    });
+  }
+
   private async onThreadStarted(
     event: ParsedThreadStarted | Record<string, unknown>,
   ): Promise<void> {
@@ -223,6 +246,13 @@ export class SlackAdapter implements MessageAdapter {
     }
 
     this.threads.set(info.threadTs, info);
+
+    const scopeError = this.getThreadScopeAuthorizationError(info.threadTs);
+    if (scopeError) {
+      console.warn(`[slack-adapter] ${scopeError}`);
+      return;
+    }
+
     try {
       this.config.rememberKnownThread?.(info.threadTs, info.channelId);
     } catch {
@@ -241,6 +271,10 @@ export class SlackAdapter implements MessageAdapter {
     if (!existing || !parsed.context) return;
 
     existing.context = parsed.context;
+    const scopeError = this.getThreadScopeAuthorizationError(parsed.threadTs);
+    if (scopeError) {
+      console.warn(`[slack-adapter] ${scopeError}`);
+    }
   }
 
   private async onAppHomeOpened(
@@ -336,6 +370,12 @@ export class SlackAdapter implements MessageAdapter {
           ? reactedMessage.text
           : "(no text)";
 
+      const scopeError = this.getThreadScopeAuthorizationError(threadTs);
+      if (scopeError) {
+        console.warn(`[slack-adapter] ${scopeError}`);
+        return;
+      }
+
       const threadInfo = this.threads.get(threadTs);
       this.inboundHandler?.({
         source: "slack",
@@ -391,6 +431,12 @@ export class SlackAdapter implements MessageAdapter {
 
     if (!isSlackUserAllowed(this.allowlist, userId)) return;
 
+    const scopeError = this.getThreadScopeAuthorizationError(threadTs);
+    if (scopeError) {
+      await this.denyUnauthorizedThreadScope(channel, threadTs);
+      return;
+    }
+
     void this.addReaction(channel, messageTs, "eyes");
     const pending = this.pendingEyes.get(threadTs) ?? [];
     pending.push({ channel, messageTs });
@@ -441,6 +487,12 @@ export class SlackAdapter implements MessageAdapter {
     }
 
     if (!isSlackUserAllowed(this.allowlist, normalized.userId)) return;
+
+    const scopeError = this.getThreadScopeAuthorizationError(normalized.threadTs);
+    if (scopeError) {
+      await this.denyUnauthorizedThreadScope(normalized.channel, normalized.threadTs);
+      return;
+    }
 
     const userName = await this.resolveUser(normalized.userId);
     if (this.shuttingDown) return;

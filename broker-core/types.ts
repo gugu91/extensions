@@ -150,6 +150,10 @@ import {
   buildCompatibilityInstanceScope as _buildCompatibilityInstanceScope,
   buildCompatibilityWorkspaceScope as _buildCompatibilityWorkspaceScope,
   buildRuntimeScopeCarrier as _buildRuntimeScopeCarrier,
+  formatRuntimeScopeCarrier as _formatRuntimeScopeCarrier,
+  getRuntimeScopeConflicts as _getRuntimeScopeConflicts,
+  isRuntimeScopeAuthorized as _isRuntimeScopeAuthorized,
+  parseRuntimeScopeCarrier as _parseRuntimeScopeCarrier,
 } from "@gugu910/pi-transport-core";
 import type {
   InboundMessage as _InboundMessage,
@@ -158,6 +162,8 @@ import type {
   RuntimeScopeCarrier as _RuntimeScopeCarrier,
   WorkspaceInstallScopeCarrier as _WorkspaceInstallScopeCarrier,
   InstanceScopeCarrier as _InstanceScopeCarrier,
+  RuntimeScopeConflict as _RuntimeScopeConflict,
+  RuntimeScopeDimension as _RuntimeScopeDimension,
 } from "@gugu910/pi-transport-core";
 
 export type InboundMessage = _InboundMessage;
@@ -166,9 +172,15 @@ export type MessageAdapter = _MessageAdapter;
 export type RuntimeScopeCarrier = _RuntimeScopeCarrier;
 export type WorkspaceInstallScopeCarrier = _WorkspaceInstallScopeCarrier;
 export type InstanceScopeCarrier = _InstanceScopeCarrier;
+export type RuntimeScopeConflict = _RuntimeScopeConflict;
+export type RuntimeScopeDimension = _RuntimeScopeDimension;
 export const buildCompatibilityWorkspaceScope = _buildCompatibilityWorkspaceScope;
 export const buildCompatibilityInstanceScope = _buildCompatibilityInstanceScope;
 export const buildRuntimeScopeCarrier = _buildRuntimeScopeCarrier;
+export const parseRuntimeScopeCarrier = _parseRuntimeScopeCarrier;
+export const getRuntimeScopeConflicts = _getRuntimeScopeConflicts;
+export const isRuntimeScopeAuthorized = _isRuntimeScopeAuthorized;
+export const formatRuntimeScopeCarrier = _formatRuntimeScopeCarrier;
 
 // ─── BrokerDB interface (subset used by the router) ──────
 
@@ -185,6 +197,7 @@ export interface BrokerDBInterface {
    * - empty Set => default-deny / allow nobody
    */
   getAllowedUsers(): Set<string> | null;
+  getThreadScope(threadId: string): RuntimeScopeCarrier | null;
 
   createThread(thread: ThreadInfo): void;
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void;

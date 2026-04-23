@@ -379,6 +379,135 @@ describe("single-player-runtime", () => {
     });
   });
 
+  it("does not start local prompt handling for threads whose Slack context conflicts with the runtime scope", async () => {
+    const state: TestState = {
+      threads: new Map(),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const ctx = createContext();
+    const { deps, spies } = createDeps(state, {
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const runtime = createSinglePlayerRuntime(deps);
+
+    await runtime.connect(ctx);
+
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    await socketConfig?.onThreadStarted?.({
+      channelId: "D123",
+      threadTs: "101.9",
+      userId: "U_SENDER",
+      context: {
+        channelId: "C999",
+        teamId: "T_SECONDARY",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "explicit",
+            workspaceId: "T_SECONDARY",
+            installId: "secondary",
+            channelId: "C999",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      },
+    });
+
+    expect(spies.setSuggestedPrompts).not.toHaveBeenCalled();
+    expect(state.lastDmChannel).toBeNull();
+    expect(state.threads.get("101.9")?.context?.scope.workspace?.installId).toBe("secondary");
+  });
+
+  it("rejects inbound Slack messages when the tracked thread context is out of scope", async () => {
+    const state: TestState = {
+      threads: new Map([
+        [
+          "101.9",
+          {
+            channelId: "D123",
+            threadTs: "101.9",
+            userId: "U_SENDER",
+            source: "slack",
+            context: {
+              channelId: "C999",
+              teamId: "T_SECONDARY",
+              scope: {
+                workspace: {
+                  provider: "slack",
+                  source: "explicit",
+                  workspaceId: "T_SECONDARY",
+                  installId: "secondary",
+                  channelId: "C999",
+                },
+                instance: {
+                  source: "compatibility",
+                  compatibilityKey: "default",
+                },
+              },
+            },
+          },
+        ],
+      ]),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const ctx = createContext();
+    const { deps, spies } = createDeps(state, {
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const runtime = createSinglePlayerRuntime(deps);
+
+    await runtime.connect(ctx);
+
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    await socketConfig?.onMessage?.({
+      type: "message",
+      channel: "D123",
+      channel_type: "im",
+      user: "U_SENDER",
+      text: "out of scope hello",
+      ts: "101.10",
+      thread_ts: "101.9",
+    });
+
+    expect(spies.pushInboxMessage).not.toHaveBeenCalled();
+    expect(spies.slack).toHaveBeenCalledWith("chat.postMessage", "xoxb-test", {
+      channel: "D123",
+      thread_ts: "101.9",
+      text: "Sorry, this Slack workspace/install or instance is not authorized for this runtime. Please contact an admin if you need access.",
+    });
+  });
+
   it("preserves file-share metadata on inbound Slack messages", async () => {
     const state: TestState = {
       threads: new Map(),

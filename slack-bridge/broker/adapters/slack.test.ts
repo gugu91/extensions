@@ -1328,6 +1328,77 @@ describe("SlackAdapter — allowlist filtering", () => {
       }),
     );
   });
+
+  it("does not emit inbound messages for thread contexts that are outside the configured runtime scope", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/chat.postMessage")) {
+        return mockSlackResponse({ message: { ts: "1.3" } });
+      }
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as {
+        onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "1.9",
+        user_id: "U_ALLOWED",
+        context: {
+          channel_id: "C_TEAM",
+          team_id: "T_SECONDARY",
+        },
+      },
+    });
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello from the wrong install",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.9",
+      ts: "1.10",
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    await waitForAssertion(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://slack.com/api/chat.postMessage",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
 });
 
 // ─── SlackAdapter — send (mocked fetch) ─────────────────

@@ -1001,6 +1001,7 @@ export default function (pi: ExtensionAPI) {
         return botToken;
       },
       getDefaultChannel: () => settings.defaultChannel,
+      getDefaultScope: () => resolveSlackDefaultScope(settings, process.env),
       getSecurityPrompt: () => securityPrompt,
       inbox,
       slack,
