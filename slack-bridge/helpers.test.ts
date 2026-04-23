@@ -568,6 +568,52 @@ describe("resolveSlackTopology", () => {
       },
     });
   });
+
+  it("defaults privileged broker surfaces to the default install unless a secondary install opts in", () => {
+    const topology = resolveSlackTopology(
+      {
+        defaultInstallId: "primary",
+        installs: [
+          {
+            installId: "primary",
+            workspaceId: "T_PRIMARY",
+            botToken: "xoxb-primary",
+            appToken: "xapp-primary",
+          },
+          {
+            installId: "secondary",
+            workspaceId: "T_SECONDARY",
+            botToken: "xoxb-secondary",
+            appToken: "xapp-secondary",
+          },
+          {
+            installId: "operator-opt-in",
+            workspaceId: "T_OPERATOR",
+            botToken: "xoxb-operator",
+            appToken: "xapp-operator",
+            homeTabEnabled: true,
+            controlPlaneCanvasEnabled: true,
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(topology.installs.find((install) => install.installId === "primary")).toMatchObject({
+      homeTabEnabled: true,
+      controlPlaneCanvasEnabled: true,
+    });
+    expect(topology.installs.find((install) => install.installId === "secondary")).toMatchObject({
+      homeTabEnabled: false,
+      controlPlaneCanvasEnabled: false,
+    });
+    expect(
+      topology.installs.find((install) => install.installId === "operator-opt-in"),
+    ).toMatchObject({
+      homeTabEnabled: true,
+      controlPlaneCanvasEnabled: true,
+    });
+  });
 });
 
 describe("resolveSlack install selection helpers", () => {
