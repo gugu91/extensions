@@ -1,4 +1,11 @@
-import type { AgentInfo, BrokerMessage } from "./types.js";
+import {
+  formatRuntimeScopeCarrier,
+  getRuntimeScopeConflicts,
+  parseRuntimeScopeCarrier,
+  type AgentInfo,
+  type BrokerMessage,
+  type RuntimeScopeCarrier,
+} from "./types.js";
 
 interface AgentCapabilities {
   repo?: string;
@@ -27,6 +34,89 @@ function extractAgentCapabilities(
     tools: asStringArray(capabilitiesRecord?.tools),
     tags: asStringArray(capabilitiesRecord?.tags),
   };
+}
+
+function extractAgentScope(agent: Pick<AgentInfo, "metadata">): RuntimeScopeCarrier | null {
+  const record = asRecord(agent.metadata);
+  const capabilitiesRecord = asRecord(record?.capabilities);
+  return parseRuntimeScopeCarrier(capabilitiesRecord?.scope ?? record?.scope);
+}
+
+function parsePinetControlAction(
+  body: string,
+  metadata?: Record<string, unknown>,
+): "reload" | "exit" | null {
+  const metadataAction = asString(metadata?.action);
+  if (
+    metadata?.type === "pinet:control" &&
+    (metadataAction === "reload" || metadataAction === "exit")
+  ) {
+    return metadataAction;
+  }
+
+  const trimmedBody = body.trim();
+  if (trimmedBody === "/reload") return "reload";
+  if (trimmedBody === "/exit") return "exit";
+
+  try {
+    const parsed = JSON.parse(trimmedBody) as Record<string, unknown>;
+    const parsedAction = asString(parsed.action);
+    if (parsed.type === "pinet:control" && (parsedAction === "reload" || parsedAction === "exit")) {
+      return parsedAction;
+    }
+  } catch {
+    /* not json */
+  }
+
+  return null;
+}
+
+function hasExplicitCrossScopeAdminAuthorization(metadata?: Record<string, unknown>): boolean {
+  if (metadata?.allowCrossScopeAdmin === true) {
+    return true;
+  }
+
+  const authorization = asRecord(metadata?.pinetAdminAuthorization);
+  return authorization?.allowCrossScope === true;
+}
+
+function formatScopeConflictDimensions(
+  senderScope: RuntimeScopeCarrier | null,
+  targetScope: RuntimeScopeCarrier | null,
+): string {
+  return getRuntimeScopeConflicts(senderScope, targetScope)
+    .map((conflict) => `${conflict.dimension}.${conflict.field}`)
+    .join(", ");
+}
+
+function assertAdminDispatchScopeAuthorized(input: {
+  sender: AgentInfo | undefined;
+  target: AgentInfo;
+  body: string;
+  metadata?: Record<string, unknown>;
+}): void {
+  const action = parsePinetControlAction(input.body, input.metadata);
+  if (!action || hasExplicitCrossScopeAdminAuthorization(input.metadata)) {
+    return;
+  }
+
+  const senderScope = input.sender ? extractAgentScope(input.sender) : null;
+  const targetScope = extractAgentScope(input.target);
+  const conflicts = getRuntimeScopeConflicts(senderScope, targetScope);
+  if (conflicts.length === 0) {
+    return;
+  }
+
+  const senderName = input.sender?.name ?? input.sender?.id ?? "unknown sender";
+  throw new Error(
+    [
+      `Pinet admin action /${action} from ${senderName} to ${input.target.name} crosses an unauthorized workspace/install or instance boundary.`,
+      `Conflicts: ${formatScopeConflictDimensions(senderScope, targetScope)}.`,
+      `Sender scope: ${formatRuntimeScopeCarrier(senderScope)}.`,
+      `Target scope: ${formatRuntimeScopeCarrier(targetScope)}.`,
+      "Add metadata.pinetAdminAuthorization.allowCrossScope=true to allow this cross-scope admin action explicitly.",
+    ].join(" "),
+  );
 }
 
 function buildAgentCapabilityTags(capabilities: AgentCapabilities): string[] {
@@ -253,10 +343,19 @@ export function dispatchDirectAgentMessage(
   input: DirectAgentDispatchInput,
   onDispatch?: AgentDispatchCallback,
 ): DirectAgentDispatchResult {
-  const target = resolveDirectAgentTarget(storage.getAgents(), input.target);
+  const agents = storage.getAgents();
+  const target = resolveDirectAgentTarget(agents, input.target);
   if (!target) {
     throw new Error(`Agent not found: ${input.target}`);
   }
+
+  const sender = agents.find((agent) => agent.id === input.senderAgentId);
+  assertAdminDispatchScopeAuthorized({
+    sender,
+    target,
+    body: input.body,
+    metadata: input.metadata,
+  });
 
   const resolvedTarget: AgentDispatchTarget = { id: target.id, name: target.name };
   const metadata = buildAgentMessageMetadata(input.senderAgentName, input.metadata);
@@ -287,9 +386,17 @@ export function dispatchBroadcastAgentMessage(
   }
 
   const agents = storage.getAgents();
-  const targets = resolveBroadcastTargets(agents, input.senderAgentId, normalizedChannel).map(
-    (agent) => ({ id: agent.id, name: agent.name }),
-  );
+  const sender = agents.find((agent) => agent.id === input.senderAgentId);
+  const targetAgents = resolveBroadcastTargets(agents, input.senderAgentId, normalizedChannel);
+  for (const target of targetAgents) {
+    assertAdminDispatchScopeAuthorized({
+      sender,
+      target,
+      body: input.body,
+      metadata: input.metadata,
+    });
+  }
+  const targets = targetAgents.map((agent) => ({ id: agent.id, name: agent.name }));
 
   if (targets.length === 0) {
     throw new Error(`No agents subscribed to #${normalizedChannel} other than the sender.`);

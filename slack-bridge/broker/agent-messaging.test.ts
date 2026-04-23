@@ -31,6 +31,27 @@ function createAgent(
   };
 }
 
+function createScopedMetadata(installId: string, workspaceId: string): Record<string, unknown> {
+  return {
+    capabilities: {
+      repo: "extensions",
+      role: "worker",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          installId,
+          workspaceId,
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
+    },
+  };
+}
+
 function createStorage(agents: AgentInfo[]): AgentMessageStorage & {
   threads: Set<string>;
   inserted: Array<{
@@ -182,6 +203,53 @@ describe("dispatchDirectAgentMessage", () => {
     });
     expect(delivered).toEqual(["target:1:Sender Agent"]);
   });
+
+  it("denies cross-scope admin control messages by default", () => {
+    const storage = createStorage([
+      createAgent("sender", "sender", createScopedMetadata("primary", "T_PRIMARY")),
+      createAgent("target", "target", createScopedMetadata("secondary", "T_SECONDARY")),
+    ]);
+
+    expect(() =>
+      dispatchDirectAgentMessage(storage, {
+        senderAgentId: "sender",
+        senderAgentName: "Sender Agent",
+        target: "target",
+        body: '{"type":"pinet:control","action":"reload"}',
+        metadata: { type: "pinet:control", action: "reload" },
+      }),
+    ).toThrow(/Conflicts: workspace\.workspaceId, workspace\.installId\./);
+  });
+
+  it("allows cross-scope admin control when explicitly authorized in metadata", () => {
+    const storage = createStorage([
+      createAgent("sender", "sender", createScopedMetadata("primary", "T_PRIMARY")),
+      createAgent("target", "target", createScopedMetadata("secondary", "T_SECONDARY")),
+    ]);
+
+    const result = dispatchDirectAgentMessage(storage, {
+      senderAgentId: "sender",
+      senderAgentName: "Sender Agent",
+      target: "target",
+      body: '{"type":"pinet:control","action":"reload"}',
+      metadata: {
+        type: "pinet:control",
+        action: "reload",
+        pinetAdminAuthorization: { allowCrossScope: true },
+      },
+    });
+
+    expect(result).toEqual({
+      target: { id: "target", name: "target" },
+      messageId: 1,
+      threadId: "a2a:sender:target",
+    });
+    expect(storage.inserted[0]?.metadata).toMatchObject({
+      type: "pinet:control",
+      action: "reload",
+      pinetAdminAuthorization: { allowCrossScope: true },
+    });
+  });
 });
 
 describe("dispatchBroadcastAgentMessage", () => {
@@ -249,5 +317,40 @@ describe("dispatchBroadcastAgentMessage", () => {
         body: "anyone there?",
       }),
     ).toThrow("No agents subscribed to #extensions other than the sender.");
+  });
+
+  it("denies cross-scope admin control broadcasts by default", () => {
+    const storage = createStorage([
+      createAgent("sender", "sender", createScopedMetadata("primary", "T_PRIMARY")),
+      createAgent("worker-a", "worker-a", createScopedMetadata("primary", "T_PRIMARY")),
+      createAgent("worker-b", "worker-b", {
+        capabilities: {
+          repo: "extensions",
+          role: "worker",
+          scope: {
+            workspace: {
+              provider: "slack",
+              source: "explicit",
+              installId: "secondary",
+              workspaceId: "T_SECONDARY",
+            },
+            instance: {
+              source: "compatibility",
+              compatibilityKey: "default",
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect(() =>
+      dispatchBroadcastAgentMessage(storage, {
+        senderAgentId: "sender",
+        senderAgentName: "Sender Agent",
+        channel: "#extensions",
+        body: '{"type":"pinet:control","action":"reload"}',
+        metadata: { type: "pinet:control", action: "reload" },
+      }),
+    ).toThrow(/Pinet admin action \/reload/);
   });
 });
