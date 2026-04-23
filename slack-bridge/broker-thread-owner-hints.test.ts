@@ -9,7 +9,7 @@ function createDeps(overrides: Partial<BrokerThreadOwnerHintsDeps> = {}) {
 
   const deps: BrokerThreadOwnerHintsDeps = {
     slack,
-    getBotToken: () => "xoxb-test",
+    resolveBotToken: () => "xoxb-test",
     ...overrides,
   };
 

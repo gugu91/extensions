@@ -4,17 +4,17 @@ import {
   type PinetControlCommand,
   type PinetRemoteControlRequestResult,
   type PinetSkinUpdate,
+  type ResolvedSlackInstallTopology,
   type SlackBridgeSettings,
   buildPinetOwnerToken,
   buildPinetSkinAssignment,
   DEFAULT_PINET_SKIN_THEME,
   resolvePinetMeshAuth,
-  resolveSlackDefaultScope,
   syncBrokerInboxEntries,
 } from "./helpers.js";
 import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
-import { SlackAdapter } from "./broker/adapters/slack.js";
+import { SlackTopologyAdapter } from "./broker/adapters/slack-topology.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
 import {
@@ -35,8 +35,8 @@ import type { InboundMessage } from "./broker/types.js";
 import {
   type ActivityLogEntry,
   type ActivityLogTone,
+  type ActivityLoggerPort,
   type LoggedActivityLogEntry,
-  type SlackActivityLogger,
 } from "./activity-log.js";
 import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
 import {
@@ -54,10 +54,16 @@ export interface BrokerRuntimeConnectResult {
   releasedBrokerClaims: number;
 }
 
+export interface BrokerHomeTabViewerRecord {
+  userId: string;
+  installId: string;
+  openedAt: string;
+}
+
 export interface BrokerRuntimeDeps {
   getSettings: () => SlackBridgeSettings;
-  getBotToken: () => string;
-  getAppToken: () => string;
+  getSlackRuntimeInstalls: () => ResolvedSlackInstallTopology[];
+  getDefaultSlackInstallId: () => string;
   getAllowedUsers: () => Set<string> | null;
   shouldAllowAllWorkspaceUsers: () => boolean;
   getBrokerStableId: () => string;
@@ -82,7 +88,10 @@ export interface BrokerRuntimeDeps {
     selfId: string;
     ctx: ExtensionContext;
   }) => Promise<void> | void;
-  onAppHomeOpened: (userId: string, ctx: ExtensionContext) => Promise<void> | void;
+  onAppHomeOpened: (
+    input: { userId: string; installId: string },
+    ctx: ExtensionContext,
+  ) => Promise<void> | void;
   pushInboxMessages: (messages: InboxMessage[]) => void;
   updateBadge: () => void;
   maybeDrainInboxIfIdle: (ctx: ExtensionContext) => boolean;
@@ -110,7 +119,7 @@ export interface BrokerRuntimeDeps {
     changedAgentId: string,
     status: "working" | "idle",
   ) => void;
-  createActivityLogger: (onError: (error: unknown) => void) => SlackActivityLogger;
+  createActivityLogger: (onError: (error: unknown) => void) => ActivityLoggerPort;
   formatTrackedAgent: (agentId: string) => string;
   summarizeTrackedAssignmentStatus: (
     status: "assigned" | "branch_pushed" | "pr_open" | "pr_merged" | "pr_closed",
@@ -124,7 +133,7 @@ export interface BrokerRuntimeDeps {
     ctx: ExtensionContext,
     snapshot: BrokerControlPlaneDashboardSnapshot,
     refreshedAt: string,
-    userIds?: string[],
+    viewers?: BrokerHomeTabViewerRecord[],
   ) => Promise<void>;
   buildControlPlaneDashboardSnapshot: (
     input: Record<string, unknown>,
@@ -164,6 +173,7 @@ export interface BrokerRuntime {
   getLastControlPlaneCanvasError: () => string | null;
   setLastControlPlaneCanvasError: (value: string | null) => void;
   getHomeTabViewerIds: () => string[];
+  getHomeTabViewers: () => BrokerHomeTabViewerRecord[];
   getLastHomeTabSnapshot: () => BrokerControlPlaneDashboardSnapshot | null;
   setLastHomeTabSnapshot: (snapshot: BrokerControlPlaneDashboardSnapshot | null) => void;
   getLastHomeTabRefreshAt: () => string | null;
@@ -174,6 +184,7 @@ export interface BrokerRuntime {
     userId: string,
     ctx: ExtensionContext,
     openedAt?: string,
+    installId?: string,
   ) => Promise<boolean>;
 }
 
@@ -193,14 +204,14 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   let brokerScheduledWakeupRunning = false;
   let lastBrokerMaintenance: BrokerMaintenanceResult | null = null;
   let lastBrokerMaintenanceSignature = "";
-  let activityLogger: SlackActivityLogger | null = null;
+  let activityLogger: ActivityLoggerPort | null = null;
   let activityLogContext: ExtensionContext | null = null;
   let lastActivityLogFailureAt = 0;
   let brokerControlPlaneCanvasRuntimeId: string | null = null;
   let brokerControlPlaneCanvasRuntimeChannelId: string | null = null;
   let lastBrokerControlPlaneCanvasRefreshAt: string | null = null;
   let lastBrokerControlPlaneCanvasError: string | null = null;
-  const brokerControlPlaneHomeTabViewers = new TtlCache<string, { openedAt: string }>({
+  const brokerControlPlaneHomeTabViewers = new TtlCache<string, BrokerHomeTabViewerRecord>({
     maxSize: 100,
     ttlMs: 12 * 60 * 60 * 1000,
   });
@@ -228,7 +239,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     );
   }
 
-  function ensureActivityLogger(): SlackActivityLogger {
+  function ensureActivityLogger(): ActivityLoggerPort {
     if (activityLogger) {
       return activityLogger;
     }
@@ -477,13 +488,15 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     userId: string,
     ctx: ExtensionContext,
     openedAt: string = new Date().toISOString(),
+    installId: string = deps.getDefaultSlackInstallId(),
   ): Promise<boolean> {
     if (!activeBroker) {
       return false;
     }
 
     activityLogContext = ctx;
-    brokerControlPlaneHomeTabViewers.set(userId, { openedAt });
+    const viewerKey = `${installId}:${userId}`;
+    brokerControlPlaneHomeTabViewers.set(viewerKey, { userId, installId, openedAt });
 
     try {
       const snapshot =
@@ -492,7 +505,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
       if (!snapshot) {
         return false;
       }
-      await deps.refreshHomeTabs(ctx, snapshot, openedAt, [userId]);
+      await deps.refreshHomeTabs(ctx, snapshot, openedAt, [{ userId, installId, openedAt }]);
       return true;
     } catch (error) {
       const homeTabMessage = `Pinet Home tab publish failed: ${deps.formatError(error)}`;
@@ -536,24 +549,52 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
       const settings = deps.getSettings();
       const meshAuth = resolvePinetMeshAuth(settings);
       const allowedUsers = deps.getAllowedUsers();
+      const runtimeInstalls = deps.getSlackRuntimeInstalls();
+      const defaultInstallId = deps.getDefaultSlackInstallId();
       const broker = await startBroker({
         ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
         ...(meshAuth.meshSecretPath ? { meshSecretPath: meshAuth.meshSecretPath } : {}),
       });
-      const adapter = new SlackAdapter({
-        botToken: deps.getBotToken(),
-        appToken: deps.getAppToken(),
+      const adapter = new SlackTopologyAdapter({
+        installs: runtimeInstalls,
+        defaultInstallId,
+        resolveInstallForScope: (scope) => {
+          const installId = normalizeOptionalSetting(scope?.workspace?.installId);
+          if (installId) {
+            return runtimeInstalls.find((install) => install.installId === installId) ?? null;
+          }
+
+          const workspaceId = normalizeOptionalSetting(scope?.workspace?.workspaceId);
+          if (workspaceId) {
+            const matches = runtimeInstalls.filter(
+              (install) => install.workspaceId === workspaceId,
+            );
+            if (matches.length > 0) {
+              return (
+                matches.find((install) => install.installId === defaultInstallId) ??
+                matches[0] ??
+                null
+              );
+            }
+            return null;
+          }
+
+          return (
+            runtimeInstalls.find((install) => install.installId === defaultInstallId) ??
+            runtimeInstalls[0] ??
+            null
+          );
+        },
         allowedUsers: allowedUsers ? [...allowedUsers] : undefined,
         allowAllWorkspaceUsers: deps.shouldAllowAllWorkspaceUsers(),
         suggestedPrompts: settings.suggestedPrompts,
         reactionCommands: settings.reactionCommands,
-        getDefaultScope: () => resolveSlackDefaultScope(deps.getSettings(), process.env),
         isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
         rememberKnownThread: (threadTs: string, channelId: string) => {
           broker.db.updateThread(threadTs, { source: "slack", channel: channelId });
         },
-        onAppHomeOpened: async ({ userId }) => {
-          await deps.onAppHomeOpened(userId, ctx);
+        onAppHomeOpened: async ({ userId, installId }) => {
+          await deps.onAppHomeOpened({ userId, installId }, ctx);
         },
       });
       let selfId: string | null = null;
@@ -807,7 +848,15 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     },
 
     getHomeTabViewerIds(): string[] {
-      return [...brokerControlPlaneHomeTabViewers.entries()].map(([userId]) => userId);
+      return [
+        ...new Set(
+          [...brokerControlPlaneHomeTabViewers.entries()].map(([, viewer]) => viewer.userId),
+        ),
+      ];
+    },
+
+    getHomeTabViewers(): BrokerHomeTabViewerRecord[] {
+      return [...brokerControlPlaneHomeTabViewers.entries()].map(([, viewer]) => ({ ...viewer }));
     },
 
     getLastHomeTabSnapshot(): BrokerControlPlaneDashboardSnapshot | null {
@@ -838,8 +887,9 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
       userId: string,
       ctx: ExtensionContext,
       openedAt = new Date().toISOString(),
+      installId = deps.getDefaultSlackInstallId(),
     ): Promise<boolean> {
-      return publishCurrentHomeTabSafely(userId, ctx, openedAt);
+      return publishCurrentHomeTabSafely(userId, ctx, openedAt, installId);
     },
   };
 }

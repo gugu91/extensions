@@ -5,7 +5,10 @@ import * as os from "node:os";
 import {
   loadSettings,
   resolveSlackDefaultScope,
+  resolveSlackInstallForScope,
+  resolveSlackRuntimeInstalls,
   resolveSlackRuntimeSettings,
+  resolveSlackSurfaceInstalls,
   resolveSlackTopology,
   resolvePinetMeshAuth,
   resolveAllowAllWorkspaceUsers,
@@ -596,6 +599,99 @@ describe("resolveSlackTopology", () => {
         },
       },
     });
+  });
+});
+
+describe("resolveSlack install selection helpers", () => {
+  it("selects installs by install id or workspace id from scope carriers", () => {
+    const topology = resolveSlackTopology(
+      {
+        defaultInstallId: "primary",
+        installs: [
+          {
+            installId: "primary",
+            workspaceId: "T_PRIMARY",
+            botToken: "xoxb-primary",
+            appToken: "xapp-primary",
+          },
+          {
+            installId: "secondary",
+            workspaceId: "T_SECONDARY",
+            botToken: "xoxb-secondary",
+            appToken: "xapp-secondary",
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(
+      resolveSlackInstallForScope(topology, {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          installId: "secondary",
+          workspaceId: "T_SECONDARY",
+        },
+      }),
+    ).toMatchObject({ installId: "secondary" });
+    expect(
+      resolveSlackInstallForScope(topology, {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+        },
+      }),
+    ).toMatchObject({ installId: "primary" });
+    expect(resolveSlackInstallForScope(topology, null)).toMatchObject({ installId: "primary" });
+    expect(
+      resolveSlackInstallForScope(topology, {
+        workspace: {
+          provider: "imessage",
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveSlackInstallForScope(topology, {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          installId: "missing",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("filters runtime-capable installs separately from broker surface installs", () => {
+    const settings = {
+      defaultInstallId: "primary",
+      installs: [
+        {
+          installId: "primary",
+          workspaceId: "T_PRIMARY",
+          botToken: "xoxb-primary",
+          appToken: "xapp-primary",
+          logChannel: "C_PRIMARY_LOGS",
+        },
+        {
+          installId: "secondary",
+          workspaceId: "T_SECONDARY",
+          botToken: "xoxb-secondary",
+          logChannel: "C_SECONDARY_LOGS",
+        },
+      ],
+    };
+
+    expect(resolveSlackRuntimeInstalls(settings, {}).map((install) => install.installId)).toEqual([
+      "primary",
+    ]);
+    expect(resolveSlackSurfaceInstalls(settings, {}).map((install) => install.installId)).toEqual([
+      "primary",
+      "secondary",
+    ]);
   });
 });
 

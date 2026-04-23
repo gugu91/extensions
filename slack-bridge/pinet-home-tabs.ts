@@ -9,14 +9,21 @@ import {
 } from "./home-tab.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
+export interface PinetHomeTabViewerRecord {
+  userId: string;
+  installId: string;
+}
+
 export interface PinetHomeTabsBrokerPort {
   isConnected: () => boolean;
   publishCurrentHomeTabSafely: (
     userId: string,
     ctx: ExtensionContext,
     openedAt?: string,
+    installId?: string,
   ) => Promise<boolean>;
   getHomeTabViewerIds: () => string[];
+  getHomeTabViewers: () => PinetHomeTabViewerRecord[];
   getLastHomeTabError: () => string | null;
   setLastHomeTabSnapshot: (snapshot: BrokerControlPlaneDashboardSnapshot | null) => void;
   setLastHomeTabRefreshAt: (value: string | null) => void;
@@ -25,7 +32,9 @@ export interface PinetHomeTabsBrokerPort {
 
 export interface PinetHomeTabsDeps {
   slack: PublishSlackHomeTabInput["slack"];
-  getBotToken: () => string | undefined;
+  getBotToken: (installId?: string | null) => string | undefined;
+  getDefaultInstallId: () => string | null | undefined;
+  isHomeTabEnabled: (installId?: string | null) => boolean;
   formatError: (error: unknown) => string;
   getAgentName: () => string;
   getAgentEmoji: () => string;
@@ -35,7 +44,7 @@ export interface PinetHomeTabsDeps {
   isSinglePlayerConnected: () => boolean;
   getActiveThreads: () => number;
   getPendingInboxCount: () => number;
-  getDefaultChannel: () => string | null | undefined;
+  getDefaultChannel: (installId?: string | null) => string | null | undefined;
   getBrokerHomeTabs: () => PinetHomeTabsBrokerPort;
   getCurrentBranch?: () => Promise<string | null>;
 }
@@ -45,18 +54,20 @@ export interface PinetHomeTabs {
     ctx: ExtensionContext,
     snapshot: BrokerControlPlaneDashboardSnapshot,
     refreshedAt: string,
-    userIds?: string[],
+    viewers?: PinetHomeTabViewerRecord[],
   ) => Promise<void>;
   reportHomeTabPublishFailure: (ctx: ExtensionContext, err: unknown) => void;
   publishCurrentPinetHomeTab: (
     userId: string,
     ctx: ExtensionContext,
     openedAt?: string,
+    installId?: string,
   ) => Promise<void>;
   publishCurrentPinetHomeTabSafely: (
     userId: string,
     ctx: ExtensionContext,
     openedAt?: string,
+    installId?: string,
   ) => Promise<void>;
 }
 
@@ -96,10 +107,9 @@ export function createPinetHomeTabs(deps: PinetHomeTabsDeps): PinetHomeTabs {
     ctx: ExtensionContext,
     snapshot: BrokerControlPlaneDashboardSnapshot,
     refreshedAt: string,
-    userIds: string[] = deps.getBrokerHomeTabs().getHomeTabViewerIds(),
+    viewers: PinetHomeTabViewerRecord[] = deps.getBrokerHomeTabs().getHomeTabViewers(),
   ): Promise<void> {
-    const botToken = deps.getBotToken();
-    if (!botToken || userIds.length === 0) {
+    if (viewers.length === 0) {
       return;
     }
 
@@ -107,12 +117,21 @@ export function createPinetHomeTabs(deps: PinetHomeTabsDeps): PinetHomeTabs {
     brokerHomeTabs.setLastHomeTabSnapshot(snapshot);
     let hadError = false;
 
-    for (const userId of userIds) {
+    for (const viewer of viewers) {
+      if (!deps.isHomeTabEnabled(viewer.installId)) {
+        continue;
+      }
+
+      const botToken = deps.getBotToken(viewer.installId);
+      if (!botToken) {
+        continue;
+      }
+
       try {
         await publishSlackHomeTab({
           slack: deps.slack,
           token: botToken,
-          userId,
+          userId: viewer.userId,
           view: renderBrokerControlPlaneHomeTabView(snapshot),
         });
       } catch (err) {
@@ -131,17 +150,22 @@ export function createPinetHomeTabs(deps: PinetHomeTabsDeps): PinetHomeTabs {
     userId: string,
     ctx: ExtensionContext,
     openedAt: string = new Date().toISOString(),
+    installId: string = deps.getDefaultInstallId() ?? "default",
   ): Promise<void> {
-    const botToken = deps.getBotToken();
-    if (!botToken) {
+    if (!deps.isHomeTabEnabled(installId)) {
       return;
     }
 
     const brokerHomeTabs = deps.getBrokerHomeTabs();
     if (brokerHomeTabs.isConnected() && deps.getBrokerRole() === "broker") {
-      if (await brokerHomeTabs.publishCurrentHomeTabSafely(userId, ctx, openedAt)) {
+      if (await brokerHomeTabs.publishCurrentHomeTabSafely(userId, ctx, openedAt, installId)) {
         return;
       }
+    }
+
+    const botToken = deps.getBotToken(installId);
+    if (!botToken) {
+      return;
     }
 
     const currentBranch = deps.getCurrentBranch
@@ -159,7 +183,7 @@ export function createPinetHomeTabs(deps: PinetHomeTabsDeps): PinetHomeTabs {
         activeThreads: deps.getActiveThreads(),
         pendingInbox: deps.getPendingInboxCount(),
         currentBranch,
-        defaultChannel: deps.getDefaultChannel() ?? null,
+        defaultChannel: deps.getDefaultChannel(installId) ?? null,
       }),
     });
     brokerHomeTabs.setLastHomeTabError(null);
@@ -169,9 +193,10 @@ export function createPinetHomeTabs(deps: PinetHomeTabsDeps): PinetHomeTabs {
     userId: string,
     ctx: ExtensionContext,
     openedAt: string = new Date().toISOString(),
+    installId?: string,
   ): Promise<void> {
     try {
-      await publishCurrentPinetHomeTab(userId, ctx, openedAt);
+      await publishCurrentPinetHomeTab(userId, ctx, openedAt, installId);
     } catch (err) {
       reportHomeTabPublishFailure(ctx, err);
     }

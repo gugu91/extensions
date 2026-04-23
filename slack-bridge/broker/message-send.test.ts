@@ -1,15 +1,21 @@
+import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
 import { describe, expect, it, vi } from "vitest";
 import { sendBrokerMessage } from "./message-send.js";
 import type { BrokerMessage, ThreadInfo } from "./types.js";
 
 function createFakeDb() {
   const threads = new Map<string, ThreadInfo>();
+  const threadScopes = new Map<string, RuntimeScopeCarrier>();
   let nextMessageId = 1;
 
   return {
     threads,
+    threadScopes,
     getThread(threadId: string) {
       return threads.get(threadId) ?? null;
+    },
+    getThreadScope(threadId: string) {
+      return threadScopes.get(threadId) ?? null;
     },
     createThread(threadId: string, source: string, channel: string, ownerAgent: string | null) {
       const now = new Date().toISOString();
@@ -113,6 +119,46 @@ describe("sendBrokerMessage", () => {
       threadId: "imessage:chat:bob",
       channel: "chat:bob",
       text: "follow-up",
+    });
+  });
+
+  it("threads stored scope carriers into outbound adapter sends", async () => {
+    const db = createFakeDb();
+    db.createThread("slack:100.1", "slack", "C123", "agent-1");
+    db.threadScopes.set("slack:100.1", {
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_PRIMARY",
+        installId: "primary",
+      },
+    });
+    const send = vi.fn(async () => undefined);
+
+    await sendBrokerMessage(
+      {
+        db,
+        adapters: [{ name: "slack", send }],
+      },
+      {
+        threadId: "slack:100.1",
+        body: "scoped follow-up",
+        senderAgentId: "agent-1",
+      },
+    );
+
+    expect(send).toHaveBeenCalledWith({
+      threadId: "slack:100.1",
+      channel: "C123",
+      text: "scoped follow-up",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+      },
     });
   });
 

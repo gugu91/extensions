@@ -1,13 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
 import { createBrokerRuntime, type BrokerRuntimeDeps } from "./broker-runtime.js";
-import type { SlackActivityLogger } from "./activity-log.js";
+import type { ActivityLoggerPort } from "./activity-log.js";
 
 function createDeps(overrides: Partial<BrokerRuntimeDeps> = {}): BrokerRuntimeDeps {
   return {
     getSettings: () => ({}),
-    getBotToken: () => "xoxb-test",
-    getAppToken: () => "xapp-test",
+    getSlackRuntimeInstalls: () => [
+      {
+        installId: "default",
+        source: "compatibility",
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        homeTabEnabled: true,
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            installId: "default",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      },
+    ],
+    getDefaultSlackInstallId: () => "default",
     getAllowedUsers: () => null,
     shouldAllowAllWorkspaceUsers: () => false,
     getBrokerStableId: () => "broker-stable-id",
@@ -52,7 +72,7 @@ function createDeps(overrides: Partial<BrokerRuntimeDeps> = {}): BrokerRuntimeDe
           clearPending: vi.fn(),
           getRecentEntries: vi.fn(() => []),
           log: vi.fn(),
-        }) as unknown as SlackActivityLogger,
+        }) as ActivityLoggerPort,
     ),
     formatTrackedAgent: vi.fn((agentId: string) => agentId),
     summarizeTrackedAssignmentStatus: vi.fn(() => ({

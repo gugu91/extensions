@@ -2,6 +2,7 @@ import type { BrokerMessage, MessageAdapter, OutboundMessage, ThreadInfo } from 
 
 export interface BrokerMessageSenderDb {
   getThread(threadId: string): ThreadInfo | null;
+  getThreadScope?(threadId: string): OutboundMessage["scope"] | null;
   createThread(
     threadId: string,
     source: string,
@@ -35,6 +36,7 @@ export interface SendBrokerMessageInput {
   agentEmoji?: string;
   agentOwnerToken?: string;
   metadata?: Record<string, unknown>;
+  scope?: OutboundMessage["scope"];
 }
 
 export interface SendBrokerMessageResult {
@@ -69,6 +71,8 @@ export async function sendBrokerMessage(
     throw new Error(`No adapter is registered for transport source ${JSON.stringify(source)}.`);
   }
 
+  const resolvedScope = input.scope ?? deps.db.getThreadScope?.(threadId) ?? null;
+
   const outbound: OutboundMessage = {
     threadId,
     channel,
@@ -77,6 +81,7 @@ export async function sendBrokerMessage(
     ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),
     ...(input.agentOwnerToken ? { agentOwnerToken: input.agentOwnerToken } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),
+    ...(resolvedScope ? { scope: resolvedScope } : {}),
   };
   await adapter.send(outbound);
 

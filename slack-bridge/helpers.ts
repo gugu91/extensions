@@ -418,6 +418,61 @@ export function summarizeSlackTopology(topology: ResolvedSlackTopology): SlackTo
   };
 }
 
+export function resolveSlackRuntimeInstalls(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): ResolvedSlackInstallTopology[] {
+  return resolveSlackTopology(settings, env).installs.filter(
+    (
+      install,
+    ): install is ResolvedSlackInstallTopology & {
+      botToken: string;
+      appToken: string;
+    } => typeof install.botToken === "string" && typeof install.appToken === "string",
+  );
+}
+
+export function resolveSlackSurfaceInstalls(
+  settings: SlackBridgeSettings,
+  env = process.env,
+): ResolvedSlackInstallTopology[] {
+  return resolveSlackTopology(settings, env).installs.filter(
+    (
+      install,
+    ): install is ResolvedSlackInstallTopology & {
+      botToken: string;
+    } => typeof install.botToken === "string",
+  );
+}
+
+export function resolveSlackInstallForScope(
+  topology: ResolvedSlackTopology,
+  scope: RuntimeScopeCarrier | null | undefined,
+): ResolvedSlackInstallTopology | null {
+  const provider = normalizeOptionalSetting(scope?.workspace?.provider);
+  if (provider && provider !== "slack") {
+    return null;
+  }
+
+  const installId = normalizeOptionalSetting(scope?.workspace?.installId);
+  if (installId) {
+    return topology.installs.find((install) => install.installId === installId) ?? null;
+  }
+
+  const workspaceId = normalizeOptionalSetting(scope?.workspace?.workspaceId);
+  if (workspaceId) {
+    const matches = topology.installs.filter((install) => install.workspaceId === workspaceId);
+    if (matches.length > 0) {
+      return (
+        matches.find((install) => install.installId === topology.defaultInstallId) ?? matches[0]!
+      );
+    }
+    return null;
+  }
+
+  return topology.defaultInstall;
+}
+
 export function resolveSlackDefaultScope(
   settings: SlackBridgeSettings,
   env = process.env,
