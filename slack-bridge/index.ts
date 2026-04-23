@@ -1039,6 +1039,13 @@ export default function (pi: ExtensionAPI) {
       },
       getDefaultChannel: () => settings.defaultChannel,
       getDefaultScope: () => resolveSlackDefaultScope(settings, process.env),
+      resolveInstallIdForScope: (scope) =>
+        slackTopologyRuntime.resolveInstallForScope(scope)?.installId ?? null,
+      getBotTokenForInstall: (installId) => slackTopologyRuntime.getBotToken(installId),
+      getDefaultChannelForInstall: (installId) =>
+        slackTopologyRuntime.getDefaultChannel(installId) ?? undefined,
+      resolveChannelForInstall: (installId, nameOrId) =>
+        slackTopologyRuntime.resolveChannel(installId, nameOrId),
       getSecurityPrompt: () => securityPrompt,
       inbox,
       slack,

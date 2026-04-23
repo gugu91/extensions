@@ -51,6 +51,13 @@ export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
   getDefaultChannel: () => string | undefined;
   getDefaultScope: () => RuntimeScopeCarrier;
+  resolveInstallIdForScope?: (scope: RuntimeScopeCarrier | null | undefined) => string | null;
+  getBotTokenForInstall?: (installId: string | null | undefined) => string | undefined;
+  getDefaultChannelForInstall?: (installId: string | null | undefined) => string | undefined;
+  resolveChannelForInstall?: (
+    installId: string | null | undefined,
+    nameOrId: string,
+  ) => Promise<string | null>;
   getSecurityPrompt: () => string;
   inbox: InboxMessage[];
   slack: (method: string, token: string, body?: Record<string, unknown>) => Promise<SlackResult>;
@@ -499,6 +506,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     getBotToken,
     getDefaultChannel,
     getDefaultScope,
+    resolveInstallIdForScope,
+    getBotTokenForInstall,
+    getDefaultChannelForInstall,
+    resolveChannelForInstall,
     getSecurityPrompt,
     inbox,
     slack,
@@ -516,17 +527,52 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     getBotUserId,
   } = deps;
 
-  async function resolveTrackedThreadChannel(threadTs: string | undefined): Promise<string | null> {
-    const threadScope = await threadContext.resolveThreadScope(threadTs);
-    const scopeError = getSlackScopeAuthorizationError({
-      actualScope: threadScope,
-      expectedScope: getDefaultScope(),
-      target: threadTs ? `thread ${threadTs}` : undefined,
-    });
-    if (scopeError) {
-      throw new Error(scopeError);
+  async function resolveScopedInstallContext(threadTs?: string): Promise<{
+    scope: RuntimeScopeCarrier | null;
+    installId: string | null;
+    token: string;
+    defaultChannel: string | undefined;
+  }> {
+    const scope = threadTs ? await threadContext.resolveThreadScope(threadTs) : null;
+    const installId = resolveInstallIdForScope?.(scope ?? null) ?? null;
+    if (threadTs && scope && resolveInstallIdForScope && !installId) {
+      const scopeError = getSlackScopeAuthorizationError({
+        actualScope: scope,
+        expectedScope: getDefaultScope(),
+        target: `thread ${threadTs}`,
+      });
+      throw new Error(
+        scopeError ?? `Slack thread ${threadTs} scope is not mapped to a configured install.`,
+      );
     }
 
+    return {
+      scope,
+      installId,
+      token: getBotTokenForInstall?.(installId) ?? getBotToken(),
+      defaultChannel: getDefaultChannelForInstall?.(installId) ?? getDefaultChannel(),
+    };
+  }
+
+  async function resolveSlackToken(threadTs?: string): Promise<string> {
+    return (await resolveScopedInstallContext(threadTs)).token;
+  }
+
+  async function resolveScopedChannelId(nameOrId: string, threadTs?: string): Promise<string> {
+    const { installId } = await resolveScopedInstallContext(threadTs);
+    const scopedChannel = await resolveChannelForInstall?.(installId, nameOrId);
+    if (scopedChannel) {
+      rememberChannel(nameOrId, scopedChannel);
+      return scopedChannel;
+    }
+    return resolveChannel(nameOrId);
+  }
+
+  async function resolveTrackedThreadChannel(threadTs: string | undefined): Promise<string | null> {
+    if (!threadTs) {
+      return null;
+    }
+    await resolveScopedInstallContext(threadTs);
     return threadContext.resolveThreadChannel(threadTs);
   }
 
@@ -682,8 +728,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       throw new Error("Provide either canvas_id or channel.");
     }
 
-    const channelId = await resolveChannel(channelInput);
-    const info = await slack("conversations.info", getBotToken(), { channel: channelId });
+    const channelId = await resolveScopedChannelId(channelInput);
+    const info = await slack("conversations.info", await resolveSlackToken(), {
+      channel: channelId,
+    });
     const resolvedCanvasId = extractSlackChannelCanvasId(info);
     if (!resolvedCanvasId) {
       throw new Error(
@@ -700,7 +748,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
   async function assertCanvasCommentsTargetIsCanvas(canvasId: string): Promise<void> {
     try {
-      await slack("canvases.sections.lookup", getBotToken(), {
+      await slack("canvases.sections.lookup", await resolveSlackToken(), {
         canvas_id: canvasId,
         criteria: { section_types: ["any_header"] },
       });
@@ -764,7 +812,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     let cursor: string | undefined;
 
     do {
-      const response = await slack("conversations.replies", getBotToken(), {
+      const response = await slack("conversations.replies", await resolveSlackToken(threadTs), {
         channel: channelId,
         ts: threadTs,
         limit: 1000,
@@ -1427,7 +1475,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       }
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
-      const response = await slack("chat.postMessage", getBotToken(), body);
+      const response = await slack(
+        "chat.postMessage",
+        await resolveSlackToken(params.thread_ts),
+        body,
+      );
       const ts = (response.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
@@ -1495,7 +1547,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const reactionName = normalizeReactionName(params.emoji);
       const channelId = await resolveReactionChannel(params.thread_ts, params.channel);
 
-      await slack("reactions.add", getBotToken(), {
+      await slack("reactions.add", await resolveSlackToken(params.thread_ts), {
         channel: channelId,
         timestamp: targetTimestamp,
         name: reactionName,
@@ -1576,7 +1628,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         channelId,
         threadTs: params.thread_ts,
         slack,
-        token: getBotToken(),
+        token: await resolveSlackToken(params.thread_ts),
       });
 
       if (params.thread_ts) {
@@ -1637,11 +1689,15 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         throw new Error("Unknown thread.");
       }
 
-      const response = await slack("conversations.replies", getBotToken(), {
-        channel,
-        ts: params.thread_ts,
-        limit: params.limit ?? 20,
-      });
+      const response = await slack(
+        "conversations.replies",
+        await resolveSlackToken(params.thread_ts),
+        {
+          channel,
+          ts: params.thread_ts,
+          limit: params.limit ?? 20,
+        },
+      );
 
       const messages = response.messages as Record<string, unknown>[];
       const lines: string[] = [];
@@ -2003,11 +2059,14 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       );
 
       const resolvedThreadChannel = await resolveTrackedThreadChannel(params.thread_ts);
-      const channelInput = params.channel ?? getDefaultChannel();
-      let channelId = params.channel ? await resolveChannel(params.channel) : resolvedThreadChannel;
+      const { defaultChannel } = await resolveScopedInstallContext(params.thread_ts);
+      const channelInput = params.channel ?? defaultChannel;
+      let channelId = params.channel
+        ? await resolveScopedChannelId(params.channel, params.thread_ts)
+        : resolvedThreadChannel;
 
       if (!channelId && channelInput) {
-        channelId = await resolveChannel(channelInput);
+        channelId = await resolveScopedChannelId(channelInput, params.thread_ts);
       }
       if (!channelId) {
         throw new Error("No channel specified and no defaultChannel configured in settings.json.");
@@ -2026,7 +2085,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       }
       if (params.thread_ts) body.thread_ts = params.thread_ts;
 
-      const response = await slack("chat.postMessage", getBotToken(), body);
+      const response = await slack(
+        "chat.postMessage",
+        await resolveSlackToken(params.thread_ts),
+        body,
+      );
       const ts = (response.message as { ts: string }).ts;
       const actualTs = params.thread_ts ?? ts;
 
@@ -2110,7 +2173,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       });
 
       for (const messageTs of messageTsList) {
-        await slack("chat.delete", getBotToken(), {
+        await slack("chat.delete", await resolveSlackToken(params.thread_ts), {
           channel: channelId,
           ts: messageTs,
         });
@@ -2179,7 +2242,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const body = { channel: channelId, timestamp: messageTs };
 
       try {
-        await slack(method, getBotToken(), body);
+        await slack(method, await resolveSlackToken(params.thread_ts), body);
       } catch (err) {
         if (action === "pin" && isSlackMethodError(err, "pins.add", "already_pinned")) {
           return {
@@ -2276,7 +2339,9 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const channelLabel = params.channel ?? channelId;
 
       if (action === "list") {
-        const response = await slack("bookmarks.list", getBotToken(), { channel_id: channelId });
+        const response = await slack("bookmarks.list", await resolveSlackToken(params.thread_ts), {
+          channel_id: channelId,
+        });
         const bookmarks = Array.isArray(response.bookmarks)
           ? (response.bookmarks as Array<Record<string, unknown>>)
           : [];
@@ -2313,7 +2378,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
         const link = normalizeSlackBookmarkUrl(params.url ?? "");
         const emoji = params.emoji?.trim();
-        const response = await slack("bookmarks.add", getBotToken(), {
+        const response = await slack("bookmarks.add", await resolveSlackToken(params.thread_ts), {
           channel_id: channelId,
           title,
           type: "link",
@@ -2350,7 +2415,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       }
 
       try {
-        await slack("bookmarks.remove", getBotToken(), {
+        await slack("bookmarks.remove", await resolveSlackToken(params.thread_ts), {
           channel_id: channelId,
           bookmark_id: bookmarkId,
         });
@@ -2432,7 +2497,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         body.thread_ts = params.thread_ts;
       }
 
-      const response = await slack("chat.scheduleMessage", getBotToken(), body);
+      const response = await slack(
+        "chat.scheduleMessage",
+        await resolveSlackToken(params.thread_ts),
+        body,
+      );
       const scheduledMessageId =
         typeof response.scheduled_message_id === "string"
           ? response.scheduled_message_id
@@ -2477,16 +2546,20 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `channel=${params.channel} | thread_ts=${params.thread_ts ?? ""} | limit=${params.limit ?? 20}`,
       );
 
-      const channelId = await resolveChannel(params.channel);
+      const channelId = await resolveScopedChannelId(params.channel, params.thread_ts);
       const limit = params.limit ?? 20;
 
       let messages: Record<string, unknown>[];
       if (params.thread_ts) {
-        const response = await slack("conversations.replies", getBotToken(), {
-          channel: channelId,
-          ts: params.thread_ts,
-          limit,
-        });
+        const response = await slack(
+          "conversations.replies",
+          await resolveSlackToken(params.thread_ts),
+          {
+            channel: channelId,
+            ts: params.thread_ts,
+            limit,
+          },
+        );
         messages = response.messages as Record<string, unknown>[];
       } else {
         const response = await slack("conversations.history", getBotToken(), {
@@ -2875,7 +2948,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         };
       }
 
-      await slack("chat.postMessage", getBotToken(), {
+      await slack("chat.postMessage", await resolveSlackToken(params.thread_ts), {
         channel: channelId,
         thread_ts: params.thread_ts,
         text: confirmMessage,
