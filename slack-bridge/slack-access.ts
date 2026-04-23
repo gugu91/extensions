@@ -1,4 +1,8 @@
-import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
+import {
+  formatRuntimeScopeCarrier,
+  getRuntimeScopeConflicts,
+  type RuntimeScopeCarrier,
+} from "@gugu910/pi-transport-core";
 import {
   buildSlackThreadScope,
   isUserAllowed,
@@ -79,6 +83,25 @@ export function buildSlackThreadRuntimeScope(input: {
       channelId: input.context?.channelId ?? input.channelId,
     })
   );
+}
+
+export function getSlackScopeAuthorizationError(input: {
+  actualScope?: RuntimeScopeCarrier | null;
+  expectedScope?: RuntimeScopeCarrier | null;
+  target?: string;
+}): string | null {
+  const conflicts = getRuntimeScopeConflicts(input.actualScope, input.expectedScope);
+  if (conflicts.length === 0) {
+    return null;
+  }
+
+  const targetLabel = input.target ? `${input.target} ` : "";
+  return [
+    `Slack ${targetLabel}scope is outside the authorized workspace/install or instance boundary for this runtime.`,
+    `Conflicts: ${conflicts.map((conflict) => `${conflict.dimension}.${conflict.field}`).join(", ")}.`,
+    `Actual: ${formatRuntimeScopeCarrier(input.actualScope)}.`,
+    `Expected: ${formatRuntimeScopeCarrier(input.expectedScope)}.`,
+  ].join(" ");
 }
 
 export interface ParsedEnvelope {

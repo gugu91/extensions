@@ -1,4 +1,13 @@
-import type { AgentInfo, BrokerDBInterface, InboundMessage, RoutingDecision } from "./types.js";
+import {
+  formatRuntimeScopeCarrier,
+  getRuntimeScopeConflicts,
+  parseRuntimeScopeCarrier,
+  type AgentInfo,
+  type BrokerDBInterface,
+  type InboundMessage,
+  type RoutingDecision,
+  type RuntimeScopeCarrier,
+} from "./types.js";
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -15,6 +24,49 @@ function buildPinetOwnerToken(stableId: string): string {
   const primary = hashString(stableId).toString(16).padStart(8, "0");
   const secondary = hashString(`${stableId}:owner`).toString(16).padStart(8, "0");
   return `owner:${primary}${secondary}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function extractAgentScope(agent: AgentInfo): RuntimeScopeCarrier | null {
+  const metadata = asRecord(agent.metadata);
+  const capabilities = asRecord(metadata?.capabilities);
+  return parseRuntimeScopeCarrier(capabilities?.scope ?? metadata?.scope);
+}
+
+function buildScopeRejectReason(
+  prefix: string,
+  actual: RuntimeScopeCarrier | null | undefined,
+  expected: RuntimeScopeCarrier | null | undefined,
+): string {
+  const conflicts = getRuntimeScopeConflicts(actual, expected);
+  if (conflicts.length === 0) {
+    return prefix;
+  }
+
+  return `${prefix}: ${conflicts.map((conflict) => `${conflict.dimension}.${conflict.field}`).join(", ")} (actual ${formatRuntimeScopeCarrier(actual)}; expected ${formatRuntimeScopeCarrier(expected)})`;
+}
+
+function getAgentScopeRejection(
+  msg: InboundMessage,
+  agent: AgentInfo,
+  scope: RuntimeScopeCarrier | null | undefined,
+): RoutingDecision | null {
+  const agentScope = extractAgentScope(agent);
+  if (getRuntimeScopeConflicts(scope, agentScope).length === 0) {
+    return null;
+  }
+
+  return {
+    action: "reject",
+    reason: buildScopeRejectReason(
+      `Inbound message scope is not authorized for agent ${agent.name}`,
+      scope,
+      agentScope,
+    ),
+  };
 }
 
 export interface ThreadOwnerHint {
@@ -251,10 +303,28 @@ export class MessageRouter {
 
     const agents = this.db.getAgents();
     let thread = this.db.getThread(msg.threadId);
+    const threadScope = thread ? this.db.getThreadScope(msg.threadId) : null;
+    const authorizationScope = msg.scope ?? threadScope;
     const explicitDirective = findExplicitThreadDirective(msg.text, agents);
+
+    if (threadScope && getRuntimeScopeConflicts(msg.scope ?? null, threadScope).length > 0) {
+      return {
+        action: "reject",
+        reason: buildScopeRejectReason(
+          `Inbound message scope is outside the existing thread authorization for ${msg.threadId}`,
+          msg.scope ?? null,
+          threadScope,
+        ),
+      };
+    }
 
     if (explicitDirective) {
       if (thread) {
+        const rejection = getAgentScopeRejection(msg, explicitDirective.agent, authorizationScope);
+        if (rejection) {
+          return rejection;
+        }
+
         if (explicitDirective.kind === "retarget") {
           this.db.updateThread(msg.threadId, {
             ownerAgent: explicitDirective.agent.id,
@@ -271,6 +341,11 @@ export class MessageRouter {
       if (thread.ownerBinding === "explicit") {
         const explicitOwner = resolveRoutableThreadOwner(this.db, thread.ownerAgent);
         if (explicitOwner) {
+          const rejection = getAgentScopeRejection(msg, explicitOwner, authorizationScope);
+          if (rejection) {
+            return rejection;
+          }
+
           if (thread.ownerAgent !== explicitOwner.id) {
             this.db.updateThread(msg.threadId, { ownerAgent: explicitOwner.id });
           }
@@ -289,6 +364,11 @@ export class MessageRouter {
 
       const hintedOwner = resolveAgentFromThreadOwnerHint(msg.metadata, agents);
       if (hintedOwner && isRoutableOwner(hintedOwner)) {
+        const rejection = getAgentScopeRejection(msg, hintedOwner, authorizationScope);
+        if (rejection) {
+          return rejection;
+        }
+
         if (thread.ownerAgent !== hintedOwner.id) {
           this.db.updateThread(msg.threadId, { ownerAgent: hintedOwner.id, channel: msg.channel });
         }
@@ -298,6 +378,11 @@ export class MessageRouter {
       if (thread.ownerAgent) {
         const owner = resolveRoutableThreadOwner(this.db, thread.ownerAgent);
         if (owner) {
+          const rejection = getAgentScopeRejection(msg, owner, authorizationScope);
+          if (rejection) {
+            return rejection;
+          }
+
           if (thread.ownerAgent !== owner.id) {
             this.db.updateThread(msg.threadId, { ownerAgent: owner.id });
           }
@@ -313,6 +398,11 @@ export class MessageRouter {
 
       const mentioned = findAgentMention(msg.text, agents);
       if (mentioned) {
+        const rejection = getAgentScopeRejection(msg, mentioned, authorizationScope);
+        if (rejection) {
+          return rejection;
+        }
+
         const claimed = this.db.claimThread(msg.threadId, mentioned.id, msg.source, msg.channel);
         if (claimed) {
           return { action: "deliver", agentId: mentioned.id };
@@ -321,6 +411,14 @@ export class MessageRouter {
         const claimedThread = this.db.getThread(msg.threadId);
         const claimedOwner = resolveRoutableThreadOwner(this.db, claimedThread?.ownerAgent ?? null);
         if (claimedOwner) {
+          const claimedOwnerRejection = getAgentScopeRejection(
+            msg,
+            claimedOwner,
+            authorizationScope,
+          );
+          if (claimedOwnerRejection) {
+            return claimedOwnerRejection;
+          }
           return { action: "deliver", agentId: claimedOwner.id };
         }
       }
@@ -333,12 +431,21 @@ export class MessageRouter {
     if (assignment) {
       const assigned = agents.find((agent) => agent.id === assignment.agentId);
       if (assigned) {
+        const rejection = getAgentScopeRejection(msg, assigned, authorizationScope);
+        if (rejection) {
+          return rejection;
+        }
         return { action: "deliver", agentId: assigned.id };
       }
     }
 
     const mentioned = findAgentMention(msg.text, agents);
     if (mentioned) {
+      const rejection = getAgentScopeRejection(msg, mentioned, authorizationScope);
+      if (rejection) {
+        return rejection;
+      }
+
       const claimed = this.db.claimThread(msg.threadId, mentioned.id, msg.source, msg.channel);
       if (claimed) {
         return { action: "deliver", agentId: mentioned.id };
@@ -347,6 +454,10 @@ export class MessageRouter {
       const claimedThread = this.db.getThread(msg.threadId);
       const claimedOwner = resolveRoutableThreadOwner(this.db, claimedThread?.ownerAgent ?? null);
       if (claimedOwner) {
+        const claimedOwnerRejection = getAgentScopeRejection(msg, claimedOwner, authorizationScope);
+        if (claimedOwnerRejection) {
+          return claimedOwnerRejection;
+        }
         return { action: "deliver", agentId: claimedOwner.id };
       }
     }

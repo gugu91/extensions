@@ -5,18 +5,21 @@ import {
   findAgentMention,
   findExplicitThreadDirective,
 } from "./router.js";
-import type {
-  AgentInfo,
-  BrokerDBInterface,
-  ChannelAssignment,
-  InboundMessage,
-  ThreadInfo,
+import {
+  buildRuntimeScopeCarrier,
+  type AgentInfo,
+  type BrokerDBInterface,
+  type ChannelAssignment,
+  type InboundMessage,
+  type RuntimeScopeCarrier,
+  type ThreadInfo,
 } from "./types.js";
 
 // ─── In-memory BrokerDBInterface stub ─────────────────────────────
 
 class StubBrokerDBInterface implements BrokerDBInterface {
   threads = new Map<string, ThreadInfo>();
+  threadScopes = new Map<string, RuntimeScopeCarrier>();
   agents: AgentInfo[] = [];
   channelAssignments = new Map<string, ChannelAssignment>();
   allowedUsers: Set<string> | null = null;
@@ -44,6 +47,10 @@ class StubBrokerDBInterface implements BrokerDBInterface {
 
   getAllowedUsers(): Set<string> | null {
     return this.allowedUsers;
+  }
+
+  getThreadScope(threadId: string): RuntimeScopeCarrier | null {
+    return this.threadScopes.get(threadId) ?? null;
   }
 
   createThread(thread: ThreadInfo): void {
@@ -130,6 +137,24 @@ function makeMessage(overrides?: Partial<InboundMessage>): InboundMessage {
     timestamp: "1700000000.000000",
     ...overrides,
   };
+}
+
+function makeScope(
+  overrides?: Partial<NonNullable<RuntimeScopeCarrier["workspace"]>>,
+): RuntimeScopeCarrier {
+  return buildRuntimeScopeCarrier({
+    workspace: {
+      provider: "slack",
+      source: "explicit",
+      workspaceId: "T_PRIMARY",
+      installId: "primary",
+      ...overrides,
+    },
+    instance: {
+      source: "compatibility",
+      compatibilityKey: "default",
+    },
+  })!;
 }
 
 // ─── Tests ───────────────────────────────────────────────
@@ -380,6 +405,68 @@ describe("MessageRouter — route", () => {
     const decision = router.route(makeMessage({ userId: "U001" }));
 
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
+  });
+
+  it("rejects known-thread messages that conflict with the stored thread scope", () => {
+    const agent = makeAgent({ id: "a1", name: "ScopedBot", metadata: { scope: makeScope() } });
+    db.agents = [agent];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "a1" }));
+    db.threadScopes.set("t-100", makeScope());
+
+    const decision = router.route(
+      makeMessage({
+        threadId: "t-100",
+        scope: makeScope({ workspaceId: "T_SECONDARY", installId: "secondary" }),
+      }),
+    );
+
+    expect(decision.action).toBe("reject");
+    expect(decision).toMatchObject({
+      reason: expect.stringContaining("existing thread authorization"),
+    });
+  });
+
+  it("rejects thread-owner delivery when the agent scope does not match the inbound scope", () => {
+    const owner = makeAgent({
+      id: "a1",
+      name: "ScopedBot",
+      metadata: { scope: makeScope() },
+    });
+    db.agents = [owner];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "a1" }));
+
+    const decision = router.route(
+      makeMessage({
+        threadId: "t-100",
+        scope: makeScope({ workspaceId: "T_SECONDARY", installId: "secondary" }),
+      }),
+    );
+
+    expect(decision.action).toBe("reject");
+    expect(decision).toMatchObject({
+      reason: expect.stringContaining("not authorized for agent ScopedBot"),
+    });
+  });
+
+  it("rejects channel assignment routing when the assigned agent is out of scope", () => {
+    const agent = makeAgent({
+      id: "a2",
+      name: "ChannelBot",
+      metadata: { scope: makeScope() },
+    });
+    db.agents = [agent];
+    db.channelAssignments.set("C001", { channel: "C001", agentId: "a2" });
+
+    const decision = router.route(
+      makeMessage({
+        scope: makeScope({ workspaceId: "T_SECONDARY", installId: "secondary" }),
+      }),
+    );
+
+    expect(decision.action).toBe("reject");
+    expect(decision).toMatchObject({
+      reason: expect.stringContaining("not authorized for agent ChannelBot"),
+    });
   });
 
   it("thread ownership takes priority over channel assignment", () => {

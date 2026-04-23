@@ -1,4 +1,5 @@
 import os from "node:os";
+import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { InboxMessage } from "./helpers.js";
@@ -49,10 +50,12 @@ import {
 import { normalizeReactionName } from "./reaction-triggers.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 import { performSlackUpload, prepareSlackUpload } from "./slack-upload.js";
+import { getSlackScopeAuthorizationError } from "./slack-access.js";
 import { TtlCache } from "./ttl-cache.js";
 
 export interface SlackToolsThreadContextPort {
   resolveThreadChannel: (threadTs: string | undefined) => Promise<string | null>;
+  resolveThreadScope: (threadTs: string | undefined) => Promise<RuntimeScopeCarrier | null>;
   noteThreadReply: (threadTs: string, channelId: string) => void;
   clearPendingAttention: (threadTs: string) => void;
 }
@@ -60,6 +63,7 @@ export interface SlackToolsThreadContextPort {
 export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
   getDefaultChannel: () => string | undefined;
+  getDefaultScope: () => RuntimeScopeCarrier;
   getSecurityPrompt: () => string;
   inbox: InboxMessage[];
   slack: (method: string, token: string, body?: Record<string, unknown>) => Promise<SlackResult>;
@@ -242,6 +246,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
   const {
     getBotToken,
     getDefaultChannel,
+    getDefaultScope,
     getSecurityPrompt,
     inbox,
     slack,
@@ -260,6 +265,16 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
   } = deps;
 
   async function resolveTrackedThreadChannel(threadTs: string | undefined): Promise<string | null> {
+    const threadScope = await threadContext.resolveThreadScope(threadTs);
+    const scopeError = getSlackScopeAuthorizationError({
+      actualScope: threadScope,
+      expectedScope: getDefaultScope(),
+      target: threadTs ? `thread ${threadTs}` : undefined,
+    });
+    if (scopeError) {
+      throw new Error(scopeError);
+    }
+
     return threadContext.resolveThreadChannel(threadTs);
   }
 

@@ -4,6 +4,10 @@ import {
   buildCompatibilityInstanceScope,
   buildCompatibilityWorkspaceScope,
   buildRuntimeScopeCarrier,
+  formatRuntimeScopeCarrier,
+  getRuntimeScopeConflicts,
+  isRuntimeScopeAuthorized,
+  parseRuntimeScopeCarrier,
   type InboundMessage,
 } from "./index.ts";
 
@@ -67,4 +71,92 @@ test("InboundMessage can carry first-class runtime scope metadata", () => {
 
   assert.equal(message.scope?.workspace?.workspaceId, "T123");
   assert.equal(message.scope?.instance?.compatibilityKey, "default");
+});
+
+test("parseRuntimeScopeCarrier reconstructs runtime scope carriers from plain metadata", () => {
+  const scope = parseRuntimeScopeCarrier({
+    workspace: {
+      provider: "slack",
+      source: "explicit",
+      workspaceId: "T123",
+      installId: "primary",
+      channelId: "C123",
+    },
+    instance: {
+      source: "compatibility",
+      compatibilityKey: "default",
+    },
+  });
+
+  assert.deepEqual(scope, {
+    workspace: {
+      provider: "slack",
+      source: "explicit",
+      workspaceId: "T123",
+      installId: "primary",
+      channelId: "C123",
+    },
+    instance: {
+      source: "compatibility",
+      compatibilityKey: "default",
+    },
+  });
+});
+
+test("runtime scope authorization rejects conflicting workspace and instance boundaries", () => {
+  const expected = buildRuntimeScopeCarrier({
+    workspace: {
+      provider: "slack",
+      source: "explicit",
+      workspaceId: "T_PRIMARY",
+      installId: "primary",
+    },
+    instance: {
+      source: "explicit",
+      instanceId: "broker-a",
+      instanceName: "Broker A",
+    },
+  });
+  const actual = buildRuntimeScopeCarrier({
+    workspace: {
+      provider: "slack",
+      source: "explicit",
+      workspaceId: "T_SECONDARY",
+      installId: "secondary",
+    },
+    instance: {
+      source: "explicit",
+      instanceId: "broker-b",
+      instanceName: "Broker B",
+    },
+  });
+
+  assert.equal(isRuntimeScopeAuthorized(actual, expected), false);
+  assert.deepEqual(getRuntimeScopeConflicts(actual, expected), [
+    {
+      dimension: "workspace",
+      field: "workspaceId",
+      expected: "T_PRIMARY",
+      actual: "T_SECONDARY",
+    },
+    {
+      dimension: "workspace",
+      field: "installId",
+      expected: "primary",
+      actual: "secondary",
+    },
+    {
+      dimension: "instance",
+      field: "instanceId",
+      expected: "broker-a",
+      actual: "broker-b",
+    },
+    {
+      dimension: "instance",
+      field: "instanceName",
+      expected: "Broker A",
+      actual: "Broker B",
+    },
+  ]);
+  assert.match(formatRuntimeScopeCarrier(actual), /workspace\.installId=secondary/);
 });

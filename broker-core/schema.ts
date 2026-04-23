@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getDefaultDbPath } from "./paths.js";
+import { parseRuntimeScopeCarrier, type RuntimeScopeCarrier } from "./types.js";
 import type {
   AgentInfo,
   ThreadInfo,
@@ -1134,6 +1135,36 @@ export class BrokerDB implements BrokerDBInterface {
 
   getAllowedUsers(): Set<string> | null {
     return this.allowedUsers === null ? null : new Set(this.allowedUsers);
+  }
+
+  getThreadScope(threadId: string): RuntimeScopeCarrier | null {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT metadata FROM messages
+         WHERE thread_id = ?
+           AND metadata IS NOT NULL
+         ORDER BY id DESC`,
+      )
+      .all(threadId) as Array<{ metadata: string | null }>;
+
+    for (const row of rows) {
+      if (!row.metadata) {
+        continue;
+      }
+
+      try {
+        const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+        const scope = parseRuntimeScopeCarrier(metadata.scope);
+        if (scope) {
+          return scope;
+        }
+      } catch {
+        // Ignore malformed historical metadata rows.
+      }
+    }
+
+    return null;
   }
 
   getChannelAssignment(_channel: string): ChannelAssignment | null {
