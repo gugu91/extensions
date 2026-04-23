@@ -2,6 +2,23 @@
 
 All notable changes to this repository are documented in this file.
 
+## [0.1.4] - 2026-04-23
+
+Pinet v0.1.4 is a focused patch release for `@gugu910/pi-slack-bridge` that fixes Slack external file-upload requests to use the form encoding Slack expects. The runtime behavior change is intentionally narrow: `slack_upload` should stop failing with `invalid_arguments` when it calls `files.getUploadURLExternal` and `files.completeUploadExternal`.
+
+### Version verification
+
+- `pi-extensions` — `0.1.4` (private repo package)
+- `@gugu910/pi-slack-bridge` — `0.1.4`
+- `@gugu910/pi-nvim-bridge` — `0.1.0` (unchanged)
+- `@gugu910/pi-neon-psql` — `0.1.0` (unchanged)
+- `@gugu910/pi-slack-api` — `0.2.0` (unchanged)
+
+### Release highlights
+
+- Form-encodes `files.getUploadURLExternal` and `files.completeUploadExternal` in the shared Slack request helper so Slack file uploads no longer send JSON to endpoints that expect URL-encoded form bodies.
+- Adds focused regression coverage for both external upload methods, including structured payload serialization for the completion request.
+
 ## [0.1.3] - 2026-04-08
 
 Pinet v0.1.3 is a narrow follow-up patch for `@gugu910/pi-slack-bridge` after `0.1.2` was published with real Slack identifiers in the package README settings example. Because published npm tarballs are immutable, this release corrects the npm-visible package surface with scrubbed example placeholders while leaving the runtime behavior unchanged.
