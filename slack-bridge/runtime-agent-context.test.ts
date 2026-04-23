@@ -469,11 +469,17 @@ describe("createRuntimeAgentContext", () => {
       role: "broker",
       skinTheme: "midnight",
       personality: "observant",
+      topology: {
+        mode: "compatibility-single",
+        installCount: 1,
+        defaultInstallId: "default",
+      },
       scope: {
         workspace: {
           provider: "slack",
           source: "compatibility",
           compatibilityKey: "default",
+          installId: "default",
         },
         instance: {
           source: "compatibility",
@@ -484,11 +490,17 @@ describe("createRuntimeAgentContext", () => {
     expect(metadata.capabilities).toMatchObject({
       role: "broker",
       tools: ["build", "git", "lint", "test", "typecheck"],
+      topology: {
+        mode: "compatibility-single",
+        installCount: 1,
+        defaultInstallId: "default",
+      },
       scope: {
         workspace: {
           provider: "slack",
           source: "compatibility",
           compatibilityKey: "default",
+          installId: "default",
         },
         instance: {
           source: "compatibility",
@@ -499,6 +511,10 @@ describe("createRuntimeAgentContext", () => {
         "role:broker",
         "repo:extensions",
         "branch:feat/runtime-agent-context",
+        "install:default",
+        "topology-mode:compatibility-single",
+        "topology-installs:1",
+        "topology-default:default",
         "tool:build",
         "tool:git",
         "tool:lint",
@@ -508,6 +524,64 @@ describe("createRuntimeAgentContext", () => {
     });
 
     fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it("uses the selected explicit install topology in agent metadata", async () => {
+    const { deps } = createDeps({
+      state: {
+        settings: {
+          defaultInstallId: "primary",
+          installs: [
+            {
+              installId: "primary",
+              workspaceId: "T_PRIMARY",
+              botToken: "xoxb-primary",
+              appToken: "xapp-primary",
+              defaultChannel: "C_PRIMARY",
+            },
+          ],
+        },
+      },
+      gitContext: {
+        cwd: process.cwd(),
+        repo: "extensions",
+        repoRoot: process.cwd(),
+        branch: "feat/runtime-agent-context-topology",
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+    const metadata = await runtimeAgentContext.getAgentMetadata("worker");
+
+    expect(metadata).toMatchObject({
+      topology: {
+        mode: "explicit-single",
+        installCount: 1,
+        defaultInstallId: "primary",
+      },
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+      },
+    });
+    expect(metadata.capabilities).toMatchObject({
+      topology: {
+        mode: "explicit-single",
+        installCount: 1,
+        defaultInstallId: "primary",
+      },
+      tags: expect.arrayContaining([
+        "workspace:T_PRIMARY",
+        "install:primary",
+        "topology-mode:explicit-single",
+        "topology-installs:1",
+        "topology-default:primary",
+      ]),
+    });
   });
 
   it("applies registration identity and exposes metadata/id helper behavior", () => {

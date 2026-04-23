@@ -116,6 +116,17 @@ function createDeps(state: TestState, overrides: Partial<SinglePlayerRuntimeDeps
     getAgentAliases: () => ["Cobalt Olive Crane"],
     getAgentOwnerToken: () => "owner:crane",
     getBotUserId: () => socketState.botUserId,
+    getDefaultScope: () => ({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    }),
     getThreads: () => state.threads,
     getPendingEyes: () => state.pendingEyes,
     getUnclaimedThreads: () => state.unclaimedThreads,
@@ -306,6 +317,66 @@ describe("single-player-runtime", () => {
     });
     expect(spies.updateBadge).toHaveBeenCalledTimes(1);
     expect(spies.maybeDrainInboxIfIdle).toHaveBeenCalledWith(ctx);
+  });
+
+  it("preserves explicit install scope on inbound Slack messages", async () => {
+    const state: TestState = {
+      threads: new Map(),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const ctx = createContext();
+    const { deps, spies } = createDeps(state, {
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const runtime = createSinglePlayerRuntime(deps);
+
+    await runtime.connect(ctx);
+
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    await socketConfig?.onMessage?.({
+      type: "message",
+      channel: "D123",
+      channel_type: "im",
+      user: "U_SENDER",
+      text: "topology hello",
+      ts: "101.1",
+      thread_ts: "101.1",
+    });
+
+    expect(spies.pushInboxMessage).toHaveBeenCalledWith({
+      channel: "D123",
+      threadTs: "101.1",
+      userId: "U_SENDER",
+      text: "topology hello",
+      timestamp: "101.1",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+          channelId: "D123",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
+    });
   });
 
   it("preserves file-share metadata on inbound Slack messages", async () => {

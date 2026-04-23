@@ -8,12 +8,15 @@ import {
   buildIdentityReplyGuidelines,
   buildPinetOwnerToken,
   buildPinetSkinAssignment,
-  buildSlackCompatibilityScope,
   getSlackUserAccessWarning,
   isUserAllowed as checkUserAllowed,
   loadSettings as loadSettingsFromFile,
   normalizeOwnedThreads,
   resolveRuntimeAgentIdentity,
+  resolveSlackDefaultScope,
+  resolveSlackRuntimeSettings,
+  resolveSlackTopology,
+  summarizeSlackTopology,
   shortenPath,
   type SlackBridgeSettings,
 } from "./helpers.js";
@@ -246,10 +249,10 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
   }
 
   function refreshSettings(): void {
-    const settings = loadSettingsFromFile();
+    const settings = resolveSlackRuntimeSettings(loadSettingsFromFile(), process.env);
     deps.setSettings(settings);
-    deps.setBotToken(settings.botToken ?? process.env.SLACK_BOT_TOKEN);
-    deps.setAppToken(settings.appToken ?? process.env.SLACK_APP_TOKEN);
+    deps.setBotToken(settings.botToken);
+    deps.setAppToken(settings.appToken);
     deps.setAllowedUsers(
       buildAllowlist(
         settings,
@@ -360,13 +363,19 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     const { cwd, repo, repoRoot, branch } = gitContext;
     const resolvedRepoRoot = repoRoot ?? cwd;
     const tools = detectProjectTools(resolvedRepoRoot, cwd);
-    const scope = buildSlackCompatibilityScope();
+    const scope = resolveSlackDefaultScope(deps.getSettings(), process.env);
+    const topology = summarizeSlackTopology(resolveSlackTopology(deps.getSettings(), process.env));
     const tags = [
       `role:${role}`,
       `repo:${repo}`,
       ...(branch ? [`branch:${branch}`] : []),
       ...(scope.workspace?.provider ? [`scope-provider:${scope.workspace.provider}`] : []),
       ...(scope.workspace?.compatibilityKey ? [`scope:${scope.workspace.compatibilityKey}`] : []),
+      ...(scope.workspace?.workspaceId ? [`workspace:${scope.workspace.workspaceId}`] : []),
+      ...(scope.workspace?.installId ? [`install:${scope.workspace.installId}`] : []),
+      `topology-mode:${topology.mode}`,
+      `topology-installs:${topology.installCount}`,
+      `topology-default:${topology.defaultInstallId}`,
       ...tools.map((tool) => `tool:${tool}`),
     ];
 
@@ -378,6 +387,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       repo,
       repoRoot,
       scope,
+      topology,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       ...(deps.getAgentPersonality() ? { personality: deps.getAgentPersonality() } : {}),
       capabilities: {
@@ -388,6 +398,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
         tools,
         tags,
         scope,
+        topology,
       },
     };
   }

@@ -1,3 +1,4 @@
+import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { agentOwnsThread, type InboxMessage, normalizeOwnedThreads } from "./helpers.js";
 import {
@@ -56,6 +57,7 @@ export interface SinglePlayerRuntimeDeps {
   getAgentAliases: () => Iterable<string>;
   getAgentOwnerToken: () => string;
   getBotUserId: () => string | null;
+  getDefaultScope: () => RuntimeScopeCarrier;
   getThreads: () => Map<string, SinglePlayerThreadState>;
   getPendingEyes: () => Map<string, SinglePlayerPendingAttention[]>;
   getUnclaimedThreads: () => SinglePlayerUnclaimedThreads;
@@ -333,6 +335,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
         scope: buildSlackThreadRuntimeScope({
           channelId: item.channel,
           context: threadInfo?.context,
+          defaultScope: deps.getDefaultScope(),
         }),
       });
       deps.persistState();
@@ -406,6 +409,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       scope: buildSlackThreadRuntimeScope({
         channelId: channel,
         context: threadInfo?.context,
+        defaultScope: deps.getDefaultScope(),
       }),
       ...(isChannelMention && { isChannelMention: true }),
       ...(metadata ? { metadata } : {}),
@@ -470,6 +474,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       scope: buildSlackThreadRuntimeScope({
         channelId: normalized.channel,
         context: threadInfo?.context,
+        defaultScope: deps.getDefaultScope(),
       }),
     });
     deps.updateBadge();
@@ -496,6 +501,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
         slack: deps.slack,
         botToken: deps.getBotToken(),
         appToken: deps.getAppToken(),
+        getDefaultScope: () => deps.getDefaultScope(),
         resolveBotUserIdOnConnect: false,
         dedup: deps.dedup,
         abortAndWait: deps.abortSlackRequests,

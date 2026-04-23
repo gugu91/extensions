@@ -151,9 +151,11 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)                                                                       |
 | `allowedUsers`                 | no       | Slack user IDs that can interact; when unset, access is denied unless `allowAllWorkspaceUsers` is true             |
 | `allowAllWorkspaceUsers`       | no       | Explicit opt-in for workspace-wide Slack access when you do not want a user allowlist                              |
-| `defaultChannel`               | no       | Default channel for the `slack` dispatcher `post_channel` action                                                   |
-| `logChannel`                   | no       | Channel for broker activity logs                                                                                   |
-| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                                  |
+| `defaultChannel`               | no       | Default channel for `slack_post_channel` in legacy single-install compatibility mode                                   |
+| `logChannel`                   | no       | Channel for broker activity logs in legacy single-install compatibility mode                                       |
+| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                                 |
+| `defaultInstallId`             | no       | When `installs` is configured, selects which install projects into today’s singleton runtime                       |
+| `installs`                     | no       | Explicit Slack install/workspace topology entries; each install can carry scoped tokens and surface targets        |
 | `runtimeMode`                  | no       | Explicit startup mode: `"off"`, `"single"`, `"broker"`, or `"follower"`                                            |
 | `autoConnect`                  | no       | Legacy compatibility alias for `runtimeMode: "single"`                                                             |
 | `autoFollow`                   | no       | Legacy compatibility alias for follower startup when a broker socket exists                                        |
@@ -164,17 +166,51 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `security.requireConfirmation` | no       | Runtime-require Slack approval before matching tools execute; core tools need a specific Slack thread context      |
 | `security.blockedTools`        | no       | Runtime-block matching tools for Slack-triggered turns, including core tools                                       |
 
+## Slack topology model (compatibility-first)
+
+Slack/Pinet now has an explicit install/workspace topology model that still preserves today’s single-workspace behavior by default.
+
+### Explicit install topology
+
+```json
+{
+  "slack-bridge": {
+    "defaultInstallId": "primary",
+    "installs": [
+      {
+        "installId": "primary",
+        "workspaceId": "T_PRIMARY",
+        "botToken": "xoxb-primary",
+        "appToken": "xapp-primary",
+        "defaultChannel": "C_PRIMARY_DEFAULT",
+        "logChannel": "C_PRIMARY_LOGS",
+        "controlPlaneCanvasChannel": "C_PRIMARY_OPS",
+        "homeTabEnabled": true
+      }
+    ]
+  }
+}
+```
+
+Compatibility and current limits:
+
+- if `installs` is omitted, the bridge synthesizes **one default compatibility install** from the legacy singleton settings
+- when `installs` is present, the selected `defaultInstallId` projects its `botToken`, `appToken`, `defaultChannel`, `logChannel`, and control-plane/Home targets into today’s singleton runtime
+- a missing or empty Slack `teamId` still stays **unknown** — the bridge does not invent a fake workspace ID
+- this slice defines topology/config plumbing only; live multi-install orchestration lands later in `#550`
+- authorization/enforcement changes stay out of this slice and land later in `#547` / `#548`
+
 ## Scope carrier model (compatibility-first)
 
-Slack/Pinet now threads a first-class runtime `scope` carrier through shared message contracts and runtime metadata.
+Slack/Pinet threads a first-class runtime `scope` carrier through shared message contracts and runtime metadata.
 
-For this first slice:
+For this slice:
 
-- **workspace/install scope** is carried as compatibility-first metadata for Slack
+- **workspace/install scope** is carried as first-class metadata for Slack
 - **instance scope** is also carried as a first-class compatibility carrier
-- today’s single-workspace deployments use one default compatibility scope
-- a missing or empty Slack `teamId` stays **unknown** — the bridge does not invent a fake workspace ID
-- these carriers are metadata only in this slice; enforcement and multi-install behavior land later in `#547` / `#550`
+- compatibility mode uses one default install with install id `default`
+- explicit install topology preserves `workspaceId` + `installId` in runtime metadata without changing routing/orchestration yet
+- these carriers remain metadata/plumbing only in this slice
 
 ## Usage
 
@@ -278,11 +314,12 @@ Startup selection:
 
 ## Scope carriers (compatibility-first)
 
-`slack-bridge` now emits first-class runtime scope carriers in shared transport contracts and agent runtime metadata.
+`slack-bridge` emits first-class runtime scope carriers in shared transport contracts and agent runtime metadata.
 
 - `scope.workspace` models the current Slack install/workspace scope.
 - `scope.instance` models the current broker/runtime instance scope.
-- in the first slice, both stay **compatibility-first**: today’s singleton runtime gets one default compatibility scope
+- in compatibility mode, today’s singleton runtime gets one default install scope with install id `default`
+- with explicit `installs` config, the selected default install preserves `workspaceId` + `installId` in runtime metadata
 - if Slack omits `team_id`, the carrier keeps the workspace id **unknown** instead of inventing a fake one
 - this slice is metadata/plumbing only: it does **not** change routing, enforcement, or multi-install orchestration yet
 

@@ -1534,6 +1534,54 @@ describe("SlackAdapter — send", () => {
     });
   });
 
+  it("uses the configured default install scope when metadata is emitted", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+
+    await adapter.send({
+      threadId: "100.200",
+      channel: "C123",
+      text: "Hello",
+      agentName: "TestBot",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    const meta = body.metadata as {
+      event_type: string;
+      event_payload: Record<string, unknown>;
+    };
+    expect(meta.event_payload.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_PRIMARY",
+        installId: "primary",
+        channelId: "C123",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+  });
+
   it("includes agent_owner in metadata when agentOwnerToken is provided", async () => {
     fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
 
