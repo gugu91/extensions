@@ -1375,6 +1375,26 @@ describe("buildBrokerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("NEVER do the work yourself");
   });
+
+  it("requires prioritized @gugu91 issues before routing extension changes", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("PRIORITIZED ISSUE GATE");
+    expect(joined).toContain("@gugu91 has prioritized");
+    expect(joined).toContain("Open issues authored by anyone else");
+    expect(joined).toContain("stop and ask");
+  });
+
+  it("keeps broker delegation and broadcasts scoped to the target repo", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("REPO-SCOPED DELEGATION");
+    expect(joined).toContain("pinet_agents");
+    expect(joined).toContain("gugu91/extensions");
+    expect(joined).toContain("never borrow idle workers from another repo");
+    expect(joined).toContain("REPO-SCOPED BROADCASTS");
+    expect(joined).toContain("do not use `#all`");
+  });
 });
 
 // ─── buildIdentityReplyGuidelines ─────────────────────────────
@@ -1400,6 +1420,15 @@ describe("buildWorkerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("ACKs, blockers, status updates, and final results");
     expect(joined).toContain("ack/work/ask/report");
+  });
+
+  it("mirrors repo-scoped and prioritized-issue delegation rules for workers", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_agents` with the target repo");
+    expect(joined).toContain("same repo/worktree");
+    expect(joined).toContain("prioritized or explicitly approved by @gugu91");
+    expect(joined).toContain("@gugu91 priority/approval");
   });
 
   it("tells workers to explicitly mark themselves idle/free when work is done", () => {
