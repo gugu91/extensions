@@ -92,25 +92,25 @@ const BROWSER_ACTION_SCHEMAS: Record<BrowserAction, BrowserActionSchema> = {
   snapshot: {
     description: "Capture a compact text/metadata snapshot of the current page.",
     requires_session_id: true,
-    args: { optional: ["selector"] },
     example: { action: "snapshot", session_id: "browser_123" },
   },
   extract: {
-    description: "Extract text or simple attributes from matching page elements.",
+    description:
+      "Extract body text when no selector is provided, or extract text/attributes from matching page elements.",
     requires_session_id: true,
-    args: { required: ["selector"], optional: ["attribute", "limit"] },
+    args: { optional: ["selector", "attribute", "max_items"] },
     example: { action: "extract", session_id: "browser_123", args: { selector: "h1" } },
   },
   click: {
-    description: "Click an element matched by selector or accessible label.",
+    description: "Click an element matched by selector.",
     requires_session_id: true,
-    args: { optional: ["selector", "label", "timeout_ms"] },
+    args: { required: ["selector"], optional: ["timeout_ms", "double_click"] },
     example: { action: "click", session_id: "browser_123", args: { selector: "button" } },
   },
   fill: {
-    description: "Fill an input-like element.",
+    description: "Fill an input-like element matched by selector.",
     requires_session_id: true,
-    args: { required: ["value"], optional: ["selector", "label", "timeout_ms"] },
+    args: { required: ["selector", "value"], optional: ["timeout_ms"] },
     example: {
       action: "fill",
       session_id: "browser_123",
@@ -124,9 +124,11 @@ const BROWSER_ACTION_SCHEMAS: Record<BrowserAction, BrowserActionSchema> = {
     example: { action: "press", session_id: "browser_123", args: { key: "Enter" } },
   },
   wait: {
-    description: "Wait for text, selector, URL, timeout, or load state.",
+    description: "Wait for selector, text, URL substring, load state, or explicit delay.",
     requires_session_id: true,
-    args: { optional: ["text", "selector", "url", "timeout_ms", "load_state"] },
+    args: {
+      optional: ["selector", "text", "url_includes", "load_state", "delay_ms", "timeout_ms"],
+    },
     example: { action: "wait", session_id: "browser_123", args: { text: "Loaded" } },
   },
   screenshot: {
@@ -140,16 +142,17 @@ const BROWSER_ACTION_SCHEMAS: Record<BrowserAction, BrowserActionSchema> = {
     },
   },
   tabs: {
-    description: "List pages/tabs, switch active page, or close a page.",
+    description: "List pages/tabs and optionally activate a page by id.",
     requires_session_id: true,
-    args: { optional: ["op", "page_id"] },
-    example: { action: "tabs", session_id: "browser_123", args: { op: "list" } },
+    args: { optional: ["activate_page_id"] },
+    example: { action: "tabs", session_id: "browser_123" },
   },
   close: {
-    description: "Close a page or an entire browser session.",
+    description:
+      "Close the selected page when page_id is provided, or close the entire browser session.",
     requires_session_id: true,
-    args: { optional: ["page_id"] },
-    example: { action: "close", session_id: "browser_123" },
+    args: { optional: ["close_session"] },
+    example: { action: "close", session_id: "browser_123", args: { close_session: true } },
   },
 };
 

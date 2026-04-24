@@ -150,6 +150,34 @@ test("buildBrowserDiscovery returns catalog and action schemas through the exist
   assert.match(JSON.stringify(navigate), /Navigate the active page/);
 });
 
+test("buildBrowserDiscovery action schemas match runtime-supported argument names", () => {
+  type RuntimeArgSchema = { args?: { required?: string[]; optional?: string[] } };
+  function schemaFor(action: string): RuntimeArgSchema {
+    const discovery = buildBrowserDiscovery(action);
+    assert.equal(typeof discovery.schema, "object");
+    assert.notEqual(discovery.schema, null);
+    return discovery.schema as RuntimeArgSchema;
+  }
+
+  assert.deepEqual(schemaFor("snapshot").args, undefined);
+  assert.deepEqual(schemaFor("extract").args, {
+    optional: ["selector", "attribute", "max_items"],
+  });
+  assert.deepEqual(schemaFor("click").args, {
+    required: ["selector"],
+    optional: ["timeout_ms", "double_click"],
+  });
+  assert.deepEqual(schemaFor("fill").args, {
+    required: ["selector", "value"],
+    optional: ["timeout_ms"],
+  });
+  assert.deepEqual(schemaFor("wait").args, {
+    optional: ["selector", "text", "url_includes", "load_state", "delay_ms", "timeout_ms"],
+  });
+  assert.deepEqual(schemaFor("tabs").args, { optional: ["activate_page_id"] });
+  assert.deepEqual(schemaFor("close").args, { optional: ["close_session"] });
+});
+
 test("buildBrowserDiscovery rejects unknown schema topics clearly", () => {
   assert.throws(() => buildBrowserDiscovery("unknown"), /Unsupported browser info topic/i);
 });
