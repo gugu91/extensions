@@ -309,7 +309,7 @@ export function formatInboxMessages(
     return `[thread ${m.threadTs}] ${n}: ${m.text}${metadataSuffix}`;
   });
 
-  return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
+  return `New Slack messages:\n${lines.join("\n")}\n\nReply in the relevant Slack thread using the thread IDs above.`;
 }
 
 function getPinetSenderLabel(message: FollowerInboxEntry["message"]): string {
@@ -379,9 +379,9 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
 
   const guidance = hasTerminalStandDown
     ? hasActionableWork
-      ? "Reply via pinet_message for actionable work only. For messages marked [terminal stand-down], do NOT acknowledge or reply unless you have a real blocker or materially new finding. For new tasks, ACK briefly, do the work, report blockers immediately, report the outcome when done."
+      ? "Reply via pinet_message for actionable work only. For messages marked [terminal stand-down], do NOT acknowledge or reply unless you have a real blocker or materially new finding."
       : "Reply via pinet_message only if you have a real blocker or materially new finding. Treat messages marked [terminal stand-down] as closed; do NOT send another acknowledgement."
-    : "Reply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.";
+    : "Reply via pinet_message for actionable work; use the thread context above for routing.";
 
   return `New Pinet messages:\n${lines.join("\n")}\n\n${guidance}`;
 }

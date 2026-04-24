@@ -432,9 +432,8 @@ describe("formatInboxMessages", () => {
     ];
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("[thread 123.456] will: hello");
-    expect(result).toContain(
-      "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
-    );
+    expect(result).toContain("Reply in the relevant Slack thread using the thread IDs above.");
+    expect(result).not.toContain("ACK briefly, do the work");
   });
 
   it("formats a channel mention", () => {
@@ -589,8 +588,9 @@ describe("formatPinetInboxMessages", () => {
     expect(result).toContain(
       "[thread a2a:broker:worker] broker-id (Broker Bunny): Take issue #175",
     );
-    expect(result).toContain("Reply via pinet_message.");
-    expect(result).toContain("ACK briefly, do the work");
+    expect(result).toContain("Reply via pinet_message for actionable work");
+    expect(result).toContain("use the thread context above for routing");
+    expect(result).not.toContain("ACK briefly, do the work");
   });
 
   it("falls back to the sender id when no senderAgent metadata exists", () => {
@@ -623,9 +623,7 @@ describe("formatPinetInboxMessages", () => {
     expect(result).toContain("[terminal stand-down]");
     expect(result).toContain("Treat messages marked [terminal stand-down] as closed");
     expect(result).toContain("do NOT send another acknowledgement");
-    expect(result).not.toContain(
-      "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
-    );
+    expect(result).not.toContain("ACK briefly, do the work");
   });
 
   it("keeps new-task reply guidance when a batch mixes closeout and actionable work", () => {
@@ -650,7 +648,7 @@ describe("formatPinetInboxMessages", () => {
 
     expect(result).toContain("[terminal stand-down]");
     expect(result).toContain("Reply via pinet_message for actionable work only.");
-    expect(result).toContain("For new tasks, ACK briefly, do the work");
+    expect(result).not.toContain("ACK briefly, do the work");
     expect(result).toContain(
       "do NOT acknowledge or reply unless you have a real blocker or materially new finding",
     );
@@ -1400,6 +1398,15 @@ describe("buildWorkerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("ACKs, blockers, status updates, and final results");
     expect(joined).toContain("ack/work/ask/report");
+  });
+
+  it("keeps the durable ACK, blocker, outcome, and reply-routing contract", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("ACK briefly");
+    expect(joined).toContain("report it immediately");
+    expect(joined).toContain("report the outcome");
+    expect(joined).toContain("Always reply where the task came from");
   });
 
   it("tells workers to explicitly mark themselves idle/free when work is done", () => {

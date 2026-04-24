@@ -11,6 +11,8 @@ type ToolResponse = {
 
 type ToolDefinition = {
   name: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   execute: (id: string, params: Record<string, unknown>) => Promise<ToolResponse>;
 };
 
@@ -341,6 +343,54 @@ describe("registerSlackTools", () => {
       requireToolPolicy,
     };
   }
+
+  it("keeps slack_inbox prompt guidance Slack-specific instead of restating the worker loop", () => {
+    const { registeredTools } = setup();
+    const inboxTool = registeredTools.get("slack_inbox");
+    const guidance = inboxTool?.promptGuidelines?.join("\n") ?? "";
+
+    expect(inboxTool?.promptSnippet).toBe("Check for new incoming Slack messages.");
+    expect(guidance).toContain("Use slack_inbox to read and clear pending Slack messages");
+    expect(guidance).toContain("slack dispatcher for non-hot Slack actions");
+    expect(guidance).toContain("Security guardrails may be active");
+    expect(guidance).not.toContain("ACK briefly");
+    expect(guidance).not.toContain("Reaction-triggered requests");
+  });
+
+  it("keeps slack_send prompt metadata concise and tool-local", () => {
+    const { registeredTools } = setup();
+    const sendTool = registeredTools.get("slack_send");
+    const guidance = sendTool?.promptGuidelines?.join("\n") ?? "";
+
+    expect(sendTool?.promptSnippet).toBe(
+      "Send a message in a Slack assistant thread; include thread_ts when replying to an existing thread.",
+    );
+    expect(guidance).toContain("Use slack_send for messages in the current Slack assistant thread");
+    expect(guidance).toContain("include thread_ts when replying");
+    expect(guidance).not.toContain("ACK briefly");
+    expect(guidance).not.toContain("always reply where the task came from");
+  });
+
+  it("keeps dispatcher prompt metadata focused on cold Slack actions", () => {
+    const { registeredTools } = setup();
+    const dispatcher = registeredTools.get("slack");
+    const guidance = dispatcher?.promptGuidelines?.join("\n") ?? "";
+
+    expect(dispatcher?.promptSnippet).toContain(
+      "Run non-hot Slack actions through a compact dispatcher",
+    );
+    expect(guidance).toContain("Use slack_inbox and slack_send for the hot path");
+    expect(guidance).toContain("Cold actions are guarded as slack:<action>");
+    expect(guidance).not.toContain("ACK briefly");
+  });
+
+  it("does not register retired rich-message builder tools with duplicated inbox guidance", () => {
+    const { registeredTools } = setup();
+
+    expect(registeredTools.has("slack_blocks_build")).toBe(false);
+    expect(registeredTools.has("slack_modal_build")).toBe(false);
+    expect(registeredTools.has("slack_post_channel")).toBe(false);
+  });
 
   it("reads the latest security prompt when slack_inbox executes", async () => {
     const { inbox, tools, setSecurityPrompt } = setup();

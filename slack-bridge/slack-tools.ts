@@ -345,18 +345,16 @@ function getSlackDispatcherExamples(action: string): Array<Record<string, unknow
 
 function buildSlackInboxPromptGuidelines(): string[] {
   return [
-    "You are connected to Slack via the slack-bridge extension.",
-    "When Slack messages arrive: ACK briefly, do the work, report blockers immediately, and report the outcome when done.",
+    "Use slack_inbox to read and clear pending Slack messages; returned text carries message/thread-local context.",
     "Use slack_send for direct assistant-thread replies. Use the slack dispatcher for non-hot Slack actions such as reactions, reads, uploads, schedules, channel posts, pins, bookmarks, canvases, modals, presence, exports, and confirmations.",
     "Call slack with action='help' for the cold-action catalogue, or action='help' with args.topic for a specific action schema and examples.",
     "Security guardrails may be active for Slack-triggered actions. Cold Slack actions are checked with slack:<action> guardrail names.",
-    "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages — treat them as explicit user instructions attached to the referenced Slack message or thread.",
   ];
 }
 
 function buildSlackSendPromptGuidelines(): string[] {
   return [
-    "Use slack_send for replies in the current Slack assistant thread; always reply where the task came from.",
+    "Use slack_send for messages in the current Slack assistant thread; include thread_ts when replying to an existing thread.",
     "For rich Block Kit JSON examples or modal/canvas patterns, load the slack-bridge skill instead of relying on tool schemas.",
   ];
 }
@@ -1370,7 +1368,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     label: "Slack Send",
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
-      "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
+      "Send a message in a Slack assistant thread; include thread_ts when replying to an existing thread.",
     promptGuidelines: buildSlackSendPromptGuidelines(),
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
