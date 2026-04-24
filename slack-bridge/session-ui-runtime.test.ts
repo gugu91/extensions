@@ -100,6 +100,29 @@ describe("createSessionUiRuntime", () => {
     expect(drainInbox).toHaveBeenCalledTimes(2);
   });
 
+  it("schedules an inbox drain retry until the session is truly idle", async () => {
+    vi.useFakeTimers();
+    try {
+      let idle = false;
+      const { deps, drainInbox } = createDeps({ getInboxLength: () => 1 });
+      const runtime = createSessionUiRuntime(deps);
+      const { ctx } = createContext({ idle: false });
+      (ctx as unknown as { isIdle: () => boolean }).isIdle = () => idle;
+
+      expect(runtime.maybeDrainInboxIfIdle(ctx)).toBe(false);
+      expect(drainInbox).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(drainInbox).not.toHaveBeenCalled();
+
+      idle = true;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(drainInbox).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("binds terminal input on session start and cleans it up on shutdown", () => {
     const unsubscribe = vi.fn();
     let terminalHandler:

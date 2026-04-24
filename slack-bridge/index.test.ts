@@ -1856,7 +1856,6 @@ describe("slack-bridge top-level shutdown", () => {
     await vi.waitFor(() => {
       expect(sendUserMessage).toHaveBeenCalledWith(
         expect.stringContaining("hello from Slack inbox"),
-        { deliverAs: "followUp" },
       );
     });
 
@@ -3518,9 +3517,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => {
-        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"), {
-          deliverAs: "followUp",
-        });
+        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"));
       });
       expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
 
@@ -3661,9 +3658,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => {
-        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"), {
-          deliverAs: "followUp",
-        });
+        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"));
       });
       expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
 
@@ -3822,9 +3817,7 @@ describe("slack-bridge Pinet reconnect", () => {
       await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
 
       expect(sendUserMessage).toHaveBeenCalledTimes(1);
-      expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"), {
-        deliverAs: "followUp",
-      });
+      expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"));
 
       await sessionShutdown?.({}, ctx);
       expect(setStatus).toHaveBeenCalled();

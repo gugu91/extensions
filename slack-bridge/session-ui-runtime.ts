@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const AUTO_DRAIN_INTERRUPT_SUPPRESSION_MS = 1_500;
+const AUTO_DRAIN_IDLE_RETRY_MS = 250;
 
 export type SessionUiStatusState = "ok" | "reconnecting" | "error" | "off";
 
@@ -32,6 +33,7 @@ type SessionUiWithTerminalInput = ExtensionContext["ui"] & {
 export function createSessionUiRuntime(deps: SessionUiRuntimeDeps): SessionUiRuntime {
   let suppressAutoDrainUntil = 0;
   let terminalInputUnsubscribe: (() => void) | null = null;
+  let deferredDrainTimer: ReturnType<typeof setTimeout> | null = null;
   let extCtx: ExtensionContext | null = null;
 
   function getExtensionContext(): ExtensionContext | null {
@@ -92,13 +94,43 @@ export function createSessionUiRuntime(deps: SessionUiRuntimeDeps): SessionUiRun
     return true;
   }
 
+  function clearDeferredDrainTimer(): void {
+    if (!deferredDrainTimer) return;
+    clearTimeout(deferredDrainTimer);
+    deferredDrainTimer = null;
+  }
+
+  function scheduleDeferredDrain(ctx: ExtensionContext): void {
+    extCtx = ctx;
+    if (deferredDrainTimer) return;
+
+    deferredDrainTimer = setTimeout(() => {
+      deferredDrainTimer = null;
+      if (deps.getInboxLength() === 0) return;
+      const latestCtx = extCtx;
+      if (!latestCtx) return;
+      maybeDrainInboxIfIdle(latestCtx);
+    }, AUTO_DRAIN_IDLE_RETRY_MS);
+    deferredDrainTimer.unref?.();
+  }
+
   function maybeDrainInboxIfIdle(ctx?: ExtensionContext): boolean {
-    if (!(ctx?.isIdle?.() ?? false)) {
+    if (ctx) {
+      extCtx = ctx;
+    }
+
+    const activeCtx = ctx ?? extCtx;
+    if (!(activeCtx?.isIdle?.() ?? false)) {
+      if (activeCtx && !shouldSuppressAutomaticInboxDrain() && deps.getInboxLength() > 0) {
+        scheduleDeferredDrain(activeCtx);
+      }
       return false;
     }
     if (shouldSuppressAutomaticInboxDrain()) {
       return false;
     }
+
+    clearDeferredDrainTimer();
     deps.drainInbox();
     return true;
   }
@@ -121,6 +153,7 @@ export function createSessionUiRuntime(deps: SessionUiRuntimeDeps): SessionUiRun
   function cleanupForSessionShutdown(): void {
     terminalInputUnsubscribe?.();
     terminalInputUnsubscribe = null;
+    clearDeferredDrainTimer();
     suppressAutoDrainUntil = 0;
   }
 

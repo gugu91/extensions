@@ -2,9 +2,12 @@ import { getBrokerInboxIds } from "./broker-delivery.js";
 import { markFollowerInboxIdsDelivered, type FollowerDeliveryState } from "./follower-delivery.js";
 import { formatInboxMessages, type InboxMessage } from "./helpers.js";
 
+const DEFAULT_MAX_MESSAGES_PER_DRAIN = 5;
+
 export interface InboxDrainRuntimeDeps {
-  sendUserMessage: (text: string, options?: { deliverAs?: "followUp" }) => void;
-  takeInboxMessages: () => InboxMessage[];
+  sendUserMessage: (text: string) => void;
+  isIdle: () => boolean;
+  takeInboxMessages: (maxMessages?: number) => InboxMessage[];
   restoreInboxMessages: (messages: InboxMessage[]) => void;
   updateBadge: () => void;
   reportStatus: (status: "working" | "idle") => Promise<void>;
@@ -19,6 +22,7 @@ export interface InboxDrainRuntimeDeps {
   flushFollowerDeliveredAcks: () => Promise<void>;
   markBrokerInboxIdsDelivered: (inboxIds: number[]) => void;
   getFollowerDeliveryState: () => FollowerDeliveryState;
+  maxMessagesPerDrain?: number;
 }
 
 export interface InboxDrainRuntime {
@@ -29,16 +33,15 @@ export interface InboxDrainRuntime {
 
 export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrainRuntime {
   function deliverFollowUpMessage(text: string): boolean {
+    if (!deps.isIdle()) {
+      return false;
+    }
+
     try {
-      deps.sendUserMessage(text, { deliverAs: "followUp" });
+      deps.sendUserMessage(text);
       return true;
     } catch {
-      try {
-        deps.sendUserMessage(text);
-        return true;
-      } catch {
-        return false;
-      }
+      return false;
     }
   }
 
@@ -51,7 +54,12 @@ export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrain
   }
 
   function drainInbox(): void {
-    const pending = deps.takeInboxMessages();
+    if (!deps.isIdle()) {
+      return;
+    }
+
+    const maxMessages = deps.maxMessagesPerDrain ?? DEFAULT_MAX_MESSAGES_PER_DRAIN;
+    const pending = deps.takeInboxMessages(maxMessages);
     if (pending.length === 0) {
       return;
     }

@@ -1,5 +1,7 @@
 export interface PinetMaintenanceDeliveryAgentRecord {
   id: string;
+  name?: string;
+  emoji?: string;
 }
 
 export interface PinetMaintenanceDeliveryBrokerDbPort {
@@ -17,19 +19,29 @@ export interface PinetMaintenanceDeliveryBrokerDbPort {
   ) => void;
 }
 
-export interface PinetMaintenanceDeliverySendMessageOptions {
-  deliverAs?: "followUp";
-}
-
 export interface PinetMaintenanceDeliveryDeps {
   getActiveBrokerDb: () => PinetMaintenanceDeliveryBrokerDbPort | null;
   getActiveBrokerSelfId: () => string | null;
-  sendUserMessage: (body: string, options?: PinetMaintenanceDeliverySendMessageOptions) => void;
+  isIdle: () => boolean;
+  sendUserMessage: (body: string) => void;
 }
 
 export interface PinetMaintenanceDelivery {
   sendBrokerMaintenanceMessage: (targetAgentId: string, body: string) => void;
   trySendBrokerFollowUp: (body: string, onDelivered: () => void) => void;
+}
+
+function formatBrokerOnlyMaintenanceMessage(
+  target: PinetMaintenanceDeliveryAgentRecord,
+  body: string,
+): string {
+  const label = [target.emoji, target.name].filter(Boolean).join(" ") || target.id;
+  return [
+    `RALPH broker-only maintenance for ${label} (${target.id}):`,
+    "",
+    "Original worker-directed maintenance note (not delivered to the worker/follower Pi queue):",
+    body,
+  ].join("\n");
 }
 
 export function createPinetMaintenanceDelivery(
@@ -42,29 +54,36 @@ export function createPinetMaintenanceDelivery(
     const target = db.getAgentById(targetAgentId);
     if (!target) return;
 
-    const threadId = `a2a:${selfId}:${target.id}`;
+    const threadId = `a2a:${selfId}:${selfId}`;
     if (!db.getThread(threadId)) {
       db.createThread(threadId, "agent", "", selfId);
     }
 
-    db.insertMessage(threadId, "agent", "outbound", selfId, body, [target.id], {
-      kind: "ralph_loop_nudge",
-      targetAgentId,
-    });
+    db.insertMessage(
+      threadId,
+      "agent",
+      "outbound",
+      selfId,
+      formatBrokerOnlyMaintenanceMessage(target, body),
+      [selfId],
+      {
+        kind: "ralph_loop_nudge",
+        targetAgentId: target.id,
+        brokerOnly: true,
+      },
+    );
   }
 
   function trySendBrokerFollowUp(body: string, onDelivered: () => void): void {
-    try {
-      deps.sendUserMessage(body, { deliverAs: "followUp" });
-      onDelivered();
+    if (!deps.isIdle()) {
       return;
+    }
+
+    try {
+      deps.sendUserMessage(body);
+      onDelivered();
     } catch {
-      try {
-        deps.sendUserMessage(body);
-        onDelivered();
-      } catch {
-        /* best effort */
-      }
+      /* best effort */
     }
   }
 

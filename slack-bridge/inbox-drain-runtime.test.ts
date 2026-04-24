@@ -26,11 +26,13 @@ function createDeps(overrides: Partial<InboxDrainRuntimeDeps> = {}) {
   let securityPrompt = "";
   let brokerRole: "broker" | "follower" | null = null;
   let followerClient = true;
+  let idle = true;
   const followerDeliveryState = createFollowerDeliveryState();
 
   const deps: InboxDrainRuntimeDeps = {
     sendUserMessage,
-    takeInboxMessages: () => inbox.splice(0, inbox.length),
+    isIdle: () => idle,
+    takeInboxMessages: (maxMessages) => inbox.splice(0, maxMessages ?? inbox.length),
     restoreInboxMessages: (messages) => {
       inbox.push(...messages);
     },
@@ -69,31 +71,38 @@ function createDeps(overrides: Partial<InboxDrainRuntimeDeps> = {}) {
     setFollowerClient: (value: boolean) => {
       followerClient = value;
     },
+    setIdle: (value: boolean) => {
+      idle = value;
+    },
   };
 }
 
 describe("createInboxDrainRuntime", () => {
-  it("delivers follow-up messages with a plain-send fallback", () => {
+  it("delivers held follow-up messages only through the idle prompt path", () => {
     const { runtime, sendUserMessage } = createDeps();
-    sendUserMessage
-      .mockImplementationOnce(() => {
-        throw new Error("followUp failed");
-      })
-      .mockImplementationOnce(() => undefined);
 
     expect(runtime.deliverFollowUpMessage("steady note")).toBe(true);
-    expect(sendUserMessage).toHaveBeenNthCalledWith(1, "steady note", { deliverAs: "followUp" });
-    expect(sendUserMessage).toHaveBeenNthCalledWith(2, "steady note");
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith("steady note");
   });
 
-  it("returns false when both follow-up delivery attempts fail", () => {
+  it("does not inject follow-up messages while the agent is active", () => {
+    const { runtime, sendUserMessage, setIdle } = createDeps();
+    setIdle(false);
+
+    expect(runtime.deliverFollowUpMessage("steady note")).toBe(false);
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns false when idle prompt delivery fails", () => {
     const { runtime, sendUserMessage } = createDeps();
     sendUserMessage.mockImplementation(() => {
       throw new Error("send failed");
     });
 
     expect(runtime.deliverFollowUpMessage("steady note")).toBe(false);
-    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith("steady note");
   });
 
   it("formats pending inbox work, applies security guidance, and flushes follower acks", () => {
@@ -146,6 +155,27 @@ describe("createInboxDrainRuntime", () => {
     expect(flushFollowerDeliveredAcks).not.toHaveBeenCalled();
   });
 
+  it("does not drain inbox work while the agent is active", () => {
+    const {
+      runtime,
+      inbox,
+      updateBadge,
+      reportStatus,
+      deliverTrackedSlackFollowUpMessage,
+      setIdle,
+    } = createDeps();
+    const message = createMessage({ brokerInboxId: 87 });
+    inbox.push(message);
+    setIdle(false);
+
+    runtime.drainInbox();
+
+    expect(updateBadge).not.toHaveBeenCalled();
+    expect(reportStatus).not.toHaveBeenCalled();
+    expect(deliverTrackedSlackFollowUpMessage).not.toHaveBeenCalled();
+    expect(inbox).toEqual([message]);
+  });
+
   it("requeues pending inbox work when the follow-up delivery is not accepted", () => {
     const { runtime, inbox, updateBadge, reportStatus, markBrokerInboxIdsDelivered } = createDeps({
       deliverTrackedSlackFollowUpMessage: vi.fn(() => false),
@@ -159,6 +189,24 @@ describe("createInboxDrainRuntime", () => {
     expect(updateBadge).toHaveBeenCalledTimes(2);
     expect(markBrokerInboxIdsDelivered).not.toHaveBeenCalled();
     expect(inbox).toEqual([message]);
+  });
+
+  it("limits each inbox drain batch and preserves remaining messages", () => {
+    const { runtime, inbox, deliverTrackedSlackFollowUpMessage } = createDeps({
+      maxMessagesPerDrain: 2,
+    });
+    const first = createMessage({ text: "first" });
+    const second = createMessage({ text: "second" });
+    const third = createMessage({ text: "third" });
+    inbox.push(first, second, third);
+
+    runtime.drainInbox();
+
+    expect(deliverTrackedSlackFollowUpMessage).toHaveBeenCalledWith({
+      prompt: formatInboxMessages([first, second], new Map<string, string>([["U123", "Ada"]])),
+      messages: [first, second],
+    });
+    expect(inbox).toEqual([third]);
   });
 
   it("only flushes follower acks when follower delivery is still live", async () => {

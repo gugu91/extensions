@@ -210,12 +210,13 @@ export default function (pi: ExtensionAPI) {
     messages: Pick<InboxMessage, "threadTs">[];
   }) => boolean = () => false;
   const inboxDrainRuntime = createInboxDrainRuntime({
-    sendUserMessage: (body, options) => {
-      pi.sendUserMessage(body, options);
+    sendUserMessage: (body) => {
+      pi.sendUserMessage(body);
     },
-    takeInboxMessages: () => inbox.splice(0, inbox.length),
+    isIdle: () => sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true,
+    takeInboxMessages: (maxMessages) => inbox.splice(0, maxMessages ?? inbox.length),
     restoreInboxMessages: (messages) => {
-      inbox.push(...messages);
+      inbox.unshift(...messages);
     },
     updateBadge,
     reportStatus: (status) => reportAgentStatus(status),
@@ -497,8 +498,9 @@ export default function (pi: ExtensionAPI) {
   const pinetMaintenanceDelivery = createPinetMaintenanceDelivery({
     getActiveBrokerDb,
     getActiveBrokerSelfId,
-    sendUserMessage: (body, options) => {
-      pi.sendUserMessage(body, options);
+    isIdle: () => sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true,
+    sendUserMessage: (body) => {
+      pi.sendUserMessage(body);
     },
   });
   const { sendBrokerMaintenanceMessage, trySendBrokerFollowUp } = pinetMaintenanceDelivery;
@@ -1345,6 +1347,10 @@ export default function (pi: ExtensionAPI) {
   // ─── Agent event wiring ──────────────────────────────
 
   agentEventRuntime.register(pi);
+
+  pi.on("session_compact", async (_event, ctx) => {
+    maybeDrainInboxIfIdle(ctx);
+  });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     resetRemoteControlState();
