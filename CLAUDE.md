@@ -85,12 +85,20 @@ The reviewer posts findings to PiComms and GitHub. Fix any critical/warning issu
 
 ## Extension patterns
 
-Design every extension with progressive disclosure:
+Design every extension with token-efficient progressive discovery. This is
+especially important for Pinet / `slack-bridge`, where large Slack/Pinet action
+families can otherwise bloat every agent turn. See #566 and #581 for the design
+pressure behind this guideline.
 
-- Keep hot-path dedicated tool schemas small and high signal.
-- Move templates, examples, and usage knowledge into warm skills/docs.
-- Collapse large homogeneous cold action families behind a dispatcher with
-  structured `help`/schema discovery.
+- Keep hot-path dedicated tool schemas compact, high-signal, and justified by
+  frequent per-turn use.
+- Collapse large homogeneous cold action families behind a compact dispatcher
+  with structured `help` and per-action schema discovery.
+- Keep cold-path templates, examples, API recipes, and recovery playbooks in
+  lazily loaded skills/docs instead of always-present prompts or tool schemas.
+- Avoid expanding prompt/tool schema footprint unless the token cost is clearly
+  justified; include token-footprint tradeoffs in reviews for new Slack/Pinet
+  tools, dispatcher actions, or prompt surfaces.
 - Return structured contracts such as `{ status, data, errors, warnings }` for
   dispatcher actions, with typed errors and recovery hints.
 - Preserve precise guardrails with action-level names such as
