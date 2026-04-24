@@ -300,6 +300,7 @@ export default function (pi: ExtensionAPI) {
   const {
     isUserAllowed,
     maybeWarnSlackUserAccess,
+    maybeWarnSlackGuardrailPosture,
     applyLocalAgentIdentity,
     refreshSettings,
     snapshotReloadableRuntime,
@@ -1060,6 +1061,7 @@ export default function (pi: ExtensionAPI) {
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
     refreshSettings();
     maybeWarnSlackUserAccess(ctx);
+    maybeWarnSlackGuardrailPosture(ctx);
 
     const {
       botUserId: brokerBotUserId,
@@ -1331,6 +1333,7 @@ export default function (pi: ExtensionAPI) {
     try {
       await transitionToRuntimeMode(ctx, startupMode);
       if (startupMode === "single") {
+        maybeWarnSlackGuardrailPosture(ctx);
         console.log("[slack-bridge] runtime mode: single");
       } else if (startupMode === "follower") {
         console.log("[slack-bridge] runtime mode: follower");

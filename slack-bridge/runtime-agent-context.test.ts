@@ -232,6 +232,44 @@ describe("createRuntimeAgentContext", () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
+  it("warns once when admitted users have effectively empty guardrails and resets when posture changes", () => {
+    const notify = vi.fn();
+    const { deps, state } = createDeps({
+      extensionContext: createContext(undefined, notify),
+      state: {
+        allowedUsers: new Set(["U_OK"]),
+        guardrails: {},
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    runtimeAgentContext.maybeWarnSlackGuardrailPosture(deps.getExtensionContext() ?? undefined);
+    runtimeAgentContext.maybeWarnSlackGuardrailPosture(deps.getExtensionContext() ?? undefined);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("guardrails are effectively empty");
+
+    state.guardrails = { blockedTools: ["bash"] };
+    runtimeAgentContext.maybeWarnSlackGuardrailPosture(deps.getExtensionContext() ?? undefined);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    state.guardrails = {};
+    runtimeAgentContext.maybeWarnSlackGuardrailPosture(deps.getExtensionContext() ?? undefined);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    state.allowedUsers = new Set();
+    runtimeAgentContext.maybeWarnSlackGuardrailPosture(deps.getExtensionContext() ?? undefined);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+
+    state.allowedUsers = new Set(["U_OK"]);
+    runtimeAgentContext.maybeWarnSlackGuardrailPosture(deps.getExtensionContext() ?? undefined);
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(3);
+  });
+
   it("applies local agent identity updates, normalizes owned threads, and skips redundant writes", () => {
     const { deps, state, threads, agentAliases, persistState, updateBadge } = createDeps({
       threads: new Map([

@@ -119,6 +119,53 @@ export function toolNeedsConfirmation(toolName: string, guardrails: SecurityGuar
  * Returns a clear, structured prompt with active guardrails.
  * Returns empty string if no guardrails are active.
  */
+export function hasEffectivelyEmptyRuntimeGuardrails(
+  guardrails: SecurityGuardrails | null | undefined,
+): boolean {
+  return (
+    guardrails?.readOnly !== true &&
+    (guardrails?.blockedTools?.length ?? 0) === 0 &&
+    (guardrails?.requireConfirmation?.length ?? 0) === 0
+  );
+}
+
+export function formatRuntimeGuardrailsPosture(
+  guardrails: SecurityGuardrails | null | undefined,
+): string {
+  if (hasEffectivelyEmptyRuntimeGuardrails(guardrails)) {
+    return "empty (warn-first posture; behavior unchanged)";
+  }
+
+  const sections: string[] = [];
+  if (guardrails?.readOnly === true) {
+    sections.push("readOnly");
+  }
+  const blockedCount = guardrails?.blockedTools?.length ?? 0;
+  if (blockedCount > 0) {
+    sections.push(`blockedTools:${blockedCount}`);
+  }
+  const confirmationCount = guardrails?.requireConfirmation?.length ?? 0;
+  if (confirmationCount > 0) {
+    sections.push(`requireConfirmation:${confirmationCount}`);
+  }
+
+  return sections.length > 0 ? `configured (${sections.join(", ")})` : "configured";
+}
+
+export function getEmptyRuntimeGuardrailsWarning(
+  guardrails: SecurityGuardrails | null | undefined,
+): string | null {
+  if (!hasEffectivelyEmptyRuntimeGuardrails(guardrails)) {
+    return null;
+  }
+
+  return [
+    "Slack/Pinet access is enabled for admitted users, but runtime guardrails are effectively empty.",
+    "Configure slack-bridge.security.readOnly, security.blockedTools, or security.requireConfirmation if you want runtime restrictions for Slack-triggered turns.",
+    "This warning is visibility-only; current runtime behavior is unchanged.",
+  ].join(" ");
+}
+
 export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
   const sections: string[] = [];
 
@@ -126,7 +173,7 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
   const hasBlocked = (guardrails.blockedTools?.length ?? 0) > 0;
   const hasConfirmation = (guardrails.requireConfirmation?.length ?? 0) > 0;
 
-  if (!hasReadOnly && !hasBlocked && !hasConfirmation) return "";
+  if (hasEffectivelyEmptyRuntimeGuardrails(guardrails)) return "";
 
   sections.push("⚠️ SECURITY GUARDRAILS — Slack-triggered action restrictions:");
 

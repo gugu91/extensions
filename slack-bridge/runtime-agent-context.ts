@@ -17,7 +17,11 @@ import {
   shortenPath,
   type SlackBridgeSettings,
 } from "./helpers.js";
-import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
+import {
+  buildSecurityPrompt,
+  getEmptyRuntimeGuardrailsWarning,
+  type SecurityGuardrails,
+} from "./guardrails.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import type { SinglePlayerThreadInfo } from "./single-player-runtime.js";
 
@@ -79,6 +83,7 @@ export interface RuntimeAgentContextDeps {
 export interface RuntimeAgentContext {
   isUserAllowed: (userId: string) => boolean;
   maybeWarnSlackUserAccess: (ctx?: ExtensionContext) => void;
+  maybeWarnSlackGuardrailPosture: (ctx?: ExtensionContext) => void;
   getStableIdForRole: (role: RuntimeAgentRole) => string;
   getIdentitySeedForRole: (role: RuntimeAgentRole, sessionFile?: string) => string;
   getSkinSeed: (preferredSeed?: string) => string;
@@ -116,6 +121,7 @@ export interface RuntimeAgentContext {
 
 export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): RuntimeAgentContext {
   let lastSlackUserAccessWarning = "";
+  let lastSlackGuardrailPostureWarning = "";
   const selfLocation = `${shortenPath(deps.cwd, os.homedir())}@${os.hostname()}`;
 
   function isUserAllowed(userId: string): boolean {
@@ -132,6 +138,29 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       return;
     }
     lastSlackUserAccessWarning = warning;
+    console.warn(`[slack-bridge] ${warning}`);
+    ctx?.ui.notify(warning, "warning");
+  }
+
+  function maybeWarnSlackGuardrailPosture(ctx?: ExtensionContext): void {
+    const botToken = deps.getBotToken()?.trim();
+    const appToken = deps.getAppToken()?.trim();
+    const allowlist = deps.getAllowedUsers();
+    const hasAdmittedUsers = allowlist === null || allowlist.size > 0;
+    const warning =
+      botToken && appToken && hasAdmittedUsers
+        ? getEmptyRuntimeGuardrailsWarning(deps.getGuardrails())
+        : null;
+
+    if (!warning) {
+      lastSlackGuardrailPostureWarning = "";
+      return;
+    }
+    if (warning === lastSlackGuardrailPostureWarning) {
+      return;
+    }
+
+    lastSlackGuardrailPostureWarning = warning;
     console.warn(`[slack-bridge] ${warning}`);
     ctx?.ui.notify(warning, "warning");
   }
@@ -405,6 +434,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
   return {
     isUserAllowed,
     maybeWarnSlackUserAccess,
+    maybeWarnSlackGuardrailPosture,
     getStableIdForRole,
     getIdentitySeedForRole,
     getSkinSeed,
