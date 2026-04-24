@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildBrowserDiscovery,
   buildCapabilities,
   describeBrowserActions,
   getBooleanArg,
@@ -9,12 +10,12 @@ import {
   parseBrowserToolRequest,
 } from "./protocol.ts";
 
-test("parseBrowserToolRequest builds a typed request from the single browser tool envelope", () => {
+test("parseBrowserToolRequest prefers top-level args for the single browser tool envelope", () => {
   const parsed = parseBrowserToolRequest({
     backend: "playwright",
     action: "navigate",
     session_id: "browser_123",
-    input_json: JSON.stringify({ url: "https://example.com", new_tab: true, timeout_ms: 1500 }),
+    args: { url: "https://example.com", new_tab: true, timeout_ms: 1500 },
   });
 
   assert.equal(parsed.backend, "playwright");
@@ -25,12 +26,46 @@ test("parseBrowserToolRequest builds a typed request from the single browser too
   assert.equal(getNumberArg(parsed.args, "timeout_ms"), 1500);
 });
 
+test("parseBrowserToolRequest keeps input_json-only calls compatible", () => {
+  const parsed = parseBrowserToolRequest({
+    action: "navigate",
+    input_json: JSON.stringify({ url: "https://example.com", new_tab: true }),
+  });
+
+  assert.equal(parsed.backend, "playwright");
+  assert.equal(getStringArg(parsed.args, "url"), "https://example.com");
+  assert.equal(getBooleanArg(parsed.args, "new_tab"), true);
+});
+
+test("parseBrowserToolRequest accepts identical args and input_json fields", () => {
+  const parsed = parseBrowserToolRequest({
+    action: "navigate",
+    args: { url: "https://example.com", new_tab: true },
+    input_json: JSON.stringify({ url: "https://example.com", new_tab: true }),
+  });
+
+  assert.equal(getStringArg(parsed.args, "url"), "https://example.com");
+  assert.equal(getBooleanArg(parsed.args, "new_tab"), true);
+});
+
+test("parseBrowserToolRequest rejects conflicting args and input_json fields", () => {
+  assert.throws(
+    () =>
+      parseBrowserToolRequest({
+        action: "navigate",
+        args: { url: "https://example.com/a" },
+        input_json: JSON.stringify({ url: "https://example.com/b" }),
+      }),
+    /args\.url and input_json\.url differ/i,
+  );
+});
+
 test("parseBrowserToolRequest allows session_id and page_id to flow through top-level fields", () => {
   const parsed = parseBrowserToolRequest({
     action: "click",
     session_id: "browser_123",
     page_id: "page_abc",
-    input_json: JSON.stringify({ selector: "button" }),
+    args: { selector: "button" },
   });
 
   assert.equal(parsed.backend, "playwright");
@@ -39,16 +74,45 @@ test("parseBrowserToolRequest allows session_id and page_id to flow through top-
   assert.equal(getStringArg(parsed.args, "selector"), "button");
 });
 
-test("parseBrowserToolRequest lets input_json override top-level session_id when needed", () => {
+test("parseBrowserToolRequest keeps top-level ids authoritative when nested values match", () => {
   const parsed = parseBrowserToolRequest({
     action: "screenshot",
-    session_id: "browser_inline",
-    input_json: JSON.stringify({ session_id: "browser_json", full_page: true, label: "override" }),
+    session_id: "browser_123",
+    page_id: "page_abc",
+    args: {
+      session_id: "browser_123",
+      page_id: "page_abc",
+      full_page: true,
+      label: "matching-ids",
+    },
+  });
+
+  assert.equal(parsed.sessionId, "browser_123");
+  assert.equal(parsed.pageId, "page_abc");
+  assert.equal(getBooleanArg(parsed.args, "full_page"), true);
+  assert.equal(getStringArg(parsed.args, "label"), "matching-ids");
+});
+
+test("parseBrowserToolRequest rejects nested ids that conflict with top-level ids", () => {
+  assert.throws(
+    () =>
+      parseBrowserToolRequest({
+        action: "screenshot",
+        session_id: "browser_inline",
+        args: { session_id: "browser_args", full_page: true },
+      }),
+    /top-level session_id is authoritative/i,
+  );
+});
+
+test("parseBrowserToolRequest still supports backward-compatible nested ids without top-level ids", () => {
+  const parsed = parseBrowserToolRequest({
+    action: "screenshot",
+    input_json: JSON.stringify({ session_id: "browser_json", page_id: "page_json" }),
   });
 
   assert.equal(parsed.sessionId, "browser_json");
-  assert.equal(getBooleanArg(parsed.args, "full_page"), true);
-  assert.equal(getStringArg(parsed.args, "label"), "override");
+  assert.equal(parsed.pageId, "page_json");
 });
 
 test("parseBrowserToolRequest rejects invalid input_json", () => {
@@ -58,13 +122,36 @@ test("parseBrowserToolRequest rejects invalid input_json", () => {
   );
 });
 
-test("buildCapabilities reports playwright as available and agent-browser as scaffolded", () => {
+test("parseBrowserToolRequest rejects non-scalar args fields", () => {
+  assert.throws(
+    () => parseBrowserToolRequest({ action: "start", args: { nested: { url: "x" } } }),
+    /args field `nested` must be a string, number, boolean, or null/i,
+  );
+});
+
+test("buildCapabilities reports playwright as available and agent-browser as unavailable locally", () => {
   const playwright = buildCapabilities("playwright");
   const agentBrowser = buildCapabilities("agent-browser");
 
   assert.equal(playwright.available, true);
+  assert.match(playwright.notes?.join(" ") ?? "", /help\/schema discovery/i);
   assert.equal(agentBrowser.available, false);
-  assert.match(agentBrowser.notes?.join(" ") ?? "", /scaffolded/i);
+  assert.deepEqual(agentBrowser.supported_actions, []);
+  assert.match(agentBrowser.notes?.join(" ") ?? "", /unavailable locally/i);
+});
+
+test("buildBrowserDiscovery returns catalog and action schemas through the existing info action", () => {
+  const catalog = buildBrowserDiscovery(undefined);
+  const navigate = buildBrowserDiscovery("navigate");
+
+  assert.equal(catalog.tool, "browser");
+  assert.match(JSON.stringify(catalog), /preferred_shape/);
+  assert.match(JSON.stringify(catalog), /action_schema/);
+  assert.match(JSON.stringify(navigate), /Navigate the active page/);
+});
+
+test("buildBrowserDiscovery rejects unknown schema topics clearly", () => {
+  assert.throws(() => buildBrowserDiscovery("unknown"), /Unsupported browser info topic/i);
 });
 
 test("describeBrowserActions summarizes the typed browser action enum", () => {

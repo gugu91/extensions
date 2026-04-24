@@ -6,9 +6,10 @@ Instead of exposing a wide `browser_*` family, the extension now exposes a
 single `browser` tool with a shared envelope:
 
 - `action`
+- `args?` — the preferred structured carrier for action-specific scalar fields
 - `session_id?`
 - `page_id?`
-- `input_json?` — the current stable carrier for action-specific fields
+- `input_json?` — compatibility-only JSON string carrier for older callers
 - `backend?` — an advanced/experimental override that should be omitted for normal use
 
 The extension owns the runtime, process, proxy, socket, and artifact complexity
@@ -44,12 +45,17 @@ Parameters:
   - `screenshot`
   - `tabs`
   - `close`
+- `args` — preferred structured object with action-specific scalar inputs such as
+  `url`, `selector`, `value`, `timeout_ms`, `label`, `full_page`, or `topic`
+  - use this for new calls
+  - `args` and `input_json` may carry duplicate fields only when the values match
 - `session_id` — optional session handle for actions that operate on an existing session
+  - top-level `session_id` is authoritative; conflicting nested values fail clearly
 - `page_id` — optional page/tab handle for actions that target a specific page
-- `input_json` — optional JSON object with action-specific inputs such as `url`,
-  `selector`, `value`, `timeout_ms`, `label`, or `full_page`
-  - this is the **current stable** carrier for action-specific fields
-  - the settled cleanup direction is **args-first**, but that contract change has not landed yet
+  - top-level `page_id` is authoritative; conflicting nested values fail clearly
+- `input_json` — compatibility-only JSON string object for older callers
+  - still accepted during migration
+  - do not use for new examples or generated guidance
 - `backend` — advanced/experimental override (`playwright` or `agent-browser`)
   - omit it for normal Anthropic-sandbox use
   - the default local path is Playwright
@@ -72,8 +78,9 @@ This keeps backend differences explicit instead of overpromising parity.
 ## Supported path in Anthropic sandbox
 
 - Use `browser-playwright` and the single `browser` tool for local browsing in this repo.
+- Use `action` + `args` for action-specific fields.
 - Omit `backend` for normal use; Playwright is the supported local path.
-- Treat `input_json` as the stable action-input carrier until the planned args-first cleanup lands.
+- Treat `input_json` as compatibility-only for older callers.
 - Treat `agent-browser` as hidden/experimental only. Local daemon compatibility is a non-goal here.
 
 ## Backend status
@@ -117,6 +124,7 @@ Truthful posture in this harness:
 - Playwright is the supported local backend
 - `agent-browser` stays explicitly unavailable locally
 - local `agent-browser` daemon compatibility is a non-goal for this repo
+- local `agent-browser` reports no runnable supported actions while unavailable
 - the only viable future support shape here is **remote/optional executor**
   unless upstream ships a real published embeddable JS SDK
 
@@ -149,6 +157,39 @@ This backend intentionally includes two same-host local-power assumptions:
 
 Treat both as local operator power, not as generic public-web browsing.
 
+## Progressive discovery
+
+The browser surface stays one tool and one action enum. It does **not** add a
+new `browser_help`/`browser_schema` tool family. Instead, use the existing
+`info` action without a session for compact help/schema discovery:
+
+```json
+{
+  "action": "info"
+}
+```
+
+For all schemas:
+
+```json
+{
+  "action": "info",
+  "args": { "topic": "schema" }
+}
+```
+
+For one action schema:
+
+```json
+{
+  "action": "info",
+  "args": { "topic": "navigate" }
+}
+```
+
+When `info` receives a `session_id` and no discovery `topic`, it keeps returning
+runtime session diagnostics.
+
 ## Example requests
 
 ### Start a session
@@ -156,7 +197,7 @@ Treat both as local operator power, not as generic public-web browsing.
 ```json
 {
   "action": "start",
-  "input_json": "{\"url\":\"https://example.com\"}"
+  "args": { "url": "https://example.com" }
 }
 ```
 
@@ -166,7 +207,7 @@ Treat both as local operator power, not as generic public-web browsing.
 {
   "action": "navigate",
   "session_id": "browser_123",
-  "input_json": "{\"url\":\"https://example.com/docs\",\"new_tab\":true}"
+  "args": { "url": "https://example.com/docs", "new_tab": true }
 }
 ```
 
@@ -177,7 +218,7 @@ Treat both as local operator power, not as generic public-web browsing.
   "action": "fill",
   "session_id": "browser_123",
   "page_id": "page_abc",
-  "input_json": "{\"selector\":\"input[name='q']\",\"value\":\"Playwright docs\"}"
+  "args": { "selector": "input[name='q']", "value": "Playwright docs" }
 }
 ```
 
@@ -187,7 +228,7 @@ Treat both as local operator power, not as generic public-web browsing.
 {
   "action": "wait",
   "session_id": "browser_123",
-  "input_json": "{\"text\":\"Playwright\",\"timeout_ms\":10000}"
+  "args": { "text": "Playwright", "timeout_ms": 10000 }
 }
 ```
 
@@ -197,7 +238,7 @@ Treat both as local operator power, not as generic public-web browsing.
 {
   "action": "screenshot",
   "session_id": "browser_123",
-  "input_json": "{\"label\":\"search-results\",\"full_page\":true}"
+  "args": { "label": "search-results", "full_page": true }
 }
 ```
 
