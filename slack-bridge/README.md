@@ -164,6 +164,18 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `security.requireConfirmation` | no       | Runtime-require Slack approval before matching tools execute; core tools need a specific Slack thread context      |
 | `security.blockedTools`        | no       | Runtime-block matching tools for Slack-triggered turns, including core tools                                       |
 
+## Scope carrier model (compatibility-first)
+
+Slack/Pinet now threads a first-class runtime `scope` carrier through shared message contracts and runtime metadata.
+
+For this first slice:
+
+- **workspace/install scope** is carried as compatibility-first metadata for Slack
+- **instance scope** is also carried as a first-class compatibility carrier
+- today’s single-workspace deployments use one default compatibility scope
+- a missing or empty Slack `teamId` stays **unknown** — the bridge does not invent a fake workspace ID
+- these carriers are metadata only in this slice; enforcement and multi-install behavior land later in `#547` / `#550`
+
 ## Usage
 
 Once configured, Pinet appears in Slack's sidebar. Users open it, type a message, and the pi agent responds.
@@ -243,6 +255,16 @@ Startup selection:
 - `autoFollow` is a legacy compatibility alias for `runtimeMode: "follower"` when a broker socket is available.
 - explicit `runtimeMode` wins over the legacy flags.
 - `/pinet-start` and `/pinet-follow` still switch the live session into broker/follower runtimes explicitly.
+
+## Scope carriers (compatibility-first)
+
+`slack-bridge` now emits first-class runtime scope carriers in shared transport contracts and agent runtime metadata.
+
+- `scope.workspace` models the current Slack install/workspace scope.
+- `scope.instance` models the current broker/runtime instance scope.
+- in the first slice, both stay **compatibility-first**: today’s singleton runtime gets one default compatibility scope
+- if Slack omits `team_id`, the carrier keeps the workspace id **unknown** instead of inventing a fake one
+- this slice is metadata/plumbing only: it does **not** change routing, enforcement, or multi-install orchestration yet
 
 ## Pinet (Multi-Agent Mode)
 

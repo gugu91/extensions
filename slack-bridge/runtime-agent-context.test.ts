@@ -431,10 +431,32 @@ describe("createRuntimeAgentContext", () => {
       role: "broker",
       skinTheme: "midnight",
       personality: "observant",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
     });
     expect(metadata.capabilities).toMatchObject({
       role: "broker",
       tools: ["build", "git", "lint", "test", "typecheck"],
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      },
       tags: expect.arrayContaining([
         "role:broker",
         "repo:extensions",

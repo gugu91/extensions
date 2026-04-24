@@ -11,6 +11,7 @@ import { startBroker, type Broker } from "./index.js";
 import { runBrokerMaintenancePass } from "./maintenance.js";
 import { BrokerSocketServer } from "./socket-server.js";
 import { buildTaskAssignmentReport } from "../task-assignments.js";
+import { buildSlackCompatibilityScope } from "../helpers.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "./types.js";
 
 // ─── Helpers ─────────────────────────────────────────────
@@ -1768,6 +1769,30 @@ describe("BrokerDB", () => {
     expect(inbox[0].message.metadata).toEqual({
       priority: "high",
       tags: ["urgent"],
+    });
+  });
+
+  it("queueMessage preserves first-class scope carriers inside stored metadata without schema changes", () => {
+    db.registerAgent("a1", "Agent", "🔵", 1);
+    db.createThread("t-scope", "slack", "C_SCOPE", "a1");
+
+    const scope = buildSlackCompatibilityScope({ teamId: "T_SCOPE", channelId: "C_SCOPE" });
+    db.queueMessage("a1", {
+      source: "slack",
+      threadId: "t-scope",
+      channel: "C_SCOPE",
+      userId: "U_SCOPE",
+      text: "scoped hello",
+      timestamp: "100.200",
+      scope,
+    });
+
+    const inbox = db.getInbox("a1");
+    expect(inbox[0].message.metadata).toMatchObject({
+      channel: "C_SCOPE",
+      userId: "U_SCOPE",
+      timestamp: "100.200",
+      scope,
     });
   });
 

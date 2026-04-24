@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+  buildCompatibilityInstanceScope,
+  buildCompatibilityWorkspaceScope,
+  buildRuntimeScopeCarrier,
+  type RuntimeScopeCarrier,
+} from "@gugu910/pi-transport-core";
 import type { ReactionCommandSettings } from "./reaction-triggers.js";
 import { matchesToolPattern } from "./guardrails.js";
 
@@ -47,6 +53,29 @@ export interface ResolvedPinetMeshAuthSettings {
 function normalizeOptionalSetting(value?: string | null): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+export function buildSlackCompatibilityScope(
+  options: {
+    teamId?: string | null;
+    channelId?: string | null;
+    installId?: string | null;
+    instanceId?: string | null;
+    instanceName?: string | null;
+  } = {},
+): RuntimeScopeCarrier {
+  return buildRuntimeScopeCarrier({
+    workspace: buildCompatibilityWorkspaceScope({
+      provider: "slack",
+      workspaceId: normalizeOptionalSetting(options.teamId) ?? undefined,
+      installId: normalizeOptionalSetting(options.installId) ?? undefined,
+      channelId: normalizeOptionalSetting(options.channelId) ?? undefined,
+    }),
+    instance: buildCompatibilityInstanceScope({
+      instanceId: normalizeOptionalSetting(options.instanceId) ?? undefined,
+      instanceName: normalizeOptionalSetting(options.instanceName) ?? undefined,
+    }),
+  })!;
 }
 
 export function resolvePinetMeshAuth(
@@ -168,6 +197,7 @@ export interface InboxMessage {
   isChannelMention?: boolean;
   brokerInboxId?: number;
   metadata?: Record<string, unknown> | null;
+  scope?: RuntimeScopeCarrier | null;
 }
 
 export interface SqliteJournalModeResult {
@@ -766,6 +796,7 @@ export interface AgentCapabilities {
   role?: string;
   tools?: string[];
   tags?: string[];
+  scope?: RuntimeScopeCarrier | null;
 }
 
 export type AgentHealth = "healthy" | "stale" | "ghost" | "resumable";
@@ -787,6 +818,7 @@ export interface AgentDisplayInfo {
     skinTheme?: string;
     personality?: string;
     capabilities?: AgentCapabilities | null;
+    scope?: RuntimeScopeCarrier | null;
   } | null;
   lastHeartbeat?: string;
   leaseExpiresAt?: string | null;
@@ -851,6 +883,50 @@ function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const strings = value.map(asString).filter((item): item is string => Boolean(item));
   return strings.length > 0 ? strings : undefined;
+}
+
+function extractRuntimeScopeCarrier(value: unknown): RuntimeScopeCarrier | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const workspaceRecord = asRecord(record.workspace);
+  const instanceRecord = asRecord(record.instance);
+  const scope = buildRuntimeScopeCarrier({
+    workspace: workspaceRecord
+      ? {
+          provider: asString(workspaceRecord.provider) ?? "slack",
+          source: asString(workspaceRecord.source) === "explicit" ? "explicit" : "compatibility",
+          ...(asString(workspaceRecord.compatibilityKey)
+            ? { compatibilityKey: asString(workspaceRecord.compatibilityKey) }
+            : {}),
+          ...(asString(workspaceRecord.workspaceId)
+            ? { workspaceId: asString(workspaceRecord.workspaceId) }
+            : {}),
+          ...(asString(workspaceRecord.installId)
+            ? { installId: asString(workspaceRecord.installId) }
+            : {}),
+          ...(asString(workspaceRecord.channelId)
+            ? { channelId: asString(workspaceRecord.channelId) }
+            : {}),
+        }
+      : null,
+    instance: instanceRecord
+      ? {
+          source: asString(instanceRecord.source) === "explicit" ? "explicit" : "compatibility",
+          ...(asString(instanceRecord.compatibilityKey)
+            ? { compatibilityKey: asString(instanceRecord.compatibilityKey) }
+            : {}),
+          ...(asString(instanceRecord.instanceId)
+            ? { instanceId: asString(instanceRecord.instanceId) }
+            : {}),
+          ...(asString(instanceRecord.instanceName)
+            ? { instanceName: asString(instanceRecord.instanceName) }
+            : {}),
+        }
+      : null,
+  });
+
+  return scope ?? null;
 }
 
 function parseIsoMs(value: string | null | undefined): number | null {
@@ -934,6 +1010,7 @@ export function extractAgentCapabilities(
     role: asString(capabilitiesRecord?.role) ?? asString(record?.role),
     tools: asStringArray(capabilitiesRecord?.tools),
     tags: asStringArray(capabilitiesRecord?.tags),
+    scope: extractRuntimeScopeCarrier(capabilitiesRecord?.scope ?? record?.scope),
   };
 }
 
@@ -943,6 +1020,21 @@ export function buildAgentCapabilityTags(capabilities: AgentCapabilities): strin
   if (capabilities.role) tags.add(`role:${capabilities.role}`);
   if (capabilities.repo) tags.add(`repo:${capabilities.repo}`);
   if (capabilities.branch) tags.add(`branch:${capabilities.branch}`);
+  if (capabilities.scope?.workspace?.provider) {
+    tags.add(`scope-provider:${capabilities.scope.workspace.provider}`);
+  }
+  if (capabilities.scope?.workspace?.compatibilityKey) {
+    tags.add(`scope:${capabilities.scope.workspace.compatibilityKey}`);
+  }
+  if (capabilities.scope?.workspace?.workspaceId) {
+    tags.add(`workspace:${capabilities.scope.workspace.workspaceId}`);
+  }
+  if (capabilities.scope?.instance?.instanceId) {
+    tags.add(`instance:${capabilities.scope.instance.instanceId}`);
+  }
+  if (capabilities.scope?.instance?.instanceName) {
+    tags.add(`instance-name:${capabilities.scope.instance.instanceName}`);
+  }
   for (const tool of capabilities.tools ?? []) {
     tags.add(`tool:${tool}`);
   }
@@ -1044,6 +1136,7 @@ export function buildAgentDisplayInfo(
           role: asString(metadata.role) ?? capabilities.role,
           skinTheme: asString(metadata.skinTheme),
           personality: asString(metadata.personality),
+          ...(capabilities.scope ? { scope: capabilities.scope } : {}),
           capabilities,
         }
       : null,
@@ -1874,6 +1967,7 @@ export function syncFollowerInboxEntries(
     const threadTs = entry.message.threadId ?? "";
     const channel = typeof meta.channel === "string" ? meta.channel : "";
     const sender = entry.message.sender ?? "";
+    const scope = extractRuntimeScopeCarrier(meta.scope);
 
     if (threadTs && channel) {
       const existing = existingThreads.get(threadTs);
@@ -1915,6 +2009,7 @@ export function syncFollowerInboxEntries(
       timestamp: entry.message.createdAt ?? "",
       brokerInboxId: entry.inboxId,
       metadata: meta,
+      ...(scope ? { scope } : {}),
     };
   });
 
@@ -1959,6 +2054,7 @@ export function syncBrokerInboxEntries(entries: FollowerInboxEntry[]): BrokerInb
       continue;
     }
 
+    const scope = extractRuntimeScopeCarrier(meta.scope);
     inboxMessages.push({
       channel: "",
       threadTs,
@@ -1967,6 +2063,7 @@ export function syncBrokerInboxEntries(entries: FollowerInboxEntry[]): BrokerInb
       timestamp: createdAt,
       brokerInboxId: inboxId,
       metadata: meta,
+      ...(scope ? { scope } : {}),
     });
   }
 

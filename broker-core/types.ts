@@ -146,15 +146,29 @@ export const RPC_AGENT_STABLE_ID_CONFLICT = -32003;
 
 // ─── Message adapter (canonical transport contracts) ─────
 
+import {
+  buildCompatibilityInstanceScope as _buildCompatibilityInstanceScope,
+  buildCompatibilityWorkspaceScope as _buildCompatibilityWorkspaceScope,
+  buildRuntimeScopeCarrier as _buildRuntimeScopeCarrier,
+} from "@gugu910/pi-transport-core";
 import type {
   InboundMessage as _InboundMessage,
   OutboundMessage as _OutboundMessage,
   MessageAdapter as _MessageAdapter,
+  RuntimeScopeCarrier as _RuntimeScopeCarrier,
+  WorkspaceInstallScopeCarrier as _WorkspaceInstallScopeCarrier,
+  InstanceScopeCarrier as _InstanceScopeCarrier,
 } from "@gugu910/pi-transport-core";
 
 export type InboundMessage = _InboundMessage;
 export type OutboundMessage = _OutboundMessage;
 export type MessageAdapter = _MessageAdapter;
+export type RuntimeScopeCarrier = _RuntimeScopeCarrier;
+export type WorkspaceInstallScopeCarrier = _WorkspaceInstallScopeCarrier;
+export type InstanceScopeCarrier = _InstanceScopeCarrier;
+export const buildCompatibilityWorkspaceScope = _buildCompatibilityWorkspaceScope;
+export const buildCompatibilityInstanceScope = _buildCompatibilityInstanceScope;
+export const buildRuntimeScopeCarrier = _buildRuntimeScopeCarrier;
 
 // ─── BrokerDB interface (subset used by the router) ──────
 

@@ -32,7 +32,10 @@ import {
   buildSqliteWalFallbackWarning,
   formatAgentList,
   shortenPath,
+  buildAgentCapabilityTags,
   buildAgentDisplayInfo,
+  buildSlackCompatibilityScope,
+  extractAgentCapabilities,
   isAgentVisibleInMesh,
   filterAgentsForMeshVisibility,
   rankAgentsForRouting,
@@ -2951,8 +2954,9 @@ describe("syncFollowerInboxEntries", () => {
     expect(result.changed).toBe(false);
   });
 
-  it("preserves structured metadata on synced inbox messages", () => {
+  it("preserves structured metadata and restores first-class scope on synced inbox messages", () => {
     const threads = new Map<string, FollowerThreadState>();
+    const scope = buildSlackCompatibilityScope({ teamId: "T_ACTION", channelId: "C_ACTION" });
     const result = syncFollowerInboxEntries(
       [
         {
@@ -2966,6 +2970,7 @@ describe("syncFollowerInboxEntries", () => {
               channel: "C_ACTION",
               kind: "slack_block_action",
               actionId: "review.approve",
+              scope,
             },
           },
         },
@@ -2978,10 +2983,12 @@ describe("syncFollowerInboxEntries", () => {
     expect(result.inboxMessages[0]).toMatchObject({
       channel: "C_ACTION",
       brokerInboxId: 29,
+      scope,
       metadata: {
         channel: "C_ACTION",
         kind: "slack_block_action",
         actionId: "review.approve",
+        scope,
       },
     });
   });
@@ -3506,5 +3513,54 @@ describe("buildAgentDisplayInfo observability fields", () => {
     expect(info.lastActivity).toBeNull();
     expect(info.idleDuration).toBeNull();
     expect(info.lastActivityAge).toBeNull();
+  });
+});
+
+describe("scope compatibility helpers", () => {
+  it("builds a compatibility scope without inventing a workspace id for an unknown team", () => {
+    expect(
+      buildSlackCompatibilityScope({
+        teamId: "",
+        channelId: "C123",
+      }),
+    ).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        channelId: "C123",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+  });
+
+  it("extracts scoped capabilities and derives scope tags", () => {
+    const capabilities = extractAgentCapabilities({
+      capabilities: {
+        repo: "extensions",
+        role: "worker",
+        scope: buildSlackCompatibilityScope({ teamId: "T123", channelId: "C123" }),
+      },
+    });
+
+    expect(capabilities.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        workspaceId: "T123",
+        channelId: "C123",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+    expect(buildAgentCapabilityTags(capabilities)).toEqual(
+      expect.arrayContaining(["scope-provider:slack", "scope:default", "workspace:T123"]),
+    );
   });
 });

@@ -1,4 +1,11 @@
-import { isUserAllowed, isChannelId, stripBotMention, isAbortError } from "./helpers.js";
+import type { RuntimeScopeCarrier } from "@gugu910/pi-transport-core";
+import {
+  buildSlackCompatibilityScope,
+  isUserAllowed,
+  isChannelId,
+  stripBotMention,
+  isAbortError,
+} from "./helpers.js";
 import {
   buildSlackInboundMessageText,
   extractSlackMessageFileMetadata,
@@ -37,7 +44,34 @@ export interface SlackAccessSet<K> {
 
 export interface SlackThreadContext {
   channelId: string;
-  teamId: string;
+  teamId?: string;
+  scope: RuntimeScopeCarrier;
+}
+
+function buildSlackThreadContext(channelId: string, teamId?: string | null): SlackThreadContext {
+  const normalizedTeamId =
+    typeof teamId === "string" && teamId.trim().length > 0 ? teamId.trim() : undefined;
+  return {
+    channelId,
+    ...(normalizedTeamId ? { teamId: normalizedTeamId } : {}),
+    scope: buildSlackCompatibilityScope({
+      teamId: normalizedTeamId,
+      channelId,
+    }),
+  };
+}
+
+export function buildSlackThreadRuntimeScope(input: {
+  channelId?: string | null;
+  context?: SlackThreadContext | null;
+}): RuntimeScopeCarrier {
+  return (
+    input.context?.scope ??
+    buildSlackCompatibilityScope({
+      teamId: input.context?.teamId,
+      channelId: input.context?.channelId ?? input.channelId,
+    })
+  );
 }
 
 export interface ParsedEnvelope {
@@ -114,7 +148,7 @@ export function extractThreadStarted(evt: Record<string, unknown>): ParsedThread
 
   const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
   if (ctx?.channel_id) {
-    result.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
+    result.context = buildSlackThreadContext(ctx.channel_id, ctx.team_id);
   }
 
   return result;
@@ -139,7 +173,7 @@ export function extractThreadContextChanged(
   const result: ParsedThreadContextChanged = { threadTs };
   const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
   if (ctx?.channel_id) {
-    result.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
+    result.context = buildSlackThreadContext(ctx.channel_id, ctx.team_id);
   }
 
   return result;
