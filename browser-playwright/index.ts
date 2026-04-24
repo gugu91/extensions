@@ -24,6 +24,7 @@ import { buildAgentBrowserModeResult } from "./agent-browser.ts";
 import {
   BROWSER_ACTION_VALUES,
   BROWSER_BACKEND_VALUES,
+  buildBrowserDiscovery,
   buildCapabilities,
   describeBrowserActions,
   getBooleanArg,
@@ -804,6 +805,11 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
 
   async function executeInfo(request: BrowserToolRequest) {
     await cleanupExpiredSessions();
+    const topic = getStringArg(request.args, "topic");
+    if (!request.sessionId || topic) {
+      return respond(request, buildBrowserDiscovery(topic));
+    }
+
     const session = getSessionOrThrow(sessions, requireSessionId(request));
     const pages = await listPages(session);
     return respond(request, {
@@ -1206,14 +1212,15 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     description:
       "Playwright-first single browser tool. In this environment, use the browser tool without a backend override; the extension owns the runtime, proxy, socket, and session complexity behind one narrow interface.",
     promptSnippet:
-      "Use the single browser tool for browsing in this environment. The supported local path is Playwright; avoid backend overrides unless you are doing explicit experimental work.",
+      "Use the single browser tool for browsing in this environment. The supported local path is Playwright; call action='info' for compact help/schema discovery.",
     promptGuidelines: [
       "Prefer the single browser tool over many browser_* actions.",
+      "Use action + args for action-specific fields; input_json is compatibility-only for older callers.",
+      "Call browser with action='info' and no session_id for the action catalogue, or args.topic='<action>' for a compact action schema.",
       "Omit backend for normal use here; Playwright is the supported local path in this Anthropic sandbox.",
       "Treat agent-browser as experimental and unavailable locally; daemon compatibility is not a supported path in this repo.",
       "Direct top-level localhost navigation is intentionally allowed for same-host local-app testing; treat it as local-power access, not a generic public-web sandbox.",
       "Only mount storage_state_name files when you intentionally trust that workspace-local auth material on the current host.",
-      "The settled contract direction is args-first, but today action-specific fields still travel through input_json.",
     ],
     parameters: Type.Object({
       backend: Type.Optional(
@@ -1237,10 +1244,16 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
           description: "Optional page_id for actions that target a specific page or tab.",
         }),
       ),
+      args: Type.Optional(
+        Type.Record(Type.String(), Type.Unknown(), {
+          description:
+            "Preferred structured action payload. Use scalar fields such as url, selector, value, timeout_ms, label, full_page, or topic. Call action='info' with args.topic='<action>' for help/schema discovery.",
+        }),
+      ),
       input_json: Type.Optional(
         Type.String({
           description:
-            "Current compatibility shape for action-specific inputs such as url, selector, value, timeout_ms, label, or full_page. The planned contract direction is args-first.",
+            "Compatibility-only JSON string for older callers. Prefer args for new browser calls.",
         }),
       ),
     }),
@@ -1250,6 +1263,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
         action: params.action as BrowserAction,
         session_id: params.session_id,
         page_id: params.page_id,
+        args: params.args,
         input_json: params.input_json,
       });
 
