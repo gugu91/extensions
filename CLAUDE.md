@@ -85,6 +85,17 @@ The reviewer posts findings to PiComms and GitHub. Fix any critical/warning issu
 
 ## Extension patterns
 
+Design every extension with progressive disclosure:
+
+- Keep hot-path dedicated tool schemas small and high signal.
+- Move templates, examples, and usage knowledge into warm skills/docs.
+- Collapse large homogeneous cold action families behind a dispatcher with
+  structured `help`/schema discovery.
+- Return structured contracts such as `{ status, data, errors, warnings }` for
+  dispatcher actions, with typed errors and recovery hints.
+- Preserve precise guardrails with action-level names such as
+  `slack:upload` or `<extension>:<action>`.
+
 Each extension is a workspace package with a `package.json` that declares the
 `pi` manifest and an `index.ts` entry point:
 

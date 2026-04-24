@@ -170,7 +170,7 @@ export function createThreadConfirmationPolicy(
     const quotedAction = formatAction(action);
     if (!threadTs) {
       throw new Error(
-        `Tool "${toolName}" requires confirmation for action ${quotedAction}. Include a thread_ts and call slack_confirm_action before executing this tool.`,
+        `Tool "${toolName}" requires confirmation for action ${quotedAction}. Include a thread_ts and call slack with action "confirm_action" before executing this tool.`,
       );
     }
 
@@ -201,7 +201,7 @@ export function createThreadConfirmationPolicy(
     }
 
     throw new Error(
-      `Tool "${toolName}" requires confirmation for action ${quotedAction}. Call slack_confirm_action in thread ${threadTs} with tool "${toolName}" and action ${quotedAction}, then wait for the user's approval first.`,
+      `Tool "${toolName}" requires confirmation for action ${quotedAction}. Call slack with action "confirm_action" in thread ${threadTs} using tool "${toolName}" and action ${quotedAction}, then wait for the user's approval first.`,
     );
   }
 

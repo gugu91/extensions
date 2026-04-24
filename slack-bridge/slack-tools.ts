@@ -1,5 +1,5 @@
 import os from "node:os";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { InboxMessage } from "./helpers.js";
 import type { SlackResult } from "./slack-api.js";
@@ -14,21 +14,8 @@ import {
   normalizeSlackCanvasUpdateMode,
   pickSlackCanvasSectionId,
 } from "./canvases.js";
-import {
-  buildSlackBlockKitPromptGuidelines,
-  buildSlackBlocksTemplate,
-  normalizeSlackBlocksInput,
-  summarizeSlackBlocksForPolicy,
-  type SlackBlockButtonInput,
-} from "./slack-block-kit.js";
-import {
-  buildSlackModalPromptGuidelines,
-  buildSlackModalTemplate,
-  encodeSlackModalPrivateMetadata,
-  normalizeSlackModalViewInput,
-  type SlackModalFieldInput,
-  type SlackModalOptionInput,
-} from "./slack-modals.js";
+import { normalizeSlackBlocksInput, summarizeSlackBlocksForPolicy } from "./slack-block-kit.js";
+import { encodeSlackModalPrivateMetadata, normalizeSlackModalViewInput } from "./slack-modals.js";
 import {
   findSlackPresenceDirectoryUser,
   formatSlackPresenceLine,
@@ -84,28 +71,293 @@ export interface RegisterSlackToolsDeps {
   getBotUserId: () => string | null;
 }
 
+type SlackDispatcherStatus = "succeeded" | "failed";
+type SlackDispatcherErrorClass = "input" | "auth" | "network" | "rate-limit" | "not-found";
+
+interface SlackDispatcherError {
+  class: SlackDispatcherErrorClass;
+  message: string;
+  retryable: boolean;
+  hint: string;
+}
+
+interface SlackDispatcherEnvelope {
+  status: SlackDispatcherStatus;
+  data: unknown;
+  errors: SlackDispatcherError[];
+  warnings: string[];
+}
+
+interface SlackActionToolDefinition extends ToolDefinition {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+  execute: NonNullable<ToolDefinition["execute"]>;
+}
+
+const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> = {
+  react: [{ action: "react", args: { emoji: "👀", thread_ts: "1712345678.000100" } }],
+  read: [{ action: "read", args: { thread_ts: "1712345678.000100", limit: 20 } }],
+  upload: [
+    {
+      action: "upload",
+      args: {
+        content: "diff --git a/example b/example",
+        filename: "changes.diff",
+        filetype: "diff",
+        thread_ts: "1712345678.000100",
+      },
+    },
+  ],
+  schedule: [
+    {
+      action: "schedule",
+      args: { text: "Follow-up reminder", thread_ts: "1712345678.000100", delay: "30m" },
+    },
+  ],
+  presence: [{ action: "presence", args: { users: ["@alice", "U123456"] } }],
+  export: [{ action: "export", args: { thread_ts: "1712345678.000100", format: "markdown" } }],
+  post_channel: [
+    {
+      action: "post_channel",
+      args: { channel: "#deployments", text: "Deploy complete" },
+    },
+  ],
+  read_channel: [{ action: "read_channel", args: { channel: "#deployments", limit: 20 } }],
+  confirm_action: [
+    {
+      action: "confirm_action",
+      args: {
+        thread_ts: "1712345678.000100",
+        tool: "slack:delete",
+        action: "delete message ts=1712345678.000200",
+      },
+    },
+  ],
+  delete: [
+    {
+      action: "delete",
+      args: { ts: "1712345678.000200", thread_ts: "1712345678.000100", confirm: true },
+    },
+  ],
+  pin: [
+    {
+      action: "pin",
+      args: { action: "pin", message_ts: "1712345678.000100", thread_ts: "1712345678.000100" },
+    },
+  ],
+  bookmark: [
+    {
+      action: "bookmark",
+      args: { action: "add", channel: "#project", title: "Runbook", url: "https://example.com" },
+    },
+  ],
+  create_channel: [{ action: "create_channel", args: { name: "proj-alpha" } }],
+  project_create: [{ action: "project_create", args: { name: "proj-alpha", topic: "Alpha" } }],
+  canvas_comments_read: [
+    { action: "canvas_comments_read", args: { canvas_id: "F0123", limit: 20 } },
+  ],
+  canvas_create: [
+    { action: "canvas_create", args: { title: "Launch notes", markdown: "# Launch" } },
+  ],
+  canvas_update: [
+    {
+      action: "canvas_update",
+      args: { canvas_id: "F0123", markdown: "## Update", mode: "append" },
+    },
+  ],
+  modal_open: [
+    {
+      action: "modal_open",
+      args: { trigger_id: "fresh-trigger-id", view: { type: "modal", blocks: [] } },
+    },
+  ],
+  modal_push: [
+    {
+      action: "modal_push",
+      args: { trigger_id: "fresh-trigger-id", view: { type: "modal", blocks: [] } },
+    },
+  ],
+  modal_update: [
+    {
+      action: "modal_update",
+      args: { view_id: "V123", view: { type: "modal", blocks: [] } },
+    },
+  ],
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeSlackDispatcherActionName(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("slack action must be a string. Use action='help' to list available actions.");
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (!normalized) {
+    throw new Error("slack action is required. Use action='help' to list available actions.");
+  }
+  if (normalized.startsWith("slack:")) return normalized.slice("slack:".length);
+  if (normalized.startsWith("slack_")) return normalized.slice("slack_".length);
+  return normalized;
+}
+
+function normalizeSlackGuardrailToolName(toolName: string): string {
+  const normalized = toolName.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized.startsWith("slack:")) return normalized;
+  if (
+    normalized.startsWith("slack_") &&
+    normalized !== "slack_inbox" &&
+    normalized !== "slack_send"
+  ) {
+    return `slack:${normalized.slice("slack_".length)}`;
+  }
+  return toolName;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function classifySlackDispatcherError(error: unknown): SlackDispatcherError {
+  const message = getErrorMessage(error);
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("not_authed") ||
+    lower.includes("invalid_auth") ||
+    lower.includes("token_revoked") ||
+    lower.includes("missing_scope") ||
+    lower.includes("access_denied")
+  ) {
+    return {
+      class: "auth",
+      message,
+      retryable: false,
+      hint: "Check Slack token configuration, app installation, channel membership, and required OAuth scopes.",
+    };
+  }
+
+  if (lower.includes("rate_limited") || lower.includes("rate limit")) {
+    return {
+      class: "rate-limit",
+      message,
+      retryable: true,
+      hint: "Wait for Slack rate limits to clear, then retry the same action if it is idempotent.",
+    };
+  }
+
+  if (
+    lower.includes("not_found") ||
+    lower.includes("not found") ||
+    lower.includes("channel_not_found") ||
+    lower.includes("user_not_found") ||
+    lower.includes("canvas_not_found") ||
+    lower.includes("file_not_found")
+  ) {
+    return {
+      class: "not-found",
+      message,
+      retryable: false,
+      hint: "Verify Slack IDs, channel names, canvas/file IDs, and whether the bot can access the target.",
+    };
+  }
+
+  if (
+    lower.includes("network") ||
+    lower.includes("fetch") ||
+    lower.includes("timeout") ||
+    lower.includes("econnreset") ||
+    lower.includes("etimedout")
+  ) {
+    return {
+      class: "network",
+      message,
+      retryable: true,
+      hint: "Retry after checking network connectivity. For write actions, verify whether Slack already applied the request before retrying.",
+    };
+  }
+
+  return {
+    class: "input",
+    message,
+    retryable: false,
+    hint: "Call slack with action='help' and args.topic set to the action name for the expected schema and examples.",
+  };
+}
+
+function extractToolResponseText(response: unknown): string | undefined {
+  if (!isRecord(response) || !Array.isArray(response.content)) return undefined;
+
+  const lines = response.content
+    .map((item) => {
+      if (!isRecord(item)) return undefined;
+      return typeof item.text === "string" ? item.text : undefined;
+    })
+    .filter((line): line is string => line != null && line.length > 0);
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function extractToolResponseDetails(response: unknown): unknown {
+  return isRecord(response) && "details" in response ? response.details : undefined;
+}
+
+function buildSlackDispatcherResponse(envelope: SlackDispatcherEnvelope): {
+  content: Array<{ type: "text"; text: string }>;
+  details: SlackDispatcherEnvelope;
+} {
+  return {
+    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+    details: envelope,
+  };
+}
+
+function buildSlackActionSuccessEnvelope(response: unknown): SlackDispatcherEnvelope {
+  return {
+    status: "succeeded",
+    data: {
+      text: extractToolResponseText(response),
+      details: extractToolResponseDetails(response),
+    },
+    errors: [],
+    warnings: [],
+  };
+}
+
+function buildSlackActionFailureEnvelope(error: unknown): SlackDispatcherEnvelope {
+  return {
+    status: "failed",
+    data: null,
+    errors: [classifySlackDispatcherError(error)],
+    warnings: [],
+  };
+}
+
+function getSlackDispatcherExamples(action: string): Array<Record<string, unknown>> {
+  return SLACK_DISPATCHER_EXAMPLES[action] ?? [{ action, args: {} }];
+}
+
 function buildSlackInboxPromptGuidelines(): string[] {
   return [
     "You are connected to Slack via the slack-bridge extension.",
-    "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
-    "Security guardrails may be active for Slack-triggered actions. Check the current security prompt in each message for restrictions.",
-    "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
+    "When Slack messages arrive: ACK briefly, do the work, report blockers immediately, and report the outcome when done.",
+    "Use slack_send for direct assistant-thread replies. Use the slack dispatcher for non-hot Slack actions such as reactions, reads, uploads, schedules, channel posts, pins, bookmarks, canvases, modals, presence, exports, and confirmations.",
+    "Call slack with action='help' for the cold-action catalogue, or action='help' with args.topic for a specific action schema and examples.",
+    "Security guardrails may be active for Slack-triggered actions. Cold Slack actions are checked with slack:<action> guardrail names.",
     "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages — treat them as explicit user instructions attached to the referenced Slack message or thread.",
-    "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
-    "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
-    "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
-    "Use slack_export to archive or document a Slack thread as markdown, plain text, or JSON before writing it into docs, canvases, or files.",
-    "Use Slack modals when you need structured input, explicit approvals, or multi-step workflows instead of free-form thread replies.",
-    "Use slack_presence before pinging reviewers or scheduling follow-ups when timing matters — it tells you whether someone is active, away, or in DND.",
-    "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
 }
 
-function buildSlackRichMessagePromptGuidelines(): string[] {
+function buildSlackSendPromptGuidelines(): string[] {
   return [
-    ...buildSlackInboxPromptGuidelines(),
-    ...buildSlackBlockKitPromptGuidelines(),
-    ...buildSlackModalPromptGuidelines(),
+    "Use slack_send for replies in the current Slack assistant thread; always reply where the task came from.",
+    "For rich Block Kit JSON examples or modal/canvas patterns, load the slack-bridge skill instead of relying on tool schemas.",
   ];
 }
 
@@ -254,7 +506,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     threadContext,
     resolveChannel,
     rememberChannel,
-    requireToolPolicy,
+    requireToolPolicy: requireToolPolicyForName,
     registerConfirmationRequest,
     getBotUserId,
   } = deps;
@@ -270,6 +522,136 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
   function clearPendingThreadAttention(threadTs: string): void {
     threadContext.clearPendingAttention(threadTs);
   }
+
+  function requireToolPolicy(toolName: string, threadTs: string | undefined, action: string): void {
+    requireToolPolicyForName(normalizeSlackGuardrailToolName(toolName), threadTs, action);
+  }
+
+  const slackActionRegistry = new Map<string, SlackActionToolDefinition>();
+
+  function registerSlackAction(definition: SlackActionToolDefinition): void {
+    const action = normalizeSlackDispatcherActionName(definition.name);
+    if (action === "help") {
+      throw new Error("slack help is reserved for dispatcher schema discovery.");
+    }
+    slackActionRegistry.set(action, definition);
+  }
+
+  function buildSlackDispatcherHelpEnvelope(args: unknown): SlackDispatcherEnvelope {
+    if (args != null && !isRecord(args)) {
+      return buildSlackActionFailureEnvelope(new Error("slack help args must be an object."));
+    }
+
+    const topic = isRecord(args) && typeof args.topic === "string" ? args.topic : undefined;
+    if (topic) {
+      const action = normalizeSlackDispatcherActionName(topic);
+      const definition = slackActionRegistry.get(action);
+      if (!definition) {
+        return buildSlackActionFailureEnvelope(
+          new Error(`Unknown Slack action topic '${topic}'. Use action='help' to list actions.`),
+        );
+      }
+
+      return {
+        status: "succeeded",
+        data: {
+          action,
+          summary: definition.description ?? "",
+          guardrail_tool: `slack:${action}`,
+          args_schema: definition.parameters ?? {},
+          examples: getSlackDispatcherExamples(action),
+        },
+        errors: [],
+        warnings: [],
+      };
+    }
+
+    return {
+      status: "succeeded",
+      data: {
+        actions: [
+          {
+            action: "help",
+            summary: "List Slack dispatcher actions or return a specific action argument schema.",
+            guardrail_tool: null,
+          },
+          ...[...slackActionRegistry.entries()].map(([action, definition]) => ({
+            action,
+            summary: definition.description ?? "",
+            guardrail_tool: `slack:${action}`,
+          })),
+        ],
+      },
+      errors: [],
+      warnings: [],
+    };
+  }
+
+  pi.registerTool({
+    name: "slack",
+    label: "Slack",
+    description:
+      "Dispatcher for non-hot Slack actions: react, read, upload, schedule, presence, export, post_channel, read_channel, confirm_action, delete, pin, bookmark, create_channel, project_create, canvas_comments_read, canvas_create, canvas_update, modal_open, modal_push, modal_update, and help. Use slack_inbox and slack_send for hot-path inbox/reply work.",
+    promptSnippet:
+      "Run non-hot Slack actions through a compact dispatcher. Use action='help' for the action catalogue or args.topic for a specific schema.",
+    promptGuidelines: [
+      "Use slack_inbox and slack_send for the hot path. Use this dispatcher for every other Slack action.",
+      "Cold actions are guarded as slack:<action>, for example slack:upload or slack:canvas_update.",
+      "The dispatcher returns {status,data,errors,warnings}. On input errors, call action='help' with args.topic for the action schema.",
+      "For Block Kit templates, modal patterns, and canvas examples, load the slack-bridge skill lazily.",
+    ],
+    parameters: Type.Object({
+      action: Type.String({
+        description:
+          "Action name: help | react | read | upload | schedule | presence | export | post_channel | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
+      }),
+      args: Type.Optional(
+        Type.Record(Type.String(), Type.Unknown(), {
+          description:
+            "Action arguments. Call slack with action='help' and args.topic='<action>' for the exact JSON schema and examples.",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      try {
+        const action = normalizeSlackDispatcherActionName(params.action);
+        const args = params.args ?? {};
+
+        if (action === "help") {
+          return buildSlackDispatcherResponse(buildSlackDispatcherHelpEnvelope(args));
+        }
+
+        if (!isRecord(args)) {
+          return buildSlackDispatcherResponse(
+            buildSlackActionFailureEnvelope(new Error("slack args must be an object.")),
+          );
+        }
+
+        const definition = slackActionRegistry.get(action);
+        if (!definition) {
+          return buildSlackDispatcherResponse(
+            buildSlackActionFailureEnvelope(
+              new Error(`Unknown Slack action '${action}'. Use action='help' to list actions.`),
+            ),
+          );
+        }
+
+        const response = await definition.execute(
+          `slack:${action}`,
+          args,
+          undefined,
+          undefined,
+          undefined as unknown as ExtensionContext,
+        );
+        return buildSlackDispatcherResponse(buildSlackActionSuccessEnvelope(response));
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+        return buildSlackDispatcherResponse(buildSlackActionFailureEnvelope(error));
+      }
+    },
+  });
 
   async function resolveCanvasTarget(
     canvasId: string | undefined,
@@ -812,205 +1194,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
-    name: "slack_blocks_build",
-    label: "Slack Blocks Build",
-    description:
-      "Build Slack Block Kit JSON for common rich-message templates like code snippets, status reports, action buttons, and diff views.",
-    promptSnippet: "Build Slack Block Kit JSON for a rich Slack message.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
-    parameters: Type.Object({
-      template: Type.String({
-        description: "Template name: code_snippet | status_report | action_buttons | diff_view",
-      }),
-      title: Type.Optional(Type.String({ description: "Optional header/title text" })),
-      text: Type.Optional(Type.String({ description: "Primary body text (mrkdwn)" })),
-      footer: Type.Optional(Type.String({ description: "Optional footer/context text" })),
-      language: Type.Optional(Type.String({ description: "Code language label" })),
-      code: Type.Optional(Type.String({ description: "Code body for code_snippet" })),
-      before: Type.Optional(Type.String({ description: "Before/removed text for diff_view" })),
-      after: Type.Optional(Type.String({ description: "After/added text for diff_view" })),
-      fields: Type.Optional(
-        Type.Array(
-          Type.Object({
-            label: Type.String({ description: "Field label" }),
-            value: Type.String({ description: "Field value" }),
-          }),
-        ),
-      ),
-      buttons: Type.Optional(
-        Type.Array(
-          Type.Object({
-            text: Type.String({ description: "Button label" }),
-            action_id: Type.String({ description: "Stable Slack action_id" }),
-            value: Type.Optional(Type.String({ description: "Optional button value string" })),
-            style: Type.Optional(
-              Type.String({ description: "Optional Slack button style: primary or danger" }),
-            ),
-            url: Type.Optional(Type.String({ description: "Optional URL button target" })),
-          }),
-        ),
-      ),
-    }),
-    async execute(_id, params) {
-      const result = buildSlackBlocksTemplate({
-        template: params.template,
-        title: params.title,
-        text: params.text,
-        footer: params.footer,
-        language: params.language,
-        code: params.code,
-        before: params.before,
-        after: params.after,
-        fields: params.fields,
-        buttons:
-          params.buttons?.map((button: SlackBlockButtonInput) => ({
-            text: button.text,
-            action_id: button.action_id,
-            value: button.value,
-            style:
-              button.style === "primary" || button.style === "danger" ? button.style : undefined,
-            url: button.url,
-          })) ?? [],
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Built Slack Block Kit template ${JSON.stringify(params.template)}. ` +
-              `Use this JSON as the blocks parameter:\n\n${JSON.stringify(result.blocks, null, 2)}`,
-          },
-        ],
-        details: {
-          template: params.template,
-          fallbackText: result.fallbackText,
-          blocks: result.blocks,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "slack_modal_build",
-    label: "Slack Modal Build",
-    description:
-      "Build Slack modal JSON for common templates like confirmation dialogs, forms, and multi-select workflows.",
-    promptSnippet: "Build Slack modal JSON for a structured Slack workflow.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
-    parameters: Type.Object({
-      template: Type.String({
-        description: "Template name: confirmation | form | multi_select",
-      }),
-      title: Type.Optional(Type.String({ description: "Modal title" })),
-      submit_label: Type.Optional(Type.String({ description: "Submit button label" })),
-      close_label: Type.Optional(Type.String({ description: "Close button label" })),
-      callback_id: Type.Optional(Type.String({ description: "Optional Slack callback_id" })),
-      external_id: Type.Optional(Type.String({ description: "Optional Slack external_id" })),
-      private_metadata: Type.Optional(
-        Type.String({ description: "Optional custom private_metadata string" }),
-      ),
-      text: Type.Optional(
-        Type.String({ description: "Primary explanatory text for confirmation modals" }),
-      ),
-      confirm_phrase: Type.Optional(
-        Type.String({ description: "Optional phrase the user must type before submitting" }),
-      ),
-      confirm_label: Type.Optional(
-        Type.String({ description: "Optional label for the confirmation input" }),
-      ),
-      confirm_action_id: Type.Optional(
-        Type.String({ description: "Optional action_id for the confirmation input" }),
-      ),
-      confirm_placeholder: Type.Optional(
-        Type.String({ description: "Optional placeholder for the confirmation input" }),
-      ),
-      fields: Type.Optional(
-        Type.Array(
-          Type.Object({
-            label: Type.String({ description: "Visible field label" }),
-            action_id: Type.String({ description: "Stable Slack action_id for the input" }),
-            block_id: Type.Optional(Type.String({ description: "Optional block_id override" })),
-            placeholder: Type.Optional(Type.String({ description: "Optional placeholder text" })),
-            hint: Type.Optional(Type.String({ description: "Optional hint text" })),
-            initial_value: Type.Optional(Type.String({ description: "Optional initial value" })),
-            multiline: Type.Optional(
-              Type.Boolean({ description: "Whether the input is multiline" }),
-            ),
-            optional: Type.Optional(Type.Boolean({ description: "Whether the field is optional" })),
-          }),
-        ),
-      ),
-      label: Type.Optional(Type.String({ description: "Input label for multi_select" })),
-      action_id: Type.Optional(Type.String({ description: "action_id for multi_select" })),
-      placeholder: Type.Optional(
-        Type.String({ description: "Optional placeholder for multi_select" }),
-      ),
-      options: Type.Optional(
-        Type.Array(
-          Type.Object({
-            text: Type.String({ description: "Visible option label" }),
-            value: Type.String({ description: "Stable option value" }),
-          }),
-        ),
-      ),
-      initial_values: Type.Optional(
-        Type.Array(Type.String({ description: "Initially selected multi_select values" })),
-      ),
-      max_selected_items: Type.Optional(
-        Type.Number({ description: "Optional max_selected_items for multi_select" }),
-      ),
-      optional: Type.Optional(Type.Boolean({ description: "Whether multi_select is optional" })),
-    }),
-    async execute(_id, params) {
-      const result = buildSlackModalTemplate({
-        template: params.template,
-        title: params.title,
-        submit_label: params.submit_label,
-        close_label: params.close_label,
-        callback_id: params.callback_id,
-        external_id: params.external_id,
-        private_metadata: params.private_metadata,
-        text: params.text,
-        confirm_phrase: params.confirm_phrase,
-        confirm_label: params.confirm_label,
-        confirm_action_id: params.confirm_action_id,
-        confirm_placeholder: params.confirm_placeholder,
-        fields: params.fields as SlackModalFieldInput[] | undefined,
-        label: params.label,
-        action_id: params.action_id,
-        placeholder: params.placeholder,
-        options: params.options as SlackModalOptionInput[] | undefined,
-        initial_values: params.initial_values,
-        max_selected_items: params.max_selected_items,
-        optional: params.optional,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Built Slack modal template ${JSON.stringify(params.template)}. ` +
-              `Use this JSON as the view parameter:\n\n${JSON.stringify(result.view, null, 2)}`,
-          },
-        ],
-        details: {
-          template: params.template,
-          summary: result.summary,
-          view: result.view,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_modal_open",
     label: "Slack Modal Open",
     description: "Open a Slack modal with views.open using a fresh trigger_id.",
     promptSnippet: "Open a Slack modal to collect structured input or approvals.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       trigger_id: Type.String({ description: "Fresh Slack trigger_id from a recent interaction" }),
       view: Type.Record(Type.String(), Type.Unknown(), {
@@ -1058,12 +1246,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_modal_push",
     label: "Slack Modal Push",
     description: "Push a new view onto an open Slack modal stack using views.push.",
     promptSnippet: "Push another Slack modal view for a multi-step workflow.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       trigger_id: Type.String({ description: "Fresh Slack trigger_id from a recent interaction" }),
       view: Type.Record(Type.String(), Type.Unknown(), {
@@ -1111,12 +1298,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_modal_update",
     label: "Slack Modal Update",
     description: "Update an open Slack modal using views.update.",
     promptSnippet: "Update an existing Slack modal with a new view.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       view: Type.Record(Type.String(), Type.Unknown(), {
         description: "Slack modal view JSON object (type='modal')",
@@ -1185,7 +1371,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
       "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
+    promptGuidelines: buildSlackSendPromptGuidelines(),
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(
@@ -1209,7 +1395,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       const channel = (await resolveTrackedThreadChannel(params.thread_ts)) ?? getLastDmChannel();
       if (!channel) {
         throw new Error(
-          "No active Slack thread. If you know the channel and thread_ts, use slack_post_channel instead.",
+          "No active Slack thread. If you know the channel and thread_ts, use the slack dispatcher action post_channel instead.",
         );
       }
 
@@ -1250,7 +1436,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_react",
     label: "Slack React",
     description: "Add an emoji reaction to a Slack message or thread root.",
@@ -1317,7 +1503,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_upload",
     label: "Slack Upload",
     description:
@@ -1415,7 +1601,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_read",
     label: "Slack Read",
     description: "Read messages from a Slack assistant thread.",
@@ -1459,7 +1645,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_presence",
     label: "Slack Presence",
     description:
@@ -1520,7 +1706,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_export",
     label: "Slack Export",
     description:
@@ -1617,7 +1803,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_create_channel",
     label: "Slack Create Channel",
     description: "Create a new Slack channel, optionally setting its topic and purpose.",
@@ -1665,7 +1851,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
   // ─── Project channel creation ──────────────────────────
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_project_create",
     label: "Slack Project Create",
     description:
@@ -1752,7 +1938,9 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       if (canvasId) {
         parts.push(`RFC canvas: ${canvasId} — "${canvasTitle}"`);
       } else {
-        parts.push("Canvas creation failed — create it manually with slack_canvas_create.");
+        parts.push(
+          "Canvas creation failed — create it manually with the slack dispatcher action canvas_create.",
+        );
       }
       if (botInvited) {
         parts.push("Bot joined the channel.");
@@ -1771,14 +1959,13 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_post_channel",
     label: "Slack Post Channel",
     description:
       "Post a message to a Slack channel (by name or ID), optionally in a thread. Uses defaultChannel from settings if channel is omitted.",
     promptSnippet:
       "Post a message to a Slack channel or thread. Use when you need to target a specific channel or thread by ID.",
-    promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       channel: Type.Optional(
         Type.String({
@@ -1845,7 +2032,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_delete",
     label: "Slack Delete",
     description:
@@ -1938,7 +2125,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_pin",
     label: "Slack Pin",
     description: "Pin or unpin a Slack message by timestamp.",
@@ -2031,7 +2218,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_bookmark",
     label: "Slack Bookmark",
     description:
@@ -2180,7 +2367,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_schedule",
     label: "Slack Schedule",
     description:
@@ -2256,7 +2443,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_read_channel",
     label: "Slack Read Channel",
     description: "Read messages from a Slack channel or a thread within a channel.",
@@ -2310,7 +2497,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_canvas_comments_read",
     label: "Slack Canvas Comments Read",
     description:
@@ -2428,7 +2615,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_canvas_create",
     label: "Slack Canvas Create",
     description:
@@ -2517,7 +2704,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_canvas_update",
     label: "Slack Canvas Update",
     description:
@@ -2622,7 +2809,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
+  registerSlackAction({
     name: "slack_confirm_action",
     label: "Slack Confirm Action",
     description:
@@ -2639,15 +2826,16 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         throw new Error(`No active Slack thread for thread_ts: ${params.thread_ts}`);
       }
 
+      const confirmationTool = normalizeSlackGuardrailToolName(params.tool);
       const confirmMessage =
         `⚠️ *Action requires confirmation*\n\n` +
-        `Tool: \`${params.tool}\`\n` +
+        `Tool: \`${confirmationTool}\`\n` +
         `Action: ${params.action}\n\n` +
         `Reply *yes* to approve or *no* to reject.`;
 
       const registration = registerConfirmationRequest(
         params.thread_ts,
-        params.tool,
+        confirmationTool,
         params.action,
       );
       if (registration.status === "conflict") {
@@ -2664,7 +2852,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
               text: `A matching confirmation request is already pending in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding.`,
             },
           ],
-          details: { thread_ts: params.thread_ts, tool: params.tool, status: registration.status },
+          details: {
+            thread_ts: params.thread_ts,
+            tool: confirmationTool,
+            status: registration.status,
+          },
         };
       }
 
@@ -2685,7 +2877,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
           },
         ],
-        details: { thread_ts: params.thread_ts, tool: params.tool, status: registration.status },
+        details: {
+          thread_ts: params.thread_ts,
+          tool: confirmationTool,
+          status: registration.status,
+        },
       };
     },
   });

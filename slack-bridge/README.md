@@ -133,7 +133,7 @@ Behavior and precedence:
     "suggestedPrompts": [{ "title": "Status", "message": "What are you working on?" }],
     "security": {
       "readOnly": false,
-      "requireConfirmation": ["slack_create_channel"],
+      "requireConfirmation": ["slack:create_channel"],
       "blockedTools": []
     }
   }
@@ -151,7 +151,7 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)                                                                       |
 | `allowedUsers`                 | no       | Slack user IDs that can interact; when unset, access is denied unless `allowAllWorkspaceUsers` is true             |
 | `allowAllWorkspaceUsers`       | no       | Explicit opt-in for workspace-wide Slack access when you do not want a user allowlist                              |
-| `defaultChannel`               | no       | Default channel for `slack_post_channel`                                                                           |
+| `defaultChannel`               | no       | Default channel for the `slack` dispatcher `post_channel` action                                                   |
 | `logChannel`                   | no       | Channel for broker activity logs                                                                                   |
 | `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                                  |
 | `runtimeMode`                  | no       | Explicit startup mode: `"off"`, `"single"`, `"broker"`, or `"follower"`                                            |
@@ -181,36 +181,56 @@ Messages queue while the agent is busy. When the agent finishes, it automaticall
 
 ### Available tools
 
-| Tool                         | Description                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| `slack_send`                 | Reply in a Slack assistant thread                                                 |
-| `slack_react`                | Add an emoji reaction to a message                                                |
-| `slack_read`                 | Read messages from a thread                                                       |
-| `slack_inbox`                | Check pending incoming messages                                                   |
-| `slack_upload`               | Upload files, snippets, or diffs into Slack                                       |
-| `slack_schedule`             | Schedule a message for later delivery                                             |
-| `slack_post_channel`         | Post to a channel (by name or ID)                                                 |
-| `slack_delete`               | Delete a bot-posted message or an entire thread                                   |
-| `slack_read_channel`         | Read channel history or a thread in a channel                                     |
-| `slack_create_channel`       | Create a new Slack channel                                                        |
-| `slack_project_create`       | Create a project channel + RFC canvas + bot invite in one call                    |
-| `slack_pin`                  | Pin or unpin a message                                                            |
-| `slack_bookmark`             | Add, list, or remove channel bookmarks                                            |
-| `slack_export`               | Export a thread as markdown, plain text, or JSON                                  |
-| `slack_presence`             | Check if users are active, away, or in DND                                        |
-| `slack_canvas_comments_read` | Read comments attached to a verified canvas by canvas ID or channel canvas lookup |
-| `slack_canvas_create`        | Create a standalone or channel canvas                                             |
-| `slack_canvas_update`        | Append, prepend, or replace canvas content                                        |
-| `slack_blocks_build`         | Build Block Kit message templates                                                 |
-| `slack_modal_build`          | Build Slack modal templates                                                       |
-| `slack_modal_open`           | Open a modal from a trigger interaction                                           |
-| `slack_modal_push`           | Push a new step onto a modal stack                                                |
-| `slack_modal_update`         | Update an existing open modal                                                     |
-| `slack_confirm_action`       | Request user confirmation before a dangerous action                               |
+Slack-bridge uses progressive disclosure to keep the per-turn tool surface
+small:
+
+| Tool          | Description                                                                 |
+| ------------- | --------------------------------------------------------------------------- |
+| `slack_inbox` | Hot-path inbox drain for pending incoming Slack messages                    |
+| `slack_send`  | Hot-path reply tool for Slack assistant threads                             |
+| `slack`       | Dispatcher for all non-hot Slack actions; call `action: "help"` for schemas |
+
+Cold Slack actions live behind the `slack` dispatcher:
+
+| Dispatcher action      | Description                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `react`                | Add an emoji reaction to a message                                                |
+| `read`                 | Read messages from a thread                                                       |
+| `upload`               | Upload files, snippets, or diffs into Slack                                       |
+| `schedule`             | Schedule a message for later delivery                                             |
+| `post_channel`         | Post to a channel (by name or ID)                                                 |
+| `delete`               | Delete a bot-posted message or an entire thread                                   |
+| `read_channel`         | Read channel history or a thread in a channel                                     |
+| `create_channel`       | Create a new Slack channel                                                        |
+| `project_create`       | Create a project channel + RFC canvas + bot invite in one call                    |
+| `pin`                  | Pin or unpin a message                                                            |
+| `bookmark`             | Add, list, or remove channel bookmarks                                            |
+| `export`               | Export a thread as markdown, plain text, or JSON                                  |
+| `presence`             | Check if users are active, away, or in DND                                        |
+| `canvas_comments_read` | Read comments attached to a verified canvas by canvas ID or channel canvas lookup |
+| `canvas_create`        | Create a standalone or channel canvas                                             |
+| `canvas_update`        | Append, prepend, or replace canvas content                                        |
+| `modal_open`           | Open a modal from a trigger interaction                                           |
+| `modal_push`           | Push a new step onto a modal stack                                                |
+| `modal_update`         | Update an existing open modal                                                     |
+| `confirm_action`       | Request user confirmation before a dangerous action                               |
+
+Use `slack` with `action: "help"` for the action catalogue, or
+`action: "help", args: { "topic": "canvas_update" }` for a specific JSON
+schema and example invocations. Dispatcher responses use a consistent
+`{ "status", "data", "errors", "warnings" }` envelope. Guardrails match
+cold Slack actions as `slack:<action>` (for example `slack:upload` or
+`slack:canvas_update`); legacy `slack_<action>` patterns are accepted during
+migration.
+
+Block Kit and modal builders are no longer registered as tools. Load the
+bundled `slack-bridge` skill for curated Block Kit templates, modal patterns,
+and canvas examples, then pass the JSON directly to `slack_send` or the
+relevant dispatcher action.
 
 #### Canvas comment inspection
 
-`slack_canvas_comments_read` is intentionally narrow:
+The `canvas_comments_read` dispatcher action is intentionally narrow:
 
 - it validates the target with `canvases.sections.lookup` before reading comment pages via `files.info`
 - it needs `files:read` because Slack exposes canvas comments through the file API surface

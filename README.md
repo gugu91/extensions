@@ -187,6 +187,25 @@ extensions/
 └── package.json        # Root — dev deps + scripts
 ```
 
+### Extension tool-surface design principles
+
+All extensions should use progressive disclosure for agent-facing surfaces:
+
+1. **Hot tool schemas stay small.** Keep only the few per-turn, high-signal
+   execution tools registered as dedicated tools.
+2. **Warm knowledge moves to skills/docs.** Formatting examples, API recipes,
+   templates, and recovery playbooks belong in lazily loaded skills or docs —
+   not in always-present tool schemas.
+3. **Large homogeneous surfaces use dispatchers.** When an extension exposes a
+   broad family of similar actions, register a compact dispatcher with
+   `help`/schema discovery instead of many cold one-off tools.
+4. **Responses are contracts.** Prefer structured response envelopes such as
+   `{ status, data, errors, warnings }` with typed error classes and recovery
+   hints so agents can recover without an extra human turn.
+5. **Guardrails name the executable action.** Dispatcher actions should expose
+   stable guardrail names (for example `slack:upload`) so blocking and
+   confirmation policies remain precise even when many actions share one tool.
+
 ### Adding a new extension
 
 1. Create a directory with `index.ts` and `package.json`

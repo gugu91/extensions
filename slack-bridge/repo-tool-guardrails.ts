@@ -90,7 +90,7 @@ export function evaluateSlackOriginRepoToolPolicy(options: {
       reason:
         turn.threadCount > 1
           ? `Tool "${toolName}" requires Slack confirmation for action ${formatAction(action)}, but this Slack-triggered turn currently batches ${turn.threadCount} threads. Process one Slack thread at a time before using that tool.`
-          : `Tool "${toolName}" requires Slack confirmation for action ${formatAction(action)}, but there is no tracked Slack thread available for this turn. Retry from a specific Slack thread and call slack_confirm_action there first.`,
+          : `Tool "${toolName}" requires Slack confirmation for action ${formatAction(action)}, but there is no tracked Slack thread available for this turn. Retry from a specific Slack thread and call slack with action "confirm_action" there first.`,
     };
   }
 

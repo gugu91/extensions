@@ -49,7 +49,7 @@ describe("repo tool Slack guardrails", () => {
       guardrails: { requireConfirmation: ["psql"] },
       requireToolPolicy: (toolName, threadTs, action) => {
         throw new Error(
-          `Tool "${toolName}" requires confirmation for action ${JSON.stringify(action)}. Call slack_confirm_action in thread ${threadTs} first.`,
+          `Tool "${toolName}" requires confirmation for action ${JSON.stringify(action)}. Call slack action confirm_action in thread ${threadTs} first.`,
         );
       },
       formatAction: (action) => JSON.stringify(action),
@@ -59,7 +59,7 @@ describe("repo tool Slack guardrails", () => {
     expect(result).toEqual({
       block: true,
       reason:
-        'Tool "psql" requires confirmation for action "format=csv | query=select * from users". Call slack_confirm_action in thread 100.1 first.',
+        'Tool "psql" requires confirmation for action "format=csv | query=select * from users". Call slack action confirm_action in thread 100.1 first.',
     });
   });
 

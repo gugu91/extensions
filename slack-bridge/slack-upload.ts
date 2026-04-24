@@ -117,7 +117,7 @@ export async function resolveSlackUploadPath(
     !isWithinRoot(resolvedCandidate, resolvedTmpdir)
   ) {
     throw new Error(
-      "For safety, slack_upload only allows local file paths inside the current working directory or the system temp directory. For other files, read the content explicitly and upload it via the content parameter.",
+      "For safety, the slack dispatcher upload action only allows local file paths inside the current working directory or the system temp directory. For other files, read the content explicitly and upload it via the content parameter.",
     );
   }
 

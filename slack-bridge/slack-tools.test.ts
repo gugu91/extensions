@@ -14,6 +14,30 @@ type ToolDefinition = {
   execute: (id: string, params: Record<string, unknown>) => Promise<ToolResponse>;
 };
 
+type SlackDispatcherEnvelope = {
+  status: "succeeded" | "failed";
+  data: unknown;
+  errors: Array<{ message: string }>;
+};
+
+type SlackDispatcherData = {
+  text?: string;
+  details?: Record<string, unknown>;
+};
+
+function unwrapSlackDispatcherResponse(response: ToolResponse): ToolResponse {
+  const envelope = response.details as SlackDispatcherEnvelope;
+  if (envelope.status === "failed") {
+    throw new Error(envelope.errors[0]?.message ?? "Slack dispatcher action failed");
+  }
+
+  const data = envelope.data as SlackDispatcherData;
+  return {
+    content: data.text ? [{ type: "text", text: data.text }] : response.content,
+    details: data.details ?? {},
+  };
+}
+
 describe("registerSlackTools", () => {
   function setup() {
     const tools = new Map<string, ToolDefinition>();
@@ -234,10 +258,48 @@ describe("registerSlackTools", () => {
       getBotUserId: () => "U_BOT",
     });
 
+    const registeredTools = new Map(tools);
+    const slackDispatcher = tools.get("slack");
+    if (!slackDispatcher) {
+      throw new Error("Expected slack dispatcher to be registered");
+    }
+    const legacyActions = [
+      "modal_open",
+      "modal_push",
+      "modal_update",
+      "react",
+      "upload",
+      "read",
+      "presence",
+      "export",
+      "create_channel",
+      "project_create",
+      "post_channel",
+      "delete",
+      "pin",
+      "bookmark",
+      "schedule",
+      "read_channel",
+      "canvas_comments_read",
+      "canvas_create",
+      "canvas_update",
+      "confirm_action",
+    ];
+    for (const action of legacyActions) {
+      tools.set(`slack_${action}`, {
+        name: `slack_${action}`,
+        execute: async (_id, params) =>
+          unwrapSlackDispatcherResponse(
+            await slackDispatcher.execute(`slack:${action}`, { action, args: params }),
+          ),
+      });
+    }
+
     return {
       inbox,
       slack,
       tools,
+      registeredTools,
       setBotToken: (value: string) => {
         botToken = value;
       },
@@ -327,7 +389,7 @@ describe("registerSlackTools", () => {
     });
 
     expect(requireToolPolicy).toHaveBeenCalledWith(
-      "slack_delete",
+      "slack:delete",
       undefined,
       "channel=ops-alerts | thread_ts= | ts=123.789 | thread=false",
     );
@@ -955,51 +1017,40 @@ describe("registerSlackTools", () => {
     });
   });
 
-  it("builds block kit templates via slack_blocks_build", async () => {
-    const { tools } = setup();
+  it("registers only the hot Slack tools plus the dispatcher", () => {
+    const { registeredTools } = setup();
 
-    const response = await tools.get("slack_blocks_build")!.execute("tool-17", {
-      template: "action_buttons",
-      title: "Review",
-      text: "Choose an action.",
-      buttons: [
-        { text: "Approve", action_id: "review.approve", style: "primary", value: "approve" },
-        { text: "Reject", action_id: "review.reject", style: "danger", value: "reject" },
-      ],
-    });
+    const slackTools = [...registeredTools.keys()].filter((name) => name.startsWith("slack"));
 
-    expect(response.content?.[0]?.text).toContain("Use this JSON as the blocks parameter");
-    expect(response.details).toMatchObject({
-      template: "action_buttons",
-      fallbackText: expect.stringContaining("Choose an action."),
-      blocks: [
-        { type: "header" },
-        { type: "section" },
-        { type: "actions", elements: expect.any(Array) },
-      ],
-    });
+    expect(slackTools).toEqual(["slack", "slack_inbox", "slack_send"]);
+    expect(registeredTools.has("slack_blocks_build")).toBe(false);
+    expect(registeredTools.has("slack_modal_build")).toBe(false);
+    expect(registeredTools.has("slack_post_channel")).toBe(false);
+    expect(registeredTools.has("slack_canvas_update")).toBe(false);
   });
 
-  it("builds modal templates via slack_modal_build", async () => {
-    const { tools } = setup();
+  it("returns structured dispatcher help with per-action schemas and examples", async () => {
+    const { registeredTools } = setup();
+    const dispatcher = registeredTools.get("slack")!;
 
-    const response = await tools.get("slack_modal_build")!.execute("tool-18", {
-      template: "confirmation",
-      title: "Deploy approval",
-      text: "Ready to deploy to production.",
-      confirm_phrase: "CONFIRM",
-      callback_id: "deploy.confirm",
-    });
+    const catalogResponse = await dispatcher.execute("tool-help", { action: "help" });
+    const catalogEnvelope = catalogResponse.details as SlackDispatcherEnvelope;
+    expect(catalogEnvelope.status).toBe("succeeded");
+    expect(catalogResponse.content?.[0]?.text).toContain('"status": "succeeded"');
+    expect(catalogResponse.content?.[0]?.text).toContain('"action": "post_channel"');
 
-    expect(response.content?.[0]?.text).toContain("Use this JSON as the view parameter");
-    expect(response.details).toMatchObject({
-      template: "confirmation",
-      view: {
-        type: "modal",
-        callback_id: "deploy.confirm",
-        blocks: expect.any(Array),
-      },
+    const schemaResponse = await dispatcher.execute("tool-help-topic", {
+      action: "help",
+      args: { topic: "post_channel" },
     });
+    const schemaEnvelope = schemaResponse.details as SlackDispatcherEnvelope;
+    expect(schemaEnvelope.status).toBe("succeeded");
+    expect(schemaEnvelope.data).toMatchObject({
+      action: "post_channel",
+      guardrail_tool: "slack:post_channel",
+      examples: [expect.objectContaining({ action: "post_channel" })],
+    });
+    expect(schemaResponse.content?.[0]?.text).toContain("args_schema");
   });
 
   it("opens a modal and embeds thread context in private_metadata", async () => {

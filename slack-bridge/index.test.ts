@@ -161,11 +161,11 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const createChannel = tools.get("slack_create_channel");
+    const slackDispatcher = tools.get("slack");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
-    expect(createChannel).toBeDefined();
+    expect(slackDispatcher).toBeDefined();
     expect(tools.has("pinet_free")).toBe(true);
     expect(commands.has("pinet-start")).toBe(true);
     expect(commands.has("pinet-free")).toBe(true);
@@ -173,7 +173,10 @@ describe("slack-bridge top-level shutdown", () => {
 
     await sessionStart?.({}, ctx);
 
-    const pending = createChannel!.execute("tool-call-1", { name: "shutdown-test" });
+    const pending = slackDispatcher!.execute("tool-call-1", {
+      action: "create_channel",
+      args: { name: "shutdown-test" },
+    });
 
     await sessionShutdown?.({}, ctx);
 
@@ -312,12 +315,12 @@ describe("slack-bridge top-level shutdown", () => {
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
     const pinetStart = commands.get("pinet-start");
-    const createChannel = tools.get("slack_create_channel");
+    const slackDispatcher = tools.get("slack");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
-    expect(createChannel).toBeDefined();
+    expect(slackDispatcher).toBeDefined();
 
     await sessionStart?.({}, ctx);
     await pinetStart?.handler("", ctx);
@@ -347,10 +350,16 @@ describe("slack-bridge top-level shutdown", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    const response = await createChannel!.execute("tool-call-2", { name: "reload-test" });
+    const response = await slackDispatcher!.execute("tool-call-2", {
+      action: "create_channel",
+      args: { name: "reload-test" },
+    });
 
     expect(response).toMatchObject({
-      details: { id: "C123", name: "reload-test" },
+      details: {
+        status: "succeeded",
+        data: { details: { id: "C123", name: "reload-test" } },
+      },
     });
     expect(
       fetchSpy.mock.calls.some(

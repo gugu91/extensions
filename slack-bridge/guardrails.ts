@@ -10,12 +10,16 @@ export interface SecurityGuardrails {
 export const READ_ONLY_TOOLS = new Set([
   "read",
   "rg",
+  "slack",
   "slack_inbox",
   "slack_send",
-  "slack_read",
-  "slack_read_channel",
-  "slack_export",
-  "slack_presence",
+  "slack:help",
+  "slack:read",
+  "slack:read_channel",
+  "slack:export",
+  "slack:presence",
+  "slack:canvas_comments_read",
+  "slack:confirm_action",
   "pinet_agents",
   "pinet_message",
   "memory_read",
@@ -34,29 +38,43 @@ export const WRITE_TOOLS = new Set([
   "memory_write",
   "memory_sync",
   "memory_init",
-  "slack_create_channel",
-  "slack_post_channel",
-  "slack_delete",
-  "slack_upload",
-  "slack_schedule",
-  "slack_pin",
-  "slack_bookmark",
-  "slack_react",
-  "slack_modal_open",
-  "slack_modal_push",
-  "slack_modal_update",
+  "slack:create_channel",
+  "slack:project_create",
+  "slack:post_channel",
+  "slack:delete",
+  "slack:upload",
+  "slack:schedule",
+  "slack:pin",
+  "slack:bookmark",
+  "slack:react",
+  "slack:canvas_create",
+  "slack:canvas_update",
+  "slack:modal_open",
+  "slack:modal_push",
+  "slack:modal_update",
   "pinet_schedule",
 ]);
 
 /**
  * Match a tool name against glob patterns (supports `*` wildcard).
+ * Slack dispatcher actions use `slack:<action>` names; legacy `slack_<action>`
+ * guardrail patterns still match during migration.
  * Returns true if the tool name matches any of the patterns.
  */
 export function matchesToolPattern(toolName: string, patterns: string[]): boolean {
+  const candidates = new Set([toolName]);
+  if (toolName.startsWith("slack:")) {
+    candidates.add(`slack_${toolName.slice("slack:".length)}`);
+  } else if (toolName.startsWith("slack_")) {
+    candidates.add(`slack:${toolName.slice("slack_".length)}`);
+  }
+
   for (const pattern of patterns) {
     const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
     const re = new RegExp(`^${escaped}$`);
-    if (re.test(toolName)) return true;
+    for (const candidate of candidates) {
+      if (re.test(candidate)) return true;
+    }
   }
   return false;
 }
@@ -71,7 +89,10 @@ export function isToolBlocked(toolName: string, guardrails: SecurityGuardrails):
   if (guardrails.blockedTools?.length && matchesToolPattern(toolName, guardrails.blockedTools)) {
     return true;
   }
-  if (guardrails.readOnly && WRITE_TOOLS.has(toolName)) {
+  const readOnlyToolName = toolName.startsWith("slack_")
+    ? `slack:${toolName.slice("slack_".length)}`
+    : toolName;
+  if (guardrails.readOnly && WRITE_TOOLS.has(readOnlyToolName)) {
     return true;
   }
   return false;
@@ -135,7 +156,7 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
     sections.push(
       [
         "✋ CONFIRMATION REQUIRED:",
-        `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack_confirm_action with the thread_ts, a description of the action, and the tool name.`,
+        `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack with action "confirm_action" and args containing thread_ts, a description of the action, and the tool name (for dispatcher actions, use slack:<action>).`,
         "Wait for the user's response via slack_inbox. Only proceed if the user approves. If denied, inform the user and skip the action.",
       ].join("\n"),
     );
