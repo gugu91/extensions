@@ -5,22 +5,25 @@ A Pi browser extension built around **one typed tool only**.
 Instead of exposing a wide `browser_*` family, the extension now exposes a
 single `browser` tool with a shared envelope:
 
-- `backend`
 - `action`
 - `session_id?`
 - `page_id?`
-- `input_json?`
+- `input_json?` — the current stable carrier for action-specific fields
+- `backend?` — an advanced/experimental override that should be omitted for normal use
 
 The extension owns the runtime, process, proxy, socket, and artifact complexity
 behind that one interface.
+
+In the Anthropic sandbox used by this repo, `browser-playwright` is the
+supported local browsing path.
 
 ## Goals
 
 - radically reduce the public browser tool surface
 - keep browser support feeling like one narrow ARC/comment channel
 - keep Playwright as the real working backend
-- add an explicit `agent-browser` adapter slot behind the same contract
-- avoid pretending both backends have identical capabilities in every sandbox
+- keep any future `agent-browser` path hidden behind the same contract instead of treating it as a supported local path
+- avoid pretending different backends have identical capabilities in every sandbox
 
 ## Public tool contract
 
@@ -28,7 +31,6 @@ Tool: `browser`
 
 Parameters:
 
-- `backend` — optional, `playwright` or `agent-browser` (defaults to `playwright`)
 - `action` — typed enum:
   - `start`
   - `info`
@@ -46,6 +48,12 @@ Parameters:
 - `page_id` — optional page/tab handle for actions that target a specific page
 - `input_json` — optional JSON object with action-specific inputs such as `url`,
   `selector`, `value`, `timeout_ms`, `label`, or `full_page`
+  - this is the **current stable** carrier for action-specific fields
+  - the settled cleanup direction is **args-first**, but that contract change has not landed yet
+- `backend` — advanced/experimental override (`playwright` or `agent-browser`)
+  - omit it for normal Anthropic-sandbox use
+  - the default local path is Playwright
+  - `agent-browser` is not a supported local path in this repo
 
 ## Response shape
 
@@ -61,9 +69,16 @@ Every call returns one shared envelope:
 
 This keeps backend differences explicit instead of overpromising parity.
 
+## Supported path in Anthropic sandbox
+
+- Use `browser-playwright` and the single `browser` tool for local browsing in this repo.
+- Omit `backend` for normal use; Playwright is the supported local path.
+- Treat `input_json` as the stable action-input carrier until the planned args-first cleanup lands.
+- Treat `agent-browser` as hidden/experimental only. Local daemon compatibility is a non-goal here.
+
 ## Backend status
 
-### `backend=playwright`
+### Playwright (default local path)
 
 This is the **real working backend** in this extension today.
 
@@ -82,7 +97,7 @@ Supported actions:
 - `tabs`
 - `close`
 
-### `backend=agent-browser`
+### `agent-browser` (experimental / not a supported local path)
 
 This backend is **scaffolded behind the same contract**, but in this sandbox it
 returns a capability-aware blocked/unavailable result instead of pretending the
@@ -99,8 +114,9 @@ Current blocker is specific and technical, not a missing adapter shape:
 
 Truthful posture in this harness:
 
-- `backend=playwright` is the real local backend
-- `backend=agent-browser` stays explicitly unavailable-locally
+- Playwright is the supported local backend
+- `agent-browser` stays explicitly unavailable locally
+- local `agent-browser` daemon compatibility is a non-goal for this repo
 - the only viable future support shape here is **remote/optional executor**
   unless upstream ships a real published embeddable JS SDK
 
@@ -139,7 +155,6 @@ Treat both as local operator power, not as generic public-web browsing.
 
 ```json
 {
-  "backend": "playwright",
   "action": "start",
   "input_json": "{\"url\":\"https://example.com\"}"
 }
@@ -149,7 +164,6 @@ Treat both as local operator power, not as generic public-web browsing.
 
 ```json
 {
-  "backend": "playwright",
   "action": "navigate",
   "session_id": "browser_123",
   "input_json": "{\"url\":\"https://example.com/docs\",\"new_tab\":true}"
@@ -160,7 +174,6 @@ Treat both as local operator power, not as generic public-web browsing.
 
 ```json
 {
-  "backend": "playwright",
   "action": "fill",
   "session_id": "browser_123",
   "page_id": "page_abc",
@@ -172,7 +185,6 @@ Treat both as local operator power, not as generic public-web browsing.
 
 ```json
 {
-  "backend": "playwright",
   "action": "wait",
   "session_id": "browser_123",
   "input_json": "{\"text\":\"Playwright\",\"timeout_ms\":10000}"
@@ -183,7 +195,6 @@ Treat both as local operator power, not as generic public-web browsing.
 
 ```json
 {
-  "backend": "playwright",
   "action": "screenshot",
   "session_id": "browser_123",
   "input_json": "{\"label\":\"search-results\",\"full_page\":true}"
@@ -259,7 +270,7 @@ Saved Playwright login/session state is supported in a narrow, explicit way.
 
 - place trusted Playwright `storageState` JSON files under
   `.pi/state/browser-playwright/`
-- reuse one explicitly via the `start` action and `storage_state_name` inside `input_json`
+- reuse one explicitly via the `start` action and `storage_state_name` inside `input_json` (today's stable action-input carrier)
 - the extension never auto-saves browser state on close or shutdown
 
 Treat `.pi/state/browser-playwright/` as trusted, secret-bearing auth material for the current workspace and host.

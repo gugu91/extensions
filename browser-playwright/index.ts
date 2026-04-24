@@ -1204,21 +1204,22 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     name: "browser",
     label: "Browser",
     description:
-      "Single typed browser tool with backend-aware actions. The extension owns the runtime, proxy, socket, and session complexity behind one narrow interface.",
+      "Playwright-first single browser tool. In this environment, use the browser tool without a backend override; the extension owns the runtime, proxy, socket, and session complexity behind one narrow interface.",
     promptSnippet:
-      "Use the single browser tool with a backend plus typed action enum. Keep browser runtime complexity inside the extension instead of calling a large browser_* tool family.",
+      "Use the single browser tool for browsing in this environment. The supported local path is Playwright; avoid backend overrides unless you are doing explicit experimental work.",
     promptGuidelines: [
       "Prefer the single browser tool over many browser_* actions.",
-      "Set backend=playwright for the working runtime in this environment.",
-      "Use backend=agent-browser only when you specifically want that adapter path; capability-aware responses may report it as unavailable in restricted environments.",
+      "Omit backend for normal use here; Playwright is the supported local path in this Anthropic sandbox.",
+      "Treat agent-browser as experimental and unavailable locally; daemon compatibility is not a supported path in this repo.",
       "Direct top-level localhost navigation is intentionally allowed for same-host local-app testing; treat it as local-power access, not a generic public-web sandbox.",
       "Only mount storage_state_name files when you intentionally trust that workspace-local auth material on the current host.",
-      "Pass action-specific fields through input_json so the public tool surface stays narrow.",
+      "The settled contract direction is args-first, but today action-specific fields still travel through input_json.",
     ],
     parameters: Type.Object({
       backend: Type.Optional(
         StringEnum(BROWSER_BACKEND_VALUES, {
-          description: "Browser backend. Defaults to playwright.",
+          description:
+            "Advanced/experimental backend override. Omit for the supported local Playwright path.",
         }),
       ),
       action: StringEnum(BROWSER_ACTION_VALUES, {
@@ -1239,7 +1240,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       input_json: Type.Optional(
         Type.String({
           description:
-            "Optional JSON object carrying action-specific inputs such as url, selector, value, timeout_ms, label, or full_page.",
+            "Current compatibility shape for action-specific inputs such as url, selector, value, timeout_ms, label, or full_page. The planned contract direction is args-first.",
         }),
       ),
     }),

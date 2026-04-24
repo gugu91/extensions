@@ -128,7 +128,7 @@ export function buildCapabilities(backend: BrowserBackend): BrowserCapabilities 
       available: true,
       supported_actions: [...BROWSER_ACTION_VALUES],
       notes: [
-        "Playwright is the real browser backend in this extension.",
+        "Playwright is the supported local browsing path in this Anthropic sandbox.",
         "Artifacts and storage state stay rooted in the active workspace.",
       ],
     };
@@ -141,7 +141,7 @@ export function buildCapabilities(backend: BrowserBackend): BrowserCapabilities 
     notes: [
       "agent-browser is scaffolded behind the same one-tool contract.",
       "Local agent-browser support is unavailable in this harness.",
-      "Truthful future support is remote/optional executor mode unless upstream ships a real embeddable SDK.",
+      "Local daemon compatibility is a non-goal here; any truthful future support is remote/optional executor mode unless upstream ships a real embeddable SDK.",
     ],
   };
 }
