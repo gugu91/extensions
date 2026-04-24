@@ -204,7 +204,7 @@ describe("createThreadConfirmationPolicy", () => {
     const { policy } = createPolicyHarness({ requireConfirmation: ["bash"] });
 
     expect(() => policy.requireToolPolicy("bash", "100.1", "run: ls")).toThrow(
-      'Tool "bash" requires confirmation for action "run: ls". Call slack_confirm_action in thread 100.1 with tool "bash" and action "run: ls", then wait for the user\'s approval first.',
+      'Tool "bash" requires confirmation for action "run: ls". Call slack with action "confirm_action" in thread 100.1 using tool "bash" and action "run: ls", then wait for the user\'s approval first.',
     );
 
     expect(policy.registerRequest("100.1", "bash", "run: ls").status).toBe("created");
@@ -215,7 +215,7 @@ describe("createThreadConfirmationPolicy", () => {
     expect(policy.consumeReply("100.1", "yes")).toEqual({ approved: true });
     expect(() => policy.requireToolPolicy("bash", "100.1", "run: ls")).not.toThrow();
     expect(() => policy.requireToolPolicy("bash", "100.1", "run: ls")).toThrow(
-      'Tool "bash" requires confirmation for action "run: ls". Call slack_confirm_action in thread 100.1 with tool "bash" and action "run: ls", then wait for the user\'s approval first.',
+      'Tool "bash" requires confirmation for action "run: ls". Call slack with action "confirm_action" in thread 100.1 using tool "bash" and action "run: ls", then wait for the user\'s approval first.',
     );
   });
 
@@ -242,7 +242,7 @@ describe("createThreadConfirmationPolicy", () => {
     const { policy } = createPolicyHarness({ requireConfirmation: ["bash"] });
 
     expect(() => policy.requireToolPolicy("bash", undefined, "run: ls")).toThrow(
-      'Tool "bash" requires confirmation for action "run: ls". Include a thread_ts and call slack_confirm_action before executing this tool.',
+      'Tool "bash" requires confirmation for action "run: ls". Include a thread_ts and call slack with action "confirm_action" before executing this tool.',
     );
   });
 
@@ -267,7 +267,7 @@ describe("createThreadConfirmationPolicy", () => {
 
     advance(DEFAULT_CONFIRMATION_REQUEST_TTL_MS + 1);
     expect(() => policy.requireToolPolicy("bash", "100.1", "run: ls")).toThrow(
-      'Tool "bash" requires confirmation for action "run: ls". Call slack_confirm_action in thread 100.1 with tool "bash" and action "run: ls", then wait for the user\'s approval first.',
+      'Tool "bash" requires confirmation for action "run: ls". Call slack with action "confirm_action" in thread 100.1 using tool "bash" and action "run: ls", then wait for the user\'s approval first.',
     );
 
     setGuardrails({});

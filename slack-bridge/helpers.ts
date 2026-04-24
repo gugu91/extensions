@@ -289,7 +289,7 @@ function formatInboxMetadata(metadata: Record<string, unknown> | null | undefine
       canvasId: canvasReference.canvasId,
       ...(canvasReference.title ? { title: canvasReference.title } : {}),
       ...(canvasReference.permalink ? { permalink: canvasReference.permalink } : {}),
-      toolHint: `slack_canvas_comments_read canvas_id=${canvasReference.canvasId}`,
+      toolHint: `slack action=canvas_comments_read args.canvas_id=${canvasReference.canvasId}`,
     })}`;
   }
 
@@ -1601,7 +1601,7 @@ export function buildWorkerPromptGuidelines(): string[] {
     "REPLY TOOL RULES:",
     "- If you received a task via `pinet_message`, reply via `pinet_message` to the sender.",
     "- If you received a task in a Slack thread, reply via `slack_send` in that thread.",
-    "- Never use `slack_post_channel` with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
+    "- Never use the `slack` dispatcher `post_channel` action with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
     "",
     "PINET DELEGATION RULES:",
     "- When you need another connected agent to take work or parallelize, do NOT use the Agent tool to spawn a local subagent for delegation.",

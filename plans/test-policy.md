@@ -43,7 +43,7 @@ No PR is merge-ready if any of these fail.
 Run after merge into target branch:
 
 1. `pinet-start` / `pinet-follow` start paths
-2. Security guardrail path (`/pinet-status`, `slack_confirm_action` if applicable)
+2. Security guardrail path (`/pinet-status`, `slack` dispatcher action `confirm_action` if applicable)
 3. Reconnect path (follow mode) and message drain behavior in a real environment
 4. Worker visibility check (`pinet-status`) for status/CWD/active-work context
 

@@ -522,7 +522,9 @@ describe("formatInboxMessages", () => {
     expect(result).toContain('canvas={"canvasId":"F_CANVAS_1"');
     expect(result).toContain('"title":"Launch plan"');
     expect(result).toContain('"permalink":"https://example.slack.com/docs/T/F_CANVAS_1"');
-    expect(result).toContain('"toolHint":"slack_canvas_comments_read canvas_id=F_CANVAS_1"');
+    expect(result).toContain(
+      '"toolHint":"slack action=canvas_comments_read args.canvas_id=F_CANVAS_1"',
+    );
   });
 
   it("keeps generic Slack file metadata out of the canvas-only suffix", () => {
@@ -547,7 +549,7 @@ describe("formatInboxMessages", () => {
 
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("will: See attached note");
-    expect(result).not.toContain("slack_canvas_comments_read");
+    expect(result).not.toContain("canvas_comments_read");
     expect(result).not.toContain(" | canvas=");
   });
 });

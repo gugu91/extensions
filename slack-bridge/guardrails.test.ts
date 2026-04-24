@@ -23,7 +23,7 @@ describe("matchesToolPattern", () => {
 
   it("matches with wildcard *", () => {
     expect(matchesToolPattern("slack_send", ["slack_*"])).toBe(true);
-    expect(matchesToolPattern("slack_read_channel", ["slack_*"])).toBe(true);
+    expect(matchesToolPattern("slack:read_channel", ["slack:*"])).toBe(true);
   });
 
   it("matches against multiple patterns", () => {
@@ -53,8 +53,13 @@ describe("matchesToolPattern", () => {
   });
 
   it("wildcard in the middle", () => {
-    expect(matchesToolPattern("slack_read_channel", ["slack_*_channel"])).toBe(true);
-    expect(matchesToolPattern("slack_send", ["slack_*_channel"])).toBe(false);
+    expect(matchesToolPattern("slack:read_channel", ["slack:*_channel"])).toBe(true);
+    expect(matchesToolPattern("slack_send", ["slack:*_channel"])).toBe(false);
+  });
+
+  it("matches legacy Slack underscore patterns against dispatcher action names", () => {
+    expect(matchesToolPattern("slack:canvas_update", ["slack_canvas_*"])).toBe(true);
+    expect(matchesToolPattern("slack:upload", ["slack_upload"])).toBe(true);
   });
 });
 
@@ -92,38 +97,41 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("edit", g)).toBe(false);
   });
 
-  it("classifies Slack mutation tools as write-only", () => {
-    expect(WRITE_TOOLS.has("slack_create_channel")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_post_channel")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_delete")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_upload")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_schedule")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_pin")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_bookmark")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_react")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_modal_open")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_modal_push")).toBe(true);
-    expect(WRITE_TOOLS.has("slack_modal_update")).toBe(true);
-    expect(READ_ONLY_TOOLS.has("slack_export")).toBe(true);
-    expect(READ_ONLY_TOOLS.has("slack_presence")).toBe(true);
-    expect(READ_ONLY_TOOLS.has("slack_create_channel")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_post_channel")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_delete")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_upload")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_schedule")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_pin")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_bookmark")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_react")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_modal_open")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_modal_push")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("slack_modal_update")).toBe(false);
-    expect(WRITE_TOOLS.has("slack_presence")).toBe(false);
+  it("classifies Slack dispatcher mutation actions as write-only", () => {
+    expect(WRITE_TOOLS.has("slack:create_channel")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:project_create")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:post_channel")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:delete")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:upload")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:schedule")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:pin")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:bookmark")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:react")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:modal_open")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:modal_push")).toBe(true);
+    expect(WRITE_TOOLS.has("slack:modal_update")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack:export")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack:presence")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack:canvas_comments_read")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack:create_channel")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:post_channel")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:delete")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:upload")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:schedule")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:pin")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:bookmark")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:react")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:modal_open")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:modal_push")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack:modal_update")).toBe(false);
+    expect(WRITE_TOOLS.has("slack:presence")).toBe(false);
   });
 
   it("combines readOnly and blockedTools", () => {
     const g: SecurityGuardrails = { readOnly: true, blockedTools: ["slack_create_channel"] };
     expect(isToolBlocked("bash", g)).toBe(true); // write tool + readOnly
-    expect(isToolBlocked("slack_create_channel", g)).toBe(true); // explicit block
+    expect(isToolBlocked("slack:create_channel", g)).toBe(true); // explicit block via legacy pattern
+    expect(isToolBlocked("slack_create_channel", g)).toBe(true); // legacy spelling still maps
     expect(isToolBlocked("read", g)).toBe(false); // read-only tool
   });
 });
@@ -212,14 +220,14 @@ describe("buildSecurityPrompt", () => {
     expect(prompt).toContain("CONFIRMATION REQUIRED");
     expect(prompt).toContain("bash");
     expect(prompt).toContain("edit");
-    expect(prompt).toContain("slack_confirm_action");
+    expect(prompt).toContain('action "confirm_action"');
   });
 
   it("includes all sections when all guardrails are active", () => {
     const prompt = buildSecurityPrompt({
       readOnly: true,
       blockedTools: ["comment_wipe_all"],
-      requireConfirmation: ["slack_create_channel"],
+      requireConfirmation: ["slack:create_channel"],
     });
     expect(prompt).toContain("READ-ONLY MODE");
     expect(prompt).toContain("BLOCKED TOOLS");
