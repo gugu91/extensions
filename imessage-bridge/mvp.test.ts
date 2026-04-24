@@ -56,7 +56,7 @@ describe("detectIMessageMvpEnvironment", () => {
 });
 
 describe("formatIMessageMvpReadiness", () => {
-  it("calls out send-first readiness when only local history is unavailable", () => {
+  it("calls out send-first readiness and the same-host trust boundary when only local history is unavailable", () => {
     const lines = formatIMessageMvpReadiness(
       detectIMessageMvpEnvironment({
         platform: "darwin",
@@ -67,6 +67,9 @@ describe("formatIMessageMvpReadiness", () => {
 
     expect(lines).toContain("mvp: send-first ready; local history is unavailable");
     expect(lines).toContain("mvp blockers: missing_messages_db");
+    expect(lines).toContain(
+      "trust-boundary: same-host local-power surface; when enabled, outbound sends go through the local Messages app via /usr/bin/osascript as the current macOS user.",
+    );
   });
 
   it("includes blockers in the human-readable summary", () => {

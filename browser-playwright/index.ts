@@ -18,6 +18,7 @@ import {
   STORAGE_STATE_RELATIVE_DIR,
   truncateText,
   type SupportedBrowserEngine,
+  buildBrowserTrustBoundaryNotes,
 } from "./helpers.ts";
 import { buildAgentBrowserModeResult } from "./agent-browser.ts";
 import {
@@ -791,6 +792,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
           localhost_direct_navigation: true,
           localhost_subrequests_require_trusted_page: true,
         },
+        trust_boundary: buildBrowserTrustBoundaryNotes({
+          mountedStorageStatePath: session.mountedStorageState?.path ?? null,
+        }),
       });
     } catch (error) {
       await browser.close().catch(() => undefined);
@@ -817,6 +821,9 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       network_summary: session.networkSummary,
       recent_console: session.consoleEntries,
       blocked_requests: session.blockedRequests,
+      trust_boundary: buildBrowserTrustBoundaryNotes({
+        mountedStorageStatePath: session.mountedStorageState?.path ?? null,
+      }),
     });
   }
 
@@ -1204,6 +1211,8 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       "Prefer the single browser tool over many browser_* actions.",
       "Omit backend for normal use here; Playwright is the supported local path in this Anthropic sandbox.",
       "Treat agent-browser as experimental and unavailable locally; daemon compatibility is not a supported path in this repo.",
+      "Direct top-level localhost navigation is intentionally allowed for same-host local-app testing; treat it as local-power access, not a generic public-web sandbox.",
+      "Only mount storage_state_name files when you intentionally trust that workspace-local auth material on the current host.",
       "The settled contract direction is args-first, but today action-specific fields still travel through input_json.",
     ],
     parameters: Type.Object({

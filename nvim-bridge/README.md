@@ -14,6 +14,16 @@ Neovim ↔ pi bridge that sends active editor context (file, viewport, selection
 
 > Important: Neovim and pi must be in the **same git repo and same branch**.
 
+## Trust boundary notes
+
+`nvim-bridge` is a **same-host local-power surface**.
+
+- The Unix socket under `/tmp/pi-nvim/<hash>.sock` assumes local trust between Neovim and the pi process on the same machine.
+- There is **no peer authentication handshake** on that socket today; the main boundary is host-local access plus the repo/branch-derived socket name.
+- The bridge now tightens the socket directory/socket permissions on a best-effort basis, but that is intentionally narrow hardening rather than a transport redesign.
+
+Treat the socket as local editor-control access for the current host, not as a remote-safe transport.
+
 ## Install / configure
 
 ### 1) Link this as a pi extension
@@ -143,6 +153,7 @@ pnpm check
 
 - Lua files are intentionally ignored by Prettier and formatted with StyLua.
 - A local ambient type declaration is provided in `types/pi-coding-agent.d.ts` so `tsc` can run without requiring external SDK types.
+- If `/tmp` or your local machine account is shared more broadly than usual, remember that `nvim-bridge` still relies on same-host trust rather than explicit socket peer auth.
 
 ## License
 

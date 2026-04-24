@@ -140,6 +140,15 @@ implementation:
 - screenshots saved under `.pi/artifacts/browser-playwright/`
 - explicit storage-state reuse from `.pi/state/browser-playwright/`
 
+## Trust boundary notes
+
+This backend intentionally includes two same-host local-power assumptions:
+
+- **Direct localhost navigation is allowed on purpose.** That is for local app testing on the current host; it is not meant to imply that arbitrary localhost/private-network subrequests are generally trusted.
+- **Stored browser state is trusted auth material.** Any `storageState` file under `.pi/state/browser-playwright/` may contain live cookies, tokens, and local storage data for the current workspace.
+
+Treat both as local operator power, not as generic public-web browsing.
+
 ## Example requests
 
 ### Start a session
@@ -237,7 +246,7 @@ Allowed by default:
 - `http://...`
 - `https://...`
 - public internet targets
-- direct top-level navigation to `localhost`, `127.0.0.1`, and `::1`
+- direct top-level navigation to `localhost`, `127.0.0.1`, and `::1` for intentional same-host local-app testing
 
 Blocked by default:
 
@@ -264,7 +273,7 @@ Saved Playwright login/session state is supported in a narrow, explicit way.
 - reuse one explicitly via the `start` action and `storage_state_name` inside `input_json` (today's stable action-input carrier)
 - the extension never auto-saves browser state on close or shutdown
 
-Treat `.pi/state/browser-playwright/` as secret-bearing auth material.
+Treat `.pi/state/browser-playwright/` as trusted, secret-bearing auth material for the current workspace and host.
 
 ## Artifacts
 

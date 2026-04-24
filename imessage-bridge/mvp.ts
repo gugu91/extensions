@@ -79,6 +79,7 @@ export function formatIMessageMvpReadiness(environment: IMessageMvpEnvironment):
     `platform: ${environment.platform}`,
     `osascript: ${environment.osascriptAvailable ? "ready" : "missing"} (${environment.osascriptPath})`,
     `messages-db: ${environment.messagesDbAvailable ? "ready" : "missing"} (${environment.messagesDbPath})`,
+    "trust-boundary: same-host local-power surface; when enabled, outbound sends go through the local Messages app via /usr/bin/osascript as the current macOS user.",
   ];
 
   if (environment.readyForLocalMvp) {

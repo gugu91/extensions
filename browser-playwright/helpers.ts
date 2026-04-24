@@ -38,6 +38,11 @@ export const STORAGE_STATE_RELATIVE_DIR = ".pi/state/browser-playwright";
 export const DEFAULT_TEXT_LINES = 120;
 export const DEFAULT_TEXT_CHARS = 4_000;
 
+const LOCALHOST_TRUST_BOUNDARY_NOTE =
+  "Direct top-level localhost navigation is intentionally allowed for same-host local-app testing. Localhost/private-network subrequests still stay behind the route guardrails unless a page is already trusted through that direct localhost navigation.";
+const STORAGE_STATE_TRUST_BOUNDARY_NOTE =
+  "Stored browser state files under `.pi/state/browser-playwright/` are treated as trusted, secret-bearing auth material from the current workspace.";
+
 const STORAGE_STATE_NAME_MAX_CHARS = 80;
 const CHROMIUM_PATH_NAMES_POSIX = [
   "google-chrome",
@@ -87,6 +92,20 @@ export function sanitizeStorageStateName(value: string): string {
 
 export function buildStorageStateFileName(value: string): string {
   return `${sanitizeStorageStateName(value)}.json`;
+}
+
+export function buildBrowserTrustBoundaryNotes(options?: {
+  mountedStorageStatePath?: string | null;
+}): string[] {
+  const notes = [LOCALHOST_TRUST_BOUNDARY_NOTE, STORAGE_STATE_TRUST_BOUNDARY_NOTE];
+
+  if (options?.mountedStorageStatePath) {
+    notes.push(
+      `Mounted storage state: \`${options.mountedStorageStatePath}\`. Reuse it only when you intentionally trust those cookies, tokens, and local storage values on this same host.`,
+    );
+  }
+
+  return notes;
 }
 
 export function truncateText(

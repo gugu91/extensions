@@ -68,7 +68,7 @@ describe("AppleScriptIMessageAdapter", () => {
     expect(runAppleScript).toHaveBeenCalledTimes(1);
   });
 
-  it("fails connect when the host cannot attempt iMessage sends", async () => {
+  it("fails connect when the host cannot attempt iMessage sends and keeps the trust boundary explicit", async () => {
     const adapter = createIMessageAdapter({
       detectEnvironment: () => ({
         platform: "linux",
@@ -84,7 +84,9 @@ describe("AppleScriptIMessageAdapter", () => {
       }),
     });
 
-    await expect(adapter.connect()).rejects.toThrow("iMessage send-first adapter is not ready");
+    await expect(adapter.connect()).rejects.toThrow(
+      /iMessage send-first adapter is not ready.*same-host local-power surface/i,
+    );
   });
 
   it("treats onInbound as a no-op for the send-first adapter", async () => {

@@ -4,7 +4,11 @@ import type {
   OutboundMessage as IMessageAdapterOutboundMessage,
 } from "@gugu910/pi-transport-core";
 import { assertIMessageSendCapability, sendIMessage, type RunAppleScript } from "./send.js";
-import type { DetectIMessageMvpEnvironmentOptions, IMessageMvpEnvironment } from "./mvp.js";
+import {
+  formatIMessageMvpReadiness,
+  type DetectIMessageMvpEnvironmentOptions,
+  type IMessageMvpEnvironment,
+} from "./mvp.js";
 
 export type { IMessageAdapterInboundMessage, IMessageAdapterOutboundMessage };
 
@@ -39,10 +43,7 @@ export class AppleScriptIMessageAdapter implements IMessageAdapter {
         throw new Error(
           [
             "iMessage send-first adapter is not ready.",
-            `platform: ${environment.platform}`,
-            `osascript: ${environment.osascriptAvailable ? "ready" : "missing"} (${environment.osascriptPath})`,
-            `messages-db: ${environment.messagesDbAvailable ? "ready" : "missing"} (${environment.messagesDbPath})`,
-            `mvp blockers: ${environment.blockers.join(", ")}`,
+            ...formatIMessageMvpReadiness(environment),
           ].join(" "),
         );
       }
