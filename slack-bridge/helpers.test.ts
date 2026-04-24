@@ -398,11 +398,15 @@ describe("Slack topology helpers", () => {
             {
               installId: "workspace-a",
               workspaceId: "T_WORKSPACE_A",
+              botToken: "xoxb-workspace-a",
+              appToken: "xapp-workspace-a",
               defaultChannel: "C_ALPHA",
             },
             {
               installId: "workspace-b",
               workspaceId: "T_WORKSPACE_B",
+              botToken: "xoxb-workspace-b",
+              appToken: "xapp-workspace-b",
               defaultChannel: "C_BETA",
               logChannel: "C_BETA_LOGS",
             },
@@ -412,9 +416,37 @@ describe("Slack topology helpers", () => {
       ),
     ).toMatchObject({
       defaultInstallId: "workspace-b",
+      botToken: "xoxb-workspace-b",
+      appToken: "xapp-workspace-b",
       defaultChannel: "C_BETA",
       logChannel: "C_BETA_LOGS",
     });
+  });
+
+  it("rejects duplicate normalized explicit install ids", () => {
+    expect(() =>
+      resolveSlackTopology(
+        {
+          installs: [
+            { installId: "primary", workspaceId: "T_PRIMARY" },
+            { installId: " primary ", workspaceId: "T_SECONDARY" },
+          ],
+        },
+        {},
+      ),
+    ).toThrow("Duplicate Slack installId configured: primary");
+  });
+
+  it("rejects an unknown explicit default install id", () => {
+    expect(() =>
+      resolveSlackTopology(
+        {
+          defaultInstallId: "missing-install",
+          installs: [{ installId: "primary", workspaceId: "T_PRIMARY" }],
+        },
+        {},
+      ),
+    ).toThrow("Slack defaultInstallId missing-install does not match any configured install.");
   });
 });
 
@@ -594,6 +626,60 @@ describe("resolveSlackRuntimeSettings", () => {
     expect(settings.logChannel).toBe("C_PRIMARY_LOGS");
     expect(settings.controlPlaneCanvasChannel).toBe("C_PRIMARY_CTRL");
     expect(settings.defaultInstallId).toBe("primary");
+  });
+
+  it("does not fall back to legacy singleton credentials when installs are configured", () => {
+    expect(() =>
+      resolveSlackRuntimeSettings(
+        {
+          defaultInstallId: "workspace-b",
+          botToken: "xoxb-legacy",
+          appToken: "xapp-legacy",
+          defaultChannel: "C_LEGACY",
+          installs: [
+            {
+              installId: "workspace-b",
+              workspaceId: "T_WORKSPACE_B",
+              defaultChannel: "C_BETA",
+            },
+          ],
+        },
+        {
+          ...process.env,
+          SLACK_BOT_TOKEN: "xoxb-env",
+          SLACK_APP_TOKEN: "xapp-env",
+        },
+      ),
+    ).toThrow(
+      "Slack install workspace-b must define both botToken and appToken when installs are configured.",
+    );
+  });
+
+  it("keeps explicit runtime defaults scoped to the selected install", () => {
+    const settings = resolveSlackRuntimeSettings(
+      {
+        defaultInstallId: "workspace-b",
+        defaultChannel: "C_LEGACY",
+        logChannel: "C_LEGACY_LOGS",
+        controlPlaneCanvasChannel: "C_LEGACY_CTRL",
+        installs: [
+          {
+            installId: "workspace-b",
+            workspaceId: "T_WORKSPACE_B",
+            botToken: "xoxb-workspace-b",
+            appToken: "xapp-workspace-b",
+            defaultChannel: "C_BETA",
+          },
+        ],
+      },
+      {},
+    );
+
+    expect(settings.botToken).toBe("xoxb-workspace-b");
+    expect(settings.appToken).toBe("xapp-workspace-b");
+    expect(settings.defaultChannel).toBe("C_BETA");
+    expect(settings.logChannel).toBeUndefined();
+    expect(settings.controlPlaneCanvasChannel).toBeUndefined();
   });
 
   it("retains one-workspace compatibility defaults when installs are omitted", () => {

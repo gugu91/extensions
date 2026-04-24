@@ -200,13 +200,20 @@ export function buildSlackThreadScope(
   } = {},
 ): RuntimeScopeCarrier {
   const workspace = options.baseScope?.workspace;
-  const source = workspace?.source === "explicit" ? "explicit" : "compatibility";
+  const baseSource = workspace?.source === "explicit" ? "explicit" : "compatibility";
+  const liveWorkspaceId = normalizeOptionalSetting(options.teamId);
+  const hasExplicitWorkspaceDrift =
+    baseSource === "explicit" &&
+    Boolean(liveWorkspaceId) &&
+    Boolean(workspace?.workspaceId) &&
+    workspace?.workspaceId !== liveWorkspaceId;
+  const source = hasExplicitWorkspaceDrift ? "compatibility" : baseSource;
 
   return buildRuntimeScopeCarrier({
     workspace: buildSlackWorkspaceScope({
       source,
-      workspaceId: normalizeOptionalSetting(options.teamId) ?? workspace?.workspaceId,
-      installId: workspace?.installId,
+      workspaceId: liveWorkspaceId ?? workspace?.workspaceId,
+      installId: source === "explicit" ? workspace?.installId : undefined,
       channelId: normalizeOptionalSetting(options.channelId) ?? workspace?.channelId,
       compatibilityKey:
         source === "compatibility"
@@ -223,6 +230,26 @@ function normalizeSlackInstallId(install: SlackInstallTopologySettings, index: n
     normalizeOptionalSetting(install.workspaceId) ??
     `install-${index + 1}`
   );
+}
+
+function validateExplicitSlackInstalls(
+  installs: ReadonlyArray<ResolvedSlackInstallTopology>,
+  configuredDefaultInstallId: string | null,
+): void {
+  const seenInstallIds = new Set<string>();
+
+  for (const install of installs) {
+    if (seenInstallIds.has(install.installId)) {
+      throw new Error(`Duplicate Slack installId configured: ${install.installId}`);
+    }
+    seenInstallIds.add(install.installId);
+  }
+
+  if (configuredDefaultInstallId && !seenInstallIds.has(configuredDefaultInstallId)) {
+    throw new Error(
+      `Slack defaultInstallId ${configuredDefaultInstallId} does not match any configured install.`,
+    );
+  }
 }
 
 function resolveCompatibilityInstall(
@@ -371,6 +398,7 @@ export function resolveSlackTopology(
 
   const installs = explicitInstalls.map((install, index) => resolveExplicitInstall(install, index));
   const configuredDefaultInstallId = normalizeOptionalSetting(settings.defaultInstallId);
+  validateExplicitSlackInstalls(installs, configuredDefaultInstallId);
   const defaultInstall =
     installs.find((install) => install.installId === configuredDefaultInstallId) ?? installs[0]!;
 
@@ -404,47 +432,74 @@ export function resolveSlackRuntimeSettings(
   const topology = resolveSlackTopology(settings, env);
   const defaultInstall = topology.defaultInstall;
 
+  if (topology.mode === "compatibility-single") {
+    return {
+      ...settings,
+      defaultInstallId: topology.defaultInstallId,
+      botToken:
+        defaultInstall.botToken ??
+        normalizeOptionalSetting(settings.botToken) ??
+        normalizeOptionalSetting(env.SLACK_BOT_TOKEN) ??
+        undefined,
+      appToken:
+        defaultInstall.appToken ??
+        normalizeOptionalSetting(settings.appToken) ??
+        normalizeOptionalSetting(env.SLACK_APP_TOKEN) ??
+        undefined,
+      appId: defaultInstall.appId ?? normalizeOptionalSetting(settings.appId) ?? undefined,
+      appConfigToken:
+        defaultInstall.appConfigToken ??
+        normalizeOptionalSetting(settings.appConfigToken) ??
+        undefined,
+      defaultChannel:
+        defaultInstall.defaultChannel ??
+        normalizeOptionalSetting(settings.defaultChannel) ??
+        undefined,
+      logChannel:
+        defaultInstall.logChannel ?? normalizeOptionalSetting(settings.logChannel) ?? undefined,
+      logLevel: defaultInstall.logLevel ?? settings.logLevel,
+      controlPlaneCanvasEnabled:
+        typeof defaultInstall.controlPlaneCanvasEnabled === "boolean"
+          ? defaultInstall.controlPlaneCanvasEnabled
+          : settings.controlPlaneCanvasEnabled,
+      controlPlaneCanvasId:
+        defaultInstall.controlPlaneCanvasId ??
+        normalizeOptionalSetting(settings.controlPlaneCanvasId) ??
+        undefined,
+      controlPlaneCanvasChannel:
+        defaultInstall.controlPlaneCanvasChannel ??
+        normalizeOptionalSetting(settings.controlPlaneCanvasChannel) ??
+        undefined,
+      controlPlaneCanvasTitle:
+        defaultInstall.controlPlaneCanvasTitle ??
+        normalizeOptionalSetting(settings.controlPlaneCanvasTitle) ??
+        undefined,
+    };
+  }
+
+  if (!defaultInstall.botToken || !defaultInstall.appToken) {
+    throw new Error(
+      `Slack install ${defaultInstall.installId} must define both botToken and appToken when installs are configured.`,
+    );
+  }
+
   return {
     ...settings,
     defaultInstallId: topology.defaultInstallId,
-    botToken:
-      defaultInstall.botToken ??
-      normalizeOptionalSetting(settings.botToken) ??
-      normalizeOptionalSetting(env.SLACK_BOT_TOKEN) ??
-      undefined,
-    appToken:
-      defaultInstall.appToken ??
-      normalizeOptionalSetting(settings.appToken) ??
-      normalizeOptionalSetting(env.SLACK_APP_TOKEN) ??
-      undefined,
-    appId: defaultInstall.appId ?? normalizeOptionalSetting(settings.appId) ?? undefined,
-    appConfigToken:
-      defaultInstall.appConfigToken ??
-      normalizeOptionalSetting(settings.appConfigToken) ??
-      undefined,
-    defaultChannel:
-      defaultInstall.defaultChannel ??
-      normalizeOptionalSetting(settings.defaultChannel) ??
-      undefined,
-    logChannel:
-      defaultInstall.logChannel ?? normalizeOptionalSetting(settings.logChannel) ?? undefined,
+    botToken: defaultInstall.botToken,
+    appToken: defaultInstall.appToken,
+    appId: defaultInstall.appId,
+    appConfigToken: defaultInstall.appConfigToken,
+    defaultChannel: defaultInstall.defaultChannel,
+    logChannel: defaultInstall.logChannel,
     logLevel: defaultInstall.logLevel ?? settings.logLevel,
     controlPlaneCanvasEnabled:
       typeof defaultInstall.controlPlaneCanvasEnabled === "boolean"
         ? defaultInstall.controlPlaneCanvasEnabled
         : settings.controlPlaneCanvasEnabled,
-    controlPlaneCanvasId:
-      defaultInstall.controlPlaneCanvasId ??
-      normalizeOptionalSetting(settings.controlPlaneCanvasId) ??
-      undefined,
-    controlPlaneCanvasChannel:
-      defaultInstall.controlPlaneCanvasChannel ??
-      normalizeOptionalSetting(settings.controlPlaneCanvasChannel) ??
-      undefined,
-    controlPlaneCanvasTitle:
-      defaultInstall.controlPlaneCanvasTitle ??
-      normalizeOptionalSetting(settings.controlPlaneCanvasTitle) ??
-      undefined,
+    controlPlaneCanvasId: defaultInstall.controlPlaneCanvasId,
+    controlPlaneCanvasChannel: defaultInstall.controlPlaneCanvasChannel,
+    controlPlaneCanvasTitle: defaultInstall.controlPlaneCanvasTitle,
   };
 }
 
