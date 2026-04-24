@@ -616,7 +616,22 @@ export const FORM_METHODS = new Set([
   "conversations.replies",
   "conversations.info",
   "apps.connections.open",
+  "files.getUploadURLExternal",
+  "files.completeUploadExternal",
 ]);
+
+function serializeSlackFormValue(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
+}
 
 export function buildSlackRequest(
   method: string,
@@ -637,7 +652,7 @@ export function buildSlackRequest(
     } else {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
       serialized = new URLSearchParams(
-        Object.entries(body).map(([k, v]) => [k, String(v)]),
+        Object.entries(body).map(([k, v]) => [k, serializeSlackFormValue(v)]),
       ).toString();
     }
   }
