@@ -189,22 +189,29 @@ extensions/
 
 ### Extension tool-surface design principles
 
-All extensions should use progressive disclosure for agent-facing surfaces:
+All extensions should use token-efficient progressive discovery for
+agent-facing surfaces. This is especially important for Pinet / `slack-bridge`,
+where broad Slack/Pinet action families can otherwise bloat every agent turn
+(see #566 and #581).
 
 1. **Hot tool schemas stay small.** Keep only the few per-turn, high-signal
-   execution tools registered as dedicated tools.
-2. **Warm knowledge moves to skills/docs.** Formatting examples, API recipes,
+   execution tools registered as dedicated tools, and justify additions by
+   expected usage and token footprint.
+2. **Cold paths stay discoverable.** Large homogeneous action families should
+   sit behind compact dispatchers with structured `help` and per-action schema
+   discovery instead of many cold one-off tools.
+3. **Warm knowledge moves to skills/docs.** Formatting examples, API recipes,
    templates, and recovery playbooks belong in lazily loaded skills or docs —
-   not in always-present tool schemas.
-3. **Large homogeneous surfaces use dispatchers.** When an extension exposes a
-   broad family of similar actions, register a compact dispatcher with
-   `help`/schema discovery instead of many cold one-off tools.
+   not in always-present prompts or tool schemas.
 4. **Responses are contracts.** Prefer structured response envelopes such as
    `{ status, data, errors, warnings }` with typed error classes and recovery
    hints so agents can recover without an extra human turn.
 5. **Guardrails name the executable action.** Dispatcher actions should expose
    stable guardrail names (for example `slack:upload`) so blocking and
    confirmation policies remain precise even when many actions share one tool.
+6. **Reviews check token cost.** New Slack/Pinet tools, dispatcher actions, or
+   prompt surfaces should include token-footprint tradeoffs in design and review
+   rather than expanding the always-loaded surface by default.
 
 ### Adding a new extension
 
