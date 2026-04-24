@@ -8,7 +8,7 @@ import {
 import type { SlackInteractiveInboxEvent } from "./slack-block-kit.js";
 import type { SlackToolsThreadContextPort } from "./slack-tools.js";
 import {
-  classifyMessage,
+  classifyMessageWithThreadOwnerHintFallback,
   resolveSlackThreadOwnerHint,
   SlackSocketModeClient,
   type ParsedAppHomeOpened,
@@ -220,10 +220,30 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
   function onContextChanged(event: ParsedThreadContextChanged): void {
     if (shuttingDown) return;
 
-    const existing = deps.getThreads().get(event.threadTs);
-    if (!existing || !event.context) return;
+    const threads = deps.getThreads();
+    const existing = threads.get(event.threadTs);
+    if (!existing) {
+      if (!event.channelId) return;
+      threads.set(event.threadTs, {
+        channelId: event.channelId,
+        threadTs: event.threadTs,
+        userId: event.userId ?? "",
+        source: "slack",
+        ...(event.context ? { context: event.context } : {}),
+      });
+      deps.persistState();
+      return;
+    }
 
-    existing.context = event.context;
+    if (event.channelId) {
+      existing.channelId = event.channelId;
+    }
+    if (event.userId) {
+      existing.userId = event.userId;
+    }
+    if (event.context) {
+      existing.context = event.context;
+    }
     deps.persistState();
   }
 
@@ -344,7 +364,13 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
     if (shuttingDown) return;
 
     const threads = deps.getThreads();
-    const classified = classifyMessage(evt, getCurrentBotUserId(), new Set(threads.keys()));
+    const classified = await classifyMessageWithThreadOwnerHintFallback({
+      evt,
+      botUserId: getCurrentBotUserId(),
+      trackedThreadIds: new Set(threads.keys()),
+      slack: deps.slack,
+      token: deps.getBotToken(),
+    });
     if (!classified.relevant) return;
 
     const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs, metadata } =

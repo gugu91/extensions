@@ -1,6 +1,6 @@
 import {
   addSlackReaction,
-  classifyMessage,
+  classifyMessageWithThreadOwnerHintFallback,
   clearSlackThreadStatus,
   extractAppHomeOpened,
   extractThreadContextChanged,
@@ -8,6 +8,7 @@ import {
   fetchSlackMessageByTs,
   isSlackUserAllowed,
   removeSlackReaction,
+  resolveSlackThreadOwnerHint,
   resolveSlackUserName,
   setSlackSuggestedPrompts,
   SlackSocketModeClient,
@@ -37,6 +38,7 @@ import type { InboundMessage, OutboundMessage, MessageAdapter } from "./types.js
 export {
   classifyMessage,
   extractAppHomeOpened,
+  extractThreadContextChanged,
   extractThreadStarted,
   parseMemberJoinedChannel,
   parseSocketFrame,
@@ -225,9 +227,34 @@ export class SlackAdapter implements MessageAdapter {
     if (!parsed) return;
 
     const existing = this.threads.get(parsed.threadTs);
-    if (!existing || !parsed.context) return;
+    if (!existing) {
+      if (!parsed.channelId) return;
+      const info: SlackThreadInfo = {
+        channelId: parsed.channelId,
+        threadTs: parsed.threadTs,
+        userId: parsed.userId ?? "",
+      };
+      if (parsed.context) {
+        info.context = parsed.context;
+      }
+      this.threads.set(parsed.threadTs, info);
+      try {
+        this.config.rememberKnownThread?.(parsed.threadTs, parsed.channelId);
+      } catch {
+        /* best effort — DB cache sync must not break Slack event handling */
+      }
+      return;
+    }
 
-    existing.context = parsed.context;
+    if (parsed.channelId) {
+      existing.channelId = parsed.channelId;
+    }
+    if (parsed.userId) {
+      existing.userId = parsed.userId;
+    }
+    if (parsed.context) {
+      existing.context = parsed.context;
+    }
   }
 
   private async onAppHomeOpened(
@@ -307,6 +334,13 @@ export class SlackAdapter implements MessageAdapter {
         }
       }
 
+      const threadOwnerHint = await resolveSlackThreadOwnerHint({
+        slack: this.callSlack.bind(this),
+        token: this.config.botToken,
+        channel: item.channel,
+        threadTs,
+      });
+
       const reactorName = await this.resolveUser(userId);
       if (this.shuttingDown) return;
       const reactedMessageAuthorId =
@@ -340,6 +374,18 @@ export class SlackAdapter implements MessageAdapter {
           reactedMessageAuthor,
         }),
         timestamp: (evt.event_ts as string) ?? item.ts,
+        ...(threadOwnerHint?.agentOwner || threadOwnerHint?.agentName
+          ? {
+              metadata: {
+                ...(threadOwnerHint.agentOwner
+                  ? { threadOwnerAgentOwner: threadOwnerHint.agentOwner }
+                  : {}),
+                ...(threadOwnerHint.agentName
+                  ? { threadOwnerAgentName: threadOwnerHint.agentName }
+                  : {}),
+              },
+            }
+          : {}),
       });
 
       await this.addReaction(item.channel, item.ts, "white_check_mark");
@@ -352,12 +398,14 @@ export class SlackAdapter implements MessageAdapter {
   private async onMessage(evt: Record<string, unknown>): Promise<void> {
     if (this.shuttingDown) return;
 
-    const classified = classifyMessage(
+    const classified = await classifyMessageWithThreadOwnerHintFallback({
       evt,
-      this.botUserId,
-      this.getTrackedThreadIds(),
-      this.config.isKnownThread,
-    );
+      botUserId: this.botUserId,
+      trackedThreadIds: this.getTrackedThreadIds(),
+      slack: this.callSlack.bind(this),
+      token: this.config.botToken,
+      isKnownThread: this.config.isKnownThread,
+    });
     if (!classified.relevant) return;
 
     const { threadTs, channel, userId, text, isChannelMention, messageTs, metadata } = classified;

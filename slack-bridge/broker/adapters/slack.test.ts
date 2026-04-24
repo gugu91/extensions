@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   parseSocketFrame,
   extractThreadStarted,
+  extractThreadContextChanged,
   extractAppHomeOpened,
   classifyMessage,
   parseMemberJoinedChannel,
@@ -177,6 +178,33 @@ describe("extractThreadStarted", () => {
     };
     const result = extractThreadStarted(evt);
     expect(result?.context).toBeUndefined();
+  });
+});
+
+describe("extractThreadContextChanged", () => {
+  it("extracts channel and user identity when Slack reports a continued thread context", () => {
+    expect(
+      extractThreadContextChanged({
+        type: "assistant_thread_context_changed",
+        assistant_thread: {
+          channel_id: "C123",
+          thread_ts: "222.333",
+          user_id: "U456",
+          context: {
+            channel_id: "C789",
+            team_id: "T001",
+          },
+        },
+      }),
+    ).toEqual({
+      channelId: "C123",
+      threadTs: "222.333",
+      userId: "U456",
+      context: {
+        channelId: "C789",
+        teamId: "T001",
+      },
+    });
   });
 });
 
@@ -1184,6 +1212,89 @@ describe("SlackAdapter — allowlist filtering", () => {
       expect(endpoints).toContain("https://slack.com/api/users.info");
       expect(endpoints).toContain("https://slack.com/api/reactions.add");
     });
+  });
+
+  it("treats an unknown continued thread with a pi_agent owner hint as relevant inbound work", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/conversations.replies")) {
+        expect(parsedBody.channel).toBe("C_THREAD");
+        expect(parsedBody.ts).toBe("200.2");
+        expect(String(parsedBody.limit)).toBe("200");
+        expect(String(parsedBody.include_all_metadata)).toBe("true");
+        return mockSlackResponse({
+          messages: [
+            {
+              ts: "200.1",
+              thread_ts: "200.2",
+              bot_id: "B_BOT",
+              metadata: {
+                event_type: "pi_agent_msg",
+                event_payload: {
+                  agent: "Cobalt Olive Crane",
+                  agent_owner: "owner:crane",
+                },
+              },
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        expect(parsedBody).toEqual({ channel: "C_THREAD", timestamp: "200.3", name: "eyes" });
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "continuing here after Slack split the thread",
+      channel: "C_THREAD",
+      channel_type: "channel",
+      thread_ts: "200.2",
+      ts: "200.3",
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      source: "slack",
+      threadId: "200.2",
+      channel: "C_THREAD",
+      userId: "U_ALLOWED",
+      userName: "Alice Example",
+      text: "continuing here after Slack split the thread",
+      timestamp: "200.3",
+      metadata: {
+        threadOwnerAgentOwner: "owner:crane",
+        threadOwnerAgentName: "Cobalt Olive Crane",
+      },
+    });
+    expect(adapter.getTrackedThreadIds()).toEqual(new Set(["200.2"]));
   });
 });
 

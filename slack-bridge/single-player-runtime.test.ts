@@ -296,6 +296,73 @@ describe("single-player-runtime", () => {
     expect(spies.maybeDrainInboxIfIdle).toHaveBeenCalledWith(ctx);
   });
 
+  it("accepts an unknown continued thread when Slack replies reveal a prior pi_agent owner hint", async () => {
+    const state: TestState = {
+      threads: new Map(),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const ctx = createContext();
+    const { deps, spies } = createDeps(state, {
+      slack: vi.fn(async (method: string) =>
+        method === "conversations.replies"
+          ? {
+              ok: true,
+              messages: [
+                {
+                  ts: "200.1",
+                  thread_ts: "200.2",
+                  bot_id: "B_BOT",
+                  metadata: {
+                    event_type: "pi_agent_msg",
+                    event_payload: {
+                      agent: "Cobalt Olive Crane",
+                      agent_owner: "owner:crane",
+                    },
+                  },
+                },
+              ],
+            }
+          : { ok: true },
+      ),
+    });
+    const runtime = createSinglePlayerRuntime(deps);
+
+    await runtime.connect(ctx);
+
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    await socketConfig?.onMessage?.({
+      type: "message",
+      channel: "C_THREAD",
+      channel_type: "channel",
+      thread_ts: "200.2",
+      user: "U_SENDER",
+      text: "continuing here after Slack split the thread",
+      ts: "200.3",
+    });
+
+    expect(state.threads.get("200.2")).toMatchObject({
+      channelId: "C_THREAD",
+      threadTs: "200.2",
+      userId: "U_SENDER",
+      source: "slack",
+    });
+    expect(spies.pushInboxMessage).toHaveBeenCalledWith({
+      channel: "C_THREAD",
+      threadTs: "200.2",
+      userId: "U_SENDER",
+      text: "continuing here after Slack split the thread",
+      timestamp: "200.3",
+      metadata: {
+        threadOwnerAgentOwner: "owner:crane",
+        threadOwnerAgentName: "Cobalt Olive Crane",
+      },
+    });
+    expect(spies.addReaction).toHaveBeenCalledWith("C_THREAD", "200.3", "eyes");
+  });
+
   it("preserves file-share metadata on inbound Slack messages", async () => {
     const state: TestState = {
       threads: new Map(),

@@ -122,6 +122,8 @@ export function extractThreadStarted(evt: Record<string, unknown>): ParsedThread
 
 export interface ParsedThreadContextChanged {
   threadTs: string;
+  channelId?: string;
+  userId?: string;
   context?: SlackThreadContext;
 }
 
@@ -136,7 +138,13 @@ export function extractThreadContextChanged(
     return null;
   }
 
-  const result: ParsedThreadContextChanged = { threadTs };
+  const result: ParsedThreadContextChanged = {
+    threadTs,
+    ...(typeof t.channel_id === "string" && t.channel_id.length > 0
+      ? { channelId: t.channel_id }
+      : {}),
+    ...(typeof t.user_id === "string" && t.user_id.length > 0 ? { userId: t.user_id } : {}),
+  };
   const ctx = t.context as { channel_id?: string; team_id?: string } | undefined;
   if (ctx?.channel_id) {
     result.context = { channelId: ctx.channel_id, teamId: ctx.team_id ?? "" };
@@ -181,6 +189,25 @@ export type MessageClassification =
       metadata?: Record<string, unknown>;
     };
 
+function buildSlackMessageClassificationMetadata(
+  evt: Record<string, unknown>,
+  options: { threadOwnerHint?: ThreadOwnerHint | null } = {},
+): Record<string, unknown> {
+  const subtype = typeof evt.subtype === "string" ? evt.subtype : undefined;
+  const slackFiles = extractSlackMessageFileMetadata(evt.files);
+
+  return {
+    ...(subtype ? { slackSubtype: subtype } : {}),
+    ...(slackFiles.length > 0 ? { slackFiles } : {}),
+    ...(options.threadOwnerHint?.agentOwner
+      ? { threadOwnerAgentOwner: options.threadOwnerHint.agentOwner }
+      : {}),
+    ...(options.threadOwnerHint?.agentName
+      ? { threadOwnerAgentName: options.threadOwnerHint.agentName }
+      : {}),
+  };
+}
+
 /**
  * Classify an incoming Slack message event. Determines whether the
  * message is relevant (DM, known thread, or bot mention) and
@@ -211,11 +238,7 @@ export function classifyMessage(
   const effectiveTs = threadTs ?? (evt.ts as string);
   const isChannelMention = isMention && !isDM && !isKnown;
   const cleanText = isChannelMention && botUserId ? stripBotMention(text, botUserId) : text;
-  const slackFiles = extractSlackMessageFileMetadata(evt.files);
-  const metadata: Record<string, unknown> = {
-    ...(subtype ? { slackSubtype: subtype } : {}),
-    ...(slackFiles.length > 0 ? { slackFiles } : {}),
-  };
+  const metadata = buildSlackMessageClassificationMetadata(evt);
 
   return {
     relevant: true,
@@ -226,6 +249,65 @@ export function classifyMessage(
     isDM,
     isChannelMention,
     messageTs: (evt.ts as string) ?? effectiveTs,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
+export async function classifyMessageWithThreadOwnerHintFallback(input: {
+  evt: Record<string, unknown>;
+  botUserId: string | null;
+  trackedThreadIds: Set<string>;
+  slack: SlackCall;
+  token: string;
+  isKnownThread?: (threadTs: string) => boolean;
+}): Promise<MessageClassification> {
+  const classified = classifyMessage(
+    input.evt,
+    input.botUserId,
+    input.trackedThreadIds,
+    input.isKnownThread,
+  );
+  if (classified.relevant) {
+    return classified;
+  }
+
+  const subtype = typeof input.evt.subtype === "string" ? input.evt.subtype : undefined;
+  const allowsSubtype = subtype === undefined || subtype === "file_share";
+  if (!allowsSubtype || input.evt.bot_id) {
+    return classified;
+  }
+
+  const threadTs = typeof input.evt.thread_ts === "string" ? input.evt.thread_ts : null;
+  const channel = typeof input.evt.channel === "string" ? input.evt.channel : null;
+  const userId = typeof input.evt.user === "string" ? input.evt.user : null;
+  const channelType = typeof input.evt.channel_type === "string" ? input.evt.channel_type : null;
+  if (!threadTs || !channel || !userId || channelType === "im") {
+    return classified;
+  }
+
+  const hint = await resolveSlackThreadOwnerHint({
+    slack: input.slack,
+    token: input.token,
+    channel,
+    threadTs,
+  });
+  if (!hint) {
+    return classified;
+  }
+
+  const metadata = buildSlackMessageClassificationMetadata(input.evt, {
+    threadOwnerHint: hint,
+  });
+
+  return {
+    relevant: true,
+    threadTs,
+    channel,
+    userId,
+    text: buildSlackInboundMessageText((input.evt.text as string) ?? "", input.evt),
+    isDM: false,
+    isChannelMention: false,
+    messageTs: (input.evt.ts as string) ?? threadTs,
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }
