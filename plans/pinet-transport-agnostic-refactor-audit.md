@@ -747,6 +747,61 @@ Recommended order:
 - #324 stable ID takeover
 - #325 remote TCP transport security
 
+
+## Appendix: full open issue coverage
+
+This audit enumerated all 47 open issues. The main body focuses on issues that directly affect the Pinet/Slack split, transport contracts, broker runtime, context sync, and security. The full issue coverage is below so later readers can see which issues are core to the refactor, which should be sequenced nearby, and which are mostly orthogonal.
+
+| Issue | Relevance to this refactor | Recommendation |
+| --- | --- | --- |
+| #596 broker reload/error visibility | Runtime reliability | Fold narrowed reload/control reliability into Pinet-core remote-control work after ownership split. |
+| #595 compaction budgets/summarization | Adjacent agent runtime context | Keep separate; durable read/context pointers from #594 should reduce prompt pressure but this is mostly Pi core behavior. |
+| #594 durable context sync/read-send | Core | Treat as a major Pinet data-layer outcome after transport address/content contracts exist. |
+| #588 tool footprint audit | Core DX | Use as guardrail for Pinet/Slack tool reshape; avoid bloating hot tool schemas. |
+| #585 Turbo setup | Repo process | Orthogonal; still important before broad refactor validation because all phases rely on repo-level checks. |
+| #582 steering vs follow-up classification | Core runtime | Add as Pinet-core delivery policy, not Slack-specific inbox behavior. |
+| #578 slop PR audit | Repo process | Use when deciding whether to land/close existing PR stack before refactor. |
+| #577 Thomas PR salvage | Repo process / source material | Relevant mainly for #599/#600/#598/#596 salvage; not a runtime architecture blocker. |
+| #575 Slack max-thread association | Core conversation model | Important because continuation links should become first-class `ConversationRef` data. |
+| #574 researcher skill override | Adjacent agent orchestration | Mostly outside transport split; could later inform worker capability metadata/routing. |
+| #572 protect main | Repo governance | Orthogonal but useful before large breaking PRs start landing. |
+| #560 neon-psql security boundary | Repo security | Orthogonal to Pinet transport, but consistent with the broader rule: separate read-only surfaces from credential-bearing write/exec surfaces. |
+| #557 browser structured args/capabilities | Agent-DX precedent | Use as a pattern for truthful capabilities in transport adapters; otherwise orthogonal. |
+| #556 prompt overlay dedupe | Core DX | Move durable Pinet role guidance into Pinet-core; keep Slack-origin snippets adapter-owned. |
+| #555 prompt-guidelines digest | Adjacent DX | Should inform Pinet prompt-guidance extraction and prevent copying Slack prompt sprawl into core. |
+| #554 Pinet tool role split | Core DX | Revisit once #601/tool-surface decision is made; pre-release allows bigger rename/reshape if warranted. |
+| #553 dormant pinet-core docs | Core | Superseded by making Pinet core/composition real rather than marking scaffold as dormant. |
+| #552 remove startup aliases | Core cleanup | Delete `autoConnect`/`autoFollow` during clean-slate settings move. |
+| #551 delete compatibility shims | Core cleanup | Do early; no reason to preserve Slack-owned broker/transport shim paths pre-release. |
+| #550 multi-workspace orchestration | Core/Slack adapter | Restack around Pinet-owned transport registry; avoid Slack-owned runtime orchestration. |
+| #549 multi-workspace topology | Core contracts | Fold into provider/install/scope contracts in transport-core. |
+| #548 operator/admin scopes | Core security/UX | Model as Pinet policy over provider/install/instance/action, with Slack UI as one origin. |
+| #547 scoped authorization enforcement | Core security | Implement after scope model; should be provider-neutral with Slack-specific policy source. |
+| #538 queued unauthorized thread context | Context/security | Reframe under durable context log: unauthorized messages can be stored as context but not commands, with explicit principal/action policy. |
+| #482 named Pinet instance | Core identity | First-class in new `pinet.*` settings and runtime scope. |
+| #481 authorization model | Core security | Required before multi-workspace/multi-instance expansion. |
+| #480 multi-workspace Slack | Slack adapter + core scope | Support through transport registry and install refs rather than Slack-owned broker globals. |
+| #474 prompt layering vs override | Adjacent runtime prompt architecture | Relevant when extracting prompt guidance; keep separate from transport contracts. |
+| #472 dead/stale surface review | Cleanup | This audit identifies several stale surfaces; still useful as a broader repo cleanup lane. |
+| #471 strict security review | Security | Should be run before cloud/multi-host; complementary to #322/#324/#325. |
+| #470 broker prompt override sourcing | Prompt architecture | Relevant to Pinet prompt-guidance extraction; not a transport blocker. |
+| #469 code-quality comparison | Repo quality | Orthogonal but useful as a review lens for the large refactor. |
+| #464 WhatsApp/iMessage strategy | Transport roadmap | Keep as design follow-up after iMessage becomes a normal adapter. |
+| #460 slack_upload scope bug | Slack adapter bug | Stays in Slack adapter; not core. |
+| #406 broker-managed worker spawn | Pinet orchestration | Later Pinet-core/daemon concern once broker ownership is clean. |
+| #403 transport-aware rendering/parsing | Core transport/content | Critical input to the new `MessageContent` model. |
+| #386 canvas update intermittent failure | Slack UX bug | Stays in Slack adapter/control-plane publisher. |
+| #373 iMessage shared core wiring | Transport adapter | Directly enabled by moving runtime ownership out of Slack. |
+| #364 release cadence | Release process | Orthogonal while pre-release; revisit after package boundaries settle. |
+| #341 Ralph stuck alerts | Runtime reliability | Move Ralph evaluation to Pinet-core and fix there. |
+| #330 browser local-dev ergonomics | Browser package | Orthogonal. |
+| #325 remote TCP unsafe | Security blocker | Hard blocker for cloud/multi-host Pinet. |
+| #324 stableId takeover | Security blocker | Hard blocker for trustworthy mesh identity. |
+| #322 guardrails advisory | Security blocker | Verify/enforce before remote/cloud transport expansion. |
+| #293 Slack canvas read API validation | Slack UX/API | Slack adapter only; not part of Pinet core. |
+| #275 disconnected-agent purge grace | Runtime reliability | Fold into Pinet-core liveness/reaping policy. |
+| #264 split Slack bridge god file | Structural | Superseded by stronger clean-slate Pinet-owned package split, but still directionally aligned. |
+
 ## Recommended migration plan
 
 ### Phase 0 — settle runway and write contracts
