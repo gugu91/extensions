@@ -148,6 +148,79 @@ function rowToThread(row: ThreadRow): ThreadInfo {
   };
 }
 
+function getStringMetadataValue(
+  metadata: Record<string, unknown> | undefined,
+  keys: string[],
+): string | null {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function deriveMessageSyncIdentity(
+  source: string,
+  metadata?: Record<string, unknown>,
+): { externalId: string | null; externalTs: string | null } {
+  const explicitExternalId = getStringMetadataValue(metadata, [
+    "externalId",
+    "external_id",
+    "transportMessageId",
+    "transport_message_id",
+  ]);
+  const explicitExternalTs = getStringMetadataValue(metadata, [
+    "externalTs",
+    "external_ts",
+    "timestamp",
+    "ts",
+  ]);
+  if (explicitExternalId) {
+    return { externalId: explicitExternalId, externalTs: explicitExternalTs };
+  }
+
+  if (source === "slack") {
+    const channel = getStringMetadataValue(metadata, ["channel", "channelId", "channel_id"]);
+    const timestamp = getStringMetadataValue(metadata, ["timestamp", "ts"]);
+    if (timestamp && channel) {
+      return { externalId: `${channel}:${timestamp}`, externalTs: timestamp };
+    }
+    if (timestamp) {
+      return { externalId: timestamp, externalTs: timestamp };
+    }
+  }
+
+  return { externalId: null, externalTs: explicitExternalTs };
+}
+
+function rowToBrokerMessage(row: {
+  id: number;
+  thread_id: string;
+  source: string;
+  direction: string;
+  sender: string;
+  body: string;
+  metadata: string | null;
+  external_id?: string | null;
+  external_ts?: string | null;
+  created_at: string;
+}): BrokerMessage {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    source: row.source,
+    direction: row.direction as "inbound" | "outbound",
+    sender: row.sender,
+    body: row.body,
+    metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+    ...(row.external_id ? { externalId: row.external_id } : {}),
+    ...(row.external_ts ? { externalTs: row.external_ts } : {}),
+    createdAt: row.created_at,
+  };
+}
+
 function rowToBacklog(row: BacklogRow): BacklogEntry {
   return {
     id: row.id,
@@ -200,7 +273,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 12;
+export const CURRENT_BROKER_SCHEMA_VERSION = 13;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -223,6 +296,13 @@ function setUserVersion(db: DatabaseSync, version: number): void {
 function getTableColumns(db: DatabaseSync, tableName: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
   return new Set(rows.map((row) => row.name));
+}
+
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { present: number } | undefined;
+  return row !== undefined;
 }
 
 function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, sql: string): void {
@@ -260,6 +340,8 @@ function createCoreTables(db: DatabaseSync): void {
       sender TEXT NOT NULL,
       body TEXT NOT NULL,
       metadata TEXT,
+      external_id TEXT,
+      external_ts TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -274,12 +356,20 @@ function createCoreTables(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_messages_thread
       ON messages(thread_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_source_external_id
+      ON messages(source, external_id)
+      WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_messages_source_external_ts
+      ON messages(source, external_ts);
     CREATE INDEX IF NOT EXISTS idx_inbox_agent_delivered
       ON inbox(agent_id, delivered, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
       ON inbox(agent_id, read_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_message
       ON inbox(message_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_agent_message_pending_unique
+      ON inbox(agent_id, message_id)
+      WHERE delivered = 0;
   `);
 }
 
@@ -378,6 +468,178 @@ function addInboxReadCursorColumn(db: DatabaseSync): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
       ON inbox(agent_id, read_at, created_at);
+  `);
+}
+
+function backfillMessageSyncIdentities(db: DatabaseSync): void {
+  const rows = db
+    .prepare("SELECT id, source, metadata FROM messages WHERE metadata IS NOT NULL")
+    .all() as Array<{ id: number; source: string; metadata: string | null }>;
+  const update = db.prepare("UPDATE messages SET external_id = ?, external_ts = ? WHERE id = ?");
+
+  for (const row of rows) {
+    if (!row.metadata) continue;
+    try {
+      const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+      const identity = deriveMessageSyncIdentity(row.source, metadata);
+      if (identity.externalId || identity.externalTs) {
+        update.run(identity.externalId, identity.externalTs, row.id);
+      }
+    } catch {
+      // Keep corrupt legacy metadata readable; it simply cannot receive a sync identity.
+    }
+  }
+}
+
+function pickBacklogStatus(left: string, right: string): BacklogEntry["status"] {
+  if (left === "assigned" || right === "assigned") return "assigned";
+  if (left === "pending" || right === "pending") return "pending";
+  return "dropped";
+}
+
+function maxNullableIso(left: string | null, right: string | null): string | null {
+  if (!left) return right;
+  if (!right) return left;
+  return left >= right ? left : right;
+}
+
+function minIso(left: string, right: string): string {
+  return left <= right ? left : right;
+}
+
+function mergeBacklogMessageId(
+  db: DatabaseSync,
+  keepMessageId: number,
+  duplicateMessageId: number,
+): void {
+  const getBacklog = db.prepare("SELECT * FROM unrouted_backlog WHERE message_id = ?");
+  const keep = getBacklog.get(keepMessageId) as BacklogRow | undefined;
+  const duplicate = getBacklog.get(duplicateMessageId) as BacklogRow | undefined;
+  if (!duplicate) return;
+
+  if (!keep) {
+    db.prepare("UPDATE unrouted_backlog SET message_id = ? WHERE id = ?").run(
+      keepMessageId,
+      duplicate.id,
+    );
+    return;
+  }
+
+  const mergedStatus = pickBacklogStatus(keep.status, duplicate.status);
+  db.prepare(
+    `UPDATE unrouted_backlog
+     SET reason = ?,
+         status = ?,
+         preferred_agent_id = ?,
+         assigned_agent_id = ?,
+         attempt_count = ?,
+         last_attempt_at = ?,
+         created_at = ?,
+         updated_at = ?
+     WHERE id = ?`,
+  ).run(
+    keep.reason || duplicate.reason,
+    mergedStatus,
+    keep.preferred_agent_id ?? duplicate.preferred_agent_id,
+    mergedStatus === "assigned" ? (keep.assigned_agent_id ?? duplicate.assigned_agent_id) : null,
+    Math.max(keep.attempt_count, duplicate.attempt_count),
+    maxNullableIso(keep.last_attempt_at, duplicate.last_attempt_at),
+    minIso(keep.created_at, duplicate.created_at),
+    maxNullableIso(keep.updated_at, duplicate.updated_at) ?? keep.updated_at,
+    keep.id,
+  );
+  db.prepare("DELETE FROM unrouted_backlog WHERE id = ?").run(duplicate.id);
+}
+
+function consolidateDuplicateMessageSyncIdentities(db: DatabaseSync): void {
+  const duplicateRows = db
+    .prepare(
+      `SELECT source, external_id, MIN(id) AS keep_id
+       FROM messages
+       WHERE external_id IS NOT NULL
+       GROUP BY source, external_id
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as Array<{ source: string; external_id: string; keep_id: number }>;
+  const findDuplicates = db.prepare(
+    `SELECT id
+     FROM messages
+     WHERE source = ?
+       AND external_id = ?
+       AND id <> ?`,
+  );
+  const repointInbox = db.prepare("UPDATE inbox SET message_id = ? WHERE message_id = ?");
+  const repointTaskAssignments = tableExists(db, "task_assignments")
+    ? db.prepare("UPDATE task_assignments SET source_message_id = ? WHERE source_message_id = ?")
+    : null;
+  const hasBacklog = tableExists(db, "unrouted_backlog");
+  const clearDuplicate = db.prepare(
+    `UPDATE messages
+     SET external_id = NULL,
+         external_ts = NULL
+     WHERE id = ?`,
+  );
+
+  for (const row of duplicateRows) {
+    const duplicates = findDuplicates.all(row.source, row.external_id, row.keep_id) as Array<{
+      id: number;
+    }>;
+    for (const duplicate of duplicates) {
+      repointInbox.run(row.keep_id, duplicate.id);
+      repointTaskAssignments?.run(row.keep_id, duplicate.id);
+      if (hasBacklog) {
+        mergeBacklogMessageId(db, row.keep_id, duplicate.id);
+      }
+      clearDuplicate.run(duplicate.id);
+    }
+  }
+}
+
+function deleteDuplicateInboxRows(db: DatabaseSync): void {
+  db.exec(`
+    UPDATE inbox
+    SET read_at = (
+      SELECT MAX(duplicate.read_at)
+      FROM inbox AS duplicate
+      WHERE duplicate.agent_id = inbox.agent_id
+        AND duplicate.message_id = inbox.message_id
+        AND duplicate.read_at IS NOT NULL
+    )
+    WHERE EXISTS (
+      SELECT 1
+      FROM inbox AS duplicate
+      WHERE duplicate.agent_id = inbox.agent_id
+        AND duplicate.message_id = inbox.message_id
+        AND duplicate.read_at IS NOT NULL
+    );
+
+    DELETE FROM inbox
+    WHERE id NOT IN (
+      SELECT COALESCE(
+        MIN(CASE WHEN delivered = 1 THEN id END),
+        MIN(id)
+      )
+      FROM inbox
+      GROUP BY agent_id, message_id
+    );
+  `);
+}
+
+function addMessageSyncIdentityColumns(db: DatabaseSync): void {
+  ensureColumn(db, "messages", "external_id", "ALTER TABLE messages ADD COLUMN external_id TEXT");
+  ensureColumn(db, "messages", "external_ts", "ALTER TABLE messages ADD COLUMN external_ts TEXT");
+  backfillMessageSyncIdentities(db);
+  consolidateDuplicateMessageSyncIdentities(db);
+  deleteDuplicateInboxRows(db);
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_source_external_id
+      ON messages(source, external_id)
+      WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_messages_source_external_ts
+      ON messages(source, external_ts);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_agent_message_pending_unique
+      ON inbox(agent_id, message_id)
+      WHERE delivered = 0;
   `);
 }
 
@@ -559,6 +821,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 12:
           addInboxReadCursorColumn(db);
+          break;
+        case 13:
+          addMessageSyncIdentityColumns(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -1214,12 +1479,6 @@ export class BrokerDB implements BrokerDBInterface {
     const existingThread = this.getThread(message.threadId);
     if (!existingThread) {
       this.createThread(message.threadId, message.source, message.channel, null);
-    } else {
-      this.updateThread(message.threadId, {
-        channel: message.channel,
-        source: message.source,
-        ownerAgent: null,
-      });
     }
 
     const brokerMessage = this.insertMessage(
@@ -1231,6 +1490,19 @@ export class BrokerDB implements BrokerDBInterface {
       [],
       metadata,
     );
+
+    const existingBacklog = this.getBacklogByMessageId(brokerMessage.id);
+    if (existingBacklog) {
+      return existingBacklog;
+    }
+
+    if (existingThread) {
+      this.updateThread(message.threadId, {
+        channel: message.channel,
+        source: message.source,
+        ownerAgent: null,
+      });
+    }
 
     return this.upsertBacklogEntry(
       brokerMessage.id,
@@ -1254,7 +1526,7 @@ export class BrokerDB implements BrokerDBInterface {
 
       const now = new Date().toISOString();
       db.prepare(
-        `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
+        `INSERT OR IGNORE INTO inbox (agent_id, message_id, delivered, created_at)
          VALUES (?, ?, 0, ?)`,
       ).run(agentId, row.message_id, now);
 
@@ -1791,38 +2063,113 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const now = new Date().toISOString();
     const metaJson = metadata ? JSON.stringify(metadata) : null;
+    const identity = deriveMessageSyncIdentity(source, metadata);
 
     const info = db
       .prepare(
-        `INSERT INTO messages (thread_id, source, direction, sender, body, metadata, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO messages (
+           thread_id,
+           source,
+           direction,
+           sender,
+           body,
+           metadata,
+           external_id,
+           external_ts,
+           created_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(threadId, source, direction, sender, body, metaJson, now);
+      .run(
+        threadId,
+        source,
+        direction,
+        sender,
+        body,
+        metaJson,
+        identity.externalId,
+        identity.externalTs,
+        now,
+      );
 
-    const messageId = Number(info.lastInsertRowid);
+    const insertedMessageId = Number(info.lastInsertRowid);
+    const messageId =
+      Number(info.changes ?? 0) > 0
+        ? insertedMessageId
+        : this.getExistingMessageIdForIdentity(source, identity.externalId);
+    if (messageId == null) {
+      throw new Error("Failed to persist broker message");
+    }
 
     const insertInbox = db.prepare(
       `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
-       VALUES (?, ?, 0, ?)`,
+       SELECT ?, ?, 0, ?
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM inbox
+         WHERE agent_id = ?
+           AND message_id = ?
+       )`,
     );
 
     for (const agentId of targetAgentIds) {
-      insertInbox.run(agentId, messageId, now);
+      insertInbox.run(agentId, messageId, now, agentId, messageId);
     }
 
     // Update thread timestamp
     db.prepare("UPDATE threads SET updated_at = ? WHERE thread_id = ?").run(now, threadId);
 
-    return {
-      id: messageId,
-      threadId,
-      source,
-      direction,
-      sender,
-      body,
-      metadata: metadata ?? null,
-      createdAt: now,
-    };
+    return (
+      this.getMessageById(messageId) ?? {
+        id: messageId,
+        threadId,
+        source,
+        direction,
+        sender,
+        body,
+        metadata: metadata ?? null,
+        ...(identity.externalId ? { externalId: identity.externalId } : {}),
+        ...(identity.externalTs ? { externalTs: identity.externalTs } : {}),
+        createdAt: now,
+      }
+    );
+  }
+
+  private getExistingMessageIdForIdentity(
+    source: string,
+    externalId: string | null,
+  ): number | null {
+    if (!externalId) {
+      return null;
+    }
+    const row = this.getDb()
+      .prepare("SELECT id FROM messages WHERE source = ? AND external_id = ?")
+      .get(source, externalId) as { id?: number } | undefined;
+    return typeof row?.id === "number" ? row.id : null;
+  }
+
+  private getMessageById(messageId: number): BrokerMessage | null {
+    const row = this.getDb()
+      .prepare(
+        `SELECT id, thread_id, source, direction, sender, body, metadata, external_id, external_ts, created_at
+         FROM messages
+         WHERE id = ?`,
+      )
+      .get(messageId) as
+      | {
+          id: number;
+          thread_id: string;
+          source: string;
+          direction: string;
+          sender: string;
+          body: string;
+          metadata: string | null;
+          external_id: string | null;
+          external_ts: string | null;
+          created_at: string;
+        }
+      | undefined;
+    return row ? rowToBrokerMessage(row) : null;
   }
 
   getInbox(agentId: string, limit = 50): { entry: InboxEntry; message: BrokerMessage }[] {
@@ -1835,7 +2182,8 @@ export class BrokerDB implements BrokerDBInterface {
            i.delivered AS i_delivered, i.read_at AS i_read_at, i.created_at AS i_created_at,
            m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
            m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
-           m.metadata AS m_metadata, m.created_at AS m_created_at
+           m.metadata AS m_metadata, m.external_id AS m_external_id,
+           m.external_ts AS m_external_ts, m.created_at AS m_created_at
          FROM inbox i
          JOIN messages m ON m.id = i.message_id
          WHERE i.agent_id = ? AND i.delivered = 0
@@ -1856,6 +2204,8 @@ export class BrokerDB implements BrokerDBInterface {
       m_sender: string;
       m_body: string;
       m_metadata: string | null;
+      m_external_id: string | null;
+      m_external_ts: string | null;
       m_created_at: string;
     }>;
 
@@ -1876,6 +2226,8 @@ export class BrokerDB implements BrokerDBInterface {
         sender: r.m_sender,
         body: r.m_body,
         metadata: r.m_metadata ? (JSON.parse(r.m_metadata) as Record<string, unknown>) : null,
+        ...(r.m_external_id ? { externalId: r.m_external_id } : {}),
+        ...(r.m_external_ts ? { externalTs: r.m_external_ts } : {}),
         createdAt: r.m_created_at,
       },
     }));
@@ -1907,7 +2259,8 @@ export class BrokerDB implements BrokerDBInterface {
            i.delivered AS i_delivered, i.read_at AS i_read_at, i.created_at AS i_created_at,
            m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
            m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
-           m.metadata AS m_metadata, m.created_at AS m_created_at
+           m.metadata AS m_metadata, m.external_id AS m_external_id,
+           m.external_ts AS m_external_ts, m.created_at AS m_created_at
          FROM inbox i
          JOIN messages m ON m.id = i.message_id
          WHERE ${clauses.join(" AND ")}
@@ -1928,6 +2281,8 @@ export class BrokerDB implements BrokerDBInterface {
       m_sender: string;
       m_body: string;
       m_metadata: string | null;
+      m_external_id: string | null;
+      m_external_ts: string | null;
       m_created_at: string;
     }>;
 
@@ -1949,6 +2304,8 @@ export class BrokerDB implements BrokerDBInterface {
         sender: r.m_sender,
         body: r.m_body,
         metadata: r.m_metadata ? (JSON.parse(r.m_metadata) as Record<string, unknown>) : null,
+        ...(r.m_external_id ? { externalId: r.m_external_id } : {}),
+        ...(r.m_external_ts ? { externalTs: r.m_external_ts } : {}),
         createdAt: r.m_created_at,
       },
     }));
@@ -2045,7 +2402,7 @@ export class BrokerDB implements BrokerDBInterface {
     const placeholders = messageIds.map(() => "?").join(", ");
     const rows = db
       .prepare(
-        `SELECT id, thread_id, source, direction, sender, body, metadata, created_at
+        `SELECT id, thread_id, source, direction, sender, body, metadata, external_id, external_ts, created_at
          FROM messages
          WHERE id IN (${placeholders})
          ORDER BY id ASC`,
@@ -2058,19 +2415,12 @@ export class BrokerDB implements BrokerDBInterface {
       sender: string;
       body: string;
       metadata: string | null;
+      external_id: string | null;
+      external_ts: string | null;
       created_at: string;
     }>;
 
-    return rows.map((row) => ({
-      id: row.id,
-      threadId: row.thread_id,
-      source: row.source,
-      direction: row.direction as "inbound" | "outbound",
-      sender: row.sender,
-      body: row.body,
-      metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
-      createdAt: row.created_at,
-    }));
+    return rows.map(rowToBrokerMessage);
   }
 
   markDelivered(inboxIds: number[], agentId?: string): void {
@@ -2184,6 +2534,14 @@ export class BrokerDB implements BrokerDBInterface {
   private getBacklogById(id: number): BacklogEntry | null {
     const db = this.getDb();
     const row = db.prepare("SELECT * FROM unrouted_backlog WHERE id = ?").get(id) as
+      | BacklogRow
+      | undefined;
+    return row ? rowToBacklog(row) : null;
+  }
+
+  private getBacklogByMessageId(messageId: number): BacklogEntry | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT * FROM unrouted_backlog WHERE message_id = ?").get(messageId) as
       | BacklogRow
       | undefined;
     return row ? rowToBacklog(row) : null;

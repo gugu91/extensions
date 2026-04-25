@@ -39,6 +39,8 @@ export interface BrokerMessage {
   body: string;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  externalId?: string;
+  externalTs?: string;
 }
 
 export interface InboxEntry {
