@@ -7,7 +7,7 @@
 
 ## 2026-04-25 topology update
 
-`plans/pinet-transport-agnostic-refactor-audit.md` supersedes the older compatibility-first assumption that `slack-bridge` remains the durable Pinet runtime entrypoint. This PRD should now be read against a Pinet-owned topology:
+`plans/pinet-transport-agnostic-refactor-audit.md` supersedes the older compatibility-first assumption that `slack-bridge` remains the durable Pinet runtime entrypoint. The concrete execution sequence is `plans/pinet-transport-agnostic-implementation-plan.md`; daemon work corresponds to its daemon phases and should not start before the listed prerequisite gates. This PRD should now be read against a Pinet-owned topology:
 
 - `pinet-core` / `pinet-extension` owns runtime composition;
 - Slack, iMessage, and future cloud surfaces are transport adapters registered with Pinet;
