@@ -160,3 +160,39 @@ test("runtime scope authorization rejects conflicting workspace and instance bou
   ]);
   assert.match(formatRuntimeScopeCarrier(actual), /workspace\.installId=secondary/);
 });
+
+test("runtime scope authorization rejects missing actual workspace or instance scopes", () => {
+  const expected = buildRuntimeScopeCarrier({
+    workspace: {
+      provider: "slack",
+      source: "explicit",
+      workspaceId: "T_PRIMARY",
+      installId: "primary",
+    },
+    instance: {
+      source: "explicit",
+      instanceId: "broker-a",
+      instanceName: "Broker A",
+    },
+  });
+
+  assert.equal(isRuntimeScopeAuthorized(undefined, expected), false);
+  assert.equal(isRuntimeScopeAuthorized({}, expected), false);
+
+  const conflicts = getRuntimeScopeConflicts(undefined, expected);
+  assert.ok(conflicts.length > 0);
+  assert.deepEqual(conflicts.slice(0, 2), [
+    {
+      dimension: "workspace",
+      field: "provider",
+      expected: "slack",
+      actual: "unscoped",
+    },
+    {
+      dimension: "workspace",
+      field: "source",
+      expected: "explicit",
+      actual: "unscoped",
+    },
+  ]);
+});

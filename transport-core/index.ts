@@ -43,11 +43,26 @@ function pushScopeConflict(
   expected: string | undefined,
   actual: string | undefined,
 ): void {
-  if (!expected || !actual || expected === actual) {
+  if (!expected) {
     return;
   }
 
-  conflicts.push({ dimension, field, expected, actual });
+  const resolvedExpected = expected;
+  if (!actual) {
+    conflicts.push({
+      dimension,
+      field,
+      expected: resolvedExpected,
+      actual: "unscoped",
+    });
+    return;
+  }
+
+  if (expected === actual) {
+    return;
+  }
+
+  conflicts.push({ dimension, field, expected: resolvedExpected, actual });
 }
 
 export function buildCompatibilityWorkspaceScope(options: {
