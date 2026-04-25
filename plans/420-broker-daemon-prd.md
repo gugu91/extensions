@@ -323,6 +323,8 @@ Daemon mode should add first-class observability:
 ### Phase 0 — PRD and seam validation
 
 - finish the transport-agnostic refactor that makes Pinet, not Slack, the runtime owner
+- follow the stacked-PR execution and worker-instructions section in `plans/pinet-transport-agnostic-implementation-plan.md`;
+  daemon work should start only at the daemon stack layers after the ownership layers land or are reviewable
 - validate that remaining `slack-bridge/index.ts` responsibilities are adapter-only and no longer broker ownership paths
 - ensure broker-core owns socket/client/bootstrap and Pinet owns runtime composition before daemon work begins
 

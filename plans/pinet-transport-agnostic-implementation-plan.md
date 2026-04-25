@@ -30,6 +30,140 @@ pnpm test
 
 Use package-filtered commands for inner-loop work, but the merge gate is repo-level validation unless a PR documents a temporary infra blocker.
 
+## Stacked PR execution and worker instructions
+
+Use stacked PRs for implementation of this plan. A stack is part of the execution contract: upper layers should be opened as draft PRs against the branch below them as soon as they are reviewable, not held locally until lower layers merge.
+
+### Required tooling
+
+Install GitHub's stacked PR extension before opening implementation PRs:
+
+```bash
+gh extension install github/gh-stack
+```
+
+Optional, but recommended for agents that support GitHub skills:
+
+```bash
+gh skill install github/gh-stack
+```
+
+Common commands for this refactor:
+
+```bash
+# Start a new stack from trunk. Prefer interactive init if the stack shape is still being adjusted.
+gh stack init --base main pinet/00-runway
+
+# Add the next layer from the current top of stack.
+gh stack add pinet/01-settings-envelope
+
+# Submit all stack layers as draft PRs once each layer has a focused commit set.
+gh stack submit --draft --remote tmustier
+
+# Inspect local stack order, PR links, and status.
+gh stack view
+
+# Cascade-rebase the stack after trunk or a lower layer changes.
+gh stack rebase --remote origin
+
+# Push all stack branches after local edits or after a successful rebase.
+gh stack push --remote tmustier
+
+# If branches/PRs were created outside local gh-stack tracking, link them bottom-to-top.
+gh stack link --base main --draft --remote tmustier pinet/00-runway pinet/01-settings-envelope
+```
+
+Use `gh stack submit --draft` for new layers by default. Move a layer out of draft only after validation, cleanup checks, and the independent review below are complete.
+
+### Fork/upstream constraint
+
+This environment currently cannot push directly to `gugu91/extensions` from the implementation worktrees. Workers must push branches to the `tmustier` remote unless they are explicitly given upstream write access.
+
+That constraint matters for gh-stack: stacked PRs must still be real GitHub stacked PRs against `gugu91/extensions`, with each PR's base set to the previous layer branch. If native `gh stack submit --remote tmustier` or `gh stack link --remote tmustier` cannot create and link upstream stacked PRs from fork branches, stop and report the blocker. Do not fake a stack by opening unrelated PRs, manually pasting dependency text, or claiming stacked execution when GitHub does not show the stack relationship.
+
+### Worker setup and ownership rules
+
+Every implementation worker must follow these rules:
+
+1. **Use an isolated worktree** — never implement in the main checkout. Create a per-layer worktree such as `.worktrees/pinet-04-helper-shim-split` and run dependency bootstrap in that worktree before validation.
+2. **Use ordered branch names** — branch names must encode stack order, for example `pinet/00-runway`, `pinet/01-settings`, `pinet/02-transport-contracts`, and so on. Keep the numeric prefix stable unless the whole stack is intentionally rebuilt.
+3. **Own one stack layer** — each worker owns exactly one layer unless explicitly assigned multiple. If a layer grows beyond one coherent review unit, split it into another numbered layer instead of widening the PR.
+4. **Base on the previous branch** — build `pinet/NN-*` on `pinet/(NN-1)-*`, not on `main`, except for `pinet/00-runway`. Verify with `git merge-base --is-ancestor <previous-layer> HEAD` before submitting.
+5. **Open upper PRs before lower PRs merge** — upper layers should target the previous branch and be submitted as drafts when reviewable. Do not wait for lower PRs to merge before opening dependent layers.
+6. **Keep lower-layer churn visible** — when a lower layer changes, run `gh stack rebase` from an appropriate worktree, resolve conflicts, and `gh stack push --remote tmustier`. If conflict resolution changes ownership boundaries, call it out in the PR description.
+7. **Do not bypass cleanup** — each layer must run the phase-specific cleanup searches and delete/shrink old owners in the same layer when the responsibility moves.
+8. **Escalate stack-tool blockers** — if `gh stack` cannot submit, push, rebase, or link the real upstream stack because of fork permissions or tool limitations, stop and report instead of replacing it with an ad hoc workflow.
+
+Suggested worktree bootstrap for a single layer:
+
+```bash
+git fetch origin main
+git fetch tmustier
+# For the bottom layer only:
+git worktree add .worktrees/pinet-00-runway -b pinet/00-runway origin/main
+# For later layers, base from the previous stack branch:
+git worktree add .worktrees/pinet-04-helper-shim-split -b pinet/04-helper-shim-split tmustier/pinet/03-native-actions
+cd .worktrees/pinet-04-helper-shim-split
+pnpm install --frozen-lockfile
+```
+
+### Review requirement for each layer
+
+Before submitting a new layer or marking a draft ready for review, run an independent reviewer using `openai-codex/gpt-5.5` with `xhigh` thinking. Prefer the `subagent` tool when available. Otherwise run a read-only CLI review and save the output locally, for example:
+
+```bash
+pi -p --model openai-codex/gpt-5.5 --thinking xhigh \
+  "Review the current git diff for the Pinet transport-agnostic stacked PR layer. Focus on correctness, ownership boundaries, cleanup completeness, tests, security, and whether this layer is small and reviewable. Do not modify files." \
+  > /tmp/pinet-$(git branch --show-current | tr '/:' '--')-review.md
+```
+
+Then explicitly handle the review:
+
+- address important findings before finalizing the PR;
+- if a finding is blocked, document the blocker and next required action;
+- if a finding is declined, document the rationale;
+- include the review output path and outcome summary in the PR description.
+
+### PR description requirements
+
+Every stacked PR description must include:
+
+- stack position, branch name, and base branch;
+- dependent lower PRs and any upper PRs already opened;
+- plan phase(s) covered and responsibilities moved;
+- old paths deleted or shrunk, plus any temporary shim and its deletion layer;
+- tests and package-filtered validation run;
+- cleanup checks run and important results;
+- independent reviewer command/output path;
+- reviewer findings addressed, blocked, or declined.
+
+### Initial stack proposal
+
+This is the starting stack shape for implementation workers. It is intentionally narrow; split a row before implementation if it cannot stay reviewable.
+
+| Layer | Branch | Base | Plan coverage | Review boundary |
+| --- | --- | --- | --- | --- |
+| 00 | `pinet/00-runway` | `main` | Phase 0 | Validation baseline, PR triage, tracking issues, historical-doc cleanup only. |
+| 01 | `pinet/01-settings-envelope` | `pinet/00-runway` | Phase 1 | Pinet settings envelope, adapter config validation, old runtime setting deletion. |
+| 02 | `pinet/02-transport-contracts` | `pinet/01-settings-envelope` | Phase 2 | Provider/install/conversation/message/actor/content/capability contracts and adapter capability declarations. |
+| 03 | `pinet/03-native-actions` | `pinet/02-transport-contracts` | Phase 3 | Typed native-action registry and replacement of provider tunnels such as `slack.proxy`. |
+| 04 | `pinet/04-helper-shim-split` | `pinet/03-native-actions` | Phase 4 | Split mixed helpers, delete pure broker shims, move tests with ownership. |
+| 05 | `pinet/05-broker-core-downshift` | `pinet/04-helper-shim-split` | Phase 5 | Broker socket/client/bootstrap and broker-neutral message delivery ownership. |
+| 06 | `pinet/06-runtime-ports` | `pinet/05-broker-core-downshift` | Phase 6 | Port-drive runtime orchestration and remove direct Slack construction from runtime. |
+| 07 | `pinet/07-pinet-extension-boundary` | `pinet/06-runtime-ports` | Phase 7 | Create Pinet composition package/extension boundary and Pi SDK registration seam. |
+| 08 | `pinet/08-pinet-core-runtime-state` | `pinet/07-pinet-extension-boundary` | Phase 8 | Extract broker/follower runtime, delivery, persisted state, maintenance, and wakeups. |
+| 09 | `pinet/09-pinet-core-tools-ralph` | `pinet/08-pinet-core-runtime-state` | Phase 8 | Extract tools/commands helpers, mesh ops, remote control, Ralph, task assignment, status, and prompts behind ports. |
+| 10 | `pinet/10-slack-adapter-slim` | `pinet/09-pinet-core-tools-ralph` | Phase 9 | Slim Slack bridge to Slack adapter/UX/policy ownership and delete migrated Pinet runtime paths. |
+| 11 | `pinet/11-imessage-transport` | `pinet/10-slack-adapter-slim` | Phase 10 | Register iMessage as a normal transport and move/remove Slack-owned iMessage tool paths. |
+| 12 | `pinet/12-durable-read-context` | `pinet/11-imessage-transport` | Phase 11 | Durable read/context sync, cursors, bounded prompt context, and read action/tool surface. |
+| 13 | `pinet/13-security-guardrails` | `pinet/12-durable-read-context` | Phase 12 | Core guardrail enforcement for native actions/tools and prompt-only policy removal. |
+| 14 | `pinet/14-security-identity-auth` | `pinet/13-security-guardrails` | Phase 12 | Stable identity, scoped auth, raw TCP restrictions, and remote/cloud security gates. |
+| 15 | `pinet/15-multi-workspace-instance` | `pinet/14-security-identity-auth` | Phase 13 | Multi-workspace and named-instance orchestration after security gates. |
+| 16 | `pinet/16-daemon-scaffold` | `pinet/15-multi-workspace-instance` | Phase 14 | Daemon package/entrypoint, singleton/lease, config loading, health/logging primitives. |
+| 17 | `pinet/17-daemon-sdk-runtime` | `pinet/16-daemon-scaffold` | Phase 15 | SDK-hosted broker runtime, daemon-owned session, worker/follower client cutover. |
+| 18 | `pinet/18-daemon-hardening-ux` | `pinet/17-daemon-sdk-runtime` | Phase 16 | Restart tooling, status UX, observability, failure handling, and operator commands. |
+| 19 | `pinet/19-final-cleanup-release` | `pinet/18-daemon-hardening-ux` | Phase 17 | Final cleanup, docs, release readiness, stale prompt/settings/test deletion. |
+
 ## Final target state
 
 At the end of this plan:
@@ -796,14 +930,31 @@ rg -g '!**/*.test.ts' 'from "\.\/broker\/(agent-messaging|auth|leader|maintenanc
 For each PR created from this plan, include this checklist in the PR description:
 
 ```md
+## Stack position
+
+- Stack layer:
+- Branch:
+- Base branch:
+- Lower PR dependencies:
+- Upper PRs already opened:
+
 ## Pinet refactor phase
 
-- Phase:
+- Phase(s):
 - Responsibilities moved:
 - Old paths deleted/shrunk:
 - Compatibility shims introduced? If yes, deletion phase:
 - Tests added/moved:
 - Hygiene checks run:
+
+## Independent review
+
+- Reviewer model/thinking: openai-codex/gpt-5.5, xhigh
+- Review command or subagent run:
+- Local review output path:
+- Findings addressed:
+- Findings blocked, with blocker:
+- Findings declined, with rationale:
 
 ## Validation
 
@@ -813,4 +964,4 @@ For each PR created from this plan, include this checklist in the PR description
 - [ ] package-specific tests listed below
 ```
 
-A PR should not merge if it adds a new abstraction but leaves the old owner fully alive without a named deletion in the same or next phase.
+A PR should not merge if it adds a new abstraction but leaves the old owner fully alive without a named deletion in the same or next phase. A PR should also stay in draft if its stack relationship is not visible on GitHub, its base branch is not the previous layer, or its independent review has unresolved important findings without an explicit blocker.

@@ -1008,7 +1008,7 @@ These checks should not be treated as a substitute for tests, but they make acci
 
 ## Recommended migration plan
 
-The concrete execution plan lives in `plans/pinet-transport-agnostic-implementation-plan.md`. Treat that file as the implementation source of truth; the phase outline below is the architectural summary.
+The concrete execution plan lives in `plans/pinet-transport-agnostic-implementation-plan.md`. Treat that file as the implementation source of truth, including its stacked-PR execution and worker-instructions section; the phase outline below is the architectural summary.
 
 ### Phase 0 — settle runway and write contracts
 
