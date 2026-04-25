@@ -3,7 +3,19 @@
 - Issue: #420
 - Status: draft PRD
 - Authors: Quantum Ebony Rhino
-- Last updated: 2026-04-14
+- Last updated: 2026-04-25
+
+## 2026-04-25 topology update
+
+`plans/pinet-transport-agnostic-refactor-audit.md` supersedes the older compatibility-first assumption that `slack-bridge` remains the durable Pinet runtime entrypoint. This PRD should now be read against a Pinet-owned topology:
+
+- `pinet-core` / `pinet-extension` owns runtime composition;
+- Slack, iMessage, and future cloud surfaces are transport adapters registered with Pinet;
+- the daemon hosts the Pinet runtime and adapter registry, not a Slack-owned extension runtime;
+- Slack adapter ownership in the daemon means owning a configured Slack transport instance, not making Slack the control-plane package;
+- daemon implementation should wait until the transport registry, `pinet.*` settings envelope, and broker-core socket/client ownership are clean.
+
+The SDK-first recommendation still stands, but the embedded session should bind Pinet runtime surfaces and adapter factories rather than bootstrapping through `slack-bridge/index.ts`.
 
 ## Problem statement
 
@@ -39,9 +51,9 @@ We need a daemonized control plane that can own broker infrastructure as a long-
 
 ## Current state
 
-Current architecture in `slack-bridge`:
+Current pre-refactor architecture in `slack-bridge`:
 
-- `slack-bridge/index.ts` still owns top-level runtime orchestration
+- `slack-bridge/index.ts` still owns top-level runtime orchestration, but this should be treated as legacy placement to unwind before daemonization
 - broker infrastructure is already being teased apart into seams like:
   - `broker-runtime.ts`
   - `follower-runtime.ts`
@@ -116,10 +128,10 @@ On restart the daemon should:
 +------------------------------+
 | Pinet daemon (single owner)  |
 | - broker DB ownership        |
-| - Slack adapter ownership    |
+| - transport adapter registry |
 | - router / Ralph loop        |
 | - activity + health signals  |
-| - embedded pi broker session |
+| - embedded Pinet session     |
 +--------------+---------------+
                |
                | existing/future local protocols
@@ -137,9 +149,9 @@ On restart the daemon should:
 
 - broker DB and schema migrations
 - broker lease / singleton process ownership
-- Slack ingress / adapter lifecycle
+- transport adapter registry and configured adapter lifecycles, including Slack ingress where configured
 - router, maintenance, wakeups, health checks, and recovery
-- broker reasoning session lifecycle
+- broker reasoning session lifecycle through Pinet-owned runtime composition
 - activity, logs, and health endpoints/events
 
 **Worker/follower clients own:**
@@ -178,7 +190,7 @@ The daemon is a supervisor/control-plane process that starts and talks to a sepa
 | Backpressure / event streaming   | Direct function and event calls                                                    | Must be modeled over transport; more framing work                                                |
 | Resource usage                   | Lower process overhead                                                             | Higher process overhead                                                                          |
 | Upgrade / version skew           | Simpler — single dependency graph                                                  | Harder — daemon and pi RPC contract can drift                                                    |
-| Broker connectivity ownership    | Clear — daemon owns Slack + broker session                                         | Risk of ambiguous ownership if daemon and pi child split responsibilities poorly                 |
+| Broker connectivity ownership    | Clear — daemon owns Pinet runtime + configured transport adapters                                         | Risk of ambiguous ownership if daemon and pi child split responsibilities poorly                 |
 | Fit for long-lived control plane | Strong                                                                             | Acceptable, but only if strict ownership and supervision are designed up front                   |
 | Time-to-first-usable daemon      | Faster                                                                             | Slower                                                                                           |
 
@@ -189,7 +201,7 @@ The daemon is a supervisor/control-plane process that starts and talks to a sepa
 - keeps broker infra and broker reasoning under one lifecycle controller
 - easiest way to reuse current extension and tool model
 - simplest path to bind current broker-facing extensions/resources in a daemon context
-- easiest to make the daemon the single owner of Slack, DB, routing, and the broker agent session
+- easiest to make the daemon the single owner of Pinet runtime composition, DB, routing, and configured transport adapters
 - reduces protocol surface for the first cut
 
 ### Pi SDK weaknesses
@@ -236,15 +248,37 @@ This is an **SDK-first, daemon-owned architecture** — not a pure RPC broker br
 
 If we later need stronger fault isolation, we can split the broker brain behind an internal boundary. But that should be a second-step optimization after daemon ownership and lifecycle are already correct.
 
+## Updated daemon configuration shape
+
+The daemon should consume the same clean `pinet.*` settings envelope as the in-session Pinet extension:
+
+```jsonc
+{
+  "pinet": {
+    "runtimeMode": "broker",
+    "instance": { "id": "local-daemon", "name": "Local Daemon" },
+    "mesh": { "auth": { "mode": "credential", "credentialPath": "..." } },
+    "broker": { "databasePath": "..." },
+    "transports": {
+      "slack": { "installs": [{ "id": "default", "botToken": "...", "appToken": "..." }] },
+      "imessage": { "enabled": true }
+    }
+  }
+}
+```
+
+The daemon owns the envelope and runtime lifecycle. Adapter packages own provider-specific config schemas and validation under `transports.<provider>`.
+
 ## Implications
 
 ### Broker connectivity
 
 With a daemonized broker:
 
-- Slack broker connectivity moves out of operator pi sessions and into the daemon
-- Slack app/bot token validation and reconnect logic become daemon responsibilities
-- Home tab, control-plane canvas, and broker-origin Slack surfaces should be published by the daemon-owned broker runtime
+- broker connectivity moves out of operator pi sessions and into the daemon
+- configured transport adapters, including Slack, connect under daemon ownership
+- Slack app/bot token validation and reconnect logic are adapter responsibilities invoked by the daemon's transport registry
+- Home tab, control-plane canvas, and broker-origin Slack surfaces should be published through daemon-owned Pinet publisher ports
 - worker sessions no longer need to be potential broker hosts
 
 ### Worker routing
@@ -288,8 +322,9 @@ Daemon mode should add first-class observability:
 
 ### Phase 0 — PRD and seam validation
 
-- finish the current refactor program that isolates broker-adjacent stateful seams
-- validate that remaining `slack-bridge/index.ts` responsibilities map cleanly to daemon-owned modules
+- finish the transport-agnostic refactor that makes Pinet, not Slack, the runtime owner
+- validate that remaining `slack-bridge/index.ts` responsibilities are adapter-only and no longer broker ownership paths
+- ensure broker-core owns socket/client/bootstrap and Pinet owns runtime composition before daemon work begins
 
 ### Phase 1 — daemon scaffold
 
@@ -306,13 +341,13 @@ Daemon mode should add first-class observability:
 
 ### Phase 3 — attach current broker infra seams
 
-- migrate broker runtime, maintenance, wakeups, Home tab publishing, activity logging, and routing ownership into daemon-owned modules
+- migrate Pinet runtime, maintenance, wakeups, publisher ports, activity logging, and routing ownership into daemon-owned modules
 - keep worker/follower local protocols as compatible as possible initially
 
 ### Phase 4 — client cutover
 
-- make `slack-bridge` broker mode a client of the daemon instead of a broker host
-- keep single-player mode separate
+- remove `slack-bridge` broker mode as a host path; Slack becomes a daemon/Pinet transport adapter or, if kept, a single-player adapter-only mode
+- keep single-player Slack mode separate only if deliberately retained outside Pinet mesh runtime
 - keep follower/worker reconnect semantics stable across the cutover
 
 ### Phase 5 — hardening

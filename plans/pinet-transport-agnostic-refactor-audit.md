@@ -97,6 +97,87 @@ This also changes the settings recommendation:
 The current `slack-bridge.*` namespace should not be protected as a long-term compatibility boundary. It can be replaced outright in the substantial refactor.
 Pinet should own the top-level settings namespace and runtime composition, but adapter packages should own provider-specific config schemas and validation. In practice: `pinet.transports.slack` stores Slack install config, while `slack-bridge` exports the Slack adapter factory and validates Slack-specific token/manifest fields. That prevents Pinet core from learning Slack API details while still giving operators one coherent config surface.
 
+Recommended settings schema shape:
+
+```ts
+interface PinetSettings {
+  runtimeMode: "off" | "broker" | "worker";
+  instance: PinetInstanceSettings;
+  mesh: PinetMeshSettings;
+  broker: PinetBrokerSettings;
+  transports: Record<TransportProviderId, unknown>;
+  tools: PinetToolSettings;
+  security: PinetSecuritySettings;
+  observability: PinetObservabilitySettings;
+}
+
+interface PinetInstanceSettings {
+  id: string;
+  name: string;
+  profile?: string;
+  dataDir?: string;
+}
+
+interface PinetMeshSettings {
+  auth:
+    | { mode: "off" }
+    | { mode: "shared-secret"; secret?: string; secretPath?: string }
+    | { mode: "credential"; credentialPath: string };
+  listen?: { kind: "unix"; path?: string } | { kind: "tcp-loopback"; port: number };
+}
+
+interface PinetBrokerSettings {
+  databasePath?: string;
+  ralph?: { enabled: boolean; intervalMs?: number };
+  maintenance?: { enabled: boolean; intervalMs?: number };
+  controlPlane?: { home?: boolean; canvas?: boolean; log?: boolean };
+}
+
+interface PinetToolSettings {
+  hotTools?: Array<"pinet_agents" | "pinet_message" | "pinet_free" | "pinet_schedule" | "pinet_read">;
+  dispatcher?: { enabled: boolean };
+}
+
+interface PinetSecuritySettings {
+  readOnly?: boolean;
+  blockedTools?: string[];
+  requireConfirmation?: string[];
+  origins?: Record<string, OriginPolicySettings>;
+}
+
+interface PinetObservabilitySettings {
+  logLevel?: "errors" | "actions" | "verbose";
+  auditNativeActions?: boolean;
+}
+```
+
+Adapter config lives under `transports` and is validated by the adapter package, for example:
+
+```ts
+interface SlackTransportSettings {
+  installs: Array<{
+    id: string;
+    workspaceId?: string;
+    botToken: string;
+    appToken: string;
+    defaultChannel?: string;
+    logChannel?: string;
+    allowedUsers?: string[];
+    allowAllWorkspaceUsers?: boolean;
+    suggestedPrompts?: { title: string; message: string }[];
+    manifest?: { appId?: string; appConfigToken?: string };
+  }>;
+}
+
+interface IMessageTransportSettings {
+  enabled: boolean;
+  accountId?: string;
+  osascriptPath?: string;
+}
+```
+
+Schema ownership rule: Pinet owns the envelope (`runtimeMode`, `instance`, `mesh`, `broker`, `security`, `observability`, and the `transports` map); each adapter owns the value schema under its provider key. Unknown provider keys should fail closed unless a plugin manifest/factory is explicitly configured.
+
 
 ## Scope and method
 
@@ -600,6 +681,68 @@ interface TransportAdapterV2 {
 ```
 
 `callNative` should be optional, off by default, unavailable to remote/non-local clients unless explicitly authorized, and policy-gated per provider/action. Prefer a typed native-action registry with advertised capabilities over arbitrary method strings. Every native call should produce an audit entry. This replaces `slack.proxy`; do not keep Slack-named RPC in broker-core or recreate it as an unrestricted provider-neutral bypass.
+
+### Native action registry
+
+If an adapter needs provider-native operations that do not fit the normalized message/read/reaction/file surfaces, expose them through a typed native-action registry rather than a stringly `method` proxy.
+
+```ts
+type NativeActionName = `${TransportProviderId}.${string}`;
+
+type NativeActionLocality = "local-only" | "daemon-local" | "remote-capable";
+
+type NativeActionRisk = "read" | "write" | "admin" | "destructive";
+
+interface NativeActionDescriptor<Input, Output> {
+  name: NativeActionName;
+  provider: TransportProviderId;
+  capability: string;
+  risk: NativeActionRisk;
+  locality: NativeActionLocality;
+  inputSchema: unknown;
+  outputSchema: unknown;
+  idempotency: "required" | "supported" | "not-supported";
+  audit: "required";
+  execute(input: Input, context: NativeActionContext): Promise<Output>;
+}
+
+interface NativeActionContext {
+  principal: PrincipalRef;
+  install: TransportInstallRef;
+  instance: PinetInstanceRef;
+  conversation?: ConversationRef;
+  idempotencyKey?: string;
+  reason?: string;
+}
+
+interface NativeActionRequest {
+  action: NativeActionName;
+  provider: TransportProviderId;
+  install: TransportInstallRef;
+  input: unknown;
+  idempotencyKey?: string;
+  reason?: string;
+}
+
+interface NativeActionReceipt {
+  action: NativeActionName;
+  provider: TransportProviderId;
+  status: "succeeded" | "failed";
+  auditId: string;
+  retryable: boolean;
+}
+```
+
+Rules:
+
+1. no arbitrary provider method strings in broker-core;
+2. every native action must be declared by the adapter with schemas, risk level, locality, and idempotency semantics;
+3. write/admin/destructive actions require explicit policy authorization and audit logging;
+4. `remote-capable` actions require the #324 credential model and the #325 remote transport security story;
+5. action names are provider-qualified (`slack.canvas_update`, `slack.modal_open`) so guardrails can remain precise;
+6. normalized Pinet operations should not be implemented as native actions just because it is faster.
+
+This gives adapter packages room for real provider features without making the broker a generic privileged API tunnel.
 
 ## Broker DB and persistence audit
 
@@ -1138,9 +1281,11 @@ Recommended first PR scope:
 2. turn `slack-bridge/tool-registration-runtime.ts` into Slack-only registration or delete it during extraction;
 3. move iMessage registration out of Slack-owned runtime entirely;
 4. introduce `TransportRegistry` and register Slack/iMessage adapters through it;
-5. add the `broker-runtime.ts` adapter-factory port and test it with non-Slack fakes, even if the implementation still lives in `slack-bridge` for one PR;
-6. delete `autoConnect`/`autoFollow` and Slack-default source fallbacks in the same wave if tests are updated;
-7. update README/plans so the public mental model is “install/enable Pinet, configure transports,” not “install Slack bridge and get Pinet as a side effect.”
+5. add the `pinet.*` settings envelope and adapter config validation hook;
+6. add the typed native-action registry contract with no runtime actions enabled by default;
+7. add the `broker-runtime.ts` adapter-factory port and test it with non-Slack fakes, even if the implementation still lives in `slack-bridge` for one PR;
+8. delete `autoConnect`/`autoFollow` and Slack-default source fallbacks in the same wave if tests are updated;
+9. update README/plans so the public mental model is “install/enable Pinet, configure transports,” not “install Slack bridge and get Pinet as a side effect.”
 
 This is a better first slice than a pure helper split because it makes the future ownership model visible immediately. The helper split can happen inside or directly after this PR.
 
@@ -1149,15 +1294,18 @@ This is a better first slice than a pure helper split because it makes the futur
 If this audit is accepted, open or update focused issues for:
 
 1. `transport-core`: replace shallow message contracts with address/content/capability contracts and temporary v1 projections only where useful.
-2. `slack-bridge` + `pinet-core`: split `helpers.ts` into Slack settings/http/policy and Pinet identity/runtime helpers.
-3. `broker-core`: move broker client/server/bootstrap down and delete Slack-specific adapter proxy naming.
-4. `pinet-core` / new `pinet-extension`: refactor `broker-runtime.ts` to receive a transport registry and publisher ports, then make Pinet the composition owner.
-5. `pinet-core`: move Pinet runtime modules after port extraction.
-6. `imessage-bridge`: wire as ordinary adapter through generic transport registry and retire Slack-owned iMessage tool registration.
-7. `broker-core`/`pinet-core`: durable context event log + unread cursors for #594.
-8. `security`: stable ID resumption credential model for #324.
-9. `security`: remote transport threat model and implementation path for #325.
-10. `policy`: scoped origin/action authorization model for #481/#547/#548.
+2. `pinet-core` / `pinet-extension`: land the `pinet.*` settings schema envelope and adapter-owned transport config validation contract.
+3. `transport-core` / `broker-core`: add the typed native-action registry contract, replacing arbitrary `slack.proxy`-style provider tunnels.
+4. `slack-bridge` + `pinet-core`: split `helpers.ts` into Slack settings/http/policy and Pinet identity/runtime helpers.
+5. `broker-core`: move broker client/server/bootstrap down and delete Slack-specific adapter proxy naming.
+6. `pinet-core` / new `pinet-extension`: refactor `broker-runtime.ts` to receive a transport registry and publisher ports, then make Pinet the composition owner.
+7. `pinet-core`: move Pinet runtime modules after port extraction.
+8. `imessage-bridge`: wire as ordinary adapter through generic transport registry and retire Slack-owned iMessage tool registration.
+9. `broker-core`/`pinet-core`: durable context event log + unread cursors for #594.
+10. `security`: stable ID resumption credential model for #324.
+11. `security`: remote transport threat model and implementation path for #325.
+12. `policy`: scoped origin/action authorization model for #481/#547/#548.
+13. `pinet-daemon`: update and later implement the daemon PRD against the Pinet-owned topology.
 
 ## Final recommendation
 
