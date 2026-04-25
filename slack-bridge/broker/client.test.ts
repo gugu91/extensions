@@ -10,10 +10,15 @@ import {
   INITIAL_RECONNECT_DELAY_MS,
   MAX_RECONNECT_DELAY_MS,
   HEARTBEAT_INTERVAL_MS,
+  MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS,
   computeReconnectDelay,
 } from "./client.js";
-import type { BrokerConnectOpts } from "./client.js";
-import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
+import type { BrokerConnectOpts, BrokerRpcRequestError } from "./client.js";
+import {
+  RPC_AGENT_NAME_CONFLICT,
+  RPC_AGENT_STABLE_ID_CONFLICT,
+  RPC_METHOD_NOT_FOUND,
+} from "./types.js";
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -24,7 +29,13 @@ interface MockServer {
   received: string[];
   close: () => Promise<void>;
   respondTo: (conn: net.Socket, id: number, result: unknown) => void;
-  respondError: (conn: net.Socket, id: number, code: number, message: string) => void;
+  respondError: (
+    conn: net.Socket,
+    id: number,
+    code: number,
+    message: string,
+    data?: unknown,
+  ) => void;
   connectOpts: BrokerConnectOpts;
 }
 
@@ -67,8 +78,13 @@ function createMockServer(port = 0): Promise<MockServer> {
           const msg = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
           conn.write(msg);
         },
-        respondError: (conn, id, code, message) => {
-          const msg = JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) + "\n";
+        respondError: (conn, id, code, message, data) => {
+          const msg =
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              error: { code, message, ...(data === undefined ? {} : { data }) },
+            }) + "\n";
           conn.write(msg);
         },
       });
@@ -83,6 +99,22 @@ async function waitFor(fn: () => boolean, timeoutMs = 2000, intervalMs = 10): Pr
     if (Date.now() > deadline) throw new Error("waitFor timed out");
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+}
+
+function createStableIdConflictError(retryable: boolean): BrokerRpcRequestError {
+  const err = new Error(
+    'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying.',
+  ) as BrokerRpcRequestError;
+  err.name = "BrokerRpcRequestError";
+  err.code = RPC_AGENT_STABLE_ID_CONFLICT;
+  err.method = "register";
+  err.data = {
+    code: "AGENT_STABLE_ID_CONFLICT",
+    stableId: "host:session:/tmp/worker",
+    ownerAgentId: "worker-2",
+    retryable,
+  };
+  return err;
 }
 
 // ─── Tests ───────────────────────────────────────────────
@@ -1307,6 +1339,133 @@ describe("BrokerClient — onReconnect callback", () => {
     expect(client.isConnected()).toBe(false);
     expect((client as unknown as { socket: net.Socket | null }).socket).toBeNull();
     expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retrying retryable stableId conflicts and resets the streak after re-registering", async () => {
+    const client = new BrokerClient({ host: "127.0.0.1", port: 1 });
+    const failedSocket = { destroy: vi.fn() } as unknown as net.Socket;
+    const scheduleReconnect = vi.fn();
+    const reconnectFired = vi.fn();
+    let registerAttempts = 0;
+
+    client.onReconnect(reconnectFired);
+    (
+      client as unknown as {
+        registrationSnapshot: { name: string; emoji: string; stableId: string };
+      }
+    ).registrationSnapshot = {
+      name: "Worker",
+      emoji: "🦙",
+      stableId: "host:session:/tmp/worker",
+    };
+    (
+      client as unknown as {
+        connectSocket: () => Promise<void>;
+        socket: net.Socket | null;
+        connected: boolean;
+      }
+    ).connectSocket = vi.fn(async () => {
+      (client as unknown as { socket: net.Socket | null }).socket = failedSocket;
+      (client as unknown as { connected: boolean }).connected = true;
+    });
+    (client as unknown as { performRegister: () => Promise<unknown> }).performRegister = vi.fn(
+      async () => {
+        registerAttempts++;
+        if (registerAttempts < MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS) {
+          throw createStableIdConflictError(true);
+        }
+        return { agentId: "worker-1", name: "Worker", emoji: "🦙" };
+      },
+    );
+    (client as unknown as { scheduleReconnect: () => void }).scheduleReconnect = scheduleReconnect;
+
+    await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+    await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+    await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+
+    expect(scheduleReconnect).toHaveBeenCalledTimes(MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS - 1);
+    expect(reconnectFired).toHaveBeenCalledTimes(1);
+    expect((client as unknown as { stableIdConflictAttempt: number }).stableIdConflictAttempt).toBe(
+      0,
+    );
+    expect(client.getReconnectAttempt()).toBe(0);
+  });
+
+  it("stops reconnecting after three consecutive retryable stableId conflicts", async () => {
+    const client = new BrokerClient({ host: "127.0.0.1", port: 1 });
+    const failedSocket = { destroy: vi.fn() } as unknown as net.Socket;
+    const scheduleReconnect = vi.fn();
+    const reconnectFailed = vi.fn();
+
+    client.onReconnectFailed(reconnectFailed);
+    (
+      client as unknown as {
+        registrationSnapshot: { name: string; emoji: string; stableId: string };
+      }
+    ).registrationSnapshot = {
+      name: "Worker",
+      emoji: "🦙",
+      stableId: "host:session:/tmp/worker",
+    };
+    (
+      client as unknown as {
+        connectSocket: () => Promise<void>;
+        socket: net.Socket | null;
+        connected: boolean;
+      }
+    ).connectSocket = vi.fn(async () => {
+      (client as unknown as { socket: net.Socket | null }).socket = failedSocket;
+      (client as unknown as { connected: boolean }).connected = true;
+    });
+    (client as unknown as { performRegister: () => Promise<unknown> }).performRegister = vi.fn(
+      async () => {
+        throw createStableIdConflictError(true);
+      },
+    );
+    (client as unknown as { scheduleReconnect: () => void }).scheduleReconnect = scheduleReconnect;
+
+    for (let i = 0; i < MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS; i++) {
+      await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+    }
+
+    expect(scheduleReconnect).toHaveBeenCalledTimes(MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS - 1);
+    expect(reconnectFailed).toHaveBeenCalledTimes(1);
+    expect(reconnectFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: RPC_AGENT_STABLE_ID_CONFLICT,
+        data: expect.objectContaining({ retryable: true }),
+      }),
+    );
+    expect(client.isConnected()).toBe(false);
+    expect(client.getReconnectAttempt()).toBe(0);
+    expect(client.getRegisteredIdentity()).toBeNull();
+    expect((client as unknown as { stableIdConflictAttempt: number }).stableIdConflictAttempt).toBe(
+      0,
+    );
+  });
+
+  it("resets the stableId conflict streak when reconnect fails before re-registering", async () => {
+    const client = new BrokerClient({ host: "127.0.0.1", port: 1 });
+    const scheduleReconnect = vi.fn();
+
+    (
+      client as unknown as {
+        connectSocket: () => Promise<void>;
+        stableIdConflictAttempt: number;
+      }
+    ).connectSocket = vi.fn(async () => {
+      throw new Error("connect failed");
+    });
+    (client as unknown as { stableIdConflictAttempt: number }).stableIdConflictAttempt =
+      MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS - 1;
+    (client as unknown as { scheduleReconnect: () => void }).scheduleReconnect = scheduleReconnect;
+
+    await (client as unknown as { reconnectOnce: () => Promise<void> }).reconnectOnce();
+
+    expect(scheduleReconnect).toHaveBeenCalledTimes(1);
+    expect((client as unknown as { stableIdConflictAttempt: number }).stableIdConflictAttempt).toBe(
+      0,
+    );
   });
 
   it("scheduleReconnect fires onDisconnect then onReconnect after server restart", async () => {

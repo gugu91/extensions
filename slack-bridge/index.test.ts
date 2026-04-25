@@ -4,13 +4,14 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DatabaseSync } from "node:sqlite";
-import { BrokerClient } from "./broker/client.js";
+import { BrokerClient, type BrokerRpcRequestError } from "./broker/client.js";
+import { RPC_AGENT_STABLE_ID_CONFLICT } from "./broker/types.js";
 import * as brokerModule from "./broker/index.js";
 import * as maintenanceModule from "./broker/maintenance.js";
 import { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import * as imessageModule from "@gugu910/pi-imessage-bridge";
-import slackBridge from "./index.js";
+import slackBridge, { buildPinetReconnectStoppedMessage } from "./index.js";
 
 type ToolDefinition = {
   name: string;
@@ -50,6 +51,48 @@ function stubIsTTY(stream: NodeJS.ReadStream | NodeJS.WriteStream, value: boolea
     Reflect.deleteProperty(target, "isTTY");
   };
 }
+
+function createStableIdReconnectError(): BrokerRpcRequestError {
+  const err = new Error(
+    'Agent stableId "host:session:/tmp/worker" is already active on another live connection. Wait for that agent to disconnect before retrying.',
+  ) as BrokerRpcRequestError;
+  err.name = "BrokerRpcRequestError";
+  err.code = RPC_AGENT_STABLE_ID_CONFLICT;
+  err.data = {
+    code: "AGENT_STABLE_ID_CONFLICT",
+    stableId: "host:session:/tmp/worker",
+    ownerAgentId: "worker-2",
+    retryable: true,
+  };
+  err.method = "register";
+  return err;
+}
+
+describe("buildPinetReconnectStoppedMessage", () => {
+  it("gives stableId-specific recovery guidance after retry exhaustion", () => {
+    const message = buildPinetReconnectStoppedMessage(createStableIdReconnectError());
+
+    expect(message).toContain("Pinet reconnect stopped after repeated stableId conflicts");
+    expect(message).toContain("Automatic retries were exhausted");
+    expect(message).toContain("Stop or disconnect the other worker");
+    expect(message).toContain("/pinet-follow");
+    expect(message).not.toContain("agentName/agentEmoji");
+    expect(message).not.toContain("PI_NICKNAME");
+  });
+
+  it("keeps name/emoji guidance for other terminal reconnect errors", () => {
+    const message = buildPinetReconnectStoppedMessage(
+      new Error(
+        'Agent name "Reserved Crane" is already reserved. Retry with a different name or leave the name empty so the broker can assign one.',
+      ),
+    );
+
+    expect(message).toContain("Pinet reconnect stopped");
+    expect(message).toContain("slack-bridge.agentName/agentEmoji");
+    expect(message).toContain("PI_NICKNAME");
+    expect(message).toContain("/pinet-follow");
+  });
+});
 
 describe("slack-bridge top-level shutdown", () => {
   const originalBotToken = process.env.SLACK_BOT_TOKEN;

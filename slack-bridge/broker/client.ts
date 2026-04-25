@@ -2,7 +2,11 @@ import * as net from "node:net";
 import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
-import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
+import {
+  RPC_AGENT_NAME_CONFLICT,
+  RPC_AGENT_STABLE_ID_CONFLICT,
+  RPC_METHOD_NOT_FOUND,
+} from "./types.js";
 import type { ClientAgentInfo } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -62,6 +66,7 @@ export const RECONNECT_DELAY_MS = 3000;
 export const INITIAL_RECONNECT_DELAY_MS = 1000;
 export const MAX_RECONNECT_DELAY_MS = 30000;
 export const HEARTBEAT_INTERVAL_MS = 5000;
+export const MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS = 3;
 
 /** Compute reconnect delay with exponential backoff and jitter. */
 export function computeReconnectDelay(attempt: number, random = Math.random()): number {
@@ -81,7 +86,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-interface BrokerRpcRequestError extends Error {
+export interface BrokerRpcRequestError extends Error {
   code?: number;
   data?: unknown;
   method?: string;
@@ -112,13 +117,17 @@ function isRpcMethodNotFoundError(err: unknown, method: string): boolean {
   return rpcErr.code === RPC_METHOD_NOT_FOUND || err.message === `Unknown method: ${method}`;
 }
 
-function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError {
+function isRpcConflictError(
+  err: unknown,
+  rpcCode: number,
+  dataCode: string,
+): err is BrokerRpcRequestError {
   if (!(err instanceof Error)) {
     return false;
   }
 
   const rpcErr = err as BrokerRpcRequestError;
-  if (rpcErr.code === RPC_AGENT_NAME_CONFLICT) {
+  if (rpcErr.code === rpcCode) {
     return true;
   }
 
@@ -126,7 +135,23 @@ function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError
     return false;
   }
 
-  return (rpcErr.data as { code?: unknown }).code === "AGENT_NAME_CONFLICT";
+  return (rpcErr.data as { code?: unknown }).code === dataCode;
+}
+
+function isRpcAgentNameConflictError(err: unknown): err is BrokerRpcRequestError {
+  return isRpcConflictError(err, RPC_AGENT_NAME_CONFLICT, "AGENT_NAME_CONFLICT");
+}
+
+export function isRpcAgentStableIdConflictError(err: unknown): err is BrokerRpcRequestError {
+  return isRpcConflictError(err, RPC_AGENT_STABLE_ID_CONFLICT, "AGENT_STABLE_ID_CONFLICT");
+}
+
+function isRpcRetryableError(err: BrokerRpcRequestError): boolean {
+  if (typeof err.data !== "object" || err.data == null) {
+    return false;
+  }
+
+  return (err.data as { retryable?: unknown }).retryable === true;
 }
 
 function getMeshAuthCompatibilityError(): Error {
@@ -188,6 +213,7 @@ export class BrokerClient {
   private reconnectHandler: (() => void) | null = null;
   private reconnectFailedHandler: ((error: Error) => void) | null = null;
   private reconnectAttempt = 0;
+  private stableIdConflictAttempt = 0;
   private registrationSnapshot: RegistrationSnapshot | null = null;
   private registeredIdentity: RegistrationResult | null = null;
 
@@ -227,6 +253,7 @@ export class BrokerClient {
 
   async connect(): Promise<void> {
     this.shuttingDown = false;
+    this.stableIdConflictAttempt = 0;
     await this.connectSocket();
     try {
       await this.authenticateIfNeeded();
@@ -251,6 +278,7 @@ export class BrokerClient {
     }
     this.socket = null;
     this.connected = false;
+    this.stableIdConflictAttempt = 0;
   }
 
   async disconnectGracefully(): Promise<void> {
@@ -666,6 +694,7 @@ export class BrokerClient {
     try {
       await this.connectSocket();
     } catch {
+      this.stableIdConflictAttempt = 0;
       this.scheduleReconnect();
       return;
     }
@@ -676,6 +705,7 @@ export class BrokerClient {
         await this.performRegister(this.registrationSnapshot);
       }
       this.reconnectAttempt = 0;
+      this.stableIdConflictAttempt = 0;
       this.reconnectHandler?.();
     } catch (err) {
       // Re-registration failed after the socket connected. Clear the connection
@@ -698,9 +728,31 @@ export class BrokerClient {
       }
       if (isRpcAgentNameConflictError(reconnectError)) {
         this.reconnectAttempt = 0;
+        this.stableIdConflictAttempt = 0;
         this.reconnectFailedHandler?.(reconnectError);
         return;
       }
+
+      if (isRpcAgentStableIdConflictError(reconnectError)) {
+        const retryableStableIdConflict = isRpcRetryableError(reconnectError);
+        this.stableIdConflictAttempt = retryableStableIdConflict
+          ? this.stableIdConflictAttempt + 1
+          : 0;
+        const shouldKeepRetrying =
+          retryableStableIdConflict &&
+          this.stableIdConflictAttempt < MAX_RETRYABLE_STABLE_ID_CONFLICT_ATTEMPTS;
+        if (!shouldKeepRetrying) {
+          this.reconnectAttempt = 0;
+          this.stableIdConflictAttempt = 0;
+          this.reconnectFailedHandler?.(reconnectError);
+          return;
+        }
+
+        this.scheduleReconnect();
+        return;
+      }
+
+      this.stableIdConflictAttempt = 0;
       this.scheduleReconnect();
     }
   }

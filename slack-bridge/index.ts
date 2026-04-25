@@ -18,7 +18,7 @@ import {
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
-import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
+import { DEFAULT_SOCKET_PATH, isRpcAgentStableIdConflictError } from "./broker/client.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { createCommandRegistrationRuntime } from "./command-registration-runtime.js";
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
@@ -1208,10 +1208,7 @@ export default function (pi: ExtensionAPI) {
         /* best effort */
       });
       setExtStatus(ctx, "error");
-      ctx.ui.notify(
-        `Pinet reconnect stopped: ${msg(error)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.`,
-        "error",
-      );
+      ctx.ui.notify(buildPinetReconnectStoppedMessage(error), "error");
     },
     formatError: msg,
     deliveryState: followerDeliveryState,
@@ -1362,6 +1359,14 @@ export default function (pi: ExtensionAPI) {
     await stopPinetRuntime(ctx, { releaseIdentity: true });
     pinetRegistrationGate.reset();
   });
+}
+
+export function buildPinetReconnectStoppedMessage(error: Error): string {
+  if (isRpcAgentStableIdConflictError(error)) {
+    return `Pinet reconnect stopped after repeated stableId conflicts: ${msg(error)} Automatic retries were exhausted because another live worker is still using this session identity. Stop or disconnect the other worker, then run /pinet-follow to retry.`;
+  }
+
+  return `Pinet reconnect stopped: ${msg(error)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.`;
 }
 
 function msg(err: unknown): string {
