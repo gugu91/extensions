@@ -80,16 +80,25 @@ export function normalizeModelId(
   return trimmed.replace(new RegExp(`^${providerPrefix}[:/]`, "i"), "").toLowerCase();
 }
 
-export function isTargetModel(
-  model: ModelLike | undefined,
-  config: { providers: string[]; modelRegex: RegExp; enabled: boolean },
-): boolean {
+type ModelMatchConfig = {
+  providers: string[];
+  providerSet?: ReadonlySet<string>;
+  modelRegex: RegExp;
+  enabled: boolean;
+};
+
+export function isTargetModel(model: ModelLike | undefined, config: ModelMatchConfig): boolean {
   if (!config.enabled || !model?.provider || !model.id) {
     return false;
   }
 
   const provider = model.provider.trim().toLowerCase();
-  if (!config.providers.map((value) => value.toLowerCase()).includes(provider)) {
+  const hasProvider =
+    config.providerSet !== undefined
+      ? config.providerSet.has(provider)
+      : config.providers.some((value) => value.toLowerCase() === provider);
+
+  if (!hasProvider) {
     return false;
   }
 

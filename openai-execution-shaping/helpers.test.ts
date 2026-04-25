@@ -43,6 +43,15 @@ describe("resolveConfig", () => {
     expect(config.debug).toBe(true);
     expect(config.sourcePath).toBe("/tmp/settings.json#openai-execution-shaping");
   });
+
+  it("normalizes provider ids case-insensitively for fast membership checks", () => {
+    const config = resolveConfig({ providers: ["OpenAI", "OpenAI-CODEX"] });
+
+    expect(config.providers).toEqual(["OpenAI", "OpenAI-CODEX"]);
+    expect(config.providerSet.has("openai")).toBe(true);
+    expect(config.providerSet.has("openai-codex")).toBe(true);
+    expect(config.providerSet.has("anthropic")).toBe(false);
+  });
 });
 
 describe("target model matching", () => {
@@ -53,6 +62,26 @@ describe("target model matching", () => {
     expect(
       isTargetModel({ provider: "openai-codex", id: "openai-codex/gpt-5.4" }, enabledConfig),
     ).toBe(true);
+  });
+
+  it("matches providers with mixed-case names when normalized once", () => {
+    const mixedCaseConfig = resolveConfig({ enabled: true, providers: ["OpenAI", "OPENAI-CODEX"] });
+
+    expect(isTargetModel({ provider: "openai", id: "gpt-5-advanced" }, mixedCaseConfig)).toBe(true);
+    expect(isTargetModel({ provider: "OPENAI-CODEX", id: "gpt-5-pro" }, mixedCaseConfig)).toBe(
+      true,
+    );
+  });
+
+  it("falls back to providers list when providerSet is absent (legacy config shape)", () => {
+    const legacyConfig = {
+      enabled: true,
+      providers: ["OpenAI", "Anthropic"],
+      modelRegex: /^gpt-5/i,
+    } as Parameters<typeof isTargetModel>[1];
+
+    expect(isTargetModel({ provider: "openai", id: "gpt-5-legacy" }, legacyConfig)).toBe(true);
+    expect(isTargetModel({ provider: "google", id: "gpt-5-legacy" }, legacyConfig)).toBe(false);
   });
 
   it("does not match non-target providers or models", () => {

@@ -24,6 +24,7 @@ export interface OpenAIExecutionShapingConfig {
 export interface ResolvedOpenAIExecutionShapingConfig {
   enabled: boolean;
   providers: string[];
+  providerSet: ReadonlySet<string>;
   modelRegexSource: string;
   modelRegex: RegExp;
   promptOverlayEnabled: boolean;
@@ -65,15 +66,28 @@ function readSettingsConfig(
   };
 }
 
+function normalizeProviders(rawProviders: string[] | undefined): {
+  providers: string[];
+  providerSet: ReadonlySet<string>;
+} {
+  const providers = Array.isArray(rawProviders)
+    ? rawProviders
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter((value) => value.length > 0)
+    : [...DEFAULT_PROVIDER_IDS];
+
+  const effectiveProviders = providers.length > 0 ? providers : [...DEFAULT_PROVIDER_IDS];
+  return {
+    providers: effectiveProviders,
+    providerSet: new Set(effectiveProviders.map((provider) => provider.toLowerCase())),
+  };
+}
+
 export function resolveConfig(
   raw: OpenAIExecutionShapingConfig | null | undefined,
   sourcePath: string | null = null,
 ): ResolvedOpenAIExecutionShapingConfig {
-  const providers = Array.isArray(raw?.providers)
-    ? raw.providers
-        .map((value) => (typeof value === "string" ? value.trim() : ""))
-        .filter((value) => value.length > 0)
-    : [...DEFAULT_PROVIDER_IDS];
+  const { providers, providerSet } = normalizeProviders(raw?.providers);
 
   const modelRegexSource =
     typeof raw?.modelRegex === "string" && raw.modelRegex.trim().length > 0
@@ -103,7 +117,8 @@ export function resolveConfig(
 
   return {
     enabled: raw?.enabled === true,
-    providers: providers.length > 0 ? providers : [...DEFAULT_PROVIDER_IDS],
+    providers,
+    providerSet,
     modelRegexSource,
     modelRegex,
     promptOverlayEnabled: raw?.promptOverlay?.enabled ?? true,
