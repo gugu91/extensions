@@ -1392,9 +1392,19 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(joined).toContain("REPO-SCOPED DELEGATION");
     expect(joined).toContain("pinet_agents");
     expect(joined).toContain("extensions-repo work");
+    expect(joined).toContain("workers/subagents");
     expect(joined).toContain("never borrow idle workers from another repo");
     expect(joined).toContain("REPO-SCOPED BROADCASTS");
     expect(joined).toContain("do not use `#all`");
+  });
+
+  it("keeps broker triage minimal before connected workers own investigation", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("DELEGATE, THEN TRACK");
+    expect(joined).toContain("Do not perform task triage yourself");
+    expect(joined).toContain("Connected workers/subagents own codebase investigation");
+    expect(joined).not.toContain("TRIAGE, THEN DELEGATE");
   });
 });
 
