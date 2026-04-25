@@ -1956,6 +1956,26 @@ describe("slack-bridge top-level shutdown", () => {
     };
     socket.emitEvent("message", {
       data: JSON.stringify({
+        envelope_id: "env-0",
+        type: "events_api",
+        payload: {
+          event: {
+            type: "assistant_thread_started",
+            assistant_thread: {
+              channel_id: "D123",
+              thread_ts: "100.1",
+              user_id: "U_SENDER",
+              context: {
+                channel_id: "D123",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    socket.emitEvent("message", {
+      data: JSON.stringify({
         envelope_id: "env-1",
         type: "events_api",
         payload: {
@@ -1972,7 +1992,9 @@ describe("slack-bridge top-level shutdown", () => {
     });
 
     await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith("https://slack.com/api/users.info", expect.any(Object));
+      expect(
+        fetchSpy.mock.calls.some(([input]) => String(input).includes("conversations.replies")),
+      ).toBe(true);
     });
     expect(sendUserMessage).not.toHaveBeenCalled();
 
@@ -2095,6 +2117,26 @@ describe("slack-bridge top-level shutdown", () => {
     };
     socket.emitEvent("message", {
       data: JSON.stringify({
+        envelope_id: "env-0",
+        type: "events_api",
+        payload: {
+          event: {
+            type: "assistant_thread_started",
+            assistant_thread: {
+              channel_id: "D123",
+              thread_ts: "100.1",
+              user_id: "U_SENDER",
+              context: {
+                channel_id: "D123",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    socket.emitEvent("message", {
+      data: JSON.stringify({
         envelope_id: "env-1",
         type: "events_api",
         payload: {
@@ -2111,7 +2153,9 @@ describe("slack-bridge top-level shutdown", () => {
     });
 
     await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith("https://slack.com/api/users.info", expect.any(Object));
+      expect(
+        fetchSpy.mock.calls.some(([input]) => String(input).includes("conversations.replies")),
+      ).toBe(true);
     });
 
     socket.emitEvent("message", {

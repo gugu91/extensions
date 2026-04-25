@@ -213,7 +213,7 @@ export function buildSlackThreadScope(
     workspace: buildSlackWorkspaceScope({
       source,
       workspaceId: liveWorkspaceId ?? workspace?.workspaceId,
-      installId: source === "explicit" ? workspace?.installId : undefined,
+      installId: workspace?.installId,
       channelId: normalizeOptionalSetting(options.channelId) ?? workspace?.channelId,
       compatibilityKey:
         source === "compatibility"

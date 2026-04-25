@@ -280,6 +280,7 @@ describe("extractThreadStarted", () => {
         provider: "slack",
         source: "compatibility",
         compatibilityKey: "default",
+        installId: "primary",
         workspaceId: "T_SECONDARY",
         channelId: "C789",
       },
