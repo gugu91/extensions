@@ -23,7 +23,7 @@ imessage-bridge -> thin macOS/iMessage send-first adapter scaffold
 
 The largest problem is not that there is no seam. The problem is that the seam is currently too shallow and still Slack-shaped in the places that matter most.
 
-The recommended target remains the shape proposed in `plans/slack-split-proposal.md`:
+The earlier `plans/slack-split-proposal.md` got the lower-layer direction right, but this audit supersedes its compatibility-first assumption that Slack remains the durable extension entrypoint. The updated target is:
 
 ```text
 pi session / future daemon
@@ -95,6 +95,8 @@ This also changes the settings recommendation:
 ```
 
 The current `slack-bridge.*` namespace should not be protected as a long-term compatibility boundary. It can be replaced outright in the substantial refactor.
+Pinet should own the top-level settings namespace and runtime composition, but adapter packages should own provider-specific config schemas and validation. In practice: `pinet.transports.slack` stores Slack install config, while `slack-bridge` exports the Slack adapter factory and validates Slack-specific token/manifest fields. That prevents Pinet core from learning Slack API details while still giving operators one coherent config surface.
+
 
 ## Scope and method
 
@@ -112,7 +114,7 @@ No runtime implementation changes were made in this audit. This file is intentio
 
 ## Current package topology
 
-Current workspace packages relevant to Pinet:
+Current workspace packages relevant to Pinet and adjacent extension boundaries:
 
 | Package | Current role | Current state |
 | --- | --- | --- |
@@ -121,6 +123,11 @@ Current workspace packages relevant to Pinet:
 | `pinet-core` | Intended Pinet runtime package | Scaffold only; `index.ts` is effectively empty |
 | `slack-bridge` | Slack adapter + current full Pinet runtime | Real composition root; 148 TS files, 70 tests, ~52k LOC |
 | `imessage-bridge` | macOS/iMessage send-first adapter | Real scaffold/adapter; 6 files, 2 tests, ~514 LOC |
+| `slack-api` | Separate Slack Web API client/CLI package | Adjacent; currently distinct from `slack-bridge/slack-api.ts`, which creates naming/ownership confusion to resolve later |
+| `browser-playwright` | Browser automation extension | Orthogonal, but useful precedent for truthful capability reporting (#557) |
+| `nvim-bridge` | Neovim/PiComms extension | Orthogonal to transport split |
+| `neon-psql` | Neon Postgres extension | Orthogonal, except for general security-boundary lessons (#560) |
+| `openai-execution-shaping` | Model/execution-shaping extension | Orthogonal |
 
 Current package dependency direction is mostly good:
 
@@ -299,6 +306,14 @@ pinet-core/thread-ownership.ts
 pinet-core/runtime-settings.ts
 ```
 
+
+Assign the high-traffic imports from `broker-runtime.ts` explicitly during this split:
+
+- `SlackBridgeSettings` -> `PinetRuntimeSettings` plus `SlackAdapterSettings`;
+- `resolvePinetMeshAuth` -> `pinet-core/mesh-auth.ts`;
+- `buildPinetOwnerToken`, skin helpers, and `DEFAULT_PINET_SKIN_THEME` -> `pinet-core/identity.ts` / `pinet-core/skin.ts`;
+- `syncBrokerInboxEntries` -> `pinet-core/inbox-sync.ts`.
+
 ### 6. Pinet tools are core-ish but policy and Pi SDK are adapter-owned
 
 `slack-bridge/pinet-tools.ts` currently registers four hot Pinet tools:
@@ -407,6 +422,8 @@ Owns the Pi-facing runtime composition root:
 - remains transport-neutral except for adapter registration glue.
 
 This package/export should become the thing users enable when they want Pinet. Slack should plug into it rather than owning it.
+This audit chooses the simplest first implementation mechanism: the first-class Pinet composition package depends on first-party adapter packages and instantiates configured adapters from `pinet.transports.*` settings. Adapter packages should export adapter factories plus config schemas/loaders; Pinet owns runtime composition, while adapters own provider-specific validation and API behavior. Avoid a shared global extension registry in the first cut because load order, duplicate runtime ownership, and failure modes would recreate split-brain risk. A later plugin manifest can generalize beyond first-party adapters once the core boundary is proven.
+
 
 #### `slack-bridge`
 
@@ -481,6 +498,20 @@ interface MessageRef {
 }
 ```
 
+Add explicit dedupe/idempotency fields to the eventual envelope types, not just the references:
+
+```ts
+interface TransportMessageKeys {
+  providerMessageId?: string;
+  inboundDedupeKey?: string;
+  outboundIdempotencyKey?: string;
+  retryOf?: MessageRef;
+}
+```
+
+These keys matter for #594's durable event log, Slack Socket Mode redelivery, future cloud webhooks, and any retrying outbound transport.
+
+
 Use these in core logic instead of naked `threadId` + `channel`. Since the project is pre-release, prefer updating schema/runtime together over preserving ambiguous aliases.
 
 ### Actor and principal model
@@ -495,9 +526,12 @@ interface ActorRef {
 }
 
 interface PrincipalRef {
-  kind: "slack-user" | "pinet-agent" | "operator" | "system";
+  kind: "transport-actor" | "pinet-agent" | "operator" | "system";
   id: string;
-  scopes: RuntimeScopeCarrier[];
+  actor?: ActorRef;
+  install?: TransportInstallRef;
+  instance?: PinetInstanceRef;
+  scopes?: RuntimeScopeCarrier[]; // migration/projection helper, not the long-term auth primitive
 }
 ```
 
@@ -565,7 +599,7 @@ interface TransportAdapterV2 {
 }
 ```
 
-`callNative` should be optional and policy-gated. It replaces `slack.proxy`; do not keep Slack-named RPC in broker-core.
+`callNative` should be optional, off by default, unavailable to remote/non-local clients unless explicitly authorized, and policy-gated per provider/action. Prefer a typed native-action registry with advertised capabilities over arbitrary method strings. Every native call should produce an audit entry. This replaces `slack.proxy`; do not keep Slack-named RPC in broker-core or recreate it as an unrestricted provider-neutral bypass.
 
 ## Broker DB and persistence audit
 
@@ -605,7 +639,9 @@ conversation_links     continuations and cross-transport references
 context_summaries      optional later summarization artifacts
 ```
 
-This gives agents compact pointers and explicit reads without stuffing every thread into every prompt.
+This gives agents compact pointers and explicit reads without stuffing every thread into every prompt. Do not start this schema ahead of the Phase 2 address contracts; otherwise #594 will entrench the old `threadId`/`channel` shape that the refactor is trying to retire.
+
+This durable event log is also the right home for #538. Messages from unauthorized Slack users should be stored as contextual events with actor metadata, but they must not become executable commands unless an authorized principal re-engages and policy explicitly permits the action. That framing preserves team context without weakening the command boundary.
 
 ## Tool and agent-DX audit
 
@@ -699,7 +735,7 @@ Open PRs at audit time:
 Recommended order:
 
 1. Land or explicitly close #599, #600, #598 if review confirms narrowness.
-2. Rebase/salvage #580 because thread continuation affects durable conversation identity.
+2. Rebase/salvage #580 because thread continuation affects durable conversation identity, but avoid landing it in a way that entrenches the old `threads.source`/`threads.channel` schema if Phase 2 address contracts are imminent.
 3. Restack or close #567/#568/#570 around the clean-slate Pinet-owned topology; do not treat the existing Slack-owner stack as the foundation by default.
 4. Treat #601 as a product/tool-surface decision: either bless `pinet_read` as hot or move toward a dispatcher/unified read action.
 
@@ -820,9 +856,9 @@ Required cleanup rules:
 Suggested per-PR hygiene checks:
 
 ```bash
-rg "autoConnect|autoFollow|slack\.proxy|source = \"slack\"|source \?\? \"slack\""
-rg "from \"\.\/broker\/(agent-messaging|auth|leader|maintenance|message-send|paths|raw-tcp-loopback|router|types)"
-rg "TODO|compatibility|legacy|deprecated" <touched packages>
+rg -g '!**/*.test.ts' "autoConnect|autoFollow|slack\.proxy|source = \"slack\"|source \?\? \"slack\""
+rg -g '!**/*.test.ts' "from \"\.\/broker\/(agent-messaging|auth|leader|maintenance|message-send|paths|raw-tcp-loopback|router|types)"
+rg -g '!**/*.test.ts' "TODO|compatibility|legacy|deprecated" <touched packages>
 ```
 
 These checks should not be treated as a substitute for tests, but they make accidental compatibility residue visible during review.
@@ -935,6 +971,8 @@ Deliverables:
 - route outbound iMessage via generic Pinet send/message primitive;
 - advertise capabilities truthfully.
 
+Phase 6 should still ship iMessage as send-first. Reading from Messages history/SQLite is a separate later track with its own macOS permission and privacy design (#464).
+
 ### Phase 7 — durable read/context sync
 
 Deliver #594 after the address/content model is ready:
@@ -954,6 +992,8 @@ Only after package boundaries are real:
 - worker/follower sessions connect to daemon-owned broker;
 - observability and health contracts are first-class.
 
+Re-read `plans/420-broker-daemon-prd.md` against this Pinet-owned topology before daemon implementation starts. That PRD currently assumes a migration path from the Slack-owned extension world; the process model remains useful, but the composition owner changes.
+
 ## File destination map
 
 ### Stay in `slack-bridge`
@@ -972,6 +1012,22 @@ Only after package boundaries are real:
 - `broker/socket-server.ts`
 - `broker/index.ts`
 - remaining non-Slack broker protocol types if not already there
+
+### Delete pure `slack-bridge/broker/*` shims
+
+These are pure re-export shims and should disappear once imports are rewritten:
+
+- `broker/agent-messaging.ts`
+- `broker/auth.ts`
+- `broker/leader.ts`
+- `broker/maintenance.ts`
+- `broker/message-send.ts`
+- `broker/paths.ts`
+- `broker/raw-tcp-loopback.ts`
+- `broker/router.ts`
+- `broker/types.ts`
+
+Do **not** treat `broker/schema.ts` as part of that mechanical deletion set. It is not a pure shim today; it extends the core broker DB with Ralph-cycle behavior and needs a real destination decision, likely Pinet core.
 
 ### Move to `pinet-core` after ports are extracted
 
@@ -1054,6 +1110,8 @@ Use package filters only for inner-loop checks.
 | Security assumptions leak into cloud | High | Critical | Block cloud/multi-host on #322/#324/#325 |
 | Durable context log becomes semantic-memory project | Medium | Medium | Start with raw event log + cursors only |
 | Tool-surface churn confuses agents | Medium | Medium | Keep four Pinet tools unless #601 is explicitly accepted |
+| Doc-on-doc drift misleads implementers | High | Medium | Mark superseded plans explicitly and keep one current architecture truth |
+| Ports become Slack-shaped god interfaces | Medium | High | Keep ports narrow and require non-Slack fake tests before Slack implementations land |
 
 ## Non-goals for the first refactor wave
 
@@ -1067,9 +1125,9 @@ Use package filters only for inner-loop checks.
 - no multi-host raw TCP enablement;
 - no collapse of Slack and Pinet tools into one universal tool unless separately designed.
 
-## Clean-slate first PR blueprint
+## Phase 0.5 clean-slate first PR blueprint
 
-Given the pre-release/no-backward-compatibility stance, the first implementation PR should set the new house foundation explicitly rather than quietly preparing `slack-bridge` internals.
+Given the pre-release/no-backward-compatibility stance, the first implementation PR should set the new house foundation explicitly rather than quietly preparing `slack-bridge` internals. This should be a structural seed, not a big-bang runtime migration: define enough transport/config contracts to make ownership clear, wire fake/test adapters first, and move behavior only where the new boundary has tests.
 
 Recommended first PR scope:
 
@@ -1080,7 +1138,7 @@ Recommended first PR scope:
 2. turn `slack-bridge/tool-registration-runtime.ts` into Slack-only registration or delete it during extraction;
 3. move iMessage registration out of Slack-owned runtime entirely;
 4. introduce `TransportRegistry` and register Slack/iMessage adapters through it;
-5. make `broker-runtime.ts` accept adapter factories/instances via a port, even if the implementation still lives in `slack-bridge` for one PR;
+5. add the `broker-runtime.ts` adapter-factory port and test it with non-Slack fakes, even if the implementation still lives in `slack-bridge` for one PR;
 6. delete `autoConnect`/`autoFollow` and Slack-default source fallbacks in the same wave if tests are updated;
 7. update README/plans so the public mental model is “install/enable Pinet, configure transports,” not “install Slack bridge and get Pinet as a side effect.”
 

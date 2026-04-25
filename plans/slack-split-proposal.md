@@ -1,5 +1,8 @@
 # Proposal: split `slack-bridge` into Pinet core + Slack adapter
 
+> Superseded note (2026-04-25): this compatibility-first split proposal is superseded by `plans/pinet-transport-agnostic-refactor-audit.md` for implementation sequencing. The newer audit keeps the lower-layer direction but changes the pre-release target so Pinet, not Slack, owns the runtime composition surface.
+
+
 - Follow-up to #264
 - Related: #531, #349, #350, #351, #352, #353, #401, #442, #444, #448, #420
 - Status: planning only — no runtime move in this PR
