@@ -1375,6 +1375,37 @@ describe("buildBrokerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("NEVER do the work yourself");
   });
+
+  it("requires maintainer-prioritized issues before routing extension changes", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("PRIORITIZED ISSUE GATE");
+    expect(joined).toContain("maintainer priority/approval");
+    expect(joined).toContain("Do not self-start from open issue lists");
+    expect(joined).toContain("stop and ask");
+    expect(joined).not.toContain("@gugu91");
+  });
+
+  it("keeps broker delegation and broadcasts scoped to the target repo", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("REPO-SCOPED DELEGATION");
+    expect(joined).toContain("pinet_agents");
+    expect(joined).toContain("extensions-repo work");
+    expect(joined).toContain("workers/subagents");
+    expect(joined).toContain("never borrow idle workers from another repo");
+    expect(joined).toContain("REPO-SCOPED BROADCASTS");
+    expect(joined).toContain("do not use `#all`");
+  });
+
+  it("keeps broker triage minimal before connected workers own investigation", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("DELEGATE, THEN TRACK");
+    expect(joined).toContain("Do not perform task triage yourself");
+    expect(joined).toContain("Connected workers/subagents own codebase investigation");
+    expect(joined).not.toContain("TRIAGE, THEN DELEGATE");
+  });
 });
 
 // ─── buildIdentityReplyGuidelines ─────────────────────────────
@@ -1400,6 +1431,16 @@ describe("buildWorkerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("ACKs, blockers, status updates, and final results");
     expect(joined).toContain("ack/work/ask/report");
+  });
+
+  it("mirrors repo-scoped and prioritized-issue delegation rules for workers", () => {
+    const guidelines = buildWorkerPromptGuidelines();
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("pinet_agents` with the target repo");
+    expect(joined).toContain("same repo/worktree");
+    expect(joined).toContain("maintainer priority/approval");
+    expect(joined).toContain("maintainer approval");
+    expect(joined).not.toContain("@gugu91");
   });
 
   it("tells workers to explicitly mark themselves idle/free when work is done", () => {

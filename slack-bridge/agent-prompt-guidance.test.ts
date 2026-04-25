@@ -67,8 +67,8 @@ describe("createAgentPromptGuidance", () => {
     const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
 
     expect(result.systemPrompt).toContain("You are 🦩 Cobalt Olive Crane, the Pinet BROKER.");
-    expect(result.systemPrompt).toContain("TRIAGE, THEN DELEGATE:");
-    expect(result.systemPrompt).toContain("Delegate before any deep repo/source inspection.");
+    expect(result.systemPrompt).toContain("DELEGATE, THEN TRACK:");
+    expect(result.systemPrompt).toContain("Do not perform task triage yourself");
     expect(result.systemPrompt).toContain("DEEP INSPECTION BELONGS TO WORKERS:");
     expect(result.systemPrompt).toContain("🚫 BROKER TOOL RESTRICTION:");
     expect(result.systemPrompt).not.toContain("TASK WORKFLOW:");

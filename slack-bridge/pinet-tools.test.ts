@@ -8,6 +8,8 @@ import {
 
 type ToolDefinition = {
   name: string;
+  promptSnippet?: string;
+  parameters?: unknown;
   execute: (id: string, params: Record<string, unknown>) => Promise<unknown>;
 };
 
@@ -78,6 +80,16 @@ describe("registerPinetTools", () => {
       "pinet_schedule",
       "pinet_agents",
     ]);
+  });
+
+  it("guides repo-scoped broadcasts away from #all", () => {
+    const tools = registerWithDeps(createDeps());
+    const pinetMessage = tools.get("pinet_message");
+
+    expect(pinetMessage?.promptSnippet).toContain("repo-scoped channels");
+    expect(pinetMessage?.promptSnippet).toContain("#extensions");
+    expect(pinetMessage?.promptSnippet).toContain("do not use #all");
+    expect(JSON.stringify(pinetMessage?.parameters)).toContain("Avoid #all");
   });
 
   it("uses the broker broadcast path for broadcast pinet_message targets", async () => {
