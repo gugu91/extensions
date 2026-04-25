@@ -802,6 +802,31 @@ This audit enumerated all 47 open issues. The main body focuses on issues that d
 | #275 disconnected-agent purge grace | Runtime reliability | Fold into Pinet-core liveness/reaping policy. |
 | #264 split Slack bridge god file | Structural | Superseded by stronger clean-slate Pinet-owned package split, but still directionally aligned. |
 
+## Cleanup discipline during the refactor
+
+The clean-slate stance only works if the refactor actively removes old paths as it creates new ones. Each implementation slice should therefore include a cleanup checklist, not just new abstractions.
+
+Required cleanup rules:
+
+1. **No duplicate owner modules** — when a responsibility moves to `transport-core`, `broker-core`, `pinet-core`, or `pinet-extension`, delete or shrink the old Slack-owned implementation in the same PR unless a short-lived transition wrapper is explicitly documented.
+2. **No permanent compatibility shims** — temporary wrappers must have a named deletion issue/phase and should be avoided entirely where the code is not published or user-facing.
+3. **No dead settings** — remove `autoConnect`, `autoFollow`, Slack-default runtime settings, and unused `slack-bridge.*` Pinet settings as the new `pinet.*` config lands.
+4. **No stale tests** — move tests with code, delete tests for removed behavior, and add regression tests for new ownership boundaries.
+5. **No unused exports** — every package boundary change should include an import/export scan and removal of orphaned exports.
+6. **No duplicated prompts/tool guidance** — keep durable Pinet role guidance in Pinet-owned prompt modules and adapter-specific guidance in adapter packages; do not copy the same instruction into tools, prompts, README, and helper strings.
+7. **No split-brain runtime paths** — after Pinet owns runtime composition, Slack should not retain a second broker/follower startup path except single-player Slack mode if deliberately kept.
+8. **Delete before daemonizing** — do not start daemon work while stale in-extension broker ownership paths still exist.
+
+Suggested per-PR hygiene checks:
+
+```bash
+rg "autoConnect|autoFollow|slack\.proxy|source = \"slack\"|source \?\? \"slack\""
+rg "from \"\.\/broker\/(agent-messaging|auth|leader|maintenance|message-send|paths|raw-tcp-loopback|router|types)"
+rg "TODO|compatibility|legacy|deprecated" <touched packages>
+```
+
+These checks should not be treated as a substitute for tests, but they make accidental compatibility residue visible during review.
+
 ## Recommended migration plan
 
 ### Phase 0 — settle runway and write contracts
