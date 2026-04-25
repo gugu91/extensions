@@ -151,9 +151,9 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `appToken`                     | **yes**  | App-Level Token for Socket Mode (`xapp-...`)                                                                       |
 | `allowedUsers`                 | no       | Slack user IDs that can interact; when unset, access is denied unless `allowAllWorkspaceUsers` is true             |
 | `allowAllWorkspaceUsers`       | no       | Explicit opt-in for workspace-wide Slack access when you do not want a user allowlist                              |
-| `defaultChannel`               | no       | Default channel for `slack_post_channel` in legacy single-install compatibility mode                                   |
+| `defaultChannel`               | no       | Default channel for `slack_post_channel` in legacy single-install compatibility mode                               |
 | `logChannel`                   | no       | Channel for broker activity logs in legacy single-install compatibility mode                                       |
-| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                                 |
+| `logLevel`                     | no       | `"errors"`, `"actions"` (default), or `"verbose"`                                                                  |
 | `defaultInstallId`             | no       | When `installs` is configured, selects which install projects into today’s singleton runtime                       |
 | `installs`                     | no       | Explicit Slack install/workspace topology entries; each install can carry scoped tokens and surface targets        |
 | `runtimeMode`                  | no       | Explicit startup mode: `"off"`, `"single"`, `"broker"`, or `"follower"`                                            |
