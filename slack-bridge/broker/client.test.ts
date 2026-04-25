@@ -533,6 +533,80 @@ describe("BrokerClient — pollInbox", () => {
   });
 });
 
+describe("BrokerClient — readInbox", () => {
+  let mock: MockServer;
+
+  beforeEach(async () => {
+    mock = await createMockServer();
+  });
+
+  afterEach(async () => {
+    await mock.close();
+  });
+
+  it("sends inbox.read and normalizes durable read rows", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const readPromise = client.readInbox({ threadId: "a2a:broker:worker", limit: 5 });
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { threadId: string; limit: number };
+    };
+    expect(req.method).toBe("inbox.read");
+    expect(req.params).toEqual({ threadId: "a2a:broker:worker", limit: 5 });
+
+    mock.respondTo(mock.connections[0], req.id, {
+      messages: [
+        {
+          entry: { id: 31, delivered: true, readAt: "2026-04-25T12:00:00.000Z" },
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent",
+            direction: "inbound",
+            sender: "broker",
+            body: "please inspect #594",
+            metadata: { a2a: true },
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 2,
+      unreadCountAfter: 1,
+      unreadThreads: [],
+      markedReadIds: [31],
+    });
+
+    const result = await readPromise;
+    expect(result.messages).toEqual([
+      {
+        inboxId: 31,
+        delivered: true,
+        readAt: "2026-04-25T12:00:00.000Z",
+        message: {
+          id: 44,
+          threadId: "a2a:broker:worker",
+          source: "agent",
+          direction: "inbound",
+          sender: "broker",
+          body: "please inspect #594",
+          metadata: { a2a: true },
+          createdAt: "2026-04-25T11:59:00.000Z",
+        },
+      },
+    ]);
+    expect(result.unreadCountBefore).toBe(2);
+    expect(result.unreadCountAfter).toBe(1);
+    expect(result.markedReadIds).toEqual([31]);
+
+    client.disconnect();
+  });
+});
+
 describe("BrokerClient — ackMessages", () => {
   let mock: MockServer;
 

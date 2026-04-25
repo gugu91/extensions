@@ -46,7 +46,32 @@ export interface InboxEntry {
   agentId: string;
   messageId: number;
   delivered: boolean;
+  readAt: string | null;
   createdAt: string;
+}
+
+export interface InboxReadOptions {
+  threadId?: string;
+  limit?: number;
+  unreadOnly?: boolean;
+  markRead?: boolean;
+}
+
+export interface InboxThreadUnreadSummary {
+  threadId: string;
+  source: string;
+  channel: string;
+  unreadCount: number;
+  latestMessageId: number;
+  latestAt: string;
+}
+
+export interface InboxReadResult {
+  messages: Array<{ entry: InboxEntry; message: BrokerMessage }>;
+  unreadCountBefore: number;
+  unreadCountAfter: number;
+  unreadThreads: InboxThreadUnreadSummary[];
+  markedReadIds: number[];
 }
 
 export interface ChannelAssignment {

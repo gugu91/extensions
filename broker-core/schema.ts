@@ -7,6 +7,9 @@ import type {
   ThreadInfo,
   BrokerMessage,
   InboxEntry,
+  InboxReadOptions,
+  InboxReadResult,
+  InboxThreadUnreadSummary,
   BacklogEntry,
   BrokerDBInterface,
   InboundMessage,
@@ -197,7 +200,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 11;
+export const CURRENT_BROKER_SCHEMA_VERSION = 12;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -265,6 +268,7 @@ function createCoreTables(db: DatabaseSync): void {
       agent_id TEXT NOT NULL,
       message_id INTEGER NOT NULL,
       delivered INTEGER NOT NULL DEFAULT 0,
+      read_at TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -272,6 +276,8 @@ function createCoreTables(db: DatabaseSync): void {
       ON messages(thread_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_agent_delivered
       ON inbox(agent_id, delivered, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
+      ON inbox(agent_id, read_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_message
       ON inbox(message_id);
   `);
@@ -364,6 +370,15 @@ function addObservabilityColumns(db: DatabaseSync): void {
 function addThreadOwnershipBindingColumn(db: DatabaseSync): void {
   createCoreTables(db);
   ensureColumn(db, "threads", "owner_binding", "ALTER TABLE threads ADD COLUMN owner_binding TEXT");
+}
+
+function addInboxReadCursorColumn(db: DatabaseSync): void {
+  createCoreTables(db);
+  ensureColumn(db, "inbox", "read_at", "ALTER TABLE inbox ADD COLUMN read_at TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
+      ON inbox(agent_id, read_at, created_at);
+  `);
 }
 
 function addBacklogAffinityColumns(db: DatabaseSync): void {
@@ -541,6 +556,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 11:
           addThreadOwnershipBindingColumn(db);
+          break;
+        case 12:
+          addInboxReadCursorColumn(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -1814,7 +1832,7 @@ export class BrokerDB implements BrokerDBInterface {
       .prepare(
         `SELECT
            i.id AS i_id, i.agent_id AS i_agent_id, i.message_id AS i_message_id,
-           i.delivered AS i_delivered, i.created_at AS i_created_at,
+           i.delivered AS i_delivered, i.read_at AS i_read_at, i.created_at AS i_created_at,
            m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
            m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
            m.metadata AS m_metadata, m.created_at AS m_created_at
@@ -1829,6 +1847,7 @@ export class BrokerDB implements BrokerDBInterface {
       i_agent_id: string;
       i_message_id: number;
       i_delivered: number;
+      i_read_at: string | null;
       i_created_at: string;
       m_id: number;
       m_thread_id: string;
@@ -1846,6 +1865,7 @@ export class BrokerDB implements BrokerDBInterface {
         agentId: r.i_agent_id,
         messageId: r.i_message_id,
         delivered: r.i_delivered === 1,
+        readAt: r.i_read_at,
         createdAt: r.i_created_at,
       },
       message: {
@@ -1859,6 +1879,161 @@ export class BrokerDB implements BrokerDBInterface {
         createdAt: r.m_created_at,
       },
     }));
+  }
+
+  readInbox(agentId: string, options: InboxReadOptions = {}): InboxReadResult {
+    const db = this.getDb();
+    const unreadOnly = options.unreadOnly ?? true;
+    const markRead = options.markRead ?? true;
+    const limit = Math.min(Math.max(Math.trunc(options.limit ?? 20), 1), 100);
+    const threadId = options.threadId?.trim();
+    const unreadCountBefore = this.getUnreadInboxCount(agentId);
+
+    const clauses = ["i.agent_id = ?"];
+    const values: Array<string | number> = [agentId];
+    if (unreadOnly) {
+      clauses.push("i.read_at IS NULL");
+    }
+    if (threadId) {
+      clauses.push("m.thread_id = ?");
+      values.push(threadId);
+    }
+
+    const order = unreadOnly ? "m.created_at ASC, i.id ASC" : "m.created_at DESC, i.id DESC";
+    const rows = db
+      .prepare(
+        `SELECT
+           i.id AS i_id, i.agent_id AS i_agent_id, i.message_id AS i_message_id,
+           i.delivered AS i_delivered, i.read_at AS i_read_at, i.created_at AS i_created_at,
+           m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
+           m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
+           m.metadata AS m_metadata, m.created_at AS m_created_at
+         FROM inbox i
+         JOIN messages m ON m.id = i.message_id
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY ${order}
+         LIMIT ?`,
+      )
+      .all(...values, limit) as unknown as Array<{
+      i_id: number;
+      i_agent_id: string;
+      i_message_id: number;
+      i_delivered: number;
+      i_read_at: string | null;
+      i_created_at: string;
+      m_id: number;
+      m_thread_id: string;
+      m_source: string;
+      m_direction: string;
+      m_sender: string;
+      m_body: string;
+      m_metadata: string | null;
+      m_created_at: string;
+    }>;
+
+    const orderedRows = unreadOnly ? rows : rows.reverse();
+    const messages = orderedRows.map((r) => ({
+      entry: {
+        id: r.i_id,
+        agentId: r.i_agent_id,
+        messageId: r.i_message_id,
+        delivered: r.i_delivered === 1,
+        readAt: r.i_read_at,
+        createdAt: r.i_created_at,
+      },
+      message: {
+        id: r.m_id,
+        threadId: r.m_thread_id,
+        source: r.m_source,
+        direction: r.m_direction as "inbound" | "outbound",
+        sender: r.m_sender,
+        body: r.m_body,
+        metadata: r.m_metadata ? (JSON.parse(r.m_metadata) as Record<string, unknown>) : null,
+        createdAt: r.m_created_at,
+      },
+    }));
+
+    const markedReadIds = messages
+      .filter((item) => item.entry.readAt === null)
+      .map((item) => item.entry.id);
+    if (markRead && markedReadIds.length > 0) {
+      this.markRead(markedReadIds, agentId);
+      const readAt = new Date().toISOString();
+      for (const item of messages) {
+        if (markedReadIds.includes(item.entry.id)) {
+          item.entry.readAt = readAt;
+        }
+      }
+    }
+
+    const unreadCountAfter = this.getUnreadInboxCount(agentId);
+    const unreadThreads = this.getUnreadThreadSummary(agentId);
+    return {
+      messages,
+      unreadCountBefore,
+      unreadCountAfter,
+      unreadThreads,
+      markedReadIds: markRead ? markedReadIds : [],
+    };
+  }
+
+  getUnreadInboxCount(agentId: string): number {
+    const db = this.getDb();
+    const row = db
+      .prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ? AND read_at IS NULL")
+      .get(agentId) as { count?: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  getUnreadThreadSummary(agentId: string, limit = 20): InboxThreadUnreadSummary[] {
+    const db = this.getDb();
+    const clampedLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+    const rows = db
+      .prepare(
+        `SELECT
+           m.thread_id AS thread_id,
+           m.source AS source,
+           COALESCE(t.channel, '') AS channel,
+           COUNT(*) AS unread_count,
+           MAX(m.id) AS latest_message_id,
+           MAX(m.created_at) AS latest_at
+         FROM inbox i
+         JOIN messages m ON m.id = i.message_id
+         LEFT JOIN threads t ON t.thread_id = m.thread_id
+         WHERE i.agent_id = ? AND i.read_at IS NULL
+         GROUP BY m.thread_id, m.source, t.channel
+         ORDER BY latest_at DESC, latest_message_id DESC
+         LIMIT ?`,
+      )
+      .all(agentId, clampedLimit) as unknown as Array<{
+      thread_id: string;
+      source: string;
+      channel: string;
+      unread_count: number;
+      latest_message_id: number;
+      latest_at: string;
+    }>;
+
+    return rows.map((row) => ({
+      threadId: row.thread_id,
+      source: row.source,
+      channel: row.channel,
+      unreadCount: row.unread_count,
+      latestMessageId: row.latest_message_id,
+      latestAt: row.latest_at,
+    }));
+  }
+
+  markRead(inboxIds: number[], agentId: string): void {
+    if (inboxIds.length === 0) return;
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const stmt = db.prepare(
+      "UPDATE inbox SET read_at = COALESCE(read_at, ?) WHERE id = ? AND agent_id = ?",
+    );
+    for (const id of inboxIds) {
+      stmt.run(now, id, agentId);
+    }
   }
 
   getMessagesByIds(messageIds: number[]): BrokerMessage[] {

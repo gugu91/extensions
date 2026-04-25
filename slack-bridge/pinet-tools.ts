@@ -11,6 +11,7 @@ import {
 import { isBroadcastChannelTarget } from "./broker/agent-messaging.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import type { PinetReadOptions, PinetReadResult } from "./broker/client.js";
 import { resolveScheduledWakeupFireAt } from "./scheduled-wakeups.js";
 
 export interface PinetToolsAgentRecord {
@@ -55,6 +56,7 @@ export interface RegisterPinetToolsDeps {
     fireAt: string,
     message: string,
   ) => Promise<{ id: number; fireAt: string }>;
+  readPinetInbox: (options: PinetReadOptions) => Promise<PinetReadResult>;
   listBrokerAgents: () => PinetToolsAgentRecord[];
   listFollowerAgents: (includeGhosts: boolean) => Promise<PinetToolsAgentRecord[]>;
 }
@@ -79,6 +81,39 @@ function buildPinetAgentsHintText(hint: PinetAgentsRoutingHint): string {
   ]
     .filter((item): item is string => Boolean(item))
     .join(" · ")}`;
+}
+
+function formatPinetReadResult(result: PinetReadResult, options: PinetReadOptions): string {
+  const scope = options.threadId ? `thread ${options.threadId}` : "your Pinet inbox";
+  const mode = options.unreadOnly === false ? "latest" : "unread";
+  const lines = [
+    `Pinet read (${mode}) from ${scope}: ${result.messages.length} message${result.messages.length === 1 ? "" : "s"}.`,
+    `Unread before: ${result.unreadCountBefore}; unread after: ${result.unreadCountAfter}.`,
+  ];
+
+  if (result.messages.length > 0) {
+    lines.push("");
+    for (const item of result.messages) {
+      lines.push(
+        `- [${item.message.source}/${item.message.threadId} #${item.message.id}] ${item.message.sender}: ${item.message.body}`,
+      );
+    }
+  }
+
+  if (result.unreadThreads.length > 0) {
+    lines.push("", "Unread thread pointers:");
+    for (const thread of result.unreadThreads.slice(0, 10)) {
+      lines.push(
+        `- ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread; latest #${thread.latestMessageId}`,
+      );
+    }
+  }
+
+  if (result.markedReadIds.length > 0) {
+    lines.push("", `Marked read: ${result.markedReadIds.join(", ")}.`);
+  }
+
+  return lines.join("\n");
 }
 
 export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDeps): void {
@@ -128,6 +163,55 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
           { type: "text", text: `Message sent to ${result.target} (id: ${result.messageId}).` },
         ],
         details: { messageId: result.messageId, target: result.target },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "pinet_read",
+    label: "Pinet Read",
+    description: "Read durable SQLite-backed Pinet inbox context with unread/read semantics.",
+    promptSnippet:
+      "Read bounded Pinet/Slack broker context from the durable SQLite inbox. Use unread counts first, then read a specific thread or latest messages when needed. Reading marks returned unread rows as read by default; use mark_read=false to peek.",
+    parameters: Type.Object({
+      thread_id: Type.Optional(
+        Type.String({ description: "Optional Pinet/Slack broker thread ID to read" }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum messages to return (default 20, max 100)" }),
+      ),
+      unread_only: Type.Optional(
+        Type.Boolean({ description: "Only return unread rows (default true)" }),
+      ),
+      mark_read: Type.Optional(
+        Type.Boolean({ description: "Mark returned unread rows as read (default true)" }),
+      ),
+    }),
+    async execute(_id, params) {
+      deps.requireToolPolicy(
+        "pinet_read",
+        undefined,
+        `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""}`,
+      );
+
+      if (!deps.pinetEnabled()) {
+        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      }
+
+      const options: PinetReadOptions = {
+        ...(typeof params.thread_id === "string" ? { threadId: params.thread_id.trim() } : {}),
+        ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
+        ...(typeof params.unread_only === "boolean" ? { unreadOnly: params.unread_only } : {}),
+        ...(typeof params.mark_read === "boolean" ? { markRead: params.mark_read } : {}),
+      };
+      if (options.threadId !== undefined && options.threadId.length === 0) {
+        throw new Error("thread_id must be a non-empty string when provided.");
+      }
+
+      const result = await deps.readPinetInbox(options);
+      return {
+        content: [{ type: "text", text: formatPinetReadResult(result, options) }],
+        details: result,
       };
     },
   });

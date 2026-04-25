@@ -21,6 +21,37 @@ export interface InboxItem {
   };
 }
 
+export interface PinetReadMessage {
+  inboxId: number;
+  delivered: boolean;
+  readAt: string | null;
+  message: InboxItem["message"];
+}
+
+export interface PinetUnreadThreadSummary {
+  threadId: string;
+  source: string;
+  channel: string;
+  unreadCount: number;
+  latestMessageId: number;
+  latestAt: string;
+}
+
+export interface PinetReadResult {
+  messages: PinetReadMessage[];
+  unreadCountBefore: number;
+  unreadCountAfter: number;
+  unreadThreads: PinetUnreadThreadSummary[];
+  markedReadIds: number[];
+}
+
+export interface PinetReadOptions {
+  threadId?: string;
+  limit?: number;
+  unreadOnly?: boolean;
+  markRead?: boolean;
+}
+
 export interface ThreadInfo {
   threadId: string;
   source: string;
@@ -349,6 +380,37 @@ export class BrokerClient {
   async pollInbox(): Promise<InboxItem[]> {
     const result = (await this.request("inbox.poll")) as InboxItem[];
     return result;
+  }
+
+  async readInbox(options: PinetReadOptions = {}): Promise<PinetReadResult> {
+    const result = (await this.request("inbox.read", {
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
+      ...(typeof options.unreadOnly === "boolean" ? { unreadOnly: options.unreadOnly } : {}),
+      ...(typeof options.markRead === "boolean" ? { markRead: options.markRead } : {}),
+    })) as {
+      messages: Array<{
+        entry: { id: number; delivered: boolean; readAt: string | null };
+        message: InboxItem["message"];
+      }>;
+      unreadCountBefore: number;
+      unreadCountAfter: number;
+      unreadThreads: PinetUnreadThreadSummary[];
+      markedReadIds: number[];
+    };
+
+    return {
+      messages: result.messages.map((item) => ({
+        inboxId: item.entry.id,
+        delivered: item.entry.delivered,
+        readAt: item.entry.readAt,
+        message: item.message,
+      })),
+      unreadCountBefore: result.unreadCountBefore,
+      unreadCountAfter: result.unreadCountAfter,
+      unreadThreads: result.unreadThreads,
+      markedReadIds: result.markedReadIds,
+    };
   }
 
   async ackMessages(ids: number[]): Promise<void> {
