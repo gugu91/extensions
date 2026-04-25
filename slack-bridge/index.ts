@@ -877,6 +877,40 @@ export default function (pi: ExtensionAPI) {
     listFollowerAgents,
   } = pinetMeshOps;
 
+  async function readPinetInbox(options: {
+    threadId?: string;
+    limit?: number;
+    unreadOnly?: boolean;
+    markRead?: boolean;
+  }) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db || !selfId) {
+        throw new Error("Broker agent identity is unavailable.");
+      }
+      const result = db.readInbox(selfId, options);
+      return {
+        messages: result.messages.map((item) => ({
+          inboxId: item.entry.id,
+          delivered: item.entry.delivered,
+          readAt: item.entry.readAt,
+          message: item.message,
+        })),
+        unreadCountBefore: result.unreadCountBefore,
+        unreadCountAfter: result.unreadCountAfter,
+        unreadThreads: result.unreadThreads,
+        markedReadIds: result.markedReadIds,
+      };
+    }
+
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.readInbox(options);
+    }
+
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
   async function transitionToRuntimeMode(
     ctx: ExtensionContext,
     mode: SlackBridgeRuntimeMode,
@@ -1023,6 +1057,7 @@ export default function (pi: ExtensionAPI) {
       signalAgentFree,
       scheduleBrokerWakeup,
       scheduleFollowerWakeup,
+      readPinetInbox,
       listBrokerAgents,
       listFollowerAgents,
     },

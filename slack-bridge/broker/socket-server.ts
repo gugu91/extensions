@@ -476,6 +476,8 @@ export class BrokerSocketServer {
           return this.handleHeartbeat(req, state);
         case "inbox.poll":
           return this.handleInboxPoll(req, state);
+        case "inbox.read":
+          return this.handleInboxRead(req, state);
         case "inbox.ack":
           return this.handleInboxAck(req, state);
         case "send":
@@ -663,6 +665,45 @@ export class BrokerSocketServer {
         inboxId: item.entry.id,
         message: item.message,
       })),
+    );
+  }
+
+  private handleInboxRead(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    this.db.touchAgent(state.agentId);
+
+    const params = req.params ?? {};
+    const threadId = typeof params.threadId === "string" ? params.threadId.trim() : undefined;
+    if (params.threadId !== undefined && !threadId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "threadId must be a non-empty string");
+    }
+
+    const limit = params.limit === undefined ? undefined : params.limit;
+    if (limit !== undefined && (typeof limit !== "number" || !Number.isFinite(limit))) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "limit must be a finite number");
+    }
+
+    const unreadOnly = params.unreadOnly === undefined ? undefined : params.unreadOnly;
+    if (unreadOnly !== undefined && typeof unreadOnly !== "boolean") {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "unreadOnly must be a boolean");
+    }
+
+    const markRead = params.markRead === undefined ? undefined : params.markRead;
+    if (markRead !== undefined && typeof markRead !== "boolean") {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "markRead must be a boolean");
+    }
+
+    return rpcOk(
+      req.id,
+      this.db.readInbox(state.agentId, {
+        ...(threadId ? { threadId } : {}),
+        ...(typeof limit === "number" ? { limit } : {}),
+        ...(typeof unreadOnly === "boolean" ? { unreadOnly } : {}),
+        ...(typeof markRead === "boolean" ? { markRead } : {}),
+      }),
     );
   }
 

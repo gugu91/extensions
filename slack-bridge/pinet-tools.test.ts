@@ -46,6 +46,13 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
     }),
     scheduleBrokerWakeup: async (fireAt: string, _message: string) => ({ id: 7, fireAt }),
     scheduleFollowerWakeup: async (fireAt: string, _message: string) => ({ id: 9, fireAt }),
+    readPinetInbox: async () => ({
+      messages: [],
+      unreadCountBefore: 0,
+      unreadCountAfter: 0,
+      unreadThreads: [],
+      markedReadIds: [],
+    }),
     listBrokerAgents: () => [makeAgent()],
     listFollowerAgents: async (_includeGhosts: boolean) => [makeAgent({ id: "agent-2" })],
   };
@@ -71,11 +78,12 @@ describe("registerPinetTools", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the four generic Pinet tools", () => {
+  it("registers the generic Pinet tools", () => {
     const tools = registerWithDeps(createDeps());
 
     expect([...tools.keys()]).toEqual([
       "pinet_message",
+      "pinet_read",
       "pinet_free",
       "pinet_schedule",
       "pinet_agents",
@@ -118,6 +126,62 @@ describe("registerPinetTools", () => {
       messageIds: [21, 22],
       recipients: ["Worker One", "Worker Two"],
     });
+  });
+
+  it("reads durable Pinet inbox context and marks returned rows read by default", async () => {
+    const readPinetInbox = vi.fn(async () => ({
+      messages: [
+        {
+          inboxId: 31,
+          delivered: true,
+          readAt: "2026-04-25T12:00:00.000Z",
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent",
+            direction: "inbound",
+            sender: "broker",
+            body: "please inspect #594",
+            metadata: { a2a: true },
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 2,
+      unreadCountAfter: 1,
+      unreadThreads: [
+        {
+          threadId: "a2a:broker:worker",
+          source: "agent",
+          channel: "",
+          unreadCount: 1,
+          latestMessageId: 45,
+          latestAt: "2026-04-25T12:01:00.000Z",
+        },
+      ],
+      markedReadIds: [31],
+    }));
+    const deps = createDeps({ readPinetInbox });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet_read")?.execute("tool-call-read", {
+      thread_id: "a2a:broker:worker",
+      limit: 5,
+    })) as {
+      content: Array<{ text: string }>;
+      details: { markedReadIds: number[] };
+    };
+
+    expect(readPinetInbox).toHaveBeenCalledWith({ threadId: "a2a:broker:worker", limit: 5 });
+    expect(result.content[0]?.text).toContain(
+      "Pinet read (unread) from thread a2a:broker:worker: 1 message.",
+    );
+    expect(result.content[0]?.text).toContain("Unread before: 2; unread after: 1.");
+    expect(result.content[0]?.text).toContain(
+      "- [agent/a2a:broker:worker #44] broker: please inspect #594",
+    );
+    expect(result.content[0]?.text).toContain("Marked read: 31.");
+    expect(result.details.markedReadIds).toEqual([31]);
   });
 
   it("formats pinet_free responses with note and queued inbox count", async () => {
