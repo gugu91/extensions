@@ -141,6 +141,7 @@ describe("registerIMessageTools", () => {
         threadId: "imessage:chat:alice",
         channel: "chat:alice",
         text: "hello from pi",
+        content: { text: "hello from pi" },
       }),
     );
     expect(trackOwnedThread).toHaveBeenCalledWith("imessage:chat:alice", "chat:alice", "imessage");
@@ -179,6 +180,7 @@ describe("registerIMessageTools", () => {
       body: "follower hello",
       source: "imessage",
       channel: "+15555550123",
+      content: { text: "follower hello" },
       agentName: "Cobalt Olive Crane",
       agentEmoji: "🦩",
       agentOwnerToken: "owner-token",

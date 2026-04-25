@@ -17,6 +17,7 @@ import type {
   JsonRpcResponse,
   JsonRpcError,
   MessageAdapter,
+  NormalizedMessageContent,
 } from "./types.js";
 import {
   RPC_PARSE_ERROR,
@@ -754,6 +755,39 @@ export class BrokerSocketServer {
     const agentEmoji = typeof params.agentEmoji === "string" ? params.agentEmoji : undefined;
     const agentOwnerToken =
       typeof params.agentOwnerToken === "string" ? params.agentOwnerToken : undefined;
+    const blocks = Array.isArray(params.blocks)
+      ? params.blocks.filter(
+          (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+        )
+      : undefined;
+    let content: NormalizedMessageContent | undefined;
+    if (params.content !== undefined) {
+      if (!params.content || typeof params.content !== "object" || Array.isArray(params.content)) {
+        return rpcError(req.id, RPC_INVALID_PARAMS, "content must be an object");
+      }
+
+      const raw = params.content as Record<string, unknown>;
+      const text = typeof raw.text === "string" ? raw.text.trim() : "";
+      if (!text) {
+        return rpcError(
+          req.id,
+          RPC_INVALID_PARAMS,
+          "content.text is required when content is provided",
+        );
+      }
+
+      const markdown = typeof raw.markdown === "string" ? raw.markdown.trim() : undefined;
+      const slackBlocks = Array.isArray(raw.slackBlocks)
+        ? raw.slackBlocks.filter(
+            (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+          )
+        : undefined;
+      content = {
+        text,
+        ...(markdown ? { markdown } : {}),
+        ...(slackBlocks && slackBlocks.length > 0 ? { slackBlocks } : {}),
+      };
+    }
     const metadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
@@ -774,6 +808,8 @@ export class BrokerSocketServer {
         senderAgentId: state.agentId,
         ...(source ? { source } : {}),
         ...(channel ? { channel } : {}),
+        ...(content ? { content } : {}),
+        ...(blocks && blocks.length > 0 ? { blocks } : {}),
         ...(agentName ? { agentName } : {}),
         ...(agentEmoji ? { agentEmoji } : {}),
         ...(agentOwnerToken ? { agentOwnerToken } : {}),

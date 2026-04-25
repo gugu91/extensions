@@ -1629,6 +1629,98 @@ describe("SlackAdapter — send", () => {
     expect(body.metadata).toBeUndefined();
   });
 
+  it("prefers transport-aware Slack blocks when present", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+    const slackBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Transport-aware*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+    const legacyBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Legacy*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    await adapter.send({
+      threadId: "1.1",
+      channel: "C1",
+      text: "legacy fallback",
+      content: {
+        text: "plain fallback",
+        markdown: "**plain fallback**",
+        slackBlocks,
+      },
+      blocks: legacyBlocks,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.text).toBe("plain fallback");
+    expect(body.blocks).toEqual(slackBlocks);
+  });
+
+  it("falls back to legacy blocks when transport-aware Slack blocks are empty", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+    const legacyBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Legacy fallback*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    await adapter.send({
+      threadId: "1.1",
+      channel: "C1",
+      text: "legacy fallback",
+      content: {
+        text: "plain fallback",
+        slackBlocks: [],
+      },
+      blocks: legacyBlocks,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.blocks).toEqual(legacyBlocks);
+  });
+
+  it("omits an empty blocks payload", async () => {
+    fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    });
+
+    await adapter.send({
+      threadId: "1.1",
+      channel: "C1",
+      text: "fallback",
+      content: {
+        text: "plain fallback",
+        slackBlocks: [],
+      },
+      blocks: [],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.blocks).toBeUndefined();
+  });
+
   it("uses buildSlackRequest for proper encoding", async () => {
     fetchMock.mockResolvedValue(mockSlackResponse({ message: { ts: "1.1" } }));
 

@@ -99,10 +99,18 @@ export interface InboundMessage {
   scope?: RuntimeScopeCarrier;
 }
 
+export interface NormalizedMessageContent {
+  text: string;
+  markdown?: string;
+  slackBlocks?: ReadonlyArray<Record<string, unknown>>;
+}
+
 export interface OutboundMessage {
   threadId: string;
   channel: string;
   text: string;
+  content?: NormalizedMessageContent;
+  blocks?: ReadonlyArray<Record<string, unknown>>;
   agentName?: string;
   agentEmoji?: string;
   agentOwnerToken?: string;

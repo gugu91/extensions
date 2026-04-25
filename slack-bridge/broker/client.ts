@@ -3,7 +3,7 @@ import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
-import type { ClientAgentInfo } from "./types.js";
+import type { ClientAgentInfo, NormalizedMessageContent } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -364,6 +364,8 @@ export class BrokerClient {
     body: string;
     source?: string;
     channel?: string;
+    content?: NormalizedMessageContent;
+    blocks?: ReadonlyArray<Record<string, unknown>>;
     agentName?: string;
     agentEmoji?: string;
     agentOwnerToken?: string;
@@ -380,6 +382,8 @@ export class BrokerClient {
       body: input.body,
       ...(input.source ? { source: input.source } : {}),
       ...(input.channel ? { channel: input.channel } : {}),
+      ...(input.content ? { content: input.content } : {}),
+      ...(input.blocks && input.blocks.length > 0 ? { blocks: input.blocks } : {}),
       ...(input.agentName ? { agentName: input.agentName } : {}),
       ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),
       ...(input.agentOwnerToken ? { agentOwnerToken: input.agentOwnerToken } : {}),
