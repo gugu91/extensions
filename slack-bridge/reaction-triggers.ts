@@ -30,6 +30,9 @@ const REACTION_ALIASES: Record<string, string> = {
   eyes: "eyes",
   "✅": "white_check_mark",
   white_check_mark: "white_check_mark",
+  "⬆": "arrow_up",
+  "⬆️": "arrow_up",
+  arrow_up: "arrow_up",
 };
 
 const REACTION_DISPLAY: Record<string, string> = {
@@ -42,6 +45,7 @@ const REACTION_DISPLAY: Record<string, string> = {
   repeat: "🔄",
   eyes: "👀",
   white_check_mark: "✅",
+  arrow_up: "⬆️",
 };
 
 export const DEFAULT_REACTION_COMMANDS: Record<string, ReactionCommandTemplate> = {
@@ -85,6 +89,11 @@ export const DEFAULT_REACTION_COMMANDS: Record<string, ReactionCommandTemplate> 
     prompt:
       "If the reacted message contains a URL, fetch the linked page and summarize the important information for the user.",
   },
+  arrow_up: {
+    action: "steering",
+    prompt:
+      "Treat the reacted-to message as high-priority steering for the current Slack/Pinet thread. Reprioritize the current or next action around that message, preserve its thread context, and report what changed.",
+  },
 };
 
 function normalizeReactionNameOrNull(input: string): string | null {
@@ -127,6 +136,8 @@ function buildDefaultPromptForAction(action: string): string {
       return DEFAULT_REACTION_COMMANDS.pushpin.prompt;
     case "fetch-url":
       return DEFAULT_REACTION_COMMANDS.globe_with_meridians.prompt;
+    case "steering":
+      return DEFAULT_REACTION_COMMANDS.arrow_up.prompt;
     default:
       return `Carry out the "${action}" action for the reacted Slack message or thread, using the included context before you decide what to do.`;
   }
@@ -170,6 +181,38 @@ export function formatReactionDisplay(reactionName: string): string {
   return `${REACTION_DISPLAY[reactionName] ?? `:${reactionName}:`} (:${reactionName}:)`;
 }
 
+export function isSteeringReaction(
+  reactionName: string,
+  command: ReactionCommandTemplate,
+): boolean {
+  const action = command.action.trim().toLowerCase();
+  return reactionName === "arrow_up" || action === "steering" || action === "steer";
+}
+
+export function buildReactionTriggerMetadata(input: {
+  reactionName: string;
+  command: ReactionCommandTemplate;
+  reactorName: string;
+  channel: string;
+  threadTs: string;
+  messageTs: string;
+  reactedMessageAuthor: string;
+}): Record<string, unknown> {
+  return {
+    kind: "slack_reaction_trigger",
+    slackReaction: input.reactionName,
+    slackReactionAction: input.command.action,
+    deliveryClassification: isSteeringReaction(input.reactionName, input.command)
+      ? "steering"
+      : "follow_up",
+    reactor: input.reactorName,
+    channel: input.channel,
+    threadTs: input.threadTs,
+    messageTs: input.messageTs,
+    reactedMessageAuthor: input.reactedMessageAuthor,
+  };
+}
+
 export interface ReactionTriggerMessageInput {
   reactionName: string;
   command: ReactionCommandTemplate;
@@ -183,10 +226,14 @@ export interface ReactionTriggerMessageInput {
 
 export function buildReactionTriggerMessage(input: ReactionTriggerMessageInput): string {
   const reactedMessageText = input.reactedMessageText.trim() || "(no text)";
+  const deliveryClassification = isSteeringReaction(input.reactionName, input.command)
+    ? "steering"
+    : "follow_up";
   return [
     "Reaction trigger from Slack:",
     `- reaction: ${formatReactionDisplay(input.reactionName)}`,
     `- action: ${input.command.action}`,
+    `- delivery_classification: ${deliveryClassification}`,
     `- reactor: ${input.reactorName}`,
     `- channel: <#${input.channel}>`,
     `- thread_ts: ${input.threadTs}`,
@@ -203,5 +250,6 @@ export function buildReactionPromptGuidelines(): string[] {
   return [
     "Reaction-triggered requests may appear in your Slack inbox as structured 'Reaction trigger from Slack:' messages.",
     "Treat them as explicit user requests keyed off emoji reactions. Use the included action, reacted message text, and thread context to decide what to do.",
+    "An up-arrow reaction (⬆️ / :arrow_up:) marks the referenced message as high-priority steering for the current or next action.",
   ];
 }

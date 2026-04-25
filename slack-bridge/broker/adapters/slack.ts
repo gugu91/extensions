@@ -24,6 +24,7 @@ import {
 } from "../../helpers.js";
 import {
   buildReactionTriggerMessage,
+  buildReactionTriggerMetadata,
   normalizeReactionName,
   resolveReactionCommands,
   type ReactionCommandSettings,
@@ -351,6 +352,15 @@ export class SlackAdapter implements MessageAdapter {
           reactedMessageAuthor,
         }),
         timestamp: (evt.event_ts as string) ?? item.ts,
+        metadata: buildReactionTriggerMetadata({
+          reactionName,
+          command,
+          reactorName,
+          channel: item.channel,
+          threadTs,
+          messageTs: item.ts,
+          reactedMessageAuthor,
+        }),
         scope: buildSlackThreadRuntimeScope({
           channelId: item.channel,
           context: threadInfo?.context,

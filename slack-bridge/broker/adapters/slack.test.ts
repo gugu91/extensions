@@ -1431,7 +1431,16 @@ describe("SlackAdapter — reaction triggers", () => {
     );
     expect(handler.mock.calls[0]?.[0]?.text).toContain("Reaction trigger from Slack:");
     expect(handler.mock.calls[0]?.[0]?.text).toContain("- action: review");
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("- delivery_classification: follow_up");
     expect(handler.mock.calls[0]?.[0]?.text).toContain("Please review PR #210");
+    expect(handler.mock.calls[0]?.[0]?.metadata).toMatchObject({
+      kind: "slack_reaction_trigger",
+      slackReaction: "eyes",
+      slackReactionAction: "review",
+      deliveryClassification: "follow_up",
+      threadTs: "111.222",
+      messageTs: "111.333",
+    });
 
     const reactionCall = fetchMock.mock.calls.find(([url]) =>
       String(url).endsWith("/reactions.add"),
@@ -1442,6 +1451,82 @@ describe("SlackAdapter — reaction triggers", () => {
       channel: "C123",
       timestamp: "111.333",
       name: "white_check_mark",
+    });
+  });
+
+  it("treats arrow-up reaction triggers as steering by default", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/conversations.history")) {
+        return mockSlackResponse({
+          messages: [
+            {
+              ts: "222.333",
+              thread_ts: "222.222",
+              text: "This changes the priority for today",
+              user: "U_TARGET",
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/users.info")) {
+        if (parsedBody.user === "U_REACTOR") {
+          return mockSlackResponse({ user: { real_name: "Alice" } });
+        }
+        if (parsedBody.user === "U_TARGET") {
+          return mockSlackResponse({ user: { real_name: "Bob" } });
+        }
+      }
+
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+    });
+    (adapter as unknown as { botUserId: string | null }).botUserId = "U_BOT";
+
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as { onReactionAdded: (evt: Record<string, unknown>) => Promise<void> }
+    ).onReactionAdded({
+      type: "reaction_added",
+      user: "U_REACTOR",
+      reaction: "arrow_up",
+      item_user: "U_TARGET",
+      item: {
+        type: "message",
+        channel: "C123",
+        ts: "222.333",
+      },
+      event_ts: "999.111",
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("- action: steering");
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("- delivery_classification: steering");
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("This changes the priority for today");
+    expect(handler.mock.calls[0]?.[0]?.metadata).toMatchObject({
+      kind: "slack_reaction_trigger",
+      slackReaction: "arrow_up",
+      slackReactionAction: "steering",
+      deliveryClassification: "steering",
+      threadTs: "222.222",
+      messageTs: "222.333",
     });
   });
 });

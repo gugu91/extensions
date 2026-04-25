@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { agentOwnsThread, type InboxMessage, normalizeOwnedThreads } from "./helpers.js";
 import {
   buildReactionTriggerMessage,
+  buildReactionTriggerMetadata,
   normalizeReactionName,
   type ReactionCommandTemplate,
 } from "./reaction-triggers.js";
@@ -330,6 +331,15 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
         userId: user,
         text: reactionMessage,
         timestamp: (evt.event_ts as string) ?? item.ts,
+        metadata: buildReactionTriggerMetadata({
+          reactionName,
+          command,
+          reactorName,
+          channel: item.channel,
+          threadTs,
+          messageTs: item.ts,
+          reactedMessageAuthor,
+        }),
         scope: buildSlackThreadRuntimeScope({
           channelId: item.channel,
           context: threadInfo?.context,
