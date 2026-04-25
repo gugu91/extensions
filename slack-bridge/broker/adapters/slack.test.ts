@@ -205,6 +205,90 @@ describe("extractThreadStarted", () => {
     const result = extractThreadStarted(evt);
     expect(result?.context).toBeUndefined();
   });
+
+  it("applies explicit default scope for explicit installs when context includes channel", () => {
+    const evt = {
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D123",
+        thread_ts: "111.222",
+        user_id: "U456",
+        context: {
+          channel_id: "C789",
+          team_id: "T_PRIMARY",
+        },
+      },
+    };
+
+    const result = extractThreadStarted(evt, {
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_PRIMARY",
+        installId: "primary",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+
+    expect(result?.context?.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_PRIMARY",
+        installId: "primary",
+        channelId: "C789",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+  });
+
+  it("falls back to compatibility scope when explicit default scope drifts", () => {
+    const evt = {
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D123",
+        thread_ts: "111.222",
+        user_id: "U456",
+        context: {
+          channel_id: "C789",
+          team_id: "T_SECONDARY",
+        },
+      },
+    };
+
+    const result = extractThreadStarted(evt, {
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_PRIMARY",
+        installId: "primary",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+
+    expect(result?.context?.scope).toEqual({
+      workspace: {
+        provider: "slack",
+        source: "compatibility",
+        compatibilityKey: "default",
+        workspaceId: "T_SECONDARY",
+        channelId: "C789",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    });
+  });
 });
 
 describe("extractAppHomeOpened", () => {
@@ -1512,6 +1596,93 @@ describe("SlackAdapter — allowlist filtering", () => {
             workspaceId: "T_PRIMARY",
             installId: "primary",
             channelId: "C_UPDATED",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      }),
+    );
+  });
+
+  it("defaults raw thread-started events to the configured explicit default scope", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+      return mockSlackResponse();
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as {
+        onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "1.21",
+        user_id: "U_ALLOWED",
+      },
+    });
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello from the selected install",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.21",
+      ts: "1.22",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1.21",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "explicit",
+            workspaceId: "T_PRIMARY",
+            installId: "primary",
+            channelId: "D1",
           },
           instance: {
             source: "compatibility",

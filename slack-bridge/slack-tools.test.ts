@@ -229,11 +229,23 @@ describe("registerSlackTools", () => {
       } as SlackResult;
     });
 
+    const defaultScope: RuntimeScopeCarrier = {
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_PRIMARY",
+        installId: "primary",
+      },
+      instance: {
+        source: "compatibility",
+        compatibilityKey: "default",
+      },
+    };
     let resolveThreadChannel: (threadTs: string | undefined) => Promise<string | null> = async () =>
       null;
     let resolveThreadScope: (
       threadTs: string | undefined,
-    ) => Promise<RuntimeScopeCarrier | null> = async () => null;
+    ) => Promise<RuntimeScopeCarrier | null> = async () => defaultScope;
     const noteThreadReply = vi.fn();
     const clearPendingAttention = vi.fn();
     const requireToolPolicy = vi.fn();
@@ -241,18 +253,8 @@ describe("registerSlackTools", () => {
     registerSlackTools(pi, {
       getBotToken: () => botToken,
       getDefaultChannel: () => defaultChannel,
-      getDefaultScope: () => ({
-        workspace: {
-          provider: "slack",
-          source: "explicit",
-          workspaceId: "T_PRIMARY",
-          installId: "primary",
-        },
-        instance: {
-          source: "compatibility",
-          compatibilityKey: "default",
-        },
-      }),
+      getDefaultScope: () => defaultScope,
+
       getSecurityPrompt: () => securityPrompt,
       inbox,
       slack,

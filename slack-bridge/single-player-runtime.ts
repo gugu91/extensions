@@ -202,9 +202,14 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
 
   function getThreadScopeAuthorizationError(threadTs: string): string | null {
     const thread = deps.getThreads().get(threadTs);
+    const expectedScope = deps.getDefaultScope();
     return getSlackScopeAuthorizationError({
-      actualScope: thread?.context?.scope ?? null,
-      expectedScope: deps.getDefaultScope(),
+      actualScope: buildSlackThreadRuntimeScope({
+        channelId: thread?.channelId,
+        context: thread?.context,
+        defaultScope: expectedScope,
+      }),
+      expectedScope,
       target: `thread ${threadTs}`,
     });
   }

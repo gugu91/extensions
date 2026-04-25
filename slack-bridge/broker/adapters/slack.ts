@@ -206,9 +206,15 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   private getThreadScopeAuthorizationError(threadTs: string): string | null {
+    const thread = this.threads.get(threadTs);
+    const defaultScope = this.config.getDefaultScope?.() ?? null;
     return getSlackScopeAuthorizationError({
-      actualScope: this.threads.get(threadTs)?.context?.scope ?? null,
-      expectedScope: this.config.getDefaultScope?.() ?? null,
+      actualScope: buildSlackThreadRuntimeScope({
+        channelId: thread?.channelId,
+        context: thread?.context,
+        defaultScope,
+      }),
+      expectedScope: defaultScope,
       target: `thread ${threadTs}`,
     });
   }
