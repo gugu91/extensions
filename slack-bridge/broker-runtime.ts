@@ -14,7 +14,10 @@ import {
 import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
-import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
+import {
+  DEFAULT_HEARTBEAT_TIMEOUT_MS,
+  type AgentStatusChangeMetadata,
+} from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
 import {
   DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS,
@@ -108,6 +111,7 @@ export interface BrokerRuntimeDeps {
     ctx: ExtensionContext,
     changedAgentId: string,
     status: "working" | "idle",
+    metadata: AgentStatusChangeMetadata,
   ) => void;
   createActivityLogger: (onError: (error: unknown) => void) => SlackActivityLogger;
   formatTrackedAgent: (agentId: string) => string;
@@ -648,11 +652,11 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           if (targetAgentId !== brokerSelfId) return;
           syncBrokerDbInbox(brokerSelfId, broker.db as BrokerDB, ctx);
         });
-        broker.server.onAgentStatusChange((changedAgentId, status) => {
+        broker.server.onAgentStatusChange((changedAgentId, status, metadata) => {
           if (status === "idle") {
             runMaintenance(ctx);
           }
-          deps.onAgentStatusChange(ctx, changedAgentId, status);
+          deps.onAgentStatusChange(ctx, changedAgentId, status, metadata);
         });
 
         startBrokerHeartbeat();

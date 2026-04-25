@@ -8,6 +8,11 @@ import {
 } from "@gugu910/pi-broker-core/schema";
 import type { RalphCycleRecord } from "../helpers.js";
 
+export interface AgentDeliveryEvidence {
+  trackedThreadCount: number;
+  outboundCount: number;
+}
+
 interface RalphCycleRow {
   id: number;
   started_at: string;
@@ -59,6 +64,43 @@ export class BrokerDB extends CoreBrokerDB {
   override initialize(): void {
     super.initialize();
     ensureRalphCycleTable(this.getDb());
+  }
+
+  getActiveTaskAssignmentDeliveryEvidenceForAgent(agentId: string): AgentDeliveryEvidence {
+    const db = this.getDb();
+    const threadRow = db
+      .prepare(
+        `SELECT COUNT(DISTINCT thread_id) AS count
+         FROM task_assignments
+         WHERE agent_id = ?
+           AND status IN ('assigned', 'branch_pushed', 'pr_open')`,
+      )
+      .get(agentId) as { count: number } | undefined;
+    const outboundRow = db
+      .prepare(
+        `SELECT COUNT(DISTINCT message.id) AS count
+         FROM messages message
+         WHERE message.sender = ?
+           AND message.source = 'agent'
+           AND message.direction = 'outbound'
+           AND EXISTS (
+             SELECT 1
+             FROM task_assignments assignment
+             WHERE assignment.agent_id = ?
+               AND assignment.status IN ('assigned', 'branch_pushed', 'pr_open')
+               AND assignment.thread_id = message.thread_id
+               AND (
+                 assignment.source_message_id IS NULL
+                 OR message.id > assignment.source_message_id
+               )
+           )`,
+      )
+      .get(agentId, agentId) as { count: number } | undefined;
+
+    return {
+      trackedThreadCount: Number(threadRow?.count ?? 0),
+      outboundCount: Number(outboundRow?.count ?? 0),
+    };
   }
 
   recordRalphCycle(record: Omit<RalphCycleRecord, "id">): number {

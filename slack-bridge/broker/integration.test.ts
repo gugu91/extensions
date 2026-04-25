@@ -221,19 +221,23 @@ describe("broker integration — client ↔ server ↔ DB", () => {
   });
 
   it("invokes status change callbacks when a client explicitly marks itself free", async () => {
-    const changes: Array<{ agentId: string; status: "working" | "idle" }> = [];
-    server.onAgentStatusChange((agentId, status) => {
-      changes.push({ agentId, status });
+    const changes: Array<{
+      agentId: string;
+      status: "working" | "idle";
+      metadata: { note?: string };
+    }> = [];
+    server.onAgentStatusChange((agentId, status, metadata) => {
+      changes.push({ agentId, status, metadata });
     });
 
     const reg = await client.register("free-agent", "🆓");
 
     await client.updateStatus("working");
-    await client.updateStatus("idle");
+    await client.updateStatus("idle", { note: "delivered report" });
 
     expect(changes).toEqual([
-      { agentId: reg.agentId, status: "working" },
-      { agentId: reg.agentId, status: "idle" },
+      { agentId: reg.agentId, status: "working", metadata: {} },
+      { agentId: reg.agentId, status: "idle", metadata: { note: "delivered report" } },
     ]);
     expect(db.getAgentById(reg.agentId)?.status).toBe("idle");
   });

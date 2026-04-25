@@ -91,7 +91,7 @@ export interface FollowerRuntime {
   ) => Promise<{ unregisterError: string | null }>;
   syncDesiredStatus: (
     desiredStatus: "working" | "idle",
-    options?: { force?: boolean },
+    options?: { force?: boolean; note?: string },
   ) => Promise<void>;
   flushDeliveredAcks: () => Promise<void>;
   getClientRef: () => BrokerClientRef | null;
@@ -152,7 +152,7 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
 
   async function syncDesiredStatus(
     desiredStatus: "working" | "idle",
-    options: { force?: boolean } = {},
+    options: { force?: boolean; note?: string } = {},
   ): Promise<void> {
     if (!clientRef) {
       return;
@@ -160,15 +160,23 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
     if (!options.force && syncedFollowerStatus === desiredStatus) {
       return;
     }
-    if (followerStatusSyncPromise && followerStatusSyncTarget === desiredStatus) {
+    const note = typeof options.note === "string" ? options.note.trim() : "";
+    if (
+      !options.force &&
+      !note &&
+      followerStatusSyncPromise &&
+      followerStatusSyncTarget === desiredStatus
+    ) {
       await followerStatusSyncPromise;
       return;
     }
 
     const targetStatus = desiredStatus;
-    const request = clientRef.client.updateStatus(targetStatus).then(() => {
-      syncedFollowerStatus = targetStatus;
-    });
+    const request = clientRef.client
+      .updateStatus(targetStatus, note ? { note } : undefined)
+      .then(() => {
+        syncedFollowerStatus = targetStatus;
+      });
     followerStatusSyncTarget = targetStatus;
     const inFlight = request.finally(() => {
       if (followerStatusSyncPromise === inFlight) {

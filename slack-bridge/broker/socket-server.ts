@@ -50,7 +50,15 @@ export type AgentMessageCallback = (
   metadata: Record<string, unknown>,
 ) => void;
 
-export type AgentStatusChangeCallback = (agentId: string, status: "working" | "idle") => void;
+export interface AgentStatusChangeMetadata {
+  note?: string;
+}
+
+export type AgentStatusChangeCallback = (
+  agentId: string,
+  status: "working" | "idle",
+  metadata: AgentStatusChangeMetadata,
+) => void;
 
 function toClientAgentInfo(agent: AgentInfo): ClientAgentInfo {
   const { stableId, ...clientAgent } = agent;
@@ -948,9 +956,10 @@ export class BrokerSocketServer {
 
     const params = req.params ?? {};
     const status = params.status === "working" ? "working" : "idle";
+    const note = typeof params.note === "string" ? params.note.trim() : "";
     this.db.updateAgentStatus(state.agentId, status);
     try {
-      this.agentStatusChangeCallback?.(state.agentId, status);
+      this.agentStatusChangeCallback?.(state.agentId, status, note ? { note } : {});
     } catch {
       /* best effort */
     }

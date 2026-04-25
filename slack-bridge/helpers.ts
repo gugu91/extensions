@@ -1493,6 +1493,13 @@ export function buildRalphLoopStatusMessage(summary: string, cycleStartedAt: str
   return `RALPH loop (${cycleStartedAt}): ${summary}`;
 }
 
+const DELIVERY_CLAIM_NOTE_REGEX =
+  /\b(deliver(?:ed|y|ing)?|reported|replied|sent|posted|shared|submitted|returned|responded)\b/i;
+
+export function containsDeliveryClaimLanguage(note: string): boolean {
+  return DELIVERY_CLAIM_NOTE_REGEX.test(note);
+}
+
 export interface RalphLoopFollowUpDeliveryOptions {
   signature: string;
   lastDeliveredSignature?: string;

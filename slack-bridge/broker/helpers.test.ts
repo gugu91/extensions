@@ -733,6 +733,55 @@ describe("BrokerDB", () => {
     expect(updated[0].prNumber).toBe(201);
   });
 
+  it("counts outbound evidence for active task assignment threads after the assignment message", () => {
+    db.registerAgent("broker", "Broker Crane", "🪿", 10);
+    db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
+    db.createThread("a2a:broker:worker-1", "agent", "", "broker");
+
+    db.insertMessage(
+      "a2a:broker:worker-1",
+      "agent",
+      "outbound",
+      "worker-1",
+      "old report before the assignment",
+      ["broker"],
+    );
+    const sourceMessage = db.insertMessage(
+      "a2a:broker:worker-1",
+      "agent",
+      "inbound",
+      "broker",
+      "Please take issue #114",
+      ["worker-1"],
+    );
+    db.recordTaskAssignment(
+      "worker-1",
+      114,
+      "feat/ralph-completion-v2",
+      "a2a:broker:worker-1",
+      sourceMessage.id,
+    );
+
+    expect(db.getActiveTaskAssignmentDeliveryEvidenceForAgent("worker-1")).toEqual({
+      trackedThreadCount: 1,
+      outboundCount: 0,
+    });
+
+    db.insertMessage(
+      "a2a:broker:worker-1",
+      "agent",
+      "outbound",
+      "worker-1",
+      "final report delivered",
+      ["broker"],
+    );
+
+    expect(db.getActiveTaskAssignmentDeliveryEvidenceForAgent("worker-1")).toEqual({
+      trackedThreadCount: 1,
+      outboundCount: 1,
+    });
+  });
+
   it("does not reset tracked progress when the broker sends a reminder on the same branch", () => {
     db.registerAgent("worker-1", "Hyper Horse", "🐎", 100);
 

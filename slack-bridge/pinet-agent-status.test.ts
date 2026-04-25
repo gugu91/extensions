@@ -18,8 +18,23 @@ function createDeps(overrides: Partial<PinetAgentStatusDeps> = {}) {
   const syncFollowerDesiredStatus = vi.fn(async () => undefined);
   const runBrokerMaintenance = vi.fn();
   const maybeDrainInboxIfIdle = vi.fn(() => true);
+  const getActiveTaskAssignmentDeliveryEvidenceForAgent = vi.fn(() => ({
+    trackedThreadCount: 0,
+    outboundCount: 0,
+  }));
+  const noteClaimsDelivery = vi.fn<(note: string) => boolean>(() => false);
+  const logSuspiciousDeliveryClaim =
+    vi.fn<
+      (details: {
+        agentId: string;
+        note: string;
+        trackedThreadCount: number;
+        outboundCount: number;
+      }) => void
+    >();
   const brokerDb: PinetAgentStatusBrokerDbPort = {
     updateAgentStatus,
+    getActiveTaskAssignmentDeliveryEvidenceForAgent,
   };
 
   const deps: PinetAgentStatusDeps = {
@@ -38,6 +53,8 @@ function createDeps(overrides: Partial<PinetAgentStatusDeps> = {}) {
     getCurrentRuntimeMode: () => "off",
     maybeDrainInboxIfIdle,
     getExtensionContext: () => ctx,
+    noteClaimsDelivery,
+    logSuspiciousDeliveryClaim,
     ...overrides,
   };
 
@@ -48,6 +65,9 @@ function createDeps(overrides: Partial<PinetAgentStatusDeps> = {}) {
     syncFollowerDesiredStatus,
     runBrokerMaintenance,
     maybeDrainInboxIfIdle,
+    getActiveTaskAssignmentDeliveryEvidenceForAgent,
+    noteClaimsDelivery,
+    logSuspiciousDeliveryClaim,
     getDesiredAgentStatus: () => desiredAgentStatus,
   };
 }
@@ -76,6 +96,23 @@ describe("createPinetAgentStatus", () => {
 
     expect(getDesiredAgentStatus()).toBe("idle");
     expect(syncFollowerDesiredStatus).toHaveBeenCalledWith("idle", {});
+  });
+
+  it("forwards delivery-claim notes to follower status sync even when already idle", async () => {
+    const { deps, syncFollowerDesiredStatus } = createDeps({
+      getBrokerRole: () => "follower",
+      hasFollowerClient: () => true,
+    });
+    const pinetAgentStatus = createPinetAgentStatus(deps);
+
+    await pinetAgentStatus.reportStatus("idle");
+    syncFollowerDesiredStatus.mockClear();
+    await pinetAgentStatus.signalAgentFree(undefined, { note: "delivered report" });
+
+    expect(syncFollowerDesiredStatus).toHaveBeenCalledWith("idle", {
+      force: true,
+      note: "delivered report",
+    });
   });
 
   it("signals broker free, runs maintenance, and drains queued inbox via the cached context", async () => {
@@ -126,5 +163,53 @@ describe("createPinetAgentStatus", () => {
     await expect(
       pinetAgentStatus.signalAgentFree(undefined, { requirePinet: true }),
     ).rejects.toThrow("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+  });
+
+  it("flags broker-local delivery-claim notes without broker-observed outbound evidence", async () => {
+    const {
+      deps,
+      getActiveTaskAssignmentDeliveryEvidenceForAgent,
+      noteClaimsDelivery,
+      logSuspiciousDeliveryClaim,
+    } = createDeps({
+      getBrokerRole: () => "broker",
+    });
+    noteClaimsDelivery.mockReturnValue(true);
+    getActiveTaskAssignmentDeliveryEvidenceForAgent.mockReturnValue({
+      trackedThreadCount: 1,
+      outboundCount: 0,
+    });
+    const pinetAgentStatus = createPinetAgentStatus(deps);
+
+    await pinetAgentStatus.signalAgentFree(undefined, { note: "delivered report" });
+
+    expect(getActiveTaskAssignmentDeliveryEvidenceForAgent).toHaveBeenCalledWith("agent-1");
+    expect(logSuspiciousDeliveryClaim).toHaveBeenCalledWith({
+      agentId: "agent-1",
+      note: "delivered report",
+      trackedThreadCount: 1,
+      outboundCount: 0,
+    });
+  });
+
+  it("does not flag delivery-claim notes once outbound evidence exists", async () => {
+    const {
+      deps,
+      getActiveTaskAssignmentDeliveryEvidenceForAgent,
+      noteClaimsDelivery,
+      logSuspiciousDeliveryClaim,
+    } = createDeps({
+      getBrokerRole: () => "broker",
+    });
+    noteClaimsDelivery.mockReturnValue(true);
+    getActiveTaskAssignmentDeliveryEvidenceForAgent.mockReturnValue({
+      trackedThreadCount: 1,
+      outboundCount: 1,
+    });
+    const pinetAgentStatus = createPinetAgentStatus(deps);
+
+    await pinetAgentStatus.signalAgentFree(undefined, { note: "reported back" });
+
+    expect(logSuspiciousDeliveryClaim).not.toHaveBeenCalled();
   });
 });

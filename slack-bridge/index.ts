@@ -14,6 +14,7 @@ import {
   resolveAgentStableId,
   resolveAllowAllWorkspaceUsers,
   trackBrokerInboundThread,
+  containsDeliveryClaimLanguage,
 } from "./helpers.js";
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
@@ -447,6 +448,23 @@ export default function (pi: ExtensionAPI) {
     getCurrentRuntimeMode: () => currentRuntimeMode,
     maybeDrainInboxIfIdle,
     getExtensionContext: () => sessionUiRuntime.getExtensionContext() ?? undefined,
+    noteClaimsDelivery: containsDeliveryClaimLanguage,
+    logSuspiciousDeliveryClaim: ({ agentId, note, trackedThreadCount, outboundCount }) => {
+      brokerRuntime.logActivity({
+        kind: "suspicious_delivery_claim",
+        level: "actions",
+        title: "Unverified delivery claim in pinet_free note",
+        summary: `${formatTrackedAgent(agentId)} claimed delivery in pinet_free without broker-observed outbound evidence.`,
+        details: [
+          `Note: ${note}`,
+          `Active assignment threads: ${trackedThreadCount}`,
+          `Broker-observed outbound messages on active assignment threads: ${outboundCount}`,
+          "Treat the delivery claim as suspicious until a real pinet_message report is visible.",
+        ],
+        fields: [{ label: "Agent", value: formatTrackedAgent(agentId) }],
+        tone: "warning",
+      });
+    },
   });
   const { reportStatus, signalAgentFree } = pinetAgentStatus;
   reportAgentStatus = reportStatus;
@@ -844,7 +862,7 @@ export default function (pi: ExtensionAPI) {
         tone: "error",
       });
     },
-    onAgentStatusChange: (_ctx, changedAgentId, status) => {
+    onAgentStatusChange: (_ctx, changedAgentId, status, metadata) => {
       brokerRuntime.logActivity({
         kind: "agent_status",
         level: "verbose",
@@ -852,6 +870,32 @@ export default function (pi: ExtensionAPI) {
         summary: `${formatTrackedAgent(changedAgentId)} marked itself ${status}.`,
         fields: [{ label: "Agent", value: formatTrackedAgent(changedAgentId) }],
         tone: status === "idle" ? "success" : "info",
+      });
+
+      const note = typeof metadata.note === "string" ? metadata.note.trim() : "";
+      if (status !== "idle" || !note || !containsDeliveryClaimLanguage(note)) {
+        return;
+      }
+
+      const evidence =
+        getActiveBrokerDb()?.getActiveTaskAssignmentDeliveryEvidenceForAgent(changedAgentId);
+      if (!evidence || evidence.outboundCount > 0) {
+        return;
+      }
+
+      brokerRuntime.logActivity({
+        kind: "suspicious_delivery_claim",
+        level: "actions",
+        title: "Unverified delivery claim in pinet_free note",
+        summary: `${formatTrackedAgent(changedAgentId)} claimed delivery in pinet_free without broker-observed outbound evidence.`,
+        details: [
+          `Note: ${note}`,
+          `Active assignment threads: ${evidence.trackedThreadCount}`,
+          `Broker-observed outbound messages on active assignment threads: ${evidence.outboundCount}`,
+          "Treat the delivery claim as suspicious until a real pinet_message report is visible.",
+        ],
+        fields: [{ label: "Agent", value: formatTrackedAgent(changedAgentId) }],
+        tone: "warning",
       });
     },
   });

@@ -417,8 +417,9 @@ export class BrokerClient {
 
   // ─── Status ────────────────────────────────────────────
 
-  async updateStatus(status: "working" | "idle"): Promise<void> {
-    await this.request("status.update", { status });
+  async updateStatus(status: "working" | "idle", options: { note?: string } = {}): Promise<void> {
+    const note = typeof options.note === "string" ? options.note.trim() : "";
+    await this.request("status.update", { status, ...(note ? { note } : {}) });
   }
 
   // ─── Agent-to-agent messaging ─────────────────────────
