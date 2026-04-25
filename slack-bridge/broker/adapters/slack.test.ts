@@ -1329,6 +1329,199 @@ describe("SlackAdapter — allowlist filtering", () => {
     );
   });
 
+  it("uses the configured default scope when parsing raw thread-started events", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+      return mockSlackResponse();
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as {
+        onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "1.11",
+        user_id: "U_ALLOWED",
+        context: {
+          channel_id: "C_TEAM",
+          team_id: "T_PRIMARY",
+        },
+      },
+    });
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello from the selected install",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.11",
+      ts: "1.12",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1.11",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "explicit",
+            workspaceId: "T_PRIMARY",
+            installId: "primary",
+            channelId: "C_TEAM",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      }),
+    );
+  });
+
+  it("uses the configured default scope when parsing raw thread-context-changed events", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+      return mockSlackResponse();
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+      getDefaultScope: () => ({
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_PRIMARY",
+          installId: "primary",
+        },
+        instance: {
+          source: "compatibility",
+          compatibilityKey: "default",
+        },
+      }),
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as {
+        onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      }
+    ).onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "1.13",
+        user_id: "U_ALLOWED",
+      },
+    });
+
+    (
+      adapter as unknown as {
+        onContextChanged: (evt: Record<string, unknown>) => void;
+      }
+    ).onContextChanged({
+      type: "assistant_thread_context_changed",
+      assistant_thread: {
+        thread_ts: "1.13",
+        context: {
+          channel_id: "C_UPDATED",
+          team_id: "T_PRIMARY",
+        },
+      },
+    });
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello after context changed",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.13",
+      ts: "1.14",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1.13",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "explicit",
+            workspaceId: "T_PRIMARY",
+            installId: "primary",
+            channelId: "C_UPDATED",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      }),
+    );
+  });
+
   it("does not emit inbound messages for thread contexts that are outside the configured runtime scope", async () => {
     fetchMock.mockImplementation(async (input) => {
       const url = String(input);

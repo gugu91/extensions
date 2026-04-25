@@ -232,7 +232,9 @@ export class SlackAdapter implements MessageAdapter {
   ): Promise<void> {
     if (this.shuttingDown) return;
 
-    const parsed = isParsedThreadStarted(event) ? event : extractThreadStarted(event);
+    const parsed = isParsedThreadStarted(event)
+      ? event
+      : extractThreadStarted(event, this.config.getDefaultScope?.() ?? null);
     if (!parsed) return;
 
     const info: SlackThreadInfo = {
@@ -264,7 +266,9 @@ export class SlackAdapter implements MessageAdapter {
   private onContextChanged(event: ParsedThreadContextChanged | Record<string, unknown>): void {
     if (this.shuttingDown) return;
 
-    const parsed = isParsedThreadContextChanged(event) ? event : extractThreadContextChanged(event);
+    const parsed = isParsedThreadContextChanged(event)
+      ? event
+      : extractThreadContextChanged(event, this.config.getDefaultScope?.() ?? null);
     if (!parsed) return;
 
     const existing = this.threads.get(parsed.threadTs);
