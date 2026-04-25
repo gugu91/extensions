@@ -759,33 +759,45 @@ export default function (pi: ExtensionAPI) {
       const installs = slackTopologyRuntime
         .getSurfaceInstalls()
         .filter((install) => install.botToken && install.logChannel);
-      const loggers = installs.map(
-        (install) =>
-          new SlackActivityLogger({
-            getBotToken: () => install.botToken,
-            getLogChannel: () => install.logChannel,
-            getLogLevel: () => install.logLevel,
-            getAgentName: () => agentName,
-            getAgentEmoji: () => agentEmoji,
-            resolveChannel: async (channelInput) => {
-              const channelId = await slackTopologyRuntime.resolveChannel(
-                install.installId,
-                channelInput,
+      const loggerEntries = installs.map((install) => ({
+        installId: install.installId,
+        logger: new SlackActivityLogger({
+          getBotToken: () => install.botToken,
+          getLogChannel: () => install.logChannel,
+          getLogLevel: () => install.logLevel,
+          getAgentName: () => agentName,
+          getAgentEmoji: () => agentEmoji,
+          resolveChannel: async (channelInput) => {
+            const channelId = await slackTopologyRuntime.resolveChannel(
+              install.installId,
+              channelInput,
+            );
+            if (!channelId) {
+              throw new Error(
+                `Unable to resolve Slack activity log channel ${JSON.stringify(channelInput)} for install ${install.installId}.`,
               );
-              if (!channelId) {
-                throw new Error(
-                  `Unable to resolve Slack activity log channel ${JSON.stringify(channelInput)} for install ${install.installId}.`,
-                );
-              }
-              return channelId;
-            },
-            slack,
-            onError,
-          }),
-      );
+            }
+            return channelId;
+          },
+          slack,
+          onError,
+        }),
+      }));
+      const loggers = loggerEntries.map((entry) => entry.logger);
       return loggers.length <= 1
         ? (loggers[0] ?? new MultiInstallSlackActivityLogger([]))
-        : new MultiInstallSlackActivityLogger(loggers, loggers[0]);
+        : new MultiInstallSlackActivityLogger(loggers, loggers[0], (entry) => {
+            if (!entry.scope) {
+              return loggers;
+            }
+            const scopedInstallId = slackTopologyRuntime.resolveInstallForScope(
+              entry.scope,
+            )?.installId;
+            const scopedLogger = loggerEntries.find(
+              (loggerEntry) => loggerEntry.installId === scopedInstallId,
+            )?.logger;
+            return scopedLogger ? [scopedLogger] : [];
+          });
     },
     formatTrackedAgent,
     summarizeTrackedAssignmentStatus,

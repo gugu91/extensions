@@ -429,14 +429,21 @@ export class SlackActivityLogger implements ActivityLoggerPort {
   }
 }
 
+export type MultiInstallActivityLoggerSelector = (
+  entry: ActivityLogEntry,
+  loggers: ReadonlyArray<ActivityLoggerPort>,
+) => ReadonlyArray<ActivityLoggerPort>;
+
 export class MultiInstallSlackActivityLogger implements ActivityLoggerPort {
   constructor(
     private readonly loggers: ReadonlyArray<ActivityLoggerPort>,
     private readonly primaryLogger: ActivityLoggerPort | null = loggers[0] ?? null,
+    private readonly selectLoggers?: MultiInstallActivityLoggerSelector,
   ) {}
 
   log(entry: ActivityLogEntry): void {
-    for (const logger of this.loggers) {
+    const targets = this.selectLoggers?.(entry, this.loggers) ?? this.loggers;
+    for (const logger of targets) {
       logger.log(entry);
     }
   }

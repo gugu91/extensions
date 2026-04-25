@@ -3,6 +3,7 @@ import {
   buildActivityLogBlocks,
   buildActivityLogText,
   formatRecentActivityLogEntries,
+  MultiInstallSlackActivityLogger,
   normalizeActivityLogLevel,
   redactSensitiveText,
   shouldLogActivity,
@@ -186,5 +187,53 @@ describe("SlackActivityLogger", () => {
     expect(slack).toHaveBeenCalledTimes(2);
     expect(logger.getRecentEntries()).toHaveLength(1);
     expect(logger.getRecentEntries()[0]?.title).toBe("Log failure");
+  });
+});
+
+describe("MultiInstallSlackActivityLogger", () => {
+  it("routes scoped entries only to the selected install logger", () => {
+    const primary = {
+      log: vi.fn(),
+      getRecentEntries: vi.fn((): LoggedActivityLogEntry[] => []),
+      clearPending: vi.fn(),
+    };
+    const secondary = {
+      log: vi.fn(),
+      getRecentEntries: vi.fn((): LoggedActivityLogEntry[] => []),
+      clearPending: vi.fn(),
+    };
+    const logger = new MultiInstallSlackActivityLogger(
+      [primary, secondary],
+      primary,
+      (entry, loggers) => (entry.scope ? [loggers[1]!] : loggers),
+    );
+
+    logger.log({
+      kind: "task_assignment",
+      level: "actions",
+      title: "Task assigned",
+      summary: "Scoped to secondary.",
+      scope: {
+        workspace: {
+          provider: "slack",
+          source: "explicit",
+          workspaceId: "T_SECONDARY",
+          installId: "secondary",
+        },
+      },
+    });
+
+    expect(primary.log).not.toHaveBeenCalled();
+    expect(secondary.log).toHaveBeenCalledOnce();
+
+    logger.log({
+      kind: "broker_start",
+      level: "actions",
+      title: "Broker started",
+      summary: "Global event.",
+    });
+
+    expect(primary.log).toHaveBeenCalledOnce();
+    expect(secondary.log).toHaveBeenCalledTimes(2);
   });
 });

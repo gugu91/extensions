@@ -505,6 +505,58 @@ describe("registerSlackTools", () => {
     );
   });
 
+  it("rejects non-default scoped Slack actions instead of falling back to the default bot token", async () => {
+    const {
+      slack,
+      tools,
+      setGetBotTokenForInstall,
+      setResolveThreadChannel,
+      setResolveThreadScope,
+    } = setup();
+    setResolveThreadChannel(async () => "C_SECONDARY");
+    setResolveThreadScope(async () => ({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_SECONDARY",
+        installId: "secondary",
+      },
+    }));
+    setGetBotTokenForInstall((installId) =>
+      installId === "secondary" ? undefined : "xoxb-initial",
+    );
+
+    await expect(
+      tools.get("slack_send")!.execute("tool-2c-scoped-token", {
+        thread_ts: "200.3",
+        text: "must not leak to default install",
+      }),
+    ).rejects.toThrow(/scoped to install "secondary" but that install has no bot token/i);
+    expect(slack.mock.calls.filter(([method]) => method === "chat.postMessage")).toHaveLength(0);
+  });
+
+  it("rejects non-default scoped channel misses instead of falling back to default channel resolution", async () => {
+    const { slack, tools, setResolveChannelForInstall, setResolveThreadScope } = setup();
+    setResolveThreadScope(async () => ({
+      workspace: {
+        provider: "slack",
+        source: "explicit",
+        workspaceId: "T_SECONDARY",
+        installId: "secondary",
+      },
+    }));
+    setResolveChannelForInstall(async () => null);
+
+    await expect(
+      tools.get("slack_post_channel")!.execute("tool-2d-scoped-channel", {
+        channel: "ops-alerts",
+        thread_ts: "200.4",
+        text: "must not resolve in default install",
+      }),
+    ).rejects.toThrow(/could not be resolved for scoped install "secondary"/i);
+    expect(slack.mock.calls.filter(([method]) => method === "chat.postMessage")).toHaveLength(0);
+  });
+
   it("deletes a single bot-posted message when confirm=true", async () => {
     const { slack, tools, setBotToken, setDefaultChannel, requireToolPolicy } = setup();
     setBotToken("xoxb-reloaded");

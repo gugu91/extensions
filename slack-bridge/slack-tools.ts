@@ -527,11 +527,20 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     getBotUserId,
   } = deps;
 
+  function isNonDefaultScopedInstall(
+    scope: RuntimeScopeCarrier | null,
+    installId: string | null,
+  ): boolean {
+    const defaultInstallId = getDefaultScope().workspace?.installId ?? null;
+    return Boolean(scope && installId && defaultInstallId && installId !== defaultInstallId);
+  }
+
   async function resolveScopedInstallContext(threadTs?: string): Promise<{
     scope: RuntimeScopeCarrier | null;
     installId: string | null;
     token: string;
     defaultChannel: string | undefined;
+    strictScopedInstall: boolean;
   }> {
     const scope = threadTs ? await threadContext.resolveThreadScope(threadTs) : null;
     const installId = resolveInstallIdForScope?.(scope ?? null) ?? null;
@@ -546,11 +555,23 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       );
     }
 
+    const strictScopedInstall = isNonDefaultScopedInstall(scope, installId);
+    const scopedToken = getBotTokenForInstall?.(installId);
+    if (strictScopedInstall && !scopedToken) {
+      throw new Error(
+        `Slack thread ${threadTs} is scoped to install ${JSON.stringify(installId)} but that install has no bot token configured.`,
+      );
+    }
+
+    const scopedDefaultChannel = getDefaultChannelForInstall?.(installId);
     return {
       scope,
       installId,
-      token: getBotTokenForInstall?.(installId) ?? getBotToken(),
-      defaultChannel: getDefaultChannelForInstall?.(installId) ?? getDefaultChannel(),
+      token: scopedToken ?? getBotToken(),
+      defaultChannel: strictScopedInstall
+        ? scopedDefaultChannel
+        : (scopedDefaultChannel ?? getDefaultChannel()),
+      strictScopedInstall,
     };
   }
 
@@ -584,11 +605,16 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
   }
 
   async function resolveScopedChannelId(nameOrId: string, threadTs?: string): Promise<string> {
-    const { installId } = await resolveScopedInstallContext(threadTs);
+    const { installId, strictScopedInstall } = await resolveScopedInstallContext(threadTs);
     const scopedChannel = await resolveChannelForInstall?.(installId, nameOrId);
     if (scopedChannel) {
       rememberChannel(nameOrId, scopedChannel);
       return scopedChannel;
+    }
+    if (strictScopedInstall) {
+      throw new Error(
+        `Slack channel ${JSON.stringify(nameOrId)} could not be resolved for scoped install ${JSON.stringify(installId)}.`,
+      );
     }
     return resolveChannel(nameOrId);
   }
