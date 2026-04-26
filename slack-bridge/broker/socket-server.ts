@@ -696,6 +696,11 @@ export class BrokerSocketServer {
       return rpcError(req.id, RPC_INVALID_PARAMS, "markRead must be a boolean");
     }
 
+    const summaryOnly = params.summaryOnly === undefined ? undefined : params.summaryOnly;
+    if (summaryOnly !== undefined && typeof summaryOnly !== "boolean") {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "summaryOnly must be a boolean");
+    }
+
     return rpcOk(
       req.id,
       this.db.readInbox(state.agentId, {
@@ -703,6 +708,7 @@ export class BrokerSocketServer {
         ...(typeof limit === "number" ? { limit } : {}),
         ...(typeof unreadOnly === "boolean" ? { unreadOnly } : {}),
         ...(typeof markRead === "boolean" ? { markRead } : {}),
+        ...(typeof summaryOnly === "boolean" ? { summaryOnly } : {}),
       }),
     );
   }

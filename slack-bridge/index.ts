@@ -886,6 +886,7 @@ export default function (pi: ExtensionAPI) {
     limit?: number;
     unreadOnly?: boolean;
     markRead?: boolean;
+    summaryOnly?: boolean;
   }) {
     if (brokerRole === "broker") {
       const db = getActiveBrokerDb();

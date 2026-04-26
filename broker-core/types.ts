@@ -58,6 +58,7 @@ export interface InboxReadOptions {
   limit?: number;
   unreadOnly?: boolean;
   markRead?: boolean;
+  summaryOnly?: boolean;
 }
 
 export interface InboxThreadUnreadSummary {

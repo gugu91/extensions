@@ -109,6 +109,19 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     await client.send("thread-read", "First unread message");
     await client.send("thread-read", "Second unread message");
 
+    const summary = await client2.readInbox({ summaryOnly: true });
+    expect(summary.messages).toEqual([]);
+    expect(summary.unreadCountBefore).toBe(2);
+    expect(summary.unreadCountAfter).toBe(2);
+    expect(summary.markedReadIds).toEqual([]);
+    expect(summary.unreadThreads).toEqual([
+      expect.objectContaining({
+        threadId: "thread-read",
+        source: "agent",
+        unreadCount: 2,
+      }),
+    ]);
+
     const read = await client2.readInbox({ threadId: "thread-read", limit: 10 });
     expect(read.unreadCountBefore).toBe(2);
     expect(read.messages.map((item) => item.message.body)).toEqual([

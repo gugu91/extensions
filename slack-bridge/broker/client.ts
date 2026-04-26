@@ -50,6 +50,7 @@ export interface PinetReadOptions {
   limit?: number;
   unreadOnly?: boolean;
   markRead?: boolean;
+  summaryOnly?: boolean;
 }
 
 export interface ThreadInfo {
@@ -388,6 +389,7 @@ export class BrokerClient {
       ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
       ...(typeof options.unreadOnly === "boolean" ? { unreadOnly: options.unreadOnly } : {}),
       ...(typeof options.markRead === "boolean" ? { markRead: options.markRead } : {}),
+      ...(typeof options.summaryOnly === "boolean" ? { summaryOnly: options.summaryOnly } : {}),
     })) as {
       messages: Array<{
         entry: { id: number; delivered: boolean; readAt: string | null };
@@ -398,6 +400,35 @@ export class BrokerClient {
       unreadThreads: PinetUnreadThreadSummary[];
       markedReadIds: number[];
     };
+
+    if (options.summaryOnly) {
+      const requestedThreadId = options.threadId?.trim();
+      const threadSummaryCount = requestedThreadId
+        ? result.unreadThreads.reduce(
+            (count, thread) => count + (thread.threadId === requestedThreadId ? 1 : 0),
+            0,
+          )
+        : 0;
+      const threadUnreadCount = requestedThreadId
+        ? (result.unreadThreads.find((thread) => thread.threadId === requestedThreadId)
+            ?.unreadCount ?? 0)
+        : result.unreadCountBefore;
+      const invalidThreadSummary = requestedThreadId
+        ? result.unreadThreads.some((thread) => thread.threadId !== requestedThreadId) ||
+          threadSummaryCount > 1 ||
+          result.unreadCountBefore !== threadUnreadCount
+        : false;
+      if (
+        result.messages.length > 0 ||
+        result.markedReadIds.length > 0 ||
+        result.unreadCountBefore !== result.unreadCountAfter ||
+        invalidThreadSummary
+      ) {
+        throw new Error(
+          "Broker does not support non-destructive Pinet read summaries. Upgrade the broker before using summaryOnly.",
+        );
+      }
+    }
 
     return {
       messages: result.messages.map((item) => ({
