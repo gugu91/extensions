@@ -235,10 +235,119 @@ cold Slack actions as `slack:<action>` (for example `slack:upload` or
 `slack:canvas_update`); legacy `slack_<action>` patterns are accepted during
 migration.
 
-Block Kit and modal builders are no longer registered as tools. Load the
-bundled `slack-bridge` skill for curated Block Kit templates, modal patterns,
-and canvas examples, then pass the JSON directly to `slack_send` or the
-relevant dispatcher action.
+#### Tool and workflow usage notes
+
+- **Reply where the work arrived.** Use `slack_send` for assistant-thread
+  replies. If a task was delivered in a Slack thread, acknowledge briefly,
+  do the work, report blockers immediately, and finish with the outcome. If
+  you know only a channel/thread pair, use dispatcher action `post_channel`
+  with `channel` and optional `thread_ts` instead.
+- **Channel posting is explicit.** `post_channel` posts to a named channel or
+  channel ID. When `channel` is omitted, it first resolves a provided
+  `thread_ts` to a tracked thread channel, then falls back to `defaultChannel`
+  from settings. `slack_send` is intentionally narrower and resolves the
+  current tracked assistant thread/DM context.
+- **Rich messages use Block Kit JSON.** Pass `blocks` directly to
+  `slack_send` or `post_channel`; keep `text` as the notification/fallback.
+  Block Kit builder tools are not registered by this package. Load the bundled
+  `slack-bridge` skill for copyable status-report, button, code, and diff
+  templates.
+- **Modal helpers are patterns, not hot tools.** Use dispatcher actions
+  `modal_open`, `modal_push`, and `modal_update` with Slack view JSON. Open or
+  push immediately after receiving a fresh `trigger_id`; Slack trigger IDs
+  expire quickly. Include `thread_ts` when submissions should route back to an
+  original assistant thread.
+- **Uploads are for bulky artifacts.** Use `upload` for logs, screenshots,
+  long diffs, and generated files instead of large inline messages. Inline
+  uploads require `filename`; path uploads are guarded and must stay within the
+  current working directory or system temp directory.
+- **Canvases are long-lived docs.** `canvas_create` creates standalone or
+  channel canvases; `canvas_update` can append, prepend, replace the whole
+  canvas, or replace a matched section; `canvas_comments_read` is read-only and
+  limited to verified canvas targets.
+- **Scheduling, pins, and bookmarks are durable affordances.** Use `schedule`
+  for delayed reminders instead of waiting; use `pin` for important thread
+  messages; use `bookmark` for persistent channel-header links to repos,
+  dashboards, docs, or runbooks.
+- **Presence helps choose timing.** Use `presence` before pinging humans when
+  active/away/DND status affects routing or whether to schedule a follow-up.
+- **Destructive actions stay constrained.** `delete` can remove only messages
+  posted by the current bot and every delete call requires `confirm: true`.
+  Whole-thread deletion additionally requires `thread: true` and succeeds only
+  when every message in the target thread belongs to the current bot. Prefer
+  asking for explicit approval before destructive cleanup.
+- **Confirm guarded actions in the same thread.** If guardrails require
+  confirmation, call `confirm_action` with the target `thread_ts`, exact tool
+  name, and the exact action string required by the guarded tool. The safest
+  flow is: attempt the guarded call, copy the `requires confirmation for action
+...` string from the error, request confirmation, wait for the user's approval
+  via `slack_inbox`, then retry the guarded call unchanged. Batched
+  multi-thread Slack turns cannot satisfy a single-thread confirmation.
+- **Reaction and interaction triggers are explicit tasks.** Reaction-triggered
+  requests and Block Kit/modal interaction payloads arrive through
+  `slack_inbox` with metadata; treat them as user instructions tied to the
+  referenced Slack thread or message.
+
+#### Common dispatcher examples
+
+Reply in the current Slack assistant thread with Block Kit:
+
+```json
+{
+  "text": "Deploy complete — branch main, checks passed.",
+  "blocks": [
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Branch*\n`main`" },
+        { "type": "mrkdwn", "text": "*Checks*\n✅ lint/typecheck/test" }
+      ]
+    }
+  ]
+}
+```
+
+Post a channel/thread update through the dispatcher:
+
+```json
+{
+  "action": "post_channel",
+  "args": {
+    "channel": "#pinet-logs",
+    "thread_ts": "1712345678.000100",
+    "text": "PR #123 is ready for review."
+  }
+}
+```
+
+Upload a generated diff snippet:
+
+```json
+{
+  "action": "upload",
+  "args": {
+    "content": "diff --git a/README.md b/README.md\n...",
+    "filename": "docs.diff",
+    "filetype": "diff",
+    "title": "Docs changes",
+    "thread_ts": "1712345678.000100"
+  }
+}
+```
+
+Request confirmation before a guarded destructive action after copying the
+exact action string from the guardrail error:
+
+```json
+{
+  "action": "confirm_action",
+  "args": {
+    "thread_ts": "1712345678.000100",
+    "tool": "slack:delete",
+    "action": "channel=#pinet-logs | thread_ts=1712345678.000100 | ts=1712345678.000200 | thread=false"
+  }
+}
+```
 
 #### Canvas comment inspection
 
