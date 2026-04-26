@@ -49,6 +49,7 @@ export interface InboxEntry {
   messageId: number;
   delivered: boolean;
   readAt: string | null;
+  liveDeliveredAt: string | null;
   createdAt: string;
 }
 

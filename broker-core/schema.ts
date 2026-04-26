@@ -273,7 +273,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 13;
+export const CURRENT_BROKER_SCHEMA_VERSION = 14;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -351,6 +351,7 @@ function createCoreTables(db: DatabaseSync): void {
       message_id INTEGER NOT NULL,
       delivered INTEGER NOT NULL DEFAULT 0,
       read_at TEXT,
+      live_delivered_at TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -365,6 +366,8 @@ function createCoreTables(db: DatabaseSync): void {
       ON inbox(agent_id, delivered, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
       ON inbox(agent_id, read_at, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inbox_agent_live_sync
+      ON inbox(agent_id, delivered, live_delivered_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_message
       ON inbox(message_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_agent_message_pending_unique
@@ -625,6 +628,23 @@ function deleteDuplicateInboxRows(db: DatabaseSync): void {
   `);
 }
 
+function addInboxLiveDeliveryColumn(db: DatabaseSync): void {
+  ensureColumn(
+    db,
+    "inbox",
+    "live_delivered_at",
+    "ALTER TABLE inbox ADD COLUMN live_delivered_at TEXT",
+  );
+  db.exec(`
+    UPDATE inbox
+    SET live_delivered_at = COALESCE(live_delivered_at, created_at)
+    WHERE delivered = 1;
+
+    CREATE INDEX IF NOT EXISTS idx_inbox_agent_live_sync
+      ON inbox(agent_id, delivered, live_delivered_at, created_at);
+  `);
+}
+
 function addMessageSyncIdentityColumns(db: DatabaseSync): void {
   ensureColumn(db, "messages", "external_id", "ALTER TABLE messages ADD COLUMN external_id TEXT");
   ensureColumn(db, "messages", "external_ts", "ALTER TABLE messages ADD COLUMN external_ts TEXT");
@@ -824,6 +844,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 13:
           addMessageSyncIdentityColumns(db);
+          break;
+        case 14:
+          addInboxLiveDeliveryColumn(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -2028,17 +2051,9 @@ export class BrokerDB implements BrokerDBInterface {
 
   // ─── Interface-compatible queueMessage (single agent) ──
 
-  queueMessage(agentId: string, message: InboundMessage): void {
-    const metadata: Record<string, unknown> = {
-      ...message.metadata,
-      channel: message.channel,
-      userName: message.userName,
-      userId: message.userId,
-      timestamp: message.timestamp,
-      ...(message.isChannelMention ? { isChannelMention: true } : {}),
-      ...(message.scope ? { scope: message.scope } : {}),
-    };
-    this.insertMessage(
+  queueMessage(agentId: string, message: InboundMessage): BrokerMessage {
+    const metadata = this.buildInboundMessageMetadata(message);
+    return this.insertMessage(
       message.threadId,
       message.source,
       "inbound",
@@ -2047,6 +2062,50 @@ export class BrokerDB implements BrokerDBInterface {
       [agentId],
       metadata,
     );
+  }
+
+  queueDeliveredMessage(
+    agentId: string,
+    message: InboundMessage,
+  ): { message: BrokerMessage; freshDelivery: boolean } {
+    return this.withTransaction(() => {
+      const db = this.getDb();
+      const metadata = this.buildInboundMessageMetadata(message);
+      const brokerMessage = this.insertMessage(
+        message.threadId,
+        message.source,
+        "inbound",
+        message.userId,
+        message.text,
+        [],
+        metadata,
+      );
+      const existingInbox = db
+        .prepare("SELECT id FROM inbox WHERE agent_id = ? AND message_id = ?")
+        .get(agentId, brokerMessage.id) as { id: number } | undefined;
+      if (existingInbox) {
+        db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ?").run(existingInbox.id);
+        return { message: brokerMessage, freshDelivery: false };
+      }
+
+      db.prepare(
+        `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
+         VALUES (?, ?, 1, ?)`,
+      ).run(agentId, brokerMessage.id, new Date().toISOString());
+      return { message: brokerMessage, freshDelivery: true };
+    });
+  }
+
+  private buildInboundMessageMetadata(message: InboundMessage): Record<string, unknown> {
+    return {
+      ...message.metadata,
+      channel: message.channel,
+      userName: message.userName,
+      userId: message.userId,
+      timestamp: message.timestamp,
+      ...(message.isChannelMention ? { isChannelMention: true } : {}),
+      ...(message.scope ? { scope: message.scope } : {}),
+    };
   }
 
   // ─── Detailed message insert (used by socket server) ──
@@ -2179,7 +2238,8 @@ export class BrokerDB implements BrokerDBInterface {
       .prepare(
         `SELECT
            i.id AS i_id, i.agent_id AS i_agent_id, i.message_id AS i_message_id,
-           i.delivered AS i_delivered, i.read_at AS i_read_at, i.created_at AS i_created_at,
+           i.delivered AS i_delivered, i.read_at AS i_read_at,
+           i.live_delivered_at AS i_live_delivered_at, i.created_at AS i_created_at,
            m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
            m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
            m.metadata AS m_metadata, m.external_id AS m_external_id,
@@ -2196,6 +2256,7 @@ export class BrokerDB implements BrokerDBInterface {
       i_message_id: number;
       i_delivered: number;
       i_read_at: string | null;
+      i_live_delivered_at: string | null;
       i_created_at: string;
       m_id: number;
       m_thread_id: string;
@@ -2216,6 +2277,79 @@ export class BrokerDB implements BrokerDBInterface {
         messageId: r.i_message_id,
         delivered: r.i_delivered === 1,
         readAt: r.i_read_at,
+        liveDeliveredAt: r.i_live_delivered_at,
+        createdAt: r.i_created_at,
+      },
+      message: {
+        id: r.m_id,
+        threadId: r.m_thread_id,
+        source: r.m_source,
+        direction: r.m_direction as "inbound" | "outbound",
+        sender: r.m_sender,
+        body: r.m_body,
+        metadata: r.m_metadata ? (JSON.parse(r.m_metadata) as Record<string, unknown>) : null,
+        ...(r.m_external_id ? { externalId: r.m_external_id } : {}),
+        ...(r.m_external_ts ? { externalTs: r.m_external_ts } : {}),
+        createdAt: r.m_created_at,
+      },
+    }));
+  }
+
+  getInboxForLiveSync(
+    agentId: string,
+    limit = 100,
+  ): { entry: InboxEntry; message: BrokerMessage }[] {
+    const db = this.getDb();
+    const clampedLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+
+    const rows = db
+      .prepare(
+        `SELECT
+           i.id AS i_id, i.agent_id AS i_agent_id, i.message_id AS i_message_id,
+           i.delivered AS i_delivered, i.read_at AS i_read_at,
+           i.live_delivered_at AS i_live_delivered_at, i.created_at AS i_created_at,
+           m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
+           m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
+           m.metadata AS m_metadata, m.external_id AS m_external_id,
+           m.external_ts AS m_external_ts, m.created_at AS m_created_at
+         FROM inbox i
+         JOIN messages m ON m.id = i.message_id
+         WHERE i.agent_id = ?
+           AND (
+             i.delivered = 0
+             OR (i.delivered = 1 AND i.read_at IS NULL AND i.live_delivered_at IS NULL)
+           )
+         ORDER BY i.created_at ASC, i.id ASC
+         LIMIT ?`,
+      )
+      .all(agentId, clampedLimit) as unknown as Array<{
+      i_id: number;
+      i_agent_id: string;
+      i_message_id: number;
+      i_delivered: number;
+      i_read_at: string | null;
+      i_live_delivered_at: string | null;
+      i_created_at: string;
+      m_id: number;
+      m_thread_id: string;
+      m_source: string;
+      m_direction: string;
+      m_sender: string;
+      m_body: string;
+      m_metadata: string | null;
+      m_external_id: string | null;
+      m_external_ts: string | null;
+      m_created_at: string;
+    }>;
+
+    return rows.map((r) => ({
+      entry: {
+        id: r.i_id,
+        agentId: r.i_agent_id,
+        messageId: r.i_message_id,
+        delivered: r.i_delivered === 1,
+        readAt: r.i_read_at,
+        liveDeliveredAt: r.i_live_delivered_at,
         createdAt: r.i_created_at,
       },
       message: {
@@ -2256,7 +2390,8 @@ export class BrokerDB implements BrokerDBInterface {
       .prepare(
         `SELECT
            i.id AS i_id, i.agent_id AS i_agent_id, i.message_id AS i_message_id,
-           i.delivered AS i_delivered, i.read_at AS i_read_at, i.created_at AS i_created_at,
+           i.delivered AS i_delivered, i.read_at AS i_read_at,
+           i.live_delivered_at AS i_live_delivered_at, i.created_at AS i_created_at,
            m.id AS m_id, m.thread_id AS m_thread_id, m.source AS m_source,
            m.direction AS m_direction, m.sender AS m_sender, m.body AS m_body,
            m.metadata AS m_metadata, m.external_id AS m_external_id,
@@ -2273,6 +2408,7 @@ export class BrokerDB implements BrokerDBInterface {
       i_message_id: number;
       i_delivered: number;
       i_read_at: string | null;
+      i_live_delivered_at: string | null;
       i_created_at: string;
       m_id: number;
       m_thread_id: string;
@@ -2294,6 +2430,7 @@ export class BrokerDB implements BrokerDBInterface {
         messageId: r.i_message_id,
         delivered: r.i_delivered === 1,
         readAt: r.i_read_at,
+        liveDeliveredAt: r.i_live_delivered_at,
         createdAt: r.i_created_at,
       },
       message: {
@@ -2421,6 +2558,38 @@ export class BrokerDB implements BrokerDBInterface {
     }>;
 
     return rows.map(rowToBrokerMessage);
+  }
+
+  markLiveDelivered(inboxIds: number[], agentId?: string): void {
+    if (inboxIds.length === 0) return;
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    if (agentId) {
+      const stmt = db.prepare(
+        "UPDATE inbox SET live_delivered_at = COALESCE(live_delivered_at, ?) WHERE id = ? AND agent_id = ?",
+      );
+      for (const id of inboxIds) {
+        stmt.run(now, id, agentId);
+      }
+      return;
+    }
+
+    const stmt = db.prepare(
+      "UPDATE inbox SET live_delivered_at = COALESCE(live_delivered_at, ?) WHERE id = ?",
+    );
+    for (const id of inboxIds) {
+      stmt.run(now, id);
+    }
+  }
+
+  markLiveDeliveredByMessageId(messageId: number, agentId: string): void {
+    const db = this.getDb();
+    db.prepare(
+      `UPDATE inbox
+       SET live_delivered_at = COALESCE(live_delivered_at, ?)
+       WHERE message_id = ? AND agent_id = ?`,
+    ).run(new Date().toISOString(), messageId, agentId);
   }
 
   markDelivered(inboxIds: number[], agentId?: string): void {
