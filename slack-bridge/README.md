@@ -243,9 +243,10 @@ migration.
   you know only a channel/thread pair, use dispatcher action `post_channel`
   with `channel` and optional `thread_ts` instead.
 - **Channel posting is explicit.** `post_channel` posts to a named channel or
-  channel ID; when `channel` is omitted it uses `defaultChannel` from settings.
-  `slack_send` is intentionally narrower and resolves the current tracked
-  assistant thread/DM context.
+  channel ID. When `channel` is omitted, it first resolves a provided
+  `thread_ts` to a tracked thread channel, then falls back to `defaultChannel`
+  from settings. `slack_send` is intentionally narrower and resolves the
+  current tracked assistant thread/DM context.
 - **Rich messages use Block Kit JSON.** Pass `blocks` directly to
   `slack_send` or `post_channel`; keep `text` as the notification/fallback.
   Block Kit builder tools are not registered by this package. Load the bundled
@@ -270,14 +271,17 @@ migration.
   dashboards, docs, or runbooks.
 - **Presence helps choose timing.** Use `presence` before pinging humans when
   active/away/DND status affects routing or whether to schedule a follow-up.
-- **Destructive actions stay constrained.** `delete` can remove only
-  bot-posted messages; deleting an entire thread requires `thread: true` and
-  `confirm: true`. Prefer asking for explicit approval before destructive
-  cleanup.
+- **Destructive actions stay constrained.** `delete` can remove only messages
+  posted by the current bot and every delete call requires `confirm: true`.
+  Whole-thread deletion additionally requires `thread: true` and succeeds only
+  when every message in the target thread belongs to the current bot. Prefer
+  asking for explicit approval before destructive cleanup.
 - **Confirm guarded actions in the same thread.** If guardrails require
   confirmation, call `confirm_action` with the target `thread_ts`, exact tool
-  name, and action summary, then wait for the user's approval via
-  `slack_inbox` before retrying the guarded tool/action. Batched
+  name, and the exact action string required by the guarded tool. The safest
+  flow is: attempt the guarded call, copy the `requires confirmation for action
+...` string from the error, request confirmation, wait for the user's approval
+  via `slack_inbox`, then retry the guarded call unchanged. Batched
   multi-thread Slack turns cannot satisfy a single-thread confirmation.
 - **Reaction and interaction triggers are explicit tasks.** Reaction-triggered
   requests and Block Kit/modal interaction payloads arrive through
@@ -331,7 +335,8 @@ Upload a generated diff snippet:
 }
 ```
 
-Request confirmation before a guarded destructive action:
+Request confirmation before a guarded destructive action after copying the
+exact action string from the guardrail error:
 
 ```json
 {
@@ -339,7 +344,7 @@ Request confirmation before a guarded destructive action:
   "args": {
     "thread_ts": "1712345678.000100",
     "tool": "slack:delete",
-    "action": "Delete bot-posted message 1712345678.000200 in #pinet-logs"
+    "action": "channel=#pinet-logs | thread_ts=1712345678.000100 | ts=1712345678.000200 | thread=false"
   }
 }
 ```
