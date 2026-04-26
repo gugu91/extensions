@@ -204,7 +204,7 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
     sections.push(
       [
         "✋ CONFIRMATION REQUIRED:",
-        `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack with action "confirm_action" and args containing thread_ts, a description of the action, and the tool name (for dispatcher actions, use slack:<action>).`,
+        `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack with action "confirm_action" and args containing thread_ts, the exact action string required by the guarded tool, and the tool name (for dispatcher actions, use slack:<action>).`,
         "Wait for the user's response via slack_inbox. Only proceed if the user approves. If denied, inform the user and skip the action.",
       ].join("\n"),
     );
