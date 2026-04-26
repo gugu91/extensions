@@ -130,7 +130,8 @@ const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
       args: {
         thread_ts: "1712345678.000100",
         tool: "slack:delete",
-        action: "delete message ts=1712345678.000200",
+        action:
+          "channel=#deployments | thread_ts=1712345678.000100 | ts=1712345678.000200 | thread=false",
       },
     },
   ],
