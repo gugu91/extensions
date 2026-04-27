@@ -364,6 +364,53 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("returns thread-scoped unread summaries without marking messages read", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.queueMessage("agent-1", {
+        source: "agent",
+        threadId: "thread-a",
+        channel: "",
+        userId: "sender",
+        userName: "Sender",
+        text: "first",
+        timestamp: "2026-04-25T00:00:01.000Z",
+      });
+      db.queueMessage("agent-1", {
+        source: "agent",
+        threadId: "thread-a",
+        channel: "",
+        userId: "sender",
+        userName: "Sender",
+        text: "second",
+        timestamp: "2026-04-25T00:00:02.000Z",
+      });
+      db.queueMessage("agent-1", {
+        source: "agent",
+        threadId: "thread-b",
+        channel: "",
+        userId: "sender",
+        userName: "Sender",
+        text: "third",
+        timestamp: "2026-04-25T00:00:03.000Z",
+      });
+
+      const summary = db.readInbox("agent-1", { threadId: "thread-a", summaryOnly: true });
+
+      expect(summary.messages).toEqual([]);
+      expect(summary.unreadCountBefore).toBe(2);
+      expect(summary.unreadCountAfter).toBe(2);
+      expect(summary.markedReadIds).toEqual([]);
+      expect(summary.unreadThreads).toEqual([
+        expect.objectContaining({ threadId: "thread-a", unreadCount: 2 }),
+      ]);
+      expect(db.getUnreadInboxCount("agent-1")).toBe(3);
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not deduplicate messages without a transport identity", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

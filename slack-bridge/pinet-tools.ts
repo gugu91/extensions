@@ -86,10 +86,14 @@ function buildPinetAgentsHintText(hint: PinetAgentsRoutingHint): string {
 function formatPinetReadResult(result: PinetReadResult, options: PinetReadOptions): string {
   const scope = options.threadId ? `thread ${options.threadId}` : "your Pinet inbox";
   const mode = options.unreadOnly === false ? "latest" : "unread";
-  const lines = [
-    `Pinet read (${mode}) from ${scope}: ${result.messages.length} message${result.messages.length === 1 ? "" : "s"}.`,
-    `Unread before: ${result.unreadCountBefore}; unread after: ${result.unreadCountAfter}.`,
-  ];
+  const lines = options.summaryOnly
+    ? [
+        `Pinet unread summary for ${scope}: ${result.unreadCountBefore} unread message${result.unreadCountBefore === 1 ? "" : "s"}.`,
+      ]
+    : [
+        `Pinet read (${mode}) from ${scope}: ${result.messages.length} message${result.messages.length === 1 ? "" : "s"}.`,
+        `Unread before: ${result.unreadCountBefore}; unread after: ${result.unreadCountAfter}.`,
+      ];
 
   if (result.messages.length > 0) {
     lines.push("");
@@ -172,7 +176,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     label: "Pinet Read",
     description: "Read durable SQLite-backed Pinet inbox context with unread/read semantics.",
     promptSnippet:
-      "Read bounded Pinet/Slack broker context from the durable SQLite inbox. Use unread counts first, then read a specific thread or latest messages when needed. Reading marks returned unread rows as read by default; use mark_read=false to peek.",
+      "Read bounded Pinet/Slack broker context from the durable SQLite inbox. Use summary_only=true for unread/thread discovery, then read a specific thread or latest messages when needed. Reading marks returned unread rows as read by default; use mark_read=false to peek.",
     parameters: Type.Object({
       thread_id: Type.Optional(
         Type.String({ description: "Optional Pinet/Slack broker thread ID to read" }),
@@ -186,12 +190,18 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       mark_read: Type.Optional(
         Type.Boolean({ description: "Mark returned unread rows as read (default true)" }),
       ),
+      summary_only: Type.Optional(
+        Type.Boolean({
+          description:
+            "Return unread counts and thread pointers without message bodies or read-state changes (default false)",
+        }),
+      ),
     }),
     async execute(_id, params) {
       deps.requireToolPolicy(
         "pinet_read",
         undefined,
-        `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""}`,
+        `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""} | summary_only=${params.summary_only ?? ""}`,
       );
 
       if (!deps.pinetEnabled()) {
@@ -203,6 +213,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
         ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
         ...(typeof params.unread_only === "boolean" ? { unreadOnly: params.unread_only } : {}),
         ...(typeof params.mark_read === "boolean" ? { markRead: params.mark_read } : {}),
+        ...(typeof params.summary_only === "boolean" ? { summaryOnly: params.summary_only } : {}),
       };
       if (options.threadId !== undefined && options.threadId.length === 0) {
         throw new Error("thread_id must be a non-empty string when provided.");

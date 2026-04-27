@@ -2370,10 +2370,21 @@ export class BrokerDB implements BrokerDBInterface {
   readInbox(agentId: string, options: InboxReadOptions = {}): InboxReadResult {
     const db = this.getDb();
     const unreadOnly = options.unreadOnly ?? true;
-    const markRead = options.markRead ?? true;
+    const summaryOnly = options.summaryOnly ?? false;
+    const markRead = summaryOnly ? false : (options.markRead ?? true);
     const limit = Math.min(Math.max(Math.trunc(options.limit ?? 20), 1), 100);
     const threadId = options.threadId?.trim();
     const unreadCountBefore = this.getUnreadInboxCount(agentId);
+    if (summaryOnly) {
+      const summaryUnreadCount = this.getUnreadInboxCount(agentId, threadId);
+      return {
+        messages: [],
+        unreadCountBefore: summaryUnreadCount,
+        unreadCountAfter: summaryUnreadCount,
+        unreadThreads: this.getUnreadThreadSummary(agentId, limit, threadId),
+        markedReadIds: [],
+      };
+    }
 
     const clauses = ["i.agent_id = ?"];
     const values: Array<string | number> = [agentId];
@@ -2471,17 +2482,37 @@ export class BrokerDB implements BrokerDBInterface {
     };
   }
 
-  getUnreadInboxCount(agentId: string): number {
+  getUnreadInboxCount(agentId: string, threadId?: string): number {
     const db = this.getDb();
+    if (threadId) {
+      const row = db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM inbox i
+           JOIN messages m ON m.id = i.message_id
+           WHERE i.agent_id = ? AND i.read_at IS NULL AND m.thread_id = ?`,
+        )
+        .get(agentId, threadId) as { count?: number } | undefined;
+      return Number(row?.count ?? 0);
+    }
+
     const row = db
       .prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ? AND read_at IS NULL")
       .get(agentId) as { count?: number } | undefined;
     return Number(row?.count ?? 0);
   }
 
-  getUnreadThreadSummary(agentId: string, limit = 20): InboxThreadUnreadSummary[] {
+  getUnreadThreadSummary(
+    agentId: string,
+    limit = 20,
+    threadId?: string,
+  ): InboxThreadUnreadSummary[] {
     const db = this.getDb();
     const clampedLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+    const threadClause = threadId ? " AND m.thread_id = ?" : "";
+    const values: Array<string | number> = threadId
+      ? [agentId, threadId, clampedLimit]
+      : [agentId, clampedLimit];
     const rows = db
       .prepare(
         `SELECT
@@ -2494,12 +2525,12 @@ export class BrokerDB implements BrokerDBInterface {
          FROM inbox i
          JOIN messages m ON m.id = i.message_id
          LEFT JOIN threads t ON t.thread_id = m.thread_id
-         WHERE i.agent_id = ? AND i.read_at IS NULL
+         WHERE i.agent_id = ? AND i.read_at IS NULL${threadClause}
          GROUP BY m.thread_id, m.source, t.channel
          ORDER BY latest_at DESC, latest_message_id DESC
          LIMIT ?`,
       )
-      .all(agentId, clampedLimit) as unknown as Array<{
+      .all(...values) as unknown as Array<{
       thread_id: string;
       source: string;
       channel: string;

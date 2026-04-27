@@ -308,13 +308,13 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 ### Multi-agent tools
 
-| Tool             | Description                                                                |
-| ---------------- | -------------------------------------------------------------------------- |
-| `pinet_message`  | Send a message to a connected Pinet agent or broker-only broadcast channel |
-| `pinet_read`     | Read durable SQLite-backed Pinet inbox context and unread thread pointers  |
-| `pinet_agents`   | List connected Pinet agents with status and capabilities                   |
-| `pinet_free`     | Mark this Pinet agent idle/free for new work                               |
-| `pinet_schedule` | Schedule a future wake-up for this Pinet agent                             |
+| Tool             | Description                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `pinet_message`  | Send a message to a connected Pinet agent or broker-only broadcast channel                                                 |
+| `pinet_read`     | Read durable SQLite-backed Pinet inbox context and unread thread pointers (`summary_only=true` peeks without marking read) |
+| `pinet_agents`   | List connected Pinet agents with status and capabilities                                                                   |
+| `pinet_free`     | Mark this Pinet agent idle/free for new work                                                                               |
+| `pinet_schedule` | Schedule a future wake-up for this Pinet agent                                                                             |
 
 ### Broker commands
 

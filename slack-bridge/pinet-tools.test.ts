@@ -184,6 +184,43 @@ describe("registerPinetTools", () => {
     expect(result.details.markedReadIds).toEqual([31]);
   });
 
+  it("summarizes durable Pinet inbox context without marking rows read", async () => {
+    const readPinetInbox = vi.fn(async () => ({
+      messages: [],
+      unreadCountBefore: 3,
+      unreadCountAfter: 3,
+      unreadThreads: [
+        {
+          threadId: "a2a:broker:worker",
+          source: "agent",
+          channel: "",
+          unreadCount: 2,
+          latestMessageId: 45,
+          latestAt: "2026-04-25T12:01:00.000Z",
+        },
+      ],
+      markedReadIds: [],
+    }));
+    const deps = createDeps({ readPinetInbox });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet_read")?.execute("tool-call-summary", {
+      summary_only: true,
+    })) as {
+      content: Array<{ text: string }>;
+      details: { unreadCountBefore: number; markedReadIds: number[] };
+    };
+
+    expect(readPinetInbox).toHaveBeenCalledWith({ summaryOnly: true });
+    expect(result.content[0]?.text).toContain(
+      "Pinet unread summary for your Pinet inbox: 3 unread messages.",
+    );
+    expect(result.content[0]?.text).toContain("Unread thread pointers:");
+    expect(result.content[0]?.text).toContain("a2a:broker:worker");
+    expect(result.content[0]?.text).not.toContain("Marked read:");
+    expect(result.details).toMatchObject({ unreadCountBefore: 3, markedReadIds: [] });
+  });
+
   it("formats pinet_free responses with note and queued inbox count", async () => {
     const signalAgentFree = vi.fn(async () => ({
       queuedInboxCount: 2,

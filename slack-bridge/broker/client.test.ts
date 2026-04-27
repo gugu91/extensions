@@ -605,6 +605,116 @@ describe("BrokerClient — readInbox", () => {
 
     client.disconnect();
   });
+
+  it("sends inbox.read summaryOnly without accepting destructive summary responses", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const readPromise = client.readInbox({ summaryOnly: true });
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: { summaryOnly: boolean };
+    };
+    expect(req.method).toBe("inbox.read");
+    expect(req.params).toEqual({ summaryOnly: true });
+
+    mock.respondTo(mock.connections[0], req.id, {
+      messages: [],
+      unreadCountBefore: 2,
+      unreadCountAfter: 2,
+      unreadThreads: [
+        {
+          threadId: "a2a:broker:worker",
+          source: "agent",
+          channel: "",
+          unreadCount: 2,
+          latestMessageId: 45,
+          latestAt: "2026-04-25T12:01:00.000Z",
+        },
+      ],
+      markedReadIds: [],
+    });
+
+    const result = await readPromise;
+    expect(result.messages).toEqual([]);
+    expect(result.unreadCountBefore).toBe(2);
+    expect(result.unreadCountAfter).toBe(2);
+    expect(result.markedReadIds).toEqual([]);
+
+    client.disconnect();
+  });
+
+  it("fails closed when an older broker returns global summaries for thread summary reads", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const readPromise = client.readInbox({ threadId: "thread-empty", summaryOnly: true });
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondTo(mock.connections[0], req.id, {
+      messages: [],
+      unreadCountBefore: 1,
+      unreadCountAfter: 1,
+      unreadThreads: [
+        {
+          threadId: "thread-other",
+          source: "agent",
+          channel: "",
+          unreadCount: 1,
+          latestMessageId: 55,
+          latestAt: "2026-04-25T12:02:00.000Z",
+        },
+      ],
+      markedReadIds: [],
+    });
+
+    await expect(readPromise).rejects.toThrow(
+      "Broker does not support non-destructive Pinet read summaries",
+    );
+
+    client.disconnect();
+  });
+
+  it("fails closed when an older broker treats summaryOnly as a normal read", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+
+    const readPromise = client.readInbox({ summaryOnly: true });
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as { id: number };
+    mock.respondTo(mock.connections[0], req.id, {
+      messages: [
+        {
+          entry: { id: 31, delivered: false, readAt: "2026-04-25T12:00:00.000Z" },
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent",
+            direction: "inbound",
+            sender: "broker",
+            body: "normal read from an older broker",
+            metadata: null,
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 2,
+      unreadCountAfter: 1,
+      unreadThreads: [],
+      markedReadIds: [31],
+    });
+
+    await expect(readPromise).rejects.toThrow(
+      "Broker does not support non-destructive Pinet read summaries",
+    );
+
+    client.disconnect();
+  });
 });
 
 describe("BrokerClient — ackMessages", () => {
