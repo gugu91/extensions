@@ -31,12 +31,10 @@ const STEERING_PATTERNS = [
   /\back briefly\b/i,
   /\bplease (?:take|continue|implement|fix|review|inspect|reassign|handle|work on)\b/i,
   /\b(?:new|fresh) (?:implementation )?(?:lane|task|worktree)\b/i,
-  /\b(?:scope|workflow|acceptance criteria|constraints?|blockers?)\s*:/i,
+  /\b(?:task|issue|worktree setup|scope|workflow|acceptance criteria|constraints?)\s*:/i,
   /\b(?:take|continue|implement|fix|review|inspect|reassign|handle|work on)\s+(?:issue|pr)\s*#\d+\b/i,
-  /\b(?:issue|pr)\s*#\d+\b.*\b(?:ack|work|review|fix|implement|take|handle|reassign)\b/i,
-  /\bready for human review\b/i,
+  /\b(?:issue|pr)\s*#\d+\b.*\back(?:\/|\s*)work(?:\/|\s*)ask(?:\/|\s*)report\b/i,
   /\breport blockers? immediately\b/i,
-  /\bno merge\b/i,
 ];
 
 const MAINTENANCE_CONTEXT_PATTERNS = [
