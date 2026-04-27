@@ -46,14 +46,14 @@ describe("chooseSlackSnippetType", () => {
     ).toBe("typescript");
   });
 
-  it("falls back to text for unsupported inline snippet types", () => {
+  it("preserves inferred inline snippet type for known/known-missing extensions", () => {
     expect(
       chooseSlackSnippetType({
         source: "content",
         byteLength: 256,
         filename: "release-notes.txt",
       }),
-    ).toBe("text");
+    ).toBe("txt");
   });
 
   it("does not enable snippet mode for path uploads or oversized content", () => {
@@ -261,6 +261,62 @@ describe("performSlackUpload", () => {
     expect(result.fileId).toBe("F123");
   });
 
+  it("retries files.getUploadURLExternal without snippet_type when invalid arguments happen", async () => {
+    const slack = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Slack files.getUploadURLExternal: invalid_arguments"))
+      .mockResolvedValueOnce({
+        ok: true,
+        upload_url: "https://uploads.slack.test/file",
+        file_id: "F123",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        files: [{ id: "F123", permalink: "https://slack.test/F123" }],
+      });
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "",
+    }));
+
+    const upload = await prepareSlackUpload(
+      {
+        content: "const answer = 42;\n",
+        filename: "release-notes.txt",
+        title: "Release notes",
+      },
+      "/repo",
+      "/tmp",
+    );
+
+    await performSlackUpload({
+      upload,
+      channelId: "C123",
+      threadTs: "171234.5678",
+      slack,
+      token: "xoxb-token",
+      fetchImpl,
+    });
+
+    expect(slack).toHaveBeenCalledTimes(3);
+    expect(slack).toHaveBeenNthCalledWith(1, "files.getUploadURLExternal", "xoxb-token", {
+      filename: "release-notes.txt",
+      length: upload.byteLength,
+      snippet_type: "txt",
+    });
+    expect(slack).toHaveBeenNthCalledWith(2, "files.getUploadURLExternal", "xoxb-token", {
+      filename: "release-notes.txt",
+      length: upload.byteLength,
+    });
+    expect(slack).toHaveBeenNthCalledWith(3, "files.completeUploadExternal", "xoxb-token", {
+      files: [{ id: "F123", title: "Release notes" }],
+      channel_id: "C123",
+      thread_ts: "171234.5678",
+    });
+  });
+
   it("surfaces raw upload failures", async () => {
     const slack = vi.fn().mockResolvedValue({
       ok: true,
@@ -291,7 +347,73 @@ describe("performSlackUpload", () => {
         token: "xoxb-token",
         fetchImpl,
       }),
-    ).rejects.toThrow("Slack raw upload failed (500 Internal Server Error)");
+    ).rejects.toThrow("Slack raw upload failed (HTTP 500 Internal Server Error)");
+  });
+
+  it("flags likely proxy/firewall blocked raw upload responses", async () => {
+    const slack = vi.fn().mockResolvedValue({
+      ok: true,
+      upload_url: "https://files.slack.com/upload/abc",
+      file_id: "F123",
+    });
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      text: async () => "X-Proxy-Error: blocked-by-allowlist",
+    }));
+
+    const upload = await prepareSlackUpload(
+      {
+        content: "hello",
+        filename: "hello.txt",
+      },
+      "/repo",
+      "/tmp",
+    );
+
+    await expect(
+      performSlackUpload({
+        upload,
+        channelId: "C123",
+        slack,
+        token: "xoxb-token",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("[possible outbound proxy/firewall block]");
+  });
+
+  it("does not label generic HTTP 403 as a proxy/firewall issue", async () => {
+    const slack = vi.fn().mockResolvedValue({
+      ok: true,
+      upload_url: "https://uploads.slack.test/file",
+      file_id: "F123",
+    });
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      text: async () => "forbidden",
+    }));
+
+    const upload = await prepareSlackUpload(
+      {
+        content: "hello",
+        filename: "hello.txt",
+      },
+      "/repo",
+      "/tmp",
+    );
+
+    await expect(
+      performSlackUpload({
+        upload,
+        channelId: "C123",
+        slack,
+        token: "xoxb-token",
+        fetchImpl,
+      }),
+    ).rejects.not.toThrow("[possible outbound proxy/firewall block]");
   });
 
   it("surfaces network upload transport failures", async () => {
@@ -325,6 +447,6 @@ describe("performSlackUpload", () => {
         token: "xoxb-token",
         fetchImpl,
       }),
-    ).rejects.toThrow("host files.slack.com");
+    ).rejects.toThrow("host=files.slack.com");
   });
 });

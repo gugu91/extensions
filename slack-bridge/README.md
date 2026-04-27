@@ -266,6 +266,10 @@ migration.
   environments with restricted egress this can fail with `403` (proxy
   allowlist) or DNS errors after `files.getUploadURLExternal`; verify the proxy
   allowlist first, or route through an environment that can reach those hosts.
+- **Upload metadata note.** Slack snippet uploads attempt to use inferred
+  `snippet_type` values for inline content and retry with plain upload metadata
+  when Slack returns `invalid_arguments`, preserving syntax highlighting for
+  supported types while avoiding hard failures on unsupported snippet types.
 - **Canvases are long-lived docs.** `canvas_create` creates standalone or
   channel canvases; `canvas_update` can append, prepend, replace the whole
   canvas, or replace a matched section; `canvas_comments_read` is read-only and
