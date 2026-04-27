@@ -20,6 +20,8 @@ export const READ_ONLY_TOOLS = new Set([
   "slack:presence",
   "slack:canvas_comments_read",
   "slack:confirm_action",
+  "pinet:agents",
+  "pinet:read",
   "pinet_agents",
   "pinet_read",
   "pinet_message",
@@ -53,13 +55,19 @@ export const WRITE_TOOLS = new Set([
   "slack:modal_open",
   "slack:modal_push",
   "slack:modal_update",
+  "pinet:schedule",
+  "pinet:send",
+  "pinet:free",
   "pinet_schedule",
+  "pinet_free",
+  "pinet_send",
 ]);
 
 /**
  * Match a tool name against glob patterns (supports `*` wildcard).
  * Slack dispatcher actions use `slack:<action>` names; legacy `slack_<action>`
- * guardrail patterns still match during migration.
+ * guardrail patterns still match during migration. Pinet follows the same
+ * `pinet:<action>` / `pinet_<action>` compatibility pattern.
  * Returns true if the tool name matches any of the patterns.
  */
 export function matchesToolPattern(toolName: string, patterns: string[]): boolean {
@@ -68,6 +76,12 @@ export function matchesToolPattern(toolName: string, patterns: string[]): boolea
     candidates.add(`slack_${toolName.slice("slack:".length)}`);
   } else if (toolName.startsWith("slack_")) {
     candidates.add(`slack:${toolName.slice("slack_".length)}`);
+  }
+
+  if (toolName.startsWith("pinet:")) {
+    candidates.add(`pinet_${toolName.slice("pinet:".length)}`);
+  } else if (toolName.startsWith("pinet_")) {
+    candidates.add(`pinet:${toolName.slice("pinet_".length)}`);
   }
 
   for (const pattern of patterns) {
@@ -90,12 +104,30 @@ export function isToolBlocked(toolName: string, guardrails: SecurityGuardrails):
   if (guardrails.blockedTools?.length && matchesToolPattern(toolName, guardrails.blockedTools)) {
     return true;
   }
-  const readOnlyToolName = toolName.startsWith("slack_")
-    ? `slack:${toolName.slice("slack_".length)}`
-    : toolName;
-  if (guardrails.readOnly && WRITE_TOOLS.has(readOnlyToolName)) {
-    return true;
+
+  if (!guardrails.readOnly) {
+    return false;
   }
+
+  const readOnlyCandidates = new Set([toolName]);
+  if (toolName.startsWith("slack:")) {
+    readOnlyCandidates.add(`slack_${toolName.slice("slack:".length)}`);
+  } else if (toolName.startsWith("slack_")) {
+    readOnlyCandidates.add(`slack:${toolName.slice("slack_".length)}`);
+  }
+
+  if (toolName.startsWith("pinet:")) {
+    readOnlyCandidates.add(`pinet_${toolName.slice("pinet:".length)}`);
+  } else if (toolName.startsWith("pinet_")) {
+    readOnlyCandidates.add(`pinet:${toolName.slice("pinet_".length)}`);
+  }
+
+  for (const candidate of readOnlyCandidates) {
+    if (WRITE_TOOLS.has(candidate)) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -204,7 +236,7 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
     sections.push(
       [
         "✋ CONFIRMATION REQUIRED:",
-        `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack with action "confirm_action" and args containing thread_ts, the exact action string required by the guarded tool, and the tool name (for dispatcher actions, use slack:<action>).`,
+        `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack with action "confirm_action" and args containing thread_ts, the exact action string required by the guarded tool, and the tool name (for dispatcher actions, use slack:<action> or pinet:<action>).`,
         "Wait for the user's response via slack_inbox. Only proceed if the user approves. If denied, inform the user and skip the action.",
       ].join("\n"),
     );

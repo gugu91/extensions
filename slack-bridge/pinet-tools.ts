@@ -69,6 +69,198 @@ interface PinetAgentsRoutingHint {
   task?: string;
 }
 
+type PinetDispatcherAction = "send" | "read" | "free" | "schedule" | "agents" | "help";
+type PinetDispatcherErrorClass = "input" | "state" | "runtime" | "network";
+
+type PinetDispatcherStatus = "succeeded" | "failed";
+
+interface PinetToolResult {
+  content: Array<{ type: "text"; text: string }>;
+  details?: unknown;
+}
+
+interface PinetActionDefinition {
+  name: PinetDispatcherAction;
+  description: string;
+  parameters: unknown;
+  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<PinetToolResult>;
+}
+
+interface PinetDispatcherError {
+  class: PinetDispatcherErrorClass;
+  message: string;
+  retryable: boolean;
+  hint: string;
+}
+
+interface PinetDispatcherEnvelope {
+  status: PinetDispatcherStatus;
+  data: unknown;
+  errors: PinetDispatcherError[];
+  warnings: string[];
+}
+
+const PINET_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> = {
+  send: [{ action: "send", args: { to: "@worker", message: "Please review PR #123" } }],
+  read: [
+    { action: "read", args: { thread_id: "a2a:broker:worker-1", limit: 20 } },
+    { action: "read", args: { unread_only: false, mark_read: false } },
+  ],
+  free: [{ action: "free", args: { note: "Wrapped up #395" } }],
+  schedule: [{ action: "schedule", args: { delay: "30m", message: "Check queue state" } }],
+  agents: [{ action: "agents", args: { repo: "extensions", role: "worker" } }],
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeDispatcherAction(value: unknown): PinetDispatcherAction {
+  if (typeof value !== "string") {
+    throw new Error("action is required");
+  }
+
+  const normalized = value
+    .trim()
+    .replace(/^pinet:/, "")
+    .replace(/^pinet_/, "")
+    .toLowerCase() as PinetDispatcherAction;
+
+  if (!normalized) {
+    throw new Error("action is required");
+  }
+
+  const allowed: PinetDispatcherAction[] = ["help", "send", "read", "free", "schedule", "agents"];
+  if (!allowed.includes(normalized)) {
+    throw new Error(`Unknown Pinet action: ${normalized}`);
+  }
+
+  return normalized;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function classifyPinetError(message: string): PinetDispatcherError {
+  if (message.includes("requires confirmation for action")) {
+    return {
+      class: "state",
+      message,
+      retryable: false,
+      hint: 'Call slack with action "confirm_action" first in the original thread.',
+    };
+  }
+
+  if (message.includes("is not running") || message.includes("unexpected state")) {
+    return {
+      class: "state",
+      message,
+      retryable: false,
+      hint: "Start or reattach Pinet, then retry.",
+    };
+  }
+
+  if (message.includes("thread_id must be") || message.includes("message is required")) {
+    return {
+      class: "input",
+      message,
+      retryable: false,
+      hint: "Fix the action arguments and retry.",
+    };
+  }
+
+  if (message.includes("ECONN") || message.includes("fetch") || message.includes("ENOTFOUND")) {
+    return {
+      class: "network",
+      message,
+      retryable: true,
+      hint: "Retry when transport is reachable.",
+    };
+  }
+
+  return {
+    class: "runtime",
+    message,
+    retryable: false,
+    hint: "Check inputs and runtime state, then retry.",
+  };
+}
+
+function buildPinetDispatcherEnvelope(
+  status: PinetDispatcherStatus,
+  data: unknown,
+  errors: PinetDispatcherError[] = [],
+  warnings: string[] = [],
+): PinetDispatcherEnvelope {
+  return { status, data, errors, warnings };
+}
+
+function wrapDispatcherEnvelope(envelope: PinetDispatcherEnvelope): {
+  content: Array<{ type: "text"; text: string }>;
+  details: PinetDispatcherEnvelope;
+} {
+  return {
+    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+    details: envelope,
+  };
+}
+
+function buildPinetDispatcherHelpEnvelope(
+  args: Record<string, unknown>,
+  actions: Map<string, PinetActionDefinition>,
+): PinetDispatcherEnvelope {
+  const topic =
+    typeof args.topic === "string" && args.topic.trim()
+      ? args.topic.trim().toLowerCase()
+      : undefined;
+
+  if (!topic) {
+    const catalog = Array.from(actions.values())
+      .filter((definition) => definition.name !== "help")
+      .map((definition) => ({
+        action: definition.name,
+        description: definition.description,
+        guardrail_tool: `pinet:${definition.name}`,
+        args_schema: definition.parameters,
+        examples: PINET_DISPATCHER_EXAMPLES[definition.name] ?? [],
+      }))
+      .sort((a, b) => a.action.localeCompare(b.action));
+
+    return buildPinetDispatcherEnvelope("succeeded", {
+      actions: catalog,
+      note: "Use args.topic to inspect a single action schema.",
+    });
+  }
+
+  const definition = actions.get(topic);
+  if (!definition || definition.name === "help") {
+    return buildPinetDispatcherEnvelope("failed", null, [
+      {
+        class: "input",
+        message: `Unknown Pinet action: ${topic}`,
+        retryable: false,
+        hint: 'Use action="help" to inspect available actions.',
+      },
+    ]);
+  }
+
+  return buildPinetDispatcherEnvelope("succeeded", {
+    action: definition.name,
+    guardrail_tool: `pinet:${definition.name}`,
+    description: definition.description,
+    args_schema: definition.parameters,
+    examples: PINET_DISPATCHER_EXAMPLES[definition.name] ?? [],
+  });
+}
+
 function buildPinetAgentsHintText(hint: PinetAgentsRoutingHint): string {
   return `Agent routing hints: ${[
     hint.repo ? `repo=${hint.repo}` : null,
@@ -116,13 +308,417 @@ function formatPinetReadResult(result: PinetReadResult, options: PinetReadOption
   return lines.join("\n");
 }
 
+function runPinetSendAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const to = typeof params.to === "string" ? params.to.trim() : "";
+    const message = typeof params.message === "string" ? params.message : "";
+
+    if (!to) {
+      throw new Error("to is required");
+    }
+    if (!message) {
+      throw new Error("message is required");
+    }
+
+    deps.requireToolPolicy(toolName, undefined, `to=${to} | message=${message}`);
+
+    if (deps.brokerRole() === "broker" && isBroadcastChannelTarget(to)) {
+      const result = deps.sendPinetBroadcastMessage(to, message);
+      const preview = result.recipients.slice(0, 5).join(", ");
+      const suffix = result.recipients.length > 5 ? ", …" : "";
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Broadcast sent to ${result.channel} (${result.recipients.length} agents: ${preview}${suffix}).`,
+          },
+        ],
+        details: {
+          channel: result.channel,
+          messageIds: result.messageIds,
+          recipients: result.recipients,
+        },
+      };
+    }
+
+    const result = await deps.sendPinetAgentMessage(to, message);
+    return {
+      content: [
+        { type: "text", text: `Message sent to ${result.target} (id: ${result.messageId}).` },
+      ],
+      details: { messageId: result.messageId, target: result.target },
+    };
+  })();
+}
+
+function runPinetReadAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+): Promise<PinetToolResult> {
+  return (async () => {
+    deps.requireToolPolicy(
+      toolName,
+      undefined,
+      `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""}`,
+    );
+
+    if (!deps.pinetEnabled()) {
+      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+    }
+
+    const options: PinetReadOptions = {
+      ...(typeof params.thread_id === "string" ? { threadId: params.thread_id.trim() } : {}),
+      ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
+      ...(typeof params.unread_only === "boolean" ? { unreadOnly: params.unread_only } : {}),
+      ...(typeof params.mark_read === "boolean" ? { markRead: params.mark_read } : {}),
+    };
+
+    if (options.threadId !== undefined && options.threadId.length === 0) {
+      throw new Error("thread_id must be a non-empty string when provided.");
+    }
+
+    const result = await deps.readPinetInbox(options);
+    return {
+      content: [{ type: "text", text: formatPinetReadResult(result, options) }],
+      details: result,
+    };
+  })();
+}
+
+function runPinetFreeAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const note = typeof params.note === "string" ? params.note.trim() : "";
+
+    deps.requireToolPolicy(toolName, undefined, `note=${note}`);
+
+    const result = await deps.signalAgentFree(undefined, { requirePinet: true });
+    const inboxSuffix =
+      result.queuedInboxCount > 0
+        ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`
+        : "";
+    const noteSuffix = note ? ` Note: ${note}.` : "";
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Marked this Pinet agent idle/free for new work.${noteSuffix}${inboxSuffix}`,
+        },
+      ],
+      details: {
+        status: "idle",
+        note: note || null,
+        queuedInboxCount: result.queuedInboxCount,
+      },
+    };
+  })();
+}
+
+function runPinetScheduleAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const delay = typeof params.delay === "string" ? params.delay : undefined;
+    const at = typeof params.at === "string" ? params.at : undefined;
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+
+    deps.requireToolPolicy(
+      toolName,
+      undefined,
+      `delay=${delay ?? ""} | at=${at ?? ""} | message=${message}`,
+    );
+
+    if (!deps.pinetEnabled()) {
+      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+    }
+    if (!message) {
+      throw new Error("message is required");
+    }
+
+    const fireAt = resolveScheduledWakeupFireAt({ delay, at });
+
+    if (deps.brokerRole() === "broker") {
+      const wakeup = await deps.scheduleBrokerWakeup(fireAt, message);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
+          },
+        ],
+        details: wakeup,
+      };
+    }
+
+    if (deps.brokerRole() === "follower") {
+      const wakeup = await deps.scheduleFollowerWakeup(fireAt, message);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
+          },
+        ],
+        details: wakeup,
+      };
+    }
+
+    throw new Error("Pinet is in an unexpected state.");
+  })();
+}
+
+function runPinetAgentsAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const hint: PinetAgentsRoutingHint = {
+      repo: typeof params.repo === "string" ? params.repo : undefined,
+      branch: typeof params.branch === "string" ? params.branch : undefined,
+      role: typeof params.role === "string" ? params.role : undefined,
+      requiredTools:
+        typeof params.required_tools === "string"
+          ? params.required_tools
+              .split(",")
+              .map((tool: string) => tool.trim())
+              .filter(Boolean)
+          : undefined,
+      task: typeof params.task === "string" ? params.task : undefined,
+    };
+
+    deps.requireToolPolicy(
+      toolName,
+      undefined,
+      `repo=${hint.repo ?? ""} | branch=${hint.branch ?? ""} | role=${hint.role ?? ""} | required_tools=${params.required_tools ?? ""} | task=${hint.task ?? ""}`,
+    );
+
+    if (!deps.pinetEnabled()) {
+      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+    }
+
+    const includeGhosts = true;
+    const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
+    const nowMs = Date.now();
+    const hasHint = Boolean(
+      hint.repo || hint.branch || hint.role || (hint.requiredTools?.length ?? 0) > 0 || hint.task,
+    );
+    const toDisplay = (agent: PinetToolsAgentRecord): AgentDisplayInfo =>
+      buildAgentDisplayInfo(agent, {
+        now: nowMs,
+        heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
+        heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+      });
+
+    let rawAgents: PinetToolsAgentRecord[];
+    if (deps.brokerRole() === "broker") {
+      rawAgents = deps.listBrokerAgents();
+    } else if (deps.brokerRole() === "follower") {
+      rawAgents = await deps.listFollowerAgents(includeGhosts);
+    } else {
+      throw new Error("Pinet is in an unexpected state.");
+    }
+
+    const visibleAgents = filterAgentsForMeshVisibility(rawAgents, {
+      now: nowMs,
+      includeGhosts,
+      recentDisconnectWindowMs: recentGhostWindowMs,
+    }).map(toDisplay);
+    const agents = rankAgentsForRouting(visibleAgents, hint);
+    const header = hasHint ? `${buildPinetAgentsHintText(hint)}\n\n` : "";
+    const text = `${header}${formatAgentList(agents, os.homedir())}`;
+
+    return {
+      content: [{ type: "text", text }],
+      details: { agents, hint },
+    };
+  })();
+}
+
 export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDeps): void {
+  const actionDefinitions = new Map<string, PinetActionDefinition>();
+
+  function registerAction(definition: PinetActionDefinition): void {
+    actionDefinitions.set(definition.name, definition);
+  }
+
+  registerAction({
+    name: "send",
+    description: "Send a message to a connected Pinet agent or broker-only broadcast channel.",
+    parameters: Type.Object({
+      to: Type.String({
+        description:
+          "Target agent name/ID, or a broker-only broadcast channel like #extensions. Avoid #all for repo-specific issue/policy announcements.",
+      }),
+      message: Type.String({ description: "Message body" }),
+    }),
+    execute: (_id, params) => runPinetSendAction(params, deps, "pinet:send"),
+  });
+
+  registerAction({
+    name: "read",
+    description: "Read durable SQLite-backed Pinet inbox context with unread/read semantics.",
+    parameters: Type.Object({
+      thread_id: Type.Optional(
+        Type.String({ description: "Optional Pinet/Slack broker thread ID to read" }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum messages to return (default 20, max 100)" }),
+      ),
+      unread_only: Type.Optional(
+        Type.Boolean({ description: "Only return unread rows (default true)" }),
+      ),
+      mark_read: Type.Optional(
+        Type.Boolean({ description: "Mark returned unread rows as read (default true)" }),
+      ),
+    }),
+    execute: (_id, params) => runPinetReadAction(params, deps, "pinet:read"),
+  });
+
+  registerAction({
+    name: "free",
+    description: "Mark this Pinet agent idle/free for new work.",
+    parameters: Type.Object({
+      note: Type.Optional(
+        Type.String({ description: "Optional short note about what you just finished" }),
+      ),
+    }),
+    execute: (_id, params) => runPinetFreeAction(params, deps, "pinet:free"),
+  });
+
+  registerAction({
+    name: "schedule",
+    description: "Schedule a future wake-up for this Pinet agent.",
+    parameters: Type.Object({
+      delay: Type.Optional(
+        Type.String({ description: "Relative delay like 5m, 30s, 1h30m, or 1d" }),
+      ),
+      at: Type.Optional(
+        Type.String({ description: "Absolute ISO-8601 UTC time, e.g. 2026-04-02T14:30:00Z" }),
+      ),
+      message: Type.String({ description: "Reminder or wake-up message to deliver later" }),
+    }),
+    execute: (_id, params) => runPinetScheduleAction(params, deps, "pinet:schedule"),
+  });
+
+  registerAction({
+    name: "agents",
+    description: "List connected Pinet agents with status and capabilities.",
+    parameters: Type.Object({
+      repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
+      branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
+      role: Type.Optional(
+        Type.String({ description: "Preferred agent role, e.g. broker or worker" }),
+      ),
+      required_tools: Type.Optional(
+        Type.String({ description: "Comma-separated required capability/tool tags" }),
+      ),
+      task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
+    }),
+    execute: (_id, params) => runPinetAgentsAction(params, deps, "pinet:agents"),
+  });
+
+  pi.registerTool({
+    name: "pinet",
+    label: "Pinet Dispatcher",
+    description:
+      "Dispatch Pinet worker operations by action with compact help and schema discovery.",
+    promptSnippet:
+      'Use this dispatcher for token-efficient Pinet actions and per-action discovery. Use action="help" for action catalog.',
+    parameters: Type.Object({
+      action: Type.String({
+        description: "Action name: help, send, read, free, schedule, or agents.",
+      }),
+      args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    }),
+    async execute(toolCallId, params) {
+      let normalizedAction: PinetDispatcherAction;
+      try {
+        normalizedAction = normalizeDispatcherAction(params.action);
+      } catch (error) {
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherEnvelope("failed", null, [
+            {
+              class: "input",
+              message: getErrorMessage(error),
+              retryable: false,
+              hint: 'Use action="help" to inspect supported actions.',
+            },
+          ]),
+        );
+      }
+
+      if (normalizedAction === "help") {
+        const args = isRecord(params.args) ? params.args : {};
+        return wrapDispatcherEnvelope(buildPinetDispatcherHelpEnvelope(args, actionDefinitions));
+      }
+
+      const definition = actionDefinitions.get(normalizedAction);
+      if (!definition) {
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherEnvelope("failed", null, [
+            {
+              class: "input",
+              message: `Unknown Pinet action: ${normalizedAction}`,
+              retryable: false,
+              hint: 'Use action="help" to inspect supported actions.',
+            },
+          ]),
+        );
+      }
+
+      if (!isRecord(params.args)) {
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherEnvelope("failed", null, [
+            {
+              class: "input",
+              message: "args must be an object for Pinet action execution.",
+              retryable: false,
+              hint: "Pass a JSON object as args.",
+            },
+          ]),
+        );
+      }
+
+      try {
+        const result = await definition.execute(toolCallId, params.args);
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherEnvelope("succeeded", {
+            action: definition.name,
+            text: result.content[0]?.text ?? "",
+            details: result.details ?? null,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        const message = getErrorMessage(error);
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherEnvelope("failed", null, [classifyPinetError(message)]),
+        );
+      }
+    },
+  });
+
   pi.registerTool({
     name: "pinet_message",
     label: "Pinet Message",
     description: "Send a message to a connected Pinet agent or broker-only broadcast channel.",
     promptSnippet:
-      "Send a message to a connected Pinet agent by name/ID, or to a broker-only broadcast channel. Use repo-scoped channels such as #extensions for repo-specific issue/policy broadcasts; do not use #all for repo-specific announcements. When assigning work, include the expected ack/work/ask/report flow.",
+      "Compatibility shim for legacy usage. Prefer pinet action=send. Use this for repo-scoped channels like #extensions and Avoid #all for repo-specific announcements.",
     parameters: Type.Object({
       to: Type.String({
         description:
@@ -131,39 +727,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_id, params) {
-      deps.requireToolPolicy(
-        "pinet_message",
-        undefined,
-        `to=${params.to} | message=${params.message}`,
-      );
-
-      if (deps.brokerRole() === "broker" && isBroadcastChannelTarget(params.to)) {
-        const result = deps.sendPinetBroadcastMessage(params.to, params.message);
-        const preview = result.recipients.slice(0, 5).join(", ");
-        const suffix = result.recipients.length > 5 ? ", …" : "";
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Broadcast sent to ${result.channel} (${result.recipients.length} agents: ${preview}${suffix}).`,
-            },
-          ],
-          details: {
-            channel: result.channel,
-            messageIds: result.messageIds,
-            recipients: result.recipients,
-          },
-        };
-      }
-
-      const result = await deps.sendPinetAgentMessage(params.to, params.message);
-      return {
-        content: [
-          { type: "text", text: `Message sent to ${result.target} (id: ${result.messageId}).` },
-        ],
-        details: { messageId: result.messageId, target: result.target },
-      };
+      return runPinetSendAction(params, deps, "pinet_message");
     },
   });
 
@@ -172,7 +736,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     label: "Pinet Read",
     description: "Read durable SQLite-backed Pinet inbox context with unread/read semantics.",
     promptSnippet:
-      "Read bounded Pinet/Slack broker context from the durable SQLite inbox. Use unread counts first, then read a specific thread or latest messages when needed. Reading marks returned unread rows as read by default; use mark_read=false to peek.",
+      "Compatibility shim for legacy usage. Prefer pinet action=read. Read bounded Pinet/Slack broker context from the durable SQLite inbox.",
     parameters: Type.Object({
       thread_id: Type.Optional(
         Type.String({ description: "Optional Pinet/Slack broker thread ID to read" }),
@@ -188,31 +752,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       ),
     }),
     async execute(_id, params) {
-      deps.requireToolPolicy(
-        "pinet_read",
-        undefined,
-        `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""}`,
-      );
-
-      if (!deps.pinetEnabled()) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-      }
-
-      const options: PinetReadOptions = {
-        ...(typeof params.thread_id === "string" ? { threadId: params.thread_id.trim() } : {}),
-        ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
-        ...(typeof params.unread_only === "boolean" ? { unreadOnly: params.unread_only } : {}),
-        ...(typeof params.mark_read === "boolean" ? { markRead: params.mark_read } : {}),
-      };
-      if (options.threadId !== undefined && options.threadId.length === 0) {
-        throw new Error("thread_id must be a non-empty string when provided.");
-      }
-
-      const result = await deps.readPinetInbox(options);
-      return {
-        content: [{ type: "text", text: formatPinetReadResult(result, options) }],
-        details: result,
-      };
+      return runPinetReadAction(params, deps, "pinet_read");
     },
   });
 
@@ -220,36 +760,14 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     name: "pinet_free",
     label: "Pinet Free",
     description: "Mark this Pinet agent idle/free for new work.",
-    promptSnippet: "Mark this Pinet agent idle/free for new work after you report the outcome.",
+    promptSnippet: "Compatibility shim for legacy usage. Prefer pinet action=free.",
     parameters: Type.Object({
       note: Type.Optional(
         Type.String({ description: "Optional short note about what you just finished" }),
       ),
     }),
     async execute(_id, params) {
-      deps.requireToolPolicy("pinet_free", undefined, `note=${params.note ?? ""}`);
-
-      const note = typeof params.note === "string" ? params.note.trim() : "";
-      const result = await deps.signalAgentFree(undefined, { requirePinet: true });
-      const inboxSuffix =
-        result.queuedInboxCount > 0
-          ? ` ${result.queuedInboxCount} queued inbox item${result.queuedInboxCount === 1 ? " remains" : "s remain"}.`
-          : "";
-      const noteSuffix = note ? ` Note: ${note}.` : "";
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Marked this Pinet agent idle/free for new work.${noteSuffix}${inboxSuffix}`,
-          },
-        ],
-        details: {
-          status: "idle",
-          note: note || null,
-          queuedInboxCount: result.queuedInboxCount,
-        },
-      };
+      return runPinetFreeAction(params, deps, "pinet_free");
     },
   });
 
@@ -257,8 +775,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     name: "pinet_schedule",
     label: "Pinet Schedule",
     description: "Schedule a future wake-up for this Pinet agent.",
-    promptSnippet:
-      "Schedule a future wake-up for this Pinet agent instead of waiting around for the next check-in.",
+    promptSnippet: "Compatibility shim for legacy usage. Prefer pinet action=schedule.",
     parameters: Type.Object({
       delay: Type.Optional(
         Type.String({ description: "Relative delay like 5m, 30s, 1h30m, or 1d" }),
@@ -269,50 +786,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       message: Type.String({ description: "Reminder or wake-up message to deliver later" }),
     }),
     async execute(_id, params) {
-      deps.requireToolPolicy(
-        "pinet_schedule",
-        undefined,
-        `delay=${params.delay ?? ""} | at=${params.at ?? ""} | message=${params.message}`,
-      );
-
-      if (!deps.pinetEnabled()) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-      }
-
-      const message = params.message.trim();
-      if (!message) {
-        throw new Error("message is required");
-      }
-
-      const fireAt = resolveScheduledWakeupFireAt({ delay: params.delay, at: params.at });
-
-      if (deps.brokerRole() === "broker") {
-        const wakeup = await deps.scheduleBrokerWakeup(fireAt, message);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
-            },
-          ],
-          details: wakeup,
-        };
-      }
-
-      if (deps.brokerRole() === "follower") {
-        const wakeup = await deps.scheduleFollowerWakeup(fireAt, message);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
-            },
-          ],
-          details: wakeup,
-        };
-      }
-
-      throw new Error("Pinet is in an unexpected state.");
+      return runPinetScheduleAction(params, deps, "pinet_schedule");
     },
   });
 
@@ -320,8 +794,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     name: "pinet_agents",
     label: "Pinet Agents",
     description: "List connected Pinet agents with status and capabilities.",
-    promptSnippet:
-      "List connected Pinet agents to choose a worker, check status, or route work by repo, branch, role, or tools.",
+    promptSnippet: "Compatibility shim for legacy usage. Prefer pinet action=agents.",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
       branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
@@ -334,62 +807,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
     }),
     async execute(_toolCallId, params) {
-      deps.requireToolPolicy(
-        "pinet_agents",
-        undefined,
-        `repo=${params.repo ?? ""} | branch=${params.branch ?? ""} | role=${params.role ?? ""} | required_tools=${params.required_tools ?? ""} | task=${params.task ?? ""}`,
-      );
-
-      if (!deps.pinetEnabled()) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
-      }
-
-      const includeGhosts = true;
-      const recentGhostWindowMs = DEFAULT_HEARTBEAT_TIMEOUT_MS * 2;
-      const nowMs = Date.now();
-      const hint: PinetAgentsRoutingHint = {
-        repo: params.repo,
-        branch: params.branch,
-        role: params.role,
-        requiredTools: params.required_tools
-          ?.split(",")
-          .map((tool: string) => tool.trim())
-          .filter(Boolean),
-        task: params.task,
-      };
-      const hasHint = Boolean(
-        hint.repo || hint.branch || hint.role || (hint.requiredTools?.length ?? 0) > 0 || hint.task,
-      );
-
-      const toDisplay = (agent: PinetToolsAgentRecord): AgentDisplayInfo =>
-        buildAgentDisplayInfo(agent, {
-          now: nowMs,
-          heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
-          heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
-        });
-
-      let rawAgents: PinetToolsAgentRecord[];
-      if (deps.brokerRole() === "broker") {
-        rawAgents = deps.listBrokerAgents();
-      } else if (deps.brokerRole() === "follower") {
-        rawAgents = await deps.listFollowerAgents(includeGhosts);
-      } else {
-        throw new Error("Pinet is in an unexpected state.");
-      }
-
-      const visibleAgents = filterAgentsForMeshVisibility(rawAgents, {
-        now: nowMs,
-        includeGhosts,
-        recentDisconnectWindowMs: recentGhostWindowMs,
-      }).map(toDisplay);
-      const agents = rankAgentsForRouting(visibleAgents, hint);
-      const header = hasHint ? `${buildPinetAgentsHintText(hint)}\n\n` : "";
-      const text = `${header}${formatAgentList(agents, os.homedir())}`;
-
-      return {
-        content: [{ type: "text", text }],
-        details: { agents, hint },
-      };
+      return runPinetAgentsAction(params, deps, "pinet_agents");
     },
   });
 }

@@ -82,6 +82,7 @@ describe("registerPinetTools", () => {
     const tools = registerWithDeps(createDeps());
 
     expect([...tools.keys()]).toEqual([
+      "pinet",
       "pinet_message",
       "pinet_read",
       "pinet_free",
@@ -94,9 +95,9 @@ describe("registerPinetTools", () => {
     const tools = registerWithDeps(createDeps());
     const pinetMessage = tools.get("pinet_message");
 
-    expect(pinetMessage?.promptSnippet).toContain("repo-scoped channels");
+    expect(pinetMessage?.promptSnippet).toContain("Avoid #all");
     expect(pinetMessage?.promptSnippet).toContain("#extensions");
-    expect(pinetMessage?.promptSnippet).toContain("do not use #all");
+    expect(pinetMessage?.promptSnippet).toContain("repo-specific");
     expect(JSON.stringify(pinetMessage?.parameters)).toContain("Avoid #all");
   });
 
@@ -182,6 +183,60 @@ describe("registerPinetTools", () => {
     );
     expect(result.content[0]?.text).toContain("Marked read: 31.");
     expect(result.details.markedReadIds).toEqual([31]);
+  });
+
+  it("routes action-dispatched help through the dispatcher", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-help", {
+      action: "help",
+    })) as {
+      content: Array<{ text: string }>;
+      details: {
+        status: "succeeded";
+        data: {
+          actions: Array<{ action: string; guardrail_tool: string; description: string }>;
+          note: string;
+        };
+      };
+    };
+
+    expect(result.details.status).toBe("succeeded");
+    expect(result.details.data.note).toContain("Use args.topic");
+    expect(result.details.data.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "send", guardrail_tool: "pinet:send" }),
+        expect.objectContaining({ action: "read", guardrail_tool: "pinet:read" }),
+        expect.objectContaining({ action: "free", guardrail_tool: "pinet:free" }),
+        expect.objectContaining({ action: "schedule", guardrail_tool: "pinet:schedule" }),
+        expect.objectContaining({ action: "agents", guardrail_tool: "pinet:agents" }),
+      ]),
+    );
+  });
+
+  it("routes action-dispatched pinet send", async () => {
+    const sendPinetAgentMessage = vi.fn(async (_to: string, _message: string) => ({
+      messageId: 41,
+      target: "alpha",
+    }));
+    const deps = createDeps({ sendPinetAgentMessage });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-send", {
+      action: "send",
+      args: {
+        to: "alpha",
+        message: "dispatch now",
+      },
+    })) as {
+      content: Array<{ text: string }>;
+      details: { status: string; data: { action: string; text: string } };
+    };
+
+    expect(sendPinetAgentMessage).toHaveBeenCalledWith("alpha", "dispatch now");
+    expect(result.details.status).toBe("succeeded");
+    expect(result.details.data.action).toBe("send");
+    expect(result.content[0]?.text).toContain('"status": "succeeded"');
   });
 
   it("formats pinet_free responses with note and queued inbox count", async () => {
