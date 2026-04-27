@@ -64,6 +64,12 @@ describe("matchesToolPattern", () => {
     expect(matchesToolPattern("slack:canvas_update", ["slack_canvas_*"])).toBe(true);
     expect(matchesToolPattern("slack:upload", ["slack_upload"])).toBe(true);
   });
+
+  it("supports dotted slack action aliases in guardrail patterns", () => {
+    expect(matchesToolPattern("slack:canvas.update", ["slack:*.update"])).toBe(true);
+    expect(matchesToolPattern("slack:canvas.update", ["slack_canvas_*"])).toBe(true);
+    expect(matchesToolPattern("slack_canvas_update", ["slack:canvas.update"])).toBe(true);
+  });
 });
 
 // ─── isToolBlocked ────────────────────────────────────────

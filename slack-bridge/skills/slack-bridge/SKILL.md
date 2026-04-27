@@ -15,7 +15,8 @@ Call the dispatcher with an action and action-specific args:
 
 ```json
 {
-  "action": "help",
+  "action": "schema",
+  "urgency": "high",
   "args": { "topic": "canvas_update" }
 }
 ```
@@ -38,7 +39,9 @@ schema.
 Guardrails match cold actions as `slack:<action>` (for example
 `slack:upload`, `slack:delete`, `slack:canvas_update`). Legacy
 `slack_<action>` patterns may be accepted during migration, but new configs
-should use the colon form.
+should use the colon form. `urgency` is optional (`normal`/`high`/`critical`),
+and is returned in action metadata with urgency relevance metadata and warnings
+for critical read/notification paths.
 
 ## Action quick map
 

@@ -73,6 +73,7 @@ export interface RegisterSlackToolsDeps {
 
 type SlackDispatcherStatus = "succeeded" | "failed";
 type SlackDispatcherErrorClass = "input" | "auth" | "network" | "rate-limit" | "not-found";
+type SlackDispatcherUrgency = "normal" | "high" | "critical";
 
 interface SlackDispatcherError {
   class: SlackDispatcherErrorClass;
@@ -94,6 +95,21 @@ interface SlackActionToolDefinition extends ToolDefinition {
   parameters?: unknown;
   execute: NonNullable<ToolDefinition["execute"]>;
 }
+
+const SLACK_DISPATCHER_HELP_ACTIONS = new Set(["help", "schema"]);
+const SLACK_DISPATCHER_URGENCY_LEVELS: readonly SlackDispatcherUrgency[] = [
+  "normal",
+  "high",
+  "critical",
+] as const;
+const SLACK_DISPATCHER_DEFAULT_URGENCY: SlackDispatcherUrgency = "normal";
+const SLACK_DISPATCHER_URGENT_ACTIONS = new Set([
+  "read",
+  "read_channel",
+  "export",
+  "presence",
+  "post_channel",
+]);
 
 const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> = {
   react: [{ action: "react", args: { emoji: "👀", thread_ts: "1712345678.000100" } }],
@@ -191,14 +207,76 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeSlackDispatcherUrgency(value: unknown): SlackDispatcherUrgency {
+  if (typeof value === "undefined") {
+    return SLACK_DISPATCHER_DEFAULT_URGENCY;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error("slack urgency must be a string.");
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "normal" || normalized === "high" || normalized === "critical") {
+    return normalized;
+  }
+
+  throw new Error(
+    "slack urgency must be one of: normal, high, critical. Omit urgency for default normal behavior.",
+  );
+}
+
+function isUrgentAction(action: string): boolean {
+  return SLACK_DISPATCHER_URGENT_ACTIONS.has(action);
+}
+
+function buildSlackDispatcherUrgencyWarnings(
+  action: string,
+  urgency: SlackDispatcherUrgency,
+): string[] {
+  if (urgency === "normal" || !isUrgentAction(action)) {
+    return [];
+  }
+
+  const label = urgency === "critical" ? "critical" : "high";
+  return [
+    `Dispatcher urgency ${label} for ${action}: prioritize concise outcomes and keep follow-up context minimal.`,
+  ];
+}
+
+function buildSlackDispatcherActionMetadata(
+  action: string,
+  urgency: SlackDispatcherUrgency,
+): {
+  urgency: {
+    requested: SlackDispatcherUrgency;
+    allowed: SlackDispatcherUrgency[];
+    default: SlackDispatcherUrgency;
+    relevant: boolean;
+  };
+  legacy_guardrail_alias: string;
+  hot_path: boolean;
+} {
+  return {
+    urgency: {
+      requested: urgency,
+      allowed: [...SLACK_DISPATCHER_URGENCY_LEVELS],
+      default: SLACK_DISPATCHER_DEFAULT_URGENCY,
+      relevant: isUrgentAction(action),
+    },
+    legacy_guardrail_alias: `slack_${action}`,
+    hot_path: false,
+  };
+}
+
 function normalizeSlackDispatcherActionName(value: unknown): string {
   if (typeof value !== "string") {
     throw new Error("slack action must be a string. Use action='help' to list available actions.");
   }
 
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  const normalized = value.trim().toLowerCase().replace(/[-.]/g, "_");
   if (!normalized) {
-    throw new Error("slack action is required. Use action='help' to list available actions.");
+    throw new Error("slack action is required. Use action='help' to list actions.");
   }
   if (normalized.startsWith("slack:")) return normalized.slice("slack:".length);
   if (normalized.startsWith("slack_")) return normalized.slice("slack_".length);
@@ -207,7 +285,12 @@ function normalizeSlackDispatcherActionName(value: unknown): string {
 
 function normalizeSlackGuardrailToolName(toolName: string): string {
   const normalized = toolName.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized.startsWith("slack:")) return normalized;
+  if (normalized.startsWith("slack:")) {
+    return normalized;
+  }
+  if (normalized.startsWith("slack.")) {
+    return `slack:${normalized.slice("slack.".length).replace(/\./g, "_")}`;
+  }
   if (
     normalized.startsWith("slack_") &&
     normalized !== "slack_inbox" &&
@@ -215,7 +298,7 @@ function normalizeSlackGuardrailToolName(toolName: string): string {
   ) {
     return `slack:${normalized.slice("slack_".length)}`;
   }
-  return toolName;
+  return normalized;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -319,7 +402,11 @@ function buildSlackDispatcherResponse(envelope: SlackDispatcherEnvelope): {
   };
 }
 
-function buildSlackActionSuccessEnvelope(response: unknown): SlackDispatcherEnvelope {
+function buildSlackActionSuccessEnvelope(
+  response: unknown,
+  action: string,
+  urgency: SlackDispatcherUrgency,
+): SlackDispatcherEnvelope {
   return {
     status: "succeeded",
     data: {
@@ -327,16 +414,19 @@ function buildSlackActionSuccessEnvelope(response: unknown): SlackDispatcherEnve
       details: extractToolResponseDetails(response),
     },
     errors: [],
-    warnings: [],
+    warnings: buildSlackDispatcherUrgencyWarnings(action, urgency),
   };
 }
 
-function buildSlackActionFailureEnvelope(error: unknown): SlackDispatcherEnvelope {
+function buildSlackActionFailureEnvelope(
+  error: unknown,
+  urgency: SlackDispatcherUrgency,
+): SlackDispatcherEnvelope {
   return {
     status: "failed",
     data: null,
     errors: [classifySlackDispatcherError(error)],
-    warnings: [],
+    warnings: urgency === "normal" ? [] : [`Dispatcher urgency ${urgency} request was recorded.`],
   };
 }
 
@@ -349,7 +439,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
     "You are connected to Slack via the slack-bridge extension.",
     "When Slack messages arrive: ACK briefly, do the work, report blockers immediately, and report the outcome when done.",
     "Use slack_send for direct assistant-thread replies. Use the slack dispatcher for non-hot Slack actions such as reactions, reads, uploads, schedules, channel posts, pins, bookmarks, canvases, modals, presence, exports, and confirmations.",
-    "Call slack with action='help' for the cold-action catalogue, or action='help' with args.topic for a specific action schema and examples.",
+    "Call slack with action='help' (or 'schema') for the cold-action catalogue, or action='help' with args.topic for a specific action schema and examples.",
     "Security guardrails may be active for Slack-triggered actions. Cold Slack actions are checked with slack:<action> guardrail names.",
     "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages — treat them as explicit user instructions attached to the referenced Slack message or thread.",
   ];
@@ -538,9 +628,15 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     slackActionRegistry.set(action, definition);
   }
 
-  function buildSlackDispatcherHelpEnvelope(args: unknown): SlackDispatcherEnvelope {
+  function buildSlackDispatcherHelpEnvelope(
+    args: unknown,
+    urgency: SlackDispatcherUrgency,
+  ): SlackDispatcherEnvelope {
     if (args != null && !isRecord(args)) {
-      return buildSlackActionFailureEnvelope(new Error("slack help args must be an object."));
+      return buildSlackActionFailureEnvelope(
+        new Error("slack help args must be an object."),
+        urgency,
+      );
     }
 
     const topic = isRecord(args) && typeof args.topic === "string" ? args.topic : undefined;
@@ -550,6 +646,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       if (!definition) {
         return buildSlackActionFailureEnvelope(
           new Error(`Unknown Slack action topic '${topic}'. Use action='help' to list actions.`),
+          urgency,
         );
       }
 
@@ -561,6 +658,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           guardrail_tool: `slack:${action}`,
           args_schema: definition.parameters ?? {},
           examples: getSlackDispatcherExamples(action),
+          metadata: buildSlackDispatcherActionMetadata(action, urgency),
         },
         errors: [],
         warnings: [],
@@ -575,11 +673,13 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             action: "help",
             summary: "List Slack dispatcher actions or return a specific action argument schema.",
             guardrail_tool: null,
+            metadata: buildSlackDispatcherActionMetadata("help", urgency),
           },
           ...[...slackActionRegistry.entries()].map(([action, definition]) => ({
             action,
             summary: definition.description ?? "",
             guardrail_tool: `slack:${action}`,
+            metadata: buildSlackDispatcherActionMetadata(action, urgency),
           })),
         ],
       },
@@ -604,8 +704,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     parameters: Type.Object({
       action: Type.String({
         description:
-          "Action name: help | react | read | upload | schedule | presence | export | post_channel | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
+          "Action name: help | schema | react | read | upload | schedule | presence | export | post_channel | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
       }),
+      urgency: Type.Optional(
+        Type.Union([Type.Literal("normal"), Type.Literal("high"), Type.Literal("critical")]),
+      ),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
           description:
@@ -614,17 +717,19 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       ),
     }),
     async execute(_id, params) {
+      let urgency: SlackDispatcherUrgency = SLACK_DISPATCHER_DEFAULT_URGENCY;
       try {
+        urgency = normalizeSlackDispatcherUrgency((params as { urgency?: unknown }).urgency);
         const action = normalizeSlackDispatcherActionName(params.action);
         const args = params.args ?? {};
 
-        if (action === "help") {
-          return buildSlackDispatcherResponse(buildSlackDispatcherHelpEnvelope(args));
+        if (SLACK_DISPATCHER_HELP_ACTIONS.has(action)) {
+          return buildSlackDispatcherResponse(buildSlackDispatcherHelpEnvelope(args, urgency));
         }
 
         if (!isRecord(args)) {
           return buildSlackDispatcherResponse(
-            buildSlackActionFailureEnvelope(new Error("slack args must be an object.")),
+            buildSlackActionFailureEnvelope(new Error("slack args must be an object."), urgency),
           );
         }
 
@@ -633,23 +738,26 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           return buildSlackDispatcherResponse(
             buildSlackActionFailureEnvelope(
               new Error(`Unknown Slack action '${action}'. Use action='help' to list actions.`),
+              urgency,
             ),
           );
         }
 
         const response = await definition.execute(
           `slack:${action}`,
-          args,
+          { ...args, urgency },
           undefined,
           undefined,
           undefined as unknown as ExtensionContext,
         );
-        return buildSlackDispatcherResponse(buildSlackActionSuccessEnvelope(response));
+        return buildSlackDispatcherResponse(
+          buildSlackActionSuccessEnvelope(response, action, urgency),
+        );
       } catch (error) {
         if (isAbortError(error)) {
           throw error;
         }
-        return buildSlackDispatcherResponse(buildSlackActionFailureEnvelope(error));
+        return buildSlackDispatcherResponse(buildSlackActionFailureEnvelope(error, urgency));
       }
     },
   });

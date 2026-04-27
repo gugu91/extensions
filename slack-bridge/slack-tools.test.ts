@@ -18,6 +18,7 @@ type SlackDispatcherEnvelope = {
   status: "succeeded" | "failed";
   data: unknown;
   errors: Array<{ message: string }>;
+  warnings?: string[];
 };
 
 type SlackDispatcherData = {
@@ -1070,6 +1071,75 @@ describe("registerSlackTools", () => {
         }),
       ],
     });
+  });
+
+  it("supports schema/action discovery aliases and urgency metadata", async () => {
+    const { registeredTools } = setup();
+    const dispatcher = registeredTools.get("slack")!;
+
+    const schemaAliasResponse = await dispatcher.execute("tool-schema", {
+      action: "schema",
+      urgency: "critical",
+    });
+    const schemaAliasEnvelope = schemaAliasResponse.details as SlackDispatcherEnvelope & {
+      data: { actions?: Array<{ action: string; metadata?: Record<string, unknown> }> };
+    };
+    expect(schemaAliasEnvelope.status).toBe("succeeded");
+
+    const postChannelAction = schemaAliasEnvelope.data.actions?.find(
+      (actionItem) => actionItem.action === "post_channel",
+    );
+    expect(postChannelAction?.metadata).toMatchObject({
+      urgency: {
+        default: "normal",
+        requested: "critical",
+        allowed: ["normal", "high", "critical"],
+      },
+    });
+
+    const topicAliasResponse = await dispatcher.execute("tool-schema-topic", {
+      action: "schema",
+      urgency: "high",
+      args: { topic: "read_channel" },
+    });
+    const topicAliasEnvelope = topicAliasResponse.details as SlackDispatcherEnvelope;
+    expect(topicAliasEnvelope.status).toBe("succeeded");
+    const serializedTopicData = JSON.stringify(topicAliasEnvelope.data);
+    expect(serializedTopicData).toContain('"requested":"high"');
+    expect(serializedTopicData).toContain('"allowed":["normal","high","critical"]');
+  });
+
+  it("normalizes dot-style dispatcher actions and surfaces urgency warnings", async () => {
+    const { tools, setConversationsReplies, setResolveThreadChannel } = setup();
+    setResolveThreadChannel(async () => "C-DB");
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [{ ts: "123.456", text: "Status check", user: "U123" }],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+
+    const response = await tools.get("slack")!.execute("tool-read-urgent", {
+      action: "slack.read",
+      urgency: "high",
+      args: { thread_ts: "123.456", limit: 1 },
+    });
+    const envelope = response.details as SlackDispatcherEnvelope;
+    expect(envelope.status).toBe("succeeded");
+    expect(envelope.warnings?.join(" ")).toContain("Dispatcher urgency high for read");
+  });
+
+  it("returns a clear error for unsupported urgency values", async () => {
+    const { tools } = setup();
+    const response = await tools.get("slack")!.execute("tool-invalid-urgency", {
+      action: "read",
+      urgency: "urgent",
+      args: { thread_ts: "123.456" },
+    });
+    const envelope = response.details as SlackDispatcherEnvelope;
+    expect(envelope.status).toBe("failed");
+    expect(envelope.errors[0]?.message).toContain("slack urgency must be one of");
   });
 
   it("opens a modal and embeds thread context in private_metadata", async () => {

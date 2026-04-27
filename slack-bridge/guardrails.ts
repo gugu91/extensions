@@ -63,11 +63,22 @@ export const WRITE_TOOLS = new Set([
  * Returns true if the tool name matches any of the patterns.
  */
 export function matchesToolPattern(toolName: string, patterns: string[]): boolean {
-  const candidates = new Set([toolName]);
+  const candidates = new Set<string>([toolName]);
+  const addCandidate = (value: string) => {
+    candidates.add(value);
+  };
+
   if (toolName.startsWith("slack:")) {
-    candidates.add(`slack_${toolName.slice("slack:".length)}`);
+    const action = toolName.slice("slack:".length);
+    addCandidate(`slack_${action}`);
+    addCandidate(`slack_${action.replace(/\./g, "_")}`);
+    addCandidate(`slack:${action.replace(/_/g, ".")}`);
+    addCandidate(`slack_${action.replace(/_/g, ".")}`);
   } else if (toolName.startsWith("slack_")) {
-    candidates.add(`slack:${toolName.slice("slack_".length)}`);
+    const action = toolName.slice("slack_".length);
+    addCandidate(`slack:${action}`);
+    addCandidate(`slack:${action.replace(/_/g, ".")}`);
+    addCandidate(`slack_${action.replace(/\./g, "_")}`);
   }
 
   for (const pattern of patterns) {
@@ -92,7 +103,9 @@ export function isToolBlocked(toolName: string, guardrails: SecurityGuardrails):
   }
   const readOnlyToolName = toolName.startsWith("slack_")
     ? `slack:${toolName.slice("slack_".length)}`
-    : toolName;
+    : toolName.startsWith("slack:")
+      ? `slack:${toolName.slice("slack:".length).replace(/\./g, "_")}`
+      : toolName;
   if (guardrails.readOnly && WRITE_TOOLS.has(readOnlyToolName)) {
     return true;
   }

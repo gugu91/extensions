@@ -228,20 +228,25 @@ Cold Slack actions live behind the `slack` dispatcher:
 | `confirm_action`       | Request user confirmation before a dangerous action                               |
 
 Use `slack` with `action: "help"` for the action catalogue, or
-`action: "help", args: { "topic": "canvas_update" }` for a specific JSON
-schema and example invocations. Dispatcher responses use a consistent
-`{ "status", "data", "errors", "warnings" }` envelope. Guardrails match
-cold Slack actions as `slack:<action>` (for example `slack:upload` or
-`slack:canvas_update`); legacy `slack_<action>` patterns are accepted during
-migration.
+`action: "schema"` as an explicit alias, and `action: "help"|"schema"`,
+`args: { "topic": "canvas_update" }` for a specific JSON schema and
+example invocations. Actions accept an optional top-level `urgency` (`normal`,
+`high`, `critical`) field; urgency is returned in help/schema metadata.
+Dispatcher responses use a consistent `{ "status", "data", "errors", "warnings" }`
+envelope. Guardrails match cold Slack actions as `slack:<action>` (for example
+`slack:upload` or `slack:canvas_update`); legacy `slack_<action>` patterns are
+accepted during migration.
 
 #### Tool and workflow usage notes
 
 - **Reply where the work arrived.** Use `slack_send` for assistant-thread
   replies. If a task was delivered in a Slack thread, acknowledge briefly,
-  do the work, report blockers immediately, and finish with the outcome. If
-  you know only a channel/thread pair, use dispatcher action `post_channel`
-  with `channel` and optional `thread_ts` instead.
+  do the work, report blockers immediately, and finish with the outcome.
+- **Use urgency for time-sensitive reads or posts.** Set `urgency: "high"` for
+  fast-turn requests (`read`, `read_channel`, `post_channel`, `presence`,
+  `export`) and `urgency: "critical"` for escalation contexts. Urgency is
+  reflected in dispatcher metadata and can trigger concise-response hints for
+  urgent actions.
 - **Channel posting is explicit.** `post_channel` posts to a named channel or
   channel ID. When `channel` is omitted, it first resolves a provided
   `thread_ts` to a tracked thread channel, then falls back to `defaultChannel`
