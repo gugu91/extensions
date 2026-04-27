@@ -49,6 +49,13 @@ describe("Pinet mail classification", () => {
         metadata: { a2a: true },
       }),
     ).toMatchObject({ class: "fwup", explicit: false });
+
+    expect(
+      classifyPinetMail({
+        body: "Tests passed. Blockers: none.",
+        metadata: { a2a: true },
+      }),
+    ).toMatchObject({ class: "fwup", explicit: false });
   });
 
   it("classifies legacy control and skin metadata as maintenance/context-only", () => {
