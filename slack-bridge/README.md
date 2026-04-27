@@ -164,6 +164,40 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `security.requireConfirmation` | no       | Runtime-require Slack approval before matching tools execute; core tools need a specific Slack thread context      |
 | `security.blockedTools`        | no       | Runtime-block matching tools for Slack-triggered turns, including core tools                                       |
 
+## Transport-aware outbound content (first slice)
+
+Issue `#403` now has a bounded outbound normalization slice in place.
+
+### Canonical model
+
+Shared outbound messages may carry both legacy top-level fields and normalized transport-aware content:
+
+- `text`: canonical plain-text fallback and persistence body
+- `content.text`: canonical normalized plain-text body when `content` is present
+- `content.markdown`: optional markdown-oriented companion for markdown-aware surfaces and exports
+- `content.slackBlocks`: optional Slack-native Block Kit payload
+- `blocks`: legacy Slack Block Kit field kept for backward compatibility
+
+### Rendering rules
+
+Current outbound rendering behavior is intentionally conservative:
+
+- **Slack** posts `content.text` when available, otherwise top-level `text`
+- **Slack** prefers non-empty `content.slackBlocks`
+- **Slack** falls back to legacy `blocks` when `content.slackBlocks` is absent or empty
+- **Slack** omits `blocks` entirely when both normalized and legacy block payloads are empty
+- **iMessage** uses canonical plain text only (`content.text` → `text` fallback)
+- `content.markdown` is currently supplementary metadata for markdown-aware surfaces; it does **not** override iMessage output
+
+### Compatibility guidance
+
+For new outbound send paths:
+
+- always provide canonical plain text
+- add `content.slackBlocks` only when you have a true Slack-native rendering
+- keep `blocks` only for legacy callers or migration periods
+- do not rely on `content.markdown` to render plain-text transports
+
 ## Scope carrier model (compatibility-first)
 
 Slack/Pinet now threads a first-class runtime `scope` carrier through shared message contracts and runtime metadata.

@@ -834,6 +834,40 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     ).rejects.toThrow("content.text is required when content is provided");
   });
 
+  it("message.send trims normalized markdown while preserving canonical plain text", async () => {
+    let delivered: unknown;
+    server.setOutboundMessageAdapters([
+      {
+        name: "slack",
+        send: async (msg) => {
+          delivered = msg;
+        },
+      },
+    ]);
+    await client.register("transport-agent", "📦");
+
+    await client.sendMessage({
+      threadId: "100.203",
+      body: "legacy fallback text",
+      source: "slack",
+      channel: "C123",
+      content: {
+        text: "canonical fallback text",
+        markdown: "  **canonical fallback text**  ",
+      },
+    });
+
+    expect(delivered).toMatchObject({
+      threadId: "100.203",
+      channel: "C123",
+      text: "canonical fallback text",
+      content: {
+        text: "canonical fallback text",
+        markdown: "**canonical fallback text**",
+      },
+    });
+  });
+
   it("thread.claim claims ownership for the calling agent", async () => {
     await client.register("claimer-agent", "🏷️");
 
