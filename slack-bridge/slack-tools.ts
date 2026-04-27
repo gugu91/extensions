@@ -270,6 +270,33 @@ function classifySlackDispatcherError(error: unknown): SlackDispatcherError {
     };
   }
 
+  if (lower.includes("files.getuploadurlexternal") && lower.includes("invalid_arguments")) {
+    return {
+      class: "input",
+      message,
+      retryable: false,
+      hint: "Slack rejected upload metadata for files.getUploadURLExternal (invalid_arguments). Check filename and snippet_type; remove unsupported snippet extensions for inline content and retry.",
+    };
+  }
+
+  if (lower.includes("slack raw upload failed")) {
+    if (lower.includes("files.slack.com") || lower.includes("uploads.slack.com")) {
+      return {
+        class: "network",
+        message,
+        retryable: true,
+        hint: "Upload data-plane host is unavailable. Verify egress rules/proxy allowlist for files.slack.com and uploads.slack.com, then retry.",
+      };
+    }
+
+    return {
+      class: "network",
+      message,
+      retryable: true,
+      hint: "Retry after checking network connectivity. For write actions, verify whether Slack already applied the request before retrying.",
+    };
+  }
+
   if (
     lower.includes("network") ||
     lower.includes("fetch") ||

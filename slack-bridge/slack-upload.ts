@@ -18,6 +18,27 @@ const FILETYPE_ALIASES: Record<string, string> = {
   zsh: "shell",
 };
 
+const ALLOWED_SNIPPET_TYPES = new Set([
+  "bash",
+  "c",
+  "cpp",
+  "css",
+  "diff",
+  "html",
+  "javascript",
+  "json",
+  "markdown",
+  "objective-c",
+  "perl",
+  "python",
+  "ruby",
+  "shell",
+  "swift",
+  "text",
+  "typescript",
+  "yaml",
+]);
+
 const DEFAULT_SNIPPET_TYPE = "text";
 const MAX_SNIPPET_BYTES = 1_000_000;
 
@@ -83,13 +104,49 @@ export function chooseSlackSnippetType(upload: {
 }): string | undefined {
   if (upload.source !== "content") return undefined;
   if (upload.byteLength > MAX_SNIPPET_BYTES) return undefined;
-  return inferSlackUploadFiletype(upload.filename, upload.filetype) ?? DEFAULT_SNIPPET_TYPE;
+  return normalizeSnippetType(inferSlackUploadFiletype(upload.filename, upload.filetype));
 }
 
 function isWithinRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
 
+function normalizeSnippetType(filetype: string | undefined): string {
+  const normalized = filetype?.trim().toLowerCase();
+  if (!normalized) return DEFAULT_SNIPPET_TYPE;
+  return ALLOWED_SNIPPET_TYPES.has(normalized) ? normalized : DEFAULT_SNIPPET_TYPE;
+}
+
+function getUploadHost(uploadUrl: string): string {
+  try {
+    return new URL(uploadUrl).hostname || "<unknown>";
+  } catch {
+    return "<unknown>";
+  }
+}
+
+function formatUploadError(error: unknown): string {
+  if (error instanceof Error) {
+    if (typeof error.cause === "string") {
+      return `${error.message}; cause: ${error.cause}`;
+    }
+
+    if (error.cause instanceof Error) {
+      const cause = [
+        error.cause.message,
+        (error.cause as { code?: unknown }).code,
+        error.cause.name,
+      ]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .join("; ");
+      return cause ? `${error.message}; cause: ${cause}` : error.message;
+    }
+
+    return error.message;
+  }
+
+  return String(error);
+}
 export async function resolveSlackUploadPath(
   inputPath: string,
   cwd: string,
@@ -202,6 +259,7 @@ export async function performSlackUpload({
 
   const uploadUrl =
     typeof getUploadResponse.upload_url === "string" ? getUploadResponse.upload_url : null;
+  const uploadHost = uploadUrl ? getUploadHost(uploadUrl) : "<unknown>";
   const fileId = typeof getUploadResponse.file_id === "string" ? getUploadResponse.file_id : null;
   if (!uploadUrl || !fileId) {
     throw new Error("Slack files.getUploadURLExternal did not return an upload URL and file ID.");
@@ -210,20 +268,34 @@ export async function performSlackUpload({
   const rawBody = new Uint8Array(upload.bytes.byteLength);
   rawBody.set(upload.bytes);
 
-  const rawUploadResponse = await fetchImpl(uploadUrl, {
-    method: "POST",
-    headers: {
-      "Content-Length": String(upload.byteLength),
-      "Content-Type":
-        upload.source === "content" ? "text/plain; charset=utf-8" : "application/octet-stream",
-    },
-    body: new Blob([rawBody]),
-  });
+  let rawUploadResponse: Pick<Response, "ok" | "status" | "statusText" | "text">;
+  try {
+    rawUploadResponse = await fetchImpl(uploadUrl, {
+      method: "POST",
+      headers: {
+        "Content-Length": String(upload.byteLength),
+        "Content-Type":
+          upload.source === "content" ? "text/plain; charset=utf-8" : "application/octet-stream",
+      },
+      body: new Blob([rawBody]),
+    });
+  } catch (error) {
+    throw new Error(
+      `Slack raw upload failed for host ${uploadHost}: ${formatUploadError(error)}; filename=${upload.filename} byte_length=${upload.byteLength}`,
+    );
+  }
 
   if (!rawUploadResponse.ok) {
     const details = (await rawUploadResponse.text()).trim();
+    const statusText = rawUploadResponse.statusText;
+    const statusTextForHeader = statusText ? ` ${statusText}` : "";
+    const withDetails =
+      details.length > 0 ? `${statusText ? `${statusText}: ` : ""}${details}` : "";
+    const hint = /^(403|429|502|503)$/.test(String(rawUploadResponse.status))
+      ? " [possible outbound proxy/firewall block]"
+      : "";
     throw new Error(
-      `Slack raw upload failed (${rawUploadResponse.status}${rawUploadResponse.statusText ? ` ${rawUploadResponse.statusText}` : ""})${details ? `: ${details}` : ""}`,
+      `Slack raw upload failed (${rawUploadResponse.status}${statusTextForHeader})${withDetails ? ` ${withDetails}` : ""}${hint}; host=${uploadHost}; filename=${upload.filename} byte_length=${upload.byteLength}`,
     );
   }
 

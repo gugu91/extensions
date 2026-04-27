@@ -46,6 +46,16 @@ describe("chooseSlackSnippetType", () => {
     ).toBe("typescript");
   });
 
+  it("falls back to text for unsupported inline snippet types", () => {
+    expect(
+      chooseSlackSnippetType({
+        source: "content",
+        byteLength: 256,
+        filename: "release-notes.txt",
+      }),
+    ).toBe("text");
+  });
+
   it("does not enable snippet mode for path uploads or oversized content", () => {
     expect(
       chooseSlackSnippetType({
@@ -281,6 +291,40 @@ describe("performSlackUpload", () => {
         token: "xoxb-token",
         fetchImpl,
       }),
-    ).rejects.toThrow("Slack raw upload failed (500 Internal Server Error): boom");
+    ).rejects.toThrow("Slack raw upload failed (500 Internal Server Error)");
+  });
+
+  it("surfaces network upload transport failures", async () => {
+    const networkError = new Error("fetch failed");
+    const dnsError = new Error("getaddrinfo ENOTFOUND files.slack.com");
+    (dnsError as NodeJS.ErrnoException).code = "ENOTFOUND";
+    (networkError as Error & { cause?: Error }).cause = dnsError;
+    const slack = vi.fn().mockResolvedValue({
+      ok: true,
+      upload_url: "https://files.slack.com/upload/abc",
+      file_id: "F123",
+    });
+    const fetchImpl = vi.fn(async () => {
+      throw networkError;
+    });
+
+    const upload = await prepareSlackUpload(
+      {
+        content: "hello",
+        filename: "hello.txt",
+      },
+      "/repo",
+      "/tmp",
+    );
+
+    await expect(
+      performSlackUpload({
+        upload,
+        channelId: "C123",
+        slack,
+        token: "xoxb-token",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("host files.slack.com");
   });
 });
