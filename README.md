@@ -128,8 +128,9 @@ caching.
 ### Release workflow
 
 Public npm releases are currently **manual by design**. If a fix merged to
-`main` should reach npm users, prepare a small release PR, verify the package
-with `pnpm --filter <package> pack`, then publish from `main`.
+`main` should reach npm users, prepare a small release PR, publish only from
+`main`, and verify the tarball with both `pnpm --filter <package> pack` and a
+local install/smoke-import before publish.
 
 See [`docs/releases.md`](docs/releases.md) for the package list, the manual
 release checklist, and the tarball verification policy.
