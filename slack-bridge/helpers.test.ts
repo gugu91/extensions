@@ -587,7 +587,10 @@ describe("formatPinetInboxMessages", () => {
 
     expect(result).toContain("New Pinet messages:");
     expect(result).toContain(
-      "[thread a2a:broker:worker] broker-id (Broker Bunny): Take issue #175",
+      "[thread a2a:broker:worker] [steering] broker-id (Broker Bunny): Take issue #175",
+    );
+    expect(result).toContain(
+      "pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
     expect(result).toContain("Reply via pinet_message.");
     expect(result).toContain("ACK briefly, do the work");
@@ -605,7 +608,7 @@ describe("formatPinetInboxMessages", () => {
       },
     ]);
 
-    expect(result).toContain("[thread a2a:broker:worker] broker-id: hello");
+    expect(result).toContain("[thread a2a:broker:worker] [fwup] broker-id: hello");
   });
 
   it("marks terminal stand-down messages as closed and suppresses reflex ack guidance", () => {

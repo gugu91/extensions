@@ -442,6 +442,7 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 - The **broker** runs Slack Socket Mode, routes messages to agents, monitors health via the RALPH loop, and maintains a control plane canvas
 - **Followers** connect to the broker over a local Unix socket, poll for work, and report results
+- Inbound Pinet mail is classified as `steering`, `fwup` (ordinary follow-up), or `maintenance_context` from durable message records; notifications include the class label plus a `pinet read` pointer while delivery/ack/read state remains separate
 - Agents can optionally authenticate using a shared local secret (`meshSecret` or `meshSecretPath`); when both are unset, mesh auth is disabled
 - Thread ownership is first-responder-wins — the first agent to reply claims the thread
 

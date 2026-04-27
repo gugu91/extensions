@@ -1,5 +1,6 @@
 import os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { classifyPinetMail, formatPinetMailClassLabel } from "@gugu910/pi-broker-core";
 import { Type } from "@sinclair/typebox";
 import {
   buildAgentDisplayInfo,
@@ -286,8 +287,16 @@ function formatPinetReadResult(result: PinetReadResult, options: PinetReadOption
   if (result.messages.length > 0) {
     lines.push("");
     for (const item of result.messages) {
+      const classification = classifyPinetMail({
+        source: item.message.source,
+        threadId: item.message.threadId,
+        sender: item.message.sender,
+        body: item.message.body,
+        metadata: item.message.metadata,
+      });
+      const classLabel = formatPinetMailClassLabel(classification.class);
       lines.push(
-        `- [${item.message.source}/${item.message.threadId} #${item.message.id}] ${item.message.sender}: ${item.message.body}`,
+        `- [${item.message.source}/${item.message.threadId} #${item.message.id}] [${classLabel}] ${item.message.sender}: ${item.message.body}`,
       );
     }
   }

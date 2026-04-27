@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { classifyPinetMail } from "./mail-classification.js";
 import { BrokerDB } from "./schema.js";
 
 function createDb(): { db: BrokerDB; dir: string } {
@@ -356,6 +357,40 @@ describe("BrokerDB message sync identity", () => {
       expect(replay.id).toBe(first.id);
       expect(db.getInbox("agent-1")).toHaveLength(0);
       expect(db.getInbox("agent-2")).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("derives mail class from durable inbox message records without changing read state", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("a2a:broker:worker", "agent", "", null);
+      db.insertMessage(
+        "a2a:broker:worker",
+        "agent",
+        "inbound",
+        "broker",
+        "Please take issue #606. Workflow: ACK/work/ask/report.",
+        ["worker"],
+        { a2a: true, senderAgent: "Broker Camel" },
+      );
+
+      const read = db.readInbox("worker", { markRead: false });
+      expect(read.messages).toHaveLength(1);
+      expect(read.messages[0].entry.readAt).toBeNull();
+      expect(read.markedReadIds).toEqual([]);
+      expect(
+        classifyPinetMail({
+          source: read.messages[0].message.source,
+          threadId: read.messages[0].message.threadId,
+          sender: read.messages[0].message.sender,
+          body: read.messages[0].message.body,
+          metadata: read.messages[0].message.metadata,
+        }),
+      ).toMatchObject({ class: "steering" });
+      expect(db.getUnreadInboxCount("worker")).toBe(1);
     } finally {
       db.close();
     }

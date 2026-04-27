@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { classifyPinetMail, formatPinetMailClassLabel } from "@gugu910/pi-broker-core";
 import {
   buildCompatibilityInstanceScope,
   buildCompatibilityWorkspaceScope,
@@ -361,17 +362,35 @@ export function isTerminalPinetStandDownMessage(body: string | null | undefined)
   return !PINET_ACTIONABLE_TASK_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+function formatPinetReadPointer(entry: FollowerInboxEntry): string {
+  const threadId = entry.message.threadId?.trim();
+  const inboxId = typeof entry.inboxId === "number" ? ` inbox=${entry.inboxId}` : "";
+  if (!threadId) {
+    return `pinet action=read args.unread_only=true${inboxId}`;
+  }
+  return `pinet action=read args.thread_id=${threadId} args.unread_only=true${inboxId}`;
+}
+
 export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string {
   const annotatedEntries = entries.map((entry) => ({
     entry,
     terminalStandDown: isTerminalPinetStandDownMessage(entry.message.body),
+    classification: classifyPinetMail({
+      source: entry.message.source,
+      threadId: entry.message.threadId,
+      sender: entry.message.sender,
+      body: entry.message.body,
+      metadata: entry.message.metadata,
+    }),
   }));
 
-  const lines = annotatedEntries.map(({ entry, terminalStandDown }) => {
+  const lines = annotatedEntries.map(({ entry, terminalStandDown, classification }) => {
     const threadTs = entry.message.threadId ?? "";
     const sender = getPinetSenderLabel(entry.message);
+    const classLabel = formatPinetMailClassLabel(classification.class);
     const standDownSuffix = terminalStandDown ? " [terminal stand-down]" : "";
-    return `[thread ${threadTs}] ${sender}${standDownSuffix}: ${entry.message.body ?? ""}`;
+    const pointer = formatPinetReadPointer(entry);
+    return `[thread ${threadTs}] [${classLabel}] ${sender}${standDownSuffix}: ${entry.message.body ?? ""} | pointer=${pointer}`;
   });
 
   const hasTerminalStandDown = annotatedEntries.some((entry) => entry.terminalStandDown);
