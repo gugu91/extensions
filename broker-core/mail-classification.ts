@@ -32,7 +32,8 @@ const STEERING_PATTERNS = [
   /\bplease (?:take|continue|implement|fix|review|inspect|reassign|handle|work on)\b/i,
   /\b(?:new|fresh) (?:implementation )?(?:lane|task|worktree)\b/i,
   /\b(?:scope|workflow|acceptance criteria|constraints?|blockers?)\s*:/i,
-  /\b(?:issue|pr)\s*#\d+\b/i,
+  /\b(?:take|continue|implement|fix|review|inspect|handle|work on)\s+(?:issue|pr)\s*#\d+\b/i,
+  /\b(?:issue|pr)\s*#\d+\b.*\b(?:ack|work|review|fix|implement|take|handle)\b/i,
   /\bready for human review\b/i,
   /\breport blockers? immediately\b/i,
   /\bno merge\b/i,
@@ -102,7 +103,9 @@ function metadataLooksLikeMaintenance(
       value.includes("maintenance") ||
       value.includes("ralph") ||
       value === "pinet:control" ||
-      value === "pinet:skin",
+      value === "pinet_control" ||
+      value === "pinet:skin" ||
+      value === "pinet_skin",
   );
 }
 

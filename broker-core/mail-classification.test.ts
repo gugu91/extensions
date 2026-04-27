@@ -28,6 +28,31 @@ describe("Pinet mail classification", () => {
     ).toMatchObject({ class: "steering", explicit: false });
   });
 
+  it("keeps ordinary issue or PR references as fwup without action cues", () => {
+    expect(
+      classifyPinetMail({
+        body: "Thanks for the review on PR #621; looks good.",
+        metadata: { a2a: true },
+      }),
+    ).toMatchObject({ class: "fwup", explicit: false });
+  });
+
+  it("classifies legacy control and skin metadata as maintenance/context-only", () => {
+    expect(
+      classifyPinetMail({
+        body: "/reload",
+        metadata: { a2a: true, kind: "pinet_control", command: "reload" },
+      }),
+    ).toMatchObject({ class: "maintenance_context" });
+
+    expect(
+      classifyPinetMail({
+        body: "skin update",
+        metadata: { a2a: true, kind: "pinet_skin", theme: "forest" },
+      }),
+    ).toMatchObject({ class: "maintenance_context" });
+  });
+
   it("classifies RALPH and closed-thread notes as maintenance/context-only", () => {
     expect(
       classifyPinetMail({
