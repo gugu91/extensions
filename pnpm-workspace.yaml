@@ -6,3 +6,4 @@ packages:
   - nvim-bridge
   - neon-psql
   - openai-execution-shaping
+  - .pi/extensions/*
