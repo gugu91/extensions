@@ -64,6 +64,11 @@ describe("matchesToolPattern", () => {
     expect(matchesToolPattern("slack:canvas_update", ["slack_canvas_*"])).toBe(true);
     expect(matchesToolPattern("slack:upload", ["slack_upload"])).toBe(true);
   });
+
+  it("matches legacy pinet underscore patterns against dispatcher action names", () => {
+    expect(matchesToolPattern("pinet:send", ["pinet_send"])).toBe(true);
+    expect(matchesToolPattern("pinet_read", ["pinet:read"])).toBe(true);
+  });
 });
 
 // ─── isToolBlocked ────────────────────────────────────────
@@ -128,6 +133,27 @@ describe("isToolBlocked", () => {
     expect(READ_ONLY_TOOLS.has("slack:modal_push")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack:modal_update")).toBe(false);
     expect(WRITE_TOOLS.has("slack:presence")).toBe(false);
+  });
+
+  it("classifies Pinet dispatcher actions as read/write appropriately", () => {
+    expect(WRITE_TOOLS.has("pinet:send")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:schedule")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:free")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("pinet:read")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("pinet:agents")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:read")).toBe(false);
+    expect(WRITE_TOOLS.has("pinet:agents")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("pinet:send")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("pinet:schedule")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("pinet:free")).toBe(false);
+  });
+
+  it("maps pinet dispatcher and legacy names for readOnly checks", () => {
+    const g: SecurityGuardrails = { readOnly: true };
+    expect(isToolBlocked("pinet:send", g)).toBe(true);
+    expect(isToolBlocked("pinet_send", g)).toBe(true);
+    expect(isToolBlocked("pinet:read", g)).toBe(false);
+    expect(isToolBlocked("pinet_read", g)).toBe(false);
   });
 
   it("combines readOnly and blockedTools", () => {
