@@ -573,9 +573,10 @@ describe("isTerminalPinetStandDownMessage", () => {
 });
 
 describe("formatPinetInboxMessages", () => {
-  it("formats agent messages with reply guidance", () => {
+  it("formats agent messages as compact steering pointers with reply guidance", () => {
     const result = formatPinetInboxMessages([
       {
+        inboxId: 17,
         message: {
           threadId: "a2a:broker:worker",
           sender: "broker-id",
@@ -587,10 +588,11 @@ describe("formatPinetInboxMessages", () => {
 
     expect(result).toContain("New Pinet messages:");
     expect(result).toContain(
-      "[thread a2a:broker:worker] broker-id (Broker Bunny): Take issue #175",
+      "[thread a2a:broker:worker] [steering] broker-id (Broker Bunny): inbox_id=17 pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
-    expect(result).toContain("Reply via pinet_message.");
-    expect(result).toContain("ACK briefly, do the work");
+    expect(result).not.toContain("Take issue #175");
+    expect(result).toContain("Use pinet_read with the pointer before acting.");
+    expect(result).toContain("ACK briefly after reading, do the work");
   });
 
   it("falls back to the sender id when no senderAgent metadata exists", () => {
@@ -605,10 +607,13 @@ describe("formatPinetInboxMessages", () => {
       },
     ]);
 
-    expect(result).toContain("[thread a2a:broker:worker] broker-id: hello");
+    expect(result).toContain(
+      "[thread a2a:broker:worker] [fwup] broker-id: pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
+    );
+    expect(result).not.toContain("broker-id: hello");
   });
 
-  it("marks terminal stand-down messages as closed and suppresses reflex ack guidance", () => {
+  it("marks terminal stand-down messages as maintenance/context and suppresses reflex ack guidance", () => {
     const result = formatPinetInboxMessages([
       {
         message: {
@@ -620,15 +625,16 @@ describe("formatPinetInboxMessages", () => {
       },
     ]);
 
-    expect(result).toContain("[terminal stand-down]");
-    expect(result).toContain("Treat messages marked [terminal stand-down] as closed");
+    expect(result).toContain("[maintenance/context]");
+    expect(result).toContain("Treat [maintenance/context] messages as context-only");
     expect(result).toContain("do NOT send another acknowledgement");
+    expect(result).not.toContain("Hard stop on this thread");
     expect(result).not.toContain(
       "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
     );
   });
 
-  it("keeps new-task reply guidance when a batch mixes closeout and actionable work", () => {
+  it("keeps steering reply guidance when a batch mixes context-only and actionable work", () => {
     const result = formatPinetInboxMessages([
       {
         message: {
@@ -648,9 +654,10 @@ describe("formatPinetInboxMessages", () => {
       },
     ]);
 
-    expect(result).toContain("[terminal stand-down]");
-    expect(result).toContain("Reply via pinet_message for actionable work only.");
-    expect(result).toContain("For new tasks, ACK briefly, do the work");
+    expect(result).toContain("[maintenance/context]");
+    expect(result).toContain("[steering]");
+    expect(result).toContain("Reply via pinet_message for steering/follow-up only.");
+    expect(result).toContain("For [steering], ACK briefly after reading, do the work");
     expect(result).toContain(
       "do NOT acknowledge or reply unless you have a real blocker or materially new finding",
     );

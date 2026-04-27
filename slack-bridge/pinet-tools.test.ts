@@ -179,7 +179,10 @@ describe("registerPinetTools", () => {
     );
     expect(result.content[0]?.text).toContain("Unread before: 2; unread after: 1.");
     expect(result.content[0]?.text).toContain(
-      "- [agent/a2a:broker:worker #44] broker: please inspect #594",
+      "- [steering] [agent/a2a:broker:worker #44] broker: please inspect #594",
+    );
+    expect(result.content[0]?.text).toContain(
+      "pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
     expect(result.content[0]?.text).toContain("Marked read: 31.");
     expect(result.details.markedReadIds).toEqual([31]);
