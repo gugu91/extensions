@@ -320,7 +320,10 @@ Add a bookmark:
 
 ## Confirmation and destructive actions
 
-If guardrails require confirmation, request it in the same Slack thread:
+If guardrails require confirmation, request it in the same Slack thread. The
+`action` value must be the exact action string required by the guarded tool;
+the safest flow is to copy it from the `requires confirmation for action ...`
+error and retry the guarded call unchanged after approval:
 
 ```json
 {
@@ -328,14 +331,15 @@ If guardrails require confirmation, request it in the same Slack thread:
   "args": {
     "thread_ts": "1712345678.000100",
     "tool": "slack:delete",
-    "action": "delete message 1712345678.000200"
+    "action": "channel=#proj-alpha | thread_ts=1712345678.000100 | ts=1712345678.000200 | thread=false"
   }
 }
 ```
 
 Wait for `slack_inbox` to deliver the approval before retrying the guarded
-action. For destructive deletes, also set `confirm: true` after verifying the
-target:
+action. Every destructive delete also needs `confirm: true` after verifying the
+target; whole-thread deletion additionally needs `thread: true` and only works
+when every message in the target thread was posted by the current bot:
 
 ```json
 {

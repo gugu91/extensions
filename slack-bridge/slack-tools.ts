@@ -130,7 +130,8 @@ const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
       args: {
         thread_ts: "1712345678.000100",
         tool: "slack:delete",
-        action: "delete message ts=1712345678.000200",
+        action:
+          "channel=#deployments | thread_ts=1712345678.000100 | ts=1712345678.000200 | thread=false",
       },
     },
   ],
@@ -2817,8 +2818,14 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     promptSnippet: "Request confirmation in Slack before dangerous actions.",
     parameters: Type.Object({
       thread_ts: Type.String({ description: "Thread to post confirmation request in" }),
-      action: Type.String({ description: "Description of the action needing approval" }),
-      tool: Type.String({ description: "Name of the tool that requires confirmation" }),
+      action: Type.String({
+        description:
+          "Exact action string required by the guarded tool. Copy it from the guardrail error and retry the guarded call unchanged after approval.",
+      }),
+      tool: Type.String({
+        description:
+          "Exact guardrail tool name that requires confirmation. For Slack dispatcher actions, use slack:<action> such as slack:delete.",
+      }),
     }),
     async execute(_id, params) {
       const channelId = await resolveTrackedThreadChannel(params.thread_ts);

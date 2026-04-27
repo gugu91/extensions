@@ -1051,6 +1051,25 @@ describe("registerSlackTools", () => {
       examples: [expect.objectContaining({ action: "post_channel" })],
     });
     expect(schemaResponse.content?.[0]?.text).toContain("args_schema");
+
+    const confirmationHelp = await dispatcher.execute("tool-help-confirm", {
+      action: "help",
+      args: { topic: "confirm_action" },
+    });
+    const confirmationEnvelope = confirmationHelp.details as SlackDispatcherEnvelope;
+    expect(confirmationEnvelope.status).toBe("succeeded");
+    expect(JSON.stringify(confirmationEnvelope.data)).toContain("Exact action string");
+    expect(JSON.stringify(confirmationEnvelope.data)).toContain("slack:<action>");
+    expect(confirmationEnvelope.data).toMatchObject({
+      action: "confirm_action",
+      guardrail_tool: "slack:confirm_action",
+      examples: [
+        expect.objectContaining({
+          action: "confirm_action",
+          args: expect.objectContaining({ tool: "slack:delete" }),
+        }),
+      ],
+    });
   });
 
   it("opens a modal and embeds thread context in private_metadata", async () => {
