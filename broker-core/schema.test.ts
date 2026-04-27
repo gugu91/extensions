@@ -250,8 +250,10 @@ describe("BrokerDB message sync identity", () => {
         .prepare("SELECT * FROM unrouted_backlog WHERE message_id = 2")
         .get();
       const inbox = inspect
-        .prepare("SELECT read_at FROM inbox WHERE agent_id = 'agent-1' AND message_id = 1")
-        .get() as { read_at: string | null } | undefined;
+        .prepare(
+          "SELECT read_at, live_delivered_at FROM inbox WHERE agent_id = 'agent-1' AND message_id = 1",
+        )
+        .get() as { read_at: string | null; live_delivered_at: string | null } | undefined;
 
       expect(backlog).toMatchObject({
         status: "assigned",
@@ -261,6 +263,7 @@ describe("BrokerDB message sync identity", () => {
       });
       expect(duplicateBacklog).toBeUndefined();
       expect(inbox?.read_at).toBe("2026-04-25T00:00:02.500Z");
+      expect(inbox?.live_delivered_at).toBe("2026-04-25T00:00:02.000Z");
     } finally {
       inspect.close();
     }

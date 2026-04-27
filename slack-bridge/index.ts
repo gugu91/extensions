@@ -45,6 +45,7 @@ import {
   type SinglePlayerThreadInfo,
 } from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
+import { persistDeliveredInboundMessage } from "./broker-inbound-persistence.js";
 import { SlackActivityLogger } from "./activity-log.js";
 import { createBrokerDeliveryState, queueBrokerInboxIds } from "./broker-delivery.js";
 import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
@@ -703,6 +704,8 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (decision.action === "deliver" || decision.action === "unrouted") {
+          const persistedInbound = persistDeliveredInboundMessage(broker.db, selfId, routedMessage);
+          if (!persistedInbound.freshDelivery) return;
           inbox.push({
             channel: routedMessage.channel,
             threadTs: routedMessage.threadId,
@@ -712,6 +715,7 @@ export default function (pi: ExtensionAPI) {
             metadata: routedMessage.metadata ?? null,
             ...(routedMessage.scope ? { scope: routedMessage.scope } : {}),
           });
+          broker.db.markLiveDeliveredByMessageId(persistedInbound.message.id, selfId);
           updateBadge();
           maybeDrainInboxIfIdle(ctx);
         }

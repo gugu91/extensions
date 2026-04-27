@@ -276,7 +276,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     db.recoverPendingTargetedBacklog(agentId);
 
     const pending = db
-      .getInbox(agentId)
+      .getInboxForLiveSync(agentId)
       .filter((item) => !isBrokerInboxIdTracked(deps.deliveryState, item.entry.id));
     if (pending.length === 0) {
       return;
@@ -299,10 +299,12 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     );
 
     const handledInboxIds = new Set<number>();
+    const liveDeliveredInboxIds = new Set<number>();
     const commandsToStart: PinetControlCommand[] = [];
     for (const entry of synced.controlEntries) {
       try {
         const queued = deps.requestRemoteControl(entry.command, ctx);
+        liveDeliveredInboxIds.add(entry.inboxId);
         if (queued.ackDisposition === "immediate") {
           handledInboxIds.add(entry.inboxId);
         } else {
@@ -319,6 +321,11 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     for (const entry of synced.skinEntries) {
       deps.applySkinUpdate(entry.update);
       handledInboxIds.add(entry.inboxId);
+      liveDeliveredInboxIds.add(entry.inboxId);
+    }
+
+    if (liveDeliveredInboxIds.size > 0) {
+      db.markLiveDelivered([...liveDeliveredInboxIds], agentId);
     }
 
     if (handledInboxIds.size > 0) {
@@ -341,6 +348,12 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     );
 
     deps.pushInboxMessages(synced.inboxMessages);
+    db.markLiveDelivered(
+      synced.inboxMessages.flatMap((message) =>
+        message.brokerInboxId != null ? [message.brokerInboxId] : [],
+      ),
+      agentId,
+    );
     deps.updateBadge();
     deps.maybeDrainInboxIfIdle(ctx);
   }
