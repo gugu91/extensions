@@ -17,7 +17,7 @@ type ToolDefinition = {
 type SlackDispatcherEnvelope = {
   status: "succeeded" | "failed";
   data: unknown;
-  errors: Array<{ message: string }>;
+  errors: Array<{ message: string; class?: string }>;
 };
 
 type SlackDispatcherData = {
@@ -1399,5 +1399,80 @@ describe("registerSlackTools", () => {
     const details = (result as { details: Record<string, unknown> }).details;
     expect(details.channel_id).toBe("C_PROJ");
     expect(details.canvas_id).toBeNull();
+  });
+
+  it("classifies raw upload 403 responses as input when no proxy marker is present", async () => {
+    const { slack, tools } = setup();
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "files.getUploadURLExternal") {
+          return {
+            ok: true,
+            upload_url: "https://uploads.slack.test/file",
+            file_id: "F123",
+          } as SlackResult;
+        }
+        if (method === "files.completeUploadExternal") {
+          return { ok: true, files: [{ id: "F123" }] } as SlackResult;
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("forbidden", { status: 403, statusText: "Forbidden" }));
+
+    const response = await tools.get("slack")!.execute("tool-upload-1", {
+      action: "upload",
+      args: { content: "hello", filename: "hello.txt" },
+    });
+
+    const envelope = response.details as SlackDispatcherEnvelope;
+    expect(envelope.status).toBe("failed");
+    expect(envelope.errors[0]?.class).toBe("input");
+    expect(envelope.errors[0]?.message).toContain("Slack raw upload failed (HTTP 403");
+
+    fetchSpy.mockRestore();
+  });
+
+  it("classifies raw upload responses as network when proxy/firewall markers appear", async () => {
+    const { slack, tools } = setup();
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "files.getUploadURLExternal") {
+          return {
+            ok: true,
+            upload_url: "https://files.slack.com/upload/abc",
+            file_id: "F123",
+          } as SlackResult;
+        }
+        if (method === "files.completeUploadExternal") {
+          return { ok: true, files: [{ id: "F123" }] } as SlackResult;
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("X-Proxy-Error: blocked-by-allowlist", {
+        status: 403,
+        statusText: "Forbidden",
+      }),
+    );
+
+    const response = await tools.get("slack")!.execute("tool-upload-2", {
+      action: "upload",
+      args: { content: "hello", filename: "hello.txt" },
+    });
+
+    const envelope = response.details as SlackDispatcherEnvelope;
+    expect(envelope.status).toBe("failed");
+    expect(envelope.errors[0]?.class).toBe("network");
+    expect(envelope.errors[0]?.message).toContain("possible outbound proxy/firewall block");
+
+    fetchSpy.mockRestore();
   });
 });

@@ -261,6 +261,15 @@ migration.
   long diffs, and generated files instead of large inline messages. Inline
   uploads require `filename`; path uploads are guarded and must stay within the
   current working directory or system temp directory.
+- **Upload host egress note.** The second upload leg goes to Slack file upload
+  hosts (`files.slack.com`/`uploads.slack.com`) for the raw payload. In
+  environments with restricted egress this can fail with `403` (proxy
+  allowlist) or DNS errors after `files.getUploadURLExternal`; verify the proxy
+  allowlist first, or route through an environment that can reach those hosts.
+- **Upload metadata note.** Slack snippet uploads attempt to use inferred
+  `snippet_type` values for inline content and retry with plain upload metadata
+  when Slack returns `invalid_arguments`, preserving syntax highlighting for
+  supported types while avoiding hard failures on unsupported snippet types.
 - **Canvases are long-lived docs.** `canvas_create` creates standalone or
   channel canvases; `canvas_update` can append, prepend, replace the whole
   canvas, or replace a matched section; `canvas_comments_read` is read-only and
