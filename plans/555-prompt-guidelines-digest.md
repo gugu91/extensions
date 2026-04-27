@@ -19,8 +19,26 @@ This digest defines:
 - intended ownership for each layer
 - when to use prose vs runtime enforcement
 - the repo's preferred anti-sprawl rules
+- the no-duplication contract for downstream overlays
 
 ## Source-of-truth hierarchy
+
+### No-duplication contract
+
+If a rule is defined in this digest or in the canonical root guidance it points
+to, downstream overlays **must not duplicate that rule text**. They may only add
+scoped extensions that depend on runtime role, persona, active transport,
+current task context, or guardrail state.
+
+In practice:
+
+- root guidance owns durable repo-wide rules
+- downstream overlays may add broker/worker/persona/guardrail deltas
+- downstream task messages may add ephemeral task/thread specifics
+- lower layers should cite or rely on higher-layer rules rather than restating them
+
+This keeps the hierarchy legible and gives future dedupe work a clear authority:
+remove repeated doctrine, keep only the layer-specific delta.
 
 ### 1. Runtime enforcement beats prose
 
@@ -75,6 +93,10 @@ only one file.
 
 ### 4. `before_agent_start` appenders add session/runtime overlays
 
+These overlays are extensions of the root guidance, not replacements for it.
+They should carry only the runtime-scoped delta needed for the current role or
+session.
+
 Use `before_agent_start` only for guidance that depends on runtime role,
 transport, model targeting, or currently active environment state.
 
@@ -100,6 +122,9 @@ Strong in-repo examples:
 - `nvim-bridge/index.ts` injects current editor context only when it is fresh and relevant
 
 ### 5. Injected task messages carry ephemeral work context
+
+Injected messages should also stay additive. They provide the current task or
+thread context, not a second copy of repo doctrine.
 
 If the instruction is specific to the current task, thread, or turn, inject it
 as a message instead of growing the durable prompt layers.
@@ -149,6 +174,7 @@ Do **not** use tool-level prompt text for:
 ### Do
 
 - keep durable repo rules in one root source of truth
+- treat downstream overlays as scoped extensions, not duplicate policy documents
 - use runtime appenders for role- or state-dependent overlays
 - send ephemeral task context as messages
 - enforce non-negotiable rules in code
@@ -157,7 +183,7 @@ Do **not** use tool-level prompt text for:
 
 ### Don't
 
-- duplicate the same rule across root files, appenders, task messages, and tool snippets
+- duplicate the same rule across root files, downstream overlays, task messages, and tool snippets
 - encode hard safety or role restrictions only in prose
 - put issue-specific asks into `AGENTS.md`
 - stuff evergreen repo doctrine into `before_agent_start`
@@ -186,7 +212,7 @@ These examples share the same pattern:
 Before adding prompt text, ask:
 
 1. Is this durable repo policy? Put it in `AGENTS.md`.
-2. Is this runtime-role or session-state dependent? Use `before_agent_start`.
+2. Is this runtime-role or session-state dependent? Use `before_agent_start` for the layer-specific delta only.
 3. Is this only about the current task or thread? Inject a message instead.
 4. Is this a rule that must hold no matter what? Enforce it in code.
 5. Is this tool-specific guidance? Keep it on the tool surface only.
