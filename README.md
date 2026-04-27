@@ -173,6 +173,14 @@ extensions/
 See [`plans/test-policy.md`](plans/test-policy.md) for merge-ready test
 expectations and the required smoke checklist.
 
+### Prompt guidance
+
+See [`plans/555-prompt-guidelines-digest.md`](plans/555-prompt-guidelines-digest.md)
+for the repo's prompt-surface hierarchy and source-of-truth rules. It defines
+what belongs in `AGENTS.md`, what belongs in `before_agent_start` overlays,
+what should be injected as task context, and what should be enforced in runtime
+code instead of prose.
+
 ## Git workflow
 
 1. Branch from `main` — use `feat/`, `fix/`, `chore/` prefixes
