@@ -11,10 +11,40 @@ type ToolResponse = {
 
 type ToolDefinition = {
   name: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   execute: (id: string, params: Record<string, unknown>) => Promise<ToolResponse>;
 };
 
 describe("registerSlackTools", () => {
+  it("keeps Slack tool prompt ownership focused and de-duplicated", () => {
+    const { tools } = setup();
+
+    const slackSend = tools.get("slack_send");
+    const slackBlocksBuild = tools.get("slack_blocks_build");
+    const slackModalBuild = tools.get("slack_modal_build");
+
+    expect(slackSend?.promptSnippet).toBe("Reply in a Slack assistant thread.");
+    expect(slackSend?.promptGuidelines?.join(" ")).not.toContain(
+      "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
+    );
+    expect(slackSend?.promptGuidelines?.join(" ")).not.toContain(
+      "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages",
+    );
+
+    const richGuidelines = slackBlocksBuild?.promptGuidelines ?? [];
+    expect(richGuidelines.join(" ")).toContain(
+      "Use slack_modal_build for common confirmation dialogs, forms, and multi-select workflows before opening or updating a modal.",
+    );
+    expect(richGuidelines.join(" ")).not.toContain(
+      "Use Slack modals when you need structured input, explicit approvals, or multi-step workflows instead of free-form thread replies. Use Slack modals when you need structured input, explicit approvals, or multi-step workflows instead of free-form thread replies.",
+    );
+
+    expect(slackModalBuild?.promptGuidelines?.[0]).toBe(
+      "You are connected to Slack via the slack-bridge extension.",
+    );
+  });
+
   function setup() {
     const tools = new Map<string, ToolDefinition>();
     const pi = {

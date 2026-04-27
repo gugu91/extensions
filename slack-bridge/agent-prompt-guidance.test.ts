@@ -81,7 +81,7 @@ describe("createAgentPromptGuidance", () => {
     const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
 
     expect(result.systemPrompt).toContain(
-      "TASK WORKFLOW: When you receive work, follow these steps:",
+      "TASK WORKFLOW: ACK briefly, do the work, report blockers immediately, and report the outcome when done.",
     );
     expect(result.systemPrompt).toContain("REPLY TOOL RULES:");
     expect(result.systemPrompt).not.toContain("Pinet BROKER");

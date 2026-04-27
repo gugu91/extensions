@@ -426,7 +426,7 @@ describe("formatInboxMessages", () => {
     ];
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("[thread 123.456] will: hello");
-    expect(result).toContain(
+    expect(result).not.toContain(
       "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
     );
   });
@@ -528,7 +528,7 @@ describe("formatPinetInboxMessages", () => {
       "[thread a2a:broker:worker] broker-id (Broker Bunny): Take issue #175",
     );
     expect(result).toContain("Reply via pinet_message.");
-    expect(result).toContain("ACK briefly, do the work");
+    expect(result).not.toContain("ACK briefly, do the work");
   });
 
   it("falls back to the sender id when no senderAgent metadata exists", () => {
@@ -588,7 +588,7 @@ describe("formatPinetInboxMessages", () => {
 
     expect(result).toContain("[terminal stand-down]");
     expect(result).toContain("Reply via pinet_message for actionable work only.");
-    expect(result).toContain("For new tasks, ACK briefly, do the work");
+    expect(result).not.toContain("For new tasks, ACK briefly, do the work");
     expect(result).toContain(
       "do NOT acknowledge or reply unless you have a real blocker or materially new finding",
     );
@@ -1224,45 +1224,22 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(guidelines[0]).toContain("Solar Mantis");
   });
 
-  it("contains a hard rule against writing code", () => {
+  it("keeps the no-code broker boundary explicit", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
-    expect(joined).toContain("HARD RULE");
-    expect(joined).toContain("NEVER WRITE CODE");
+    expect(joined).toContain("never implementation");
+    expect(joined).toContain("do not take coding");
   });
 
-  it("lists forbidden actions explicitly", () => {
+  it("lists the core broker responsibilities without procedural duplication", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
-    expect(joined).toContain("FORBIDDEN");
-    expect(joined).toContain("Agent tool");
-    expect(joined).toContain("edit");
-    expect(joined).toContain("write");
-    expect(joined).toContain("bash");
-  });
-
-  it("lists allowed actions explicitly", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("ALLOWED");
-    expect(joined).toContain("Route messages");
     expect(joined).toContain("pinet_agents");
     expect(joined).toContain("pinet_message");
-  });
-
-  it("includes a refusal template for coding requests", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("IF ASKED TO CODE");
-    expect(joined).toContain("Refuse");
-    expect(joined).toContain("delegate");
-  });
-
-  it("explains why the constraint exists (mesh stalls)", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("mesh");
-    expect(joined).toContain("stall");
+    expect(joined).toContain("read-only inspection");
+    expect(joined).not.toContain("HARD RULE");
+    expect(joined).not.toContain("FORBIDDEN");
+    expect(joined).not.toContain("ALLOWED");
   });
 
   it("instructs to use pinet_message instead of Agent tool", () => {
@@ -1292,7 +1269,7 @@ describe("buildWorkerPromptGuidelines", () => {
   it("includes Pinet delegation guidance for connected workers", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
-    expect(joined).toContain("PINET DELEGATION RULES");
+    expect(joined).toContain("PINET DELEGATION RULES:");
     expect(joined).toContain("pinet_agents");
     expect(joined).toContain("pinet_message");
   });

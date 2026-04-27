@@ -87,15 +87,12 @@ export interface RegisterSlackToolsDeps {
 function buildSlackInboxPromptGuidelines(): string[] {
   return [
     "You are connected to Slack via the slack-bridge extension.",
-    "When you receive messages: ACK briefly, do the work, report blockers immediately, report the outcome when done.",
     "Security guardrails may be active for Slack-triggered actions. Check the current security prompt in each message for restrictions.",
     "When a tool requires confirmation, call slack_confirm_action first and wait for approval in the same thread.",
-    "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages — treat them as explicit user instructions attached to the referenced Slack message or thread.",
     "Use slack_upload instead of giant inline code blocks when sharing diffs, logs, screenshots, generated files, or long snippets.",
     "Use slack_schedule for reminders, timed announcements, and delayed follow-ups instead of waiting around to send a message later.",
     "Use slack_pin for important Slack messages you want highlighted in the conversation, and use slack_bookmark for durable channel-header links like repos, dashboards, docs, and runbooks.",
     "Use slack_export to archive or document a Slack thread as markdown, plain text, or JSON before writing it into docs, canvases, or files.",
-    "Use Slack modals when you need structured input, explicit approvals, or multi-step workflows instead of free-form thread replies.",
     "Use slack_presence before pinging reviewers or scheduling follow-ups when timing matters — it tells you whether someone is active, away, or in DND.",
     "When uploading from a local path, only files inside the current working directory or the system temp directory are allowed.",
   ];
@@ -105,7 +102,7 @@ function buildSlackRichMessagePromptGuidelines(): string[] {
   return [
     ...buildSlackInboxPromptGuidelines(),
     ...buildSlackBlockKitPromptGuidelines(),
-    ...buildSlackModalPromptGuidelines(),
+    ...buildSlackModalPromptGuidelines().slice(1),
   ];
 }
 
@@ -1086,8 +1083,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     name: "slack_send",
     label: "Slack Send",
     description: "Send a message in a Slack assistant thread.",
-    promptSnippet:
-      "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
+    promptSnippet: "Reply in a Slack assistant thread.",
     promptGuidelines: buildSlackRichMessagePromptGuidelines(),
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
