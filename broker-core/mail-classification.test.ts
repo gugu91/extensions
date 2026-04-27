@@ -69,6 +69,34 @@ describe("Pinet mail classification", () => {
     ).toMatchObject({ class: "maintenance_context" });
   });
 
+  it("classifies terminal stand-down cues as maintenance/context-only", () => {
+    for (const body of [
+      "Stand down on this lane.",
+      "The thread is already satisfied; no reply is needed.",
+      "No further replies are needed unless I ask for a new task.",
+    ]) {
+      expect(classifyPinetMail({ body, metadata: { a2a: true } })).toMatchObject({
+        class: "maintenance_context",
+      });
+    }
+  });
+
+  it("does not treat standalone issue or PR references as steering", () => {
+    expect(
+      classifyPinetMail({
+        body: "PR #621 looks good.",
+        metadata: { a2a: true },
+      }),
+    ).toMatchObject({ class: "fwup", explicit: false });
+
+    expect(
+      classifyPinetMail({
+        body: "Issue #606 is now routed; no action needed.",
+        metadata: { a2a: true },
+      }),
+    ).toMatchObject({ class: "maintenance_context", explicit: false });
+  });
+
   it("defaults ordinary durable mail to fwup", () => {
     expect(
       classifyPinetMail({

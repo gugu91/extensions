@@ -32,8 +32,8 @@ const STEERING_PATTERNS = [
   /\bplease (?:take|continue|implement|fix|review|inspect|reassign|handle|work on)\b/i,
   /\b(?:new|fresh) (?:implementation )?(?:lane|task|worktree)\b/i,
   /\b(?:scope|workflow|acceptance criteria|constraints?|blockers?)\s*:/i,
-  /\b(?:take|continue|implement|fix|review|inspect|handle|work on)\s+(?:issue|pr)\s*#\d+\b/i,
-  /\b(?:issue|pr)\s*#\d+\b.*\b(?:ack|work|review|fix|implement|take|handle)\b/i,
+  /\b(?:take|continue|implement|fix|review|inspect|reassign|handle|work on)\s+(?:issue|pr)\s*#\d+\b/i,
+  /\b(?:issue|pr)\s*#\d+\b.*\b(?:ack|work|review|fix|implement|take|handle|reassign)\b/i,
   /\bready for human review\b/i,
   /\breport blockers? immediately\b/i,
   /\bno merge\b/i,
@@ -46,7 +46,11 @@ const MAINTENANCE_CONTEXT_PATTERNS = [
   /\bno further repl(?:y|ies) (?:are|is) needed\b/i,
   /\bno further acknowledg(?:ement|ements) (?:are|is) needed\b/i,
   /\bno reply is needed\b/i,
+  /\bno action needed\b/i,
   /\bhard stop on this [^.\n]*thread\b/i,
+  /\bstand down\b/i,
+  /\bthread is already satisfied\b/i,
+  /\bunless I (?:assign|ask for) (?:a )?(?:genuinely )?new task\b/i,
   /\bstay free(?:\/| and )quiet\b/i,
   /\bstay quiet(?:\/| and )free\b/i,
 ];
@@ -98,15 +102,15 @@ function metadataLooksLikeMaintenance(
   const kind = asString(metadata?.kind)?.toLowerCase() ?? "";
   const type = asString(metadata?.type)?.toLowerCase() ?? "";
   const eventType = asString(metadata?.event_type)?.toLowerCase() ?? "";
-  return [kind, type, eventType].some(
-    (value) =>
-      value.includes("maintenance") ||
-      value.includes("ralph") ||
-      value === "pinet:control" ||
-      value === "pinet_control" ||
-      value === "pinet:skin" ||
-      value === "pinet_skin",
-  );
+  return [kind, type, eventType].some((value) => {
+    const normalized = value.replace(/_/g, ":");
+    return (
+      normalized.includes("maintenance") ||
+      normalized.includes("ralph") ||
+      normalized === "pinet:control" ||
+      normalized === "pinet:skin"
+    );
+  });
 }
 
 export function classifyPinetMail(input: PinetMailClassificationInput): PinetMailClassification {
