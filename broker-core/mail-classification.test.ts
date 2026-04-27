@@ -26,6 +26,13 @@ describe("Pinet mail classification", () => {
         metadata: { a2a: true, senderAgent: "Broker Camel" },
       }),
     ).toMatchObject({ class: "steering", explicit: false });
+
+    expect(
+      classifyPinetMail({
+        body: "Task: Final re-review current branch for PR #621 after blocker-report fix. Focus on mail classification false positives/negatives and scope.",
+        metadata: { a2a: true, senderAgent: "Broker Camel" },
+      }),
+    ).toMatchObject({ class: "steering", explicit: false });
   });
 
   it("keeps ordinary issue or PR references as fwup without action cues", () => {
@@ -53,6 +60,13 @@ describe("Pinet mail classification", () => {
     expect(
       classifyPinetMail({
         body: "Tests passed. Blockers: none.",
+        metadata: { a2a: true },
+      }),
+    ).toMatchObject({ class: "fwup", explicit: false });
+
+    expect(
+      classifyPinetMail({
+        body: "Done. Tests passed. No merge performed. Ready for human review.",
         metadata: { a2a: true },
       }),
     ).toMatchObject({ class: "fwup", explicit: false });
