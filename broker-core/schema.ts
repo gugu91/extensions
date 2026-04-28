@@ -1525,6 +1525,27 @@ export class BrokerDB implements BrokerDBInterface {
       if (!row) return null;
 
       const now = new Date().toISOString();
+      const message = db
+        .prepare("SELECT source, direction, metadata FROM messages WHERE id = ?")
+        .get(row.message_id) as
+        | { source: string; direction: string; metadata: string | null }
+        | undefined;
+      if (message?.source === "slack" && message.direction === "inbound") {
+        let metadata: Record<string, unknown> = {};
+        if (message.metadata) {
+          try {
+            metadata = JSON.parse(message.metadata) as Record<string, unknown>;
+          } catch {
+            metadata = {};
+          }
+        }
+        metadata.threadAffinityOwnerAgentId = agentId;
+        db.prepare("UPDATE messages SET metadata = ? WHERE id = ?").run(
+          JSON.stringify(metadata),
+          row.message_id,
+        );
+      }
+
       db.prepare(
         `INSERT OR IGNORE INTO inbox (agent_id, message_id, delivered, created_at)
          VALUES (?, ?, 0, ?)`,

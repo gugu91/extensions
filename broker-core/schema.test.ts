@@ -332,6 +332,36 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("drops stale Slack backlog assignments when ownership changes before delivery", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+
+    try {
+      const backlog = db.queueUnroutedMessage({
+        source: "slack",
+        threadId: "123.456",
+        channel: "C123",
+        userId: "U1",
+        userName: "User One",
+        text: "hello from backlog",
+        timestamp: "123.456",
+        metadata: { channel: "C123", timestamp: "123.456" },
+      });
+      const assigned = db.assignBacklogEntry(backlog.id, "agent-1");
+      expect(assigned).toMatchObject({ status: "assigned", assignedAgentId: "agent-1" });
+
+      db.updateThread("123.456", { ownerAgent: "agent-2" });
+
+      expect(db.getInbox("agent-1")).toHaveLength(0);
+      const read = db.readInbox("agent-1", { markRead: false });
+      expect(read.messages).toEqual([]);
+      expect(read.unreadCountBefore).toBe(0);
+      expect(read.unreadThreads).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not re-enqueue replayed Slack messages after delivery", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);
