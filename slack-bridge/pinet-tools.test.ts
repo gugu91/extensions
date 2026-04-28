@@ -158,6 +158,8 @@ describe("registerPinetTools", () => {
           unreadCount: 1,
           latestMessageId: 45,
           latestAt: "2026-04-25T12:01:00.000Z",
+          highestMailClass: "steering" as const,
+          mailClassCounts: { steering: 1, fwup: 0, maintenance_context: 0 },
         },
       ],
       markedReadIds: [31],
@@ -182,7 +184,7 @@ describe("registerPinetTools", () => {
       "- [steering] [agent/a2a:broker:worker #44] broker: please inspect #594",
     );
     expect(result.content[0]?.text).toContain(
-      "pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
+      "- [steering] a2a:broker:worker (agent): 1 unread (1 steering); latest #45; pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
     expect(result.content[0]?.text).toContain("Marked read: 31.");
     expect(result.details.markedReadIds).toEqual([31]);

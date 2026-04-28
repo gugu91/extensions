@@ -1,3 +1,5 @@
+import type { PinetMailClass } from "./mail-classification.js";
+
 // ─── Domain types ─────────────────────────────────────────
 
 export interface AgentInfo {
@@ -66,6 +68,8 @@ export interface InboxThreadUnreadSummary {
   unreadCount: number;
   latestMessageId: number;
   latestAt: string;
+  highestMailClass: PinetMailClass;
+  mailClassCounts: Record<PinetMailClass, number>;
 }
 
 export interface InboxReadResult {
