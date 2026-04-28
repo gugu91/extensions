@@ -178,9 +178,74 @@ describe("dispatchDirectAgentMessage", () => {
         workflow: "ack/work/ask/report",
         senderAgent: "Sender Agent",
         a2a: true,
+        pinetMailClass: "fwup",
       },
     });
     expect(delivered).toEqual(["target:1:Sender Agent"]);
+  });
+
+  it("stamps inferred mail classes on direct a2a messages", () => {
+    const storage = createStorage([
+      createAgent("sender", "sender", { capabilities: { repo: "extensions", role: "worker" } }),
+      createAgent("target", "target", { capabilities: { repo: "extensions", role: "worker" } }),
+    ]);
+
+    dispatchDirectAgentMessage(storage, {
+      senderAgentId: "sender",
+      senderAgentName: "Sender Agent",
+      target: "target",
+      body: "Please implement issue #594 and report blockers immediately.",
+    });
+
+    expect(storage.inserted[0]?.metadata).toMatchObject({
+      senderAgent: "Sender Agent",
+      a2a: true,
+      pinetMailClass: "steering",
+    });
+  });
+
+  it("classifies direct control messages as maintenance context", () => {
+    const storage = createStorage([
+      createAgent("sender", "sender", { capabilities: { repo: "extensions", role: "worker" } }),
+      createAgent("target", "target", { capabilities: { repo: "extensions", role: "worker" } }),
+    ]);
+
+    dispatchDirectAgentMessage(storage, {
+      senderAgentId: "sender",
+      senderAgentName: "Sender Agent",
+      target: "target",
+      body: '{"type":"pinet:control","action":"reload"}',
+      metadata: { type: "pinet:control", action: "reload" },
+    });
+
+    expect(storage.inserted[0]?.metadata).toMatchObject({
+      senderAgent: "Sender Agent",
+      a2a: true,
+      type: "pinet:control",
+      action: "reload",
+      pinetMailClass: "maintenance_context",
+    });
+  });
+
+  it("preserves caller-provided mail class metadata", () => {
+    const storage = createStorage([
+      createAgent("sender", "sender", { capabilities: { repo: "extensions", role: "worker" } }),
+      createAgent("target", "target", { capabilities: { repo: "extensions", role: "worker" } }),
+    ]);
+
+    dispatchDirectAgentMessage(storage, {
+      senderAgentId: "sender",
+      senderAgentName: "Sender Agent",
+      target: "target",
+      body: "Please implement issue #594 and report blockers immediately.",
+      metadata: { pinetMailClass: "maintenance_context" },
+    });
+
+    expect(storage.inserted[0]?.metadata).toMatchObject({
+      senderAgent: "Sender Agent",
+      a2a: true,
+      pinetMailClass: "maintenance_context",
+    });
   });
 });
 
@@ -226,12 +291,14 @@ describe("dispatchBroadcastAgentMessage", () => {
       a2a: true,
       broadcast: true,
       broadcastChannel: "#extensions",
+      pinetMailClass: "fwup",
     });
     expect(storage.inserted[1]?.metadata).toMatchObject({
       senderAgent: "Broker Agent",
       a2a: true,
       broadcast: true,
       broadcastChannel: "#extensions",
+      pinetMailClass: "fwup",
     });
     expect(delivered).toEqual(["worker-a:a2a:sender:worker-a", "worker-b:a2a:sender:worker-b"]);
   });

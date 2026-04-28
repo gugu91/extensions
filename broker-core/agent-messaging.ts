@@ -1,3 +1,4 @@
+import { classifyPinetMail } from "./mail-classification.js";
 import type { AgentInfo, BrokerMessage } from "./types.js";
 
 interface AgentCapabilities {
@@ -142,14 +143,21 @@ function ensurePairThread(
 
 function buildAgentMessageMetadata(
   senderAgentName: string,
+  body: string,
   metadata?: Record<string, unknown>,
   broadcastChannel?: string,
 ): Record<string, unknown> {
-  return {
+  const baseMetadata: Record<string, unknown> = {
     ...metadata,
     senderAgent: senderAgentName,
     a2a: true,
     ...(broadcastChannel ? { broadcast: true, broadcastChannel } : {}),
+  };
+  const classification = classifyPinetMail({ source: "agent", body, metadata: baseMetadata });
+
+  return {
+    ...baseMetadata,
+    pinetMailClass: classification.class,
   };
 }
 
@@ -259,7 +267,7 @@ export function dispatchDirectAgentMessage(
   }
 
   const resolvedTarget: AgentDispatchTarget = { id: target.id, name: target.name };
-  const metadata = buildAgentMessageMetadata(input.senderAgentName, input.metadata);
+  const metadata = buildAgentMessageMetadata(input.senderAgentName, input.body, input.metadata);
   const { threadId, messageId } = deliverAgentMessage(
     storage,
     input.senderAgentId,
@@ -298,6 +306,7 @@ export function dispatchBroadcastAgentMessage(
   const broadcastChannel = `#${normalizedChannel}`;
   const metadata = buildAgentMessageMetadata(
     input.senderAgentName,
+    input.body,
     input.metadata,
     broadcastChannel,
   );
