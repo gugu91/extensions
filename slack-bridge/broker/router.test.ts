@@ -274,11 +274,32 @@ describe("MessageRouter — route", () => {
     expect(decision).toEqual({ action: "deliver", agentId: "a1" });
   });
 
-  it("prefers the canonical Slack thread owner hint over a stale competing owner for generic in-thread follow-ups", () => {
+  it("keeps a known Slack thread on its broker owner instead of latest bot owner hint", () => {
     const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
     const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
     db.agents = [hippo, cobra];
     db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: "cobra" }));
+
+    const decision = router.route(
+      makeMessage({
+        threadId: "t-100",
+        text: "also check for hardcoded routes pls",
+        metadata: {
+          threadOwnerAgentOwner: "owner:99b0f2b5e8a7874e",
+          threadOwnerAgentName: "Pixel Lime Hippo",
+        },
+      }),
+    );
+
+    expect(decision).toEqual({ action: "deliver", agentId: "cobra" });
+    expect(db.threads.get("t-100")?.ownerAgent).toBe("cobra");
+  });
+
+  it("uses a Slack thread owner hint only for an existing unowned thread", () => {
+    const hippo = makeAgent({ id: "hippo", name: "Pixel Lime Hippo", stableId: "stable-hippo" });
+    const cobra = makeAgent({ id: "cobra", name: "Aurora Pearl Cobra", stableId: "stable-cobra" });
+    db.agents = [hippo, cobra];
+    db.threads.set("t-100", makeThread({ threadId: "t-100", ownerAgent: null }));
 
     const decision = router.route(
       makeMessage({
@@ -468,7 +489,7 @@ describe("MessageRouter — route", () => {
 
     const decision = router.route(makeMessage({ threadId: "t-100" }));
 
-    // Owner is gone — clears ownership and falls through to unrouted
+    // Owner is gone — clears ownership and stops instead of using generic fallback routing.
     expect(decision).toEqual({ action: "unrouted" });
     // Ownership should be cleared
     expect(db.threads.get("t-100")?.ownerAgent).toBeNull();
