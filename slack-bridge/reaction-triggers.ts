@@ -30,6 +30,9 @@ const REACTION_ALIASES: Record<string, string> = {
   eyes: "eyes",
   "✅": "white_check_mark",
   white_check_mark: "white_check_mark",
+  "⬆️": "arrow_up",
+  "⬆": "arrow_up",
+  arrow_up: "arrow_up",
 };
 
 const REACTION_DISPLAY: Record<string, string> = {
@@ -42,6 +45,7 @@ const REACTION_DISPLAY: Record<string, string> = {
   repeat: "🔄",
   eyes: "👀",
   white_check_mark: "✅",
+  arrow_up: "⬆️",
 };
 
 export const DEFAULT_REACTION_COMMANDS: Record<string, ReactionCommandTemplate> = {
@@ -69,6 +73,11 @@ export const DEFAULT_REACTION_COMMANDS: Record<string, ReactionCommandTemplate> 
     action: "retry",
     prompt:
       "Retry or regenerate the requested work using the reacted message and surrounding thread as the source of truth.",
+  },
+  arrow_up: {
+    action: "steer",
+    prompt:
+      "Treat the reacted-to message as steering. Read the durable message context, then prioritize it as an explicit operator instruction if it is relevant and safe.",
   },
   mag: {
     action: "search",
@@ -103,7 +112,7 @@ export function normalizeReactionName(input: string): string {
   const normalized = normalizeReactionNameOrNull(input);
   if (!normalized) {
     throw new Error(
-      `Unsupported reaction ${JSON.stringify(input)}. Use a Slack reaction name like "eyes" or a supported emoji such as 👀, ✅, 🔄, 📝, or 🐛.`,
+      `Unsupported reaction ${JSON.stringify(input)}. Use a Slack reaction name like "eyes" or a supported emoji such as 👀, ✅, 🔄, 📝, 🐛, or ⬆️.`,
     );
   }
   return normalized;
@@ -121,6 +130,8 @@ function buildDefaultPromptForAction(action: string): string {
       return DEFAULT_REACTION_COMMANDS.white_check_mark.prompt;
     case "retry":
       return DEFAULT_REACTION_COMMANDS.repeat.prompt;
+    case "steer":
+      return DEFAULT_REACTION_COMMANDS.arrow_up.prompt;
     case "search":
       return DEFAULT_REACTION_COMMANDS.mag.prompt;
     case "track":

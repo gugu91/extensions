@@ -342,6 +342,7 @@ export class SlackAdapter implements MessageAdapter {
           : "(no text)";
 
       const threadInfo = this.threads.get(threadTs);
+      const reactionEventTs = (evt.event_ts as string | undefined) ?? item.ts;
       this.inboundHandler?.({
         source: "slack",
         threadId: threadTs,
@@ -358,7 +359,22 @@ export class SlackAdapter implements MessageAdapter {
           reactedMessageText,
           reactedMessageAuthor,
         }),
-        timestamp: (evt.event_ts as string) ?? item.ts,
+        timestamp: reactionEventTs,
+        metadata: {
+          reactionTrigger: true,
+          reactionName,
+          reactionAction: command.action,
+          reactorUserId: userId,
+          reactorName,
+          reactionEventTs,
+          referencedSource: "slack",
+          referencedChannel: item.channel,
+          referencedThreadTs: threadTs,
+          referencedMessageTs: item.ts,
+          referencedExternalId: `${item.channel}:${item.ts}`,
+          reactedMessageAuthor,
+          ...(reactedMessageAuthorId ? { reactedMessageAuthorId } : {}),
+        },
         scope: buildSlackThreadRuntimeScope({
           channelId: item.channel,
           context: threadInfo?.context,
