@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { classifyPinetMail } from "./mail-classification.js";
 import { BrokerDB } from "./schema.js";
 
 function createDb(): { db: BrokerDB; dir: string } {
@@ -372,6 +373,61 @@ describe("BrokerDB message sync identity", () => {
 
       expect(second.id).not.toBe(first.id);
       expect(db.getInbox("two")).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps mail classification derivable from durable inbox records without changing read state", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("a2a:broker:worker", "agent", "", null);
+      db.insertMessage(
+        "a2a:broker:worker",
+        "agent",
+        "inbound",
+        "broker",
+        "Task: implement issue #606. Workflow: ACK/work/ask/report.",
+        ["worker"],
+        { a2a: true },
+      );
+      db.insertMessage(
+        "a2a:broker:worker",
+        "agent",
+        "inbound",
+        "broker",
+        "Tests passed. Blockers: none.",
+        ["worker"],
+        { a2a: true },
+      );
+      db.insertMessage(
+        "a2a:broker:worker",
+        "agent",
+        "inbound",
+        "broker",
+        "RALPH broker-only maintenance: ghost agents detected.",
+        ["worker"],
+        { kind: "broker_maintenance" },
+      );
+
+      const result = db.readInbox("worker", { markRead: false });
+      expect(result.markedReadIds).toEqual([]);
+      expect(result.unreadCountBefore).toBe(3);
+      expect(result.unreadCountAfter).toBe(3);
+      expect(result.messages.map((item) => item.entry.readAt)).toEqual([null, null, null]);
+      expect(
+        result.messages.map(
+          (item) =>
+            classifyPinetMail({
+              source: item.message.source,
+              threadId: item.message.threadId,
+              sender: item.message.sender,
+              body: item.message.body,
+              metadata: item.message.metadata,
+            }).class,
+        ),
+      ).toEqual(["steering", "fwup", "maintenance_context"]);
     } finally {
       db.close();
     }

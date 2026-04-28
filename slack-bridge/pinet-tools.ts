@@ -1,4 +1,8 @@
 import os from "node:os";
+import {
+  classifyPinetMail,
+  formatPinetMailClassLabel,
+} from "@gugu910/pi-broker-core/mail-classification";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
@@ -286,8 +290,16 @@ function formatPinetReadResult(result: PinetReadResult, options: PinetReadOption
   if (result.messages.length > 0) {
     lines.push("");
     for (const item of result.messages) {
+      const classification = classifyPinetMail({
+        source: item.message.source,
+        threadId: item.message.threadId,
+        sender: item.message.sender,
+        body: item.message.body,
+        metadata: item.message.metadata,
+      });
+      const label = formatPinetMailClassLabel(classification.class);
       lines.push(
-        `- [${item.message.source}/${item.message.threadId} #${item.message.id}] ${item.message.sender}: ${item.message.body}`,
+        `- [${label}] [${item.message.source}/${item.message.threadId} #${item.message.id}] ${item.message.sender}: ${item.message.body}`,
       );
     }
   }
@@ -296,7 +308,7 @@ function formatPinetReadResult(result: PinetReadResult, options: PinetReadOption
     lines.push("", "Unread thread pointers:");
     for (const thread of result.unreadThreads.slice(0, 10)) {
       lines.push(
-        `- ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread; latest #${thread.latestMessageId}`,
+        `- ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread; latest #${thread.latestMessageId}; pointer=pinet action=read args.thread_id=${thread.threadId} args.unread_only=true`,
       );
     }
   }

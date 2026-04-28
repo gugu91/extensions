@@ -2,6 +2,7 @@ export * from "./agent-messaging.js";
 export * from "./auth.js";
 export * from "./leader.js";
 export * from "./maintenance.js";
+export * from "./mail-classification.js";
 export * from "./message-send.js";
 export * from "./paths.js";
 export * from "./raw-tcp-loopback.js";

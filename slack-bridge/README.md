@@ -426,6 +426,8 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 | `pinet_free`     | Mark this Pinet agent idle/free for new work                                                                        |
 | `pinet_schedule` | Schedule a future wake-up for this Pinet agent                                                                      |
 
+Durable Pinet inbox notifications are classified as `steering`, `fwup`, or `maintenance/context` from explicit metadata or message cues. Follower prompts receive compact pointers such as `pinet action=read args.thread_id=...` instead of the full durable message body; agents use `pinet_read` to retrieve the actual context. Delivery, read/ack state, and mail classification remain separate.
+
 ### Broker commands
 
 | Command                 | Description                                |

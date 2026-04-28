@@ -20,6 +20,7 @@
     "./auth": "./dist/auth.js",
     "./leader": "./dist/leader.js",
     "./maintenance": "./dist/maintenance.js",
+    "./mail-classification": "./dist/mail-classification.js",
     "./message-send": "./dist/message-send.js",
     "./paths": "./dist/paths.js",
     "./raw-tcp-loopback": "./dist/raw-tcp-loopback.js",

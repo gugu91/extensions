@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  classifyPinetMail,
+  formatPinetMailClassLabel,
+} from "@gugu910/pi-broker-core/mail-classification";
+import {
   buildCompatibilityInstanceScope,
   buildCompatibilityWorkspaceScope,
   buildRuntimeScopeCarrier,
@@ -324,64 +328,62 @@ function getPinetSenderLabel(message: FollowerInboxEntry["message"]): string {
   return senderId || senderAgent || "unknown-agent";
 }
 
-const PINET_TERMINAL_STAND_DOWN_PATTERNS = [
-  /\bno further repl(?:y|ies) (?:are|is) needed\b/i,
-  /\bno further acknowledg(?:ement|ements) (?:are|is) needed\b/i,
-  /\bno reply is needed\b/i,
-  /\bhard stop on this [^.\n]*thread\b/i,
-  /\bno more work is needed\b/i,
-  /\bstand down\b/i,
-  /\bstay free(?:\/| and )quiet\b/i,
-  /\bstay quiet(?:\/| and )free\b/i,
-  /\bthread is already satisfied\b/i,
-  /\bunless I (?:assign|ask for) (?:a )?(?:genuinely )?new task\b/i,
-];
-
-const PINET_ACTIONABLE_TASK_PATTERNS = [
-  /\bnew [a-z-]+ lane\b/i,
-  /\bissue:\b/i,
-  /\btask:\b/i,
-  /\bworktree setup:\b/i,
-  /\bplease ACK\/work\/ask\/report\b/i,
-];
-
 export function isTerminalPinetStandDownMessage(body: string | null | undefined): boolean {
   const normalized = body?.replace(/\s+/g, " ").trim() ?? "";
   if (!normalized) {
     return false;
   }
 
-  const hasTerminalCue = PINET_TERMINAL_STAND_DOWN_PATTERNS.some((pattern) =>
-    pattern.test(normalized),
+  return (
+    classifyPinetMail({ body: normalized, metadata: { a2a: true } }).class === "maintenance_context"
   );
-  if (!hasTerminalCue) {
-    return false;
-  }
+}
 
-  return !PINET_ACTIONABLE_TASK_PATTERNS.some((pattern) => pattern.test(normalized));
+function formatPinetInboxPointer(entry: FollowerInboxEntry): string {
+  const threadId = entry.message.threadId?.trim() ?? "";
+  const parts = [
+    "pointer=pinet action=read",
+    threadId ? `args.thread_id=${threadId}` : null,
+    "args.unread_only=true",
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(" ");
 }
 
 export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string {
-  const annotatedEntries = entries.map((entry) => ({
-    entry,
-    terminalStandDown: isTerminalPinetStandDownMessage(entry.message.body),
-  }));
-
-  const lines = annotatedEntries.map(({ entry, terminalStandDown }) => {
-    const threadTs = entry.message.threadId ?? "";
-    const sender = getPinetSenderLabel(entry.message);
-    const standDownSuffix = terminalStandDown ? " [terminal stand-down]" : "";
-    return `[thread ${threadTs}] ${sender}${standDownSuffix}: ${entry.message.body ?? ""}`;
+  const annotatedEntries = entries.map((entry) => {
+    const classification = classifyPinetMail({
+      source: entry.message.source,
+      threadId: entry.message.threadId,
+      sender: entry.message.sender,
+      body: entry.message.body,
+      metadata: entry.message.metadata,
+    });
+    return { entry, classification };
   });
 
-  const hasTerminalStandDown = annotatedEntries.some((entry) => entry.terminalStandDown);
-  const hasActionableWork = annotatedEntries.some((entry) => !entry.terminalStandDown);
+  const lines = annotatedEntries.map(({ entry, classification }) => {
+    const threadTs = entry.message.threadId ?? "";
+    const sender = getPinetSenderLabel(entry.message);
+    const label = formatPinetMailClassLabel(classification.class);
+    const inboxSuffix = entry.inboxId != null ? ` inbox_id=${entry.inboxId}` : "";
+    return `[thread ${threadTs}] [${label}] ${sender}:${inboxSuffix} ${formatPinetInboxPointer(entry)}`;
+  });
 
-  const guidance = hasTerminalStandDown
-    ? hasActionableWork
-      ? "Reply via pinet_message for actionable work only. For messages marked [terminal stand-down], do NOT acknowledge or reply unless you have a real blocker or materially new finding. For new tasks, ACK briefly, do the work, report blockers immediately, report the outcome when done."
-      : "Reply via pinet_message only if you have a real blocker or materially new finding. Treat messages marked [terminal stand-down] as closed; do NOT send another acknowledgement."
-    : "Reply via pinet_message. ACK briefly, do the work, report blockers immediately, report the outcome when done.";
+  const hasMaintenanceOnly = annotatedEntries.some(
+    (entry) => entry.classification.class === "maintenance_context",
+  );
+  const hasActionableWork = annotatedEntries.some(
+    (entry) => entry.classification.class === "steering",
+  );
+  const hasFollowUp = annotatedEntries.some((entry) => entry.classification.class === "fwup");
+
+  const guidance = hasMaintenanceOnly
+    ? hasActionableWork || hasFollowUp
+      ? "Use pinet_read with the pointer before acting. Reply via pinet_message for steering/follow-up only. For [maintenance/context] messages, do NOT acknowledge or reply unless you have a real blocker or materially new finding. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+      : "Use pinet_read with the pointer only if you need details. Treat [maintenance/context] messages as context-only; do NOT send another acknowledgement unless you have a real blocker or materially new finding."
+    : hasActionableWork
+      ? "Use pinet_read with the pointer before acting. Reply via pinet_message. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+      : "Use pinet_read with the pointer before acting. Reply via pinet_message if follow-up is needed.";
 
   return `New Pinet messages:\n${lines.join("\n")}\n\n${guidance}`;
 }
