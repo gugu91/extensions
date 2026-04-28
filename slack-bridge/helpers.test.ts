@@ -527,6 +527,33 @@ describe("formatInboxMessages", () => {
     );
   });
 
+  it("formats broker-side scheduled wake-ups as Pinet read pointers without the reminder body", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "",
+        threadTs: "wakeup:broker-1",
+        userId: "scheduler",
+        text: "/exit",
+        timestamp: "2026-04-28T10:00:00.000Z",
+        brokerInboxId: 77,
+        metadata: {
+          senderAgent: "Pinet Scheduler",
+          scheduledWakeup: true,
+          a2a: true,
+          pinetMailClass: "fwup",
+        },
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain("New Pinet messages:");
+    expect(result).toContain(
+      "[thread wakeup:broker-1] [fwup] scheduler (Pinet Scheduler): inbox_id=77 pointer=pinet action=read args.thread_id=wakeup:broker-1 args.unread_only=true",
+    );
+    expect(result).not.toContain("New Slack messages:");
+    expect(result).not.toContain("scheduler: /exit");
+  });
+
   it("keeps generic Slack file metadata out of the canvas-only suffix", () => {
     const msgs: InboxMessage[] = [
       {
@@ -611,6 +638,32 @@ describe("formatPinetInboxMessages", () => {
       "[thread a2a:broker:worker] [fwup] broker-id: pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
     expect(result).not.toContain("broker-id: hello");
+  });
+
+  it("formats scheduled wake-ups as durable follow-up pointers without the reminder body", () => {
+    const result = formatPinetInboxMessages([
+      {
+        inboxId: 42,
+        message: {
+          threadId: "wakeup:worker-1",
+          sender: "scheduler",
+          body: "Check whether PR #62 merged",
+          metadata: {
+            senderAgent: "Pinet Scheduler",
+            scheduledWakeup: true,
+            a2a: true,
+            pinetMailClass: "fwup",
+          },
+        },
+      },
+    ]);
+
+    expect(result).toContain("New Pinet messages:");
+    expect(result).toContain(
+      "[thread wakeup:worker-1] [fwup] scheduler (Pinet Scheduler): inbox_id=42 pointer=pinet action=read args.thread_id=wakeup:worker-1 args.unread_only=true",
+    );
+    expect(result).not.toContain("Check whether PR #62 merged");
+    expect(result).toContain("Use pinet_read with the pointer before acting.");
   });
 
   it("marks terminal stand-down messages as maintenance/context and suppresses reflex ack guidance", () => {
@@ -748,6 +801,23 @@ describe("Pinet control helpers", () => {
         threadId: "a2a:sender:target",
         body: '{"type":"pinet:control","action":"noop"}',
         metadata: { a2a: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not treat scheduled wake-up mail bodies as remote-control commands", () => {
+    expect(
+      extractPinetControlCommand({
+        threadId: "wakeup:worker-1",
+        body: "/exit",
+        metadata: { scheduledWakeup: true, a2a: true, senderAgent: "Pinet Scheduler" },
+      }),
+    ).toBeNull();
+    expect(
+      extractPinetControlCommand({
+        threadId: "wakeup:worker-1",
+        body: '{"type":"pinet:control","action":"reload"}',
+        metadata: { scheduledWakeup: true, a2a: true, type: "pinet:control", action: "reload" },
       }),
     ).toBeNull();
   });
@@ -3469,14 +3539,23 @@ describe("partitionFollowerInboxEntries", () => {
           metadata: { a2a: true, senderAgent: "Broker Bunny" },
         },
       },
+      {
+        inboxId: 4,
+        message: {
+          threadId: "wakeup:worker",
+          sender: "scheduler",
+          body: "check queue",
+          metadata: { scheduledWakeup: true, senderAgent: "Pinet Scheduler" },
+        },
+      },
     ];
 
     const result = partitionFollowerInboxEntries(entries);
     expect(result.nudges).toHaveLength(1);
-    expect(result.agentMessages).toHaveLength(1);
+    expect(result.agentMessages).toHaveLength(2);
     expect(result.regular).toHaveLength(1);
     expect(result.nudges[0].inboxId).toBe(1);
-    expect(result.agentMessages[0].inboxId).toBe(3);
+    expect(result.agentMessages.map((entry) => entry.inboxId)).toEqual([3, 4]);
     expect(result.regular[0].inboxId).toBe(2);
   });
 
