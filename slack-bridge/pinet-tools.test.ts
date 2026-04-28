@@ -158,6 +158,8 @@ describe("registerPinetTools", () => {
           unreadCount: 1,
           latestMessageId: 45,
           latestAt: "2026-04-25T12:01:00.000Z",
+          highestMailClass: "steering" as const,
+          mailClassCounts: { steering: 1, fwup: 0, maintenance_context: 0 },
         },
       ],
       markedReadIds: [31],

@@ -3,6 +3,7 @@ import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
+import type { PinetMailClass } from "@gugu910/pi-broker-core/mail-classification";
 import type { ClientAgentInfo, NormalizedMessageContent } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -35,6 +36,8 @@ export interface PinetUnreadThreadSummary {
   unreadCount: number;
   latestMessageId: number;
   latestAt: string;
+  highestMailClass: PinetMailClass;
+  mailClassCounts: Record<PinetMailClass, number>;
 }
 
 export interface PinetReadResult {

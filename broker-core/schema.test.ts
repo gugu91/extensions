@@ -691,6 +691,58 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("prioritizes steering mail for unread reads and thread summaries", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-fwup", "agent", "", null);
+      db.createThread("thread-steering", "agent", "", null);
+      db.insertMessage(
+        "thread-fwup",
+        "agent",
+        "inbound",
+        "broker",
+        "Ordinary status follow-up.",
+        ["worker"],
+        { pinet_mail_class: "fwup" },
+      );
+      const steering = db.insertMessage(
+        "thread-steering",
+        "agent",
+        "inbound",
+        "broker",
+        "Escalated operator instruction.",
+        ["worker"],
+        { pinet_mail_class: "steering" },
+      );
+      db.insertMessage(
+        "thread-steering",
+        "agent",
+        "inbound",
+        "broker",
+        "Context-only note.",
+        ["worker"],
+        { pinet_mail_class: "maintenance_context" },
+      );
+
+      const read = db.readInbox("worker", { limit: 1, markRead: false });
+      expect(read.messages).toHaveLength(1);
+      expect(read.messages[0].message.id).toBe(steering.id);
+      expect(read.unreadThreads[0]).toMatchObject({
+        threadId: "thread-steering",
+        highestMailClass: "steering",
+        mailClassCounts: { steering: 1, fwup: 0, maintenance_context: 1 },
+      });
+      expect(read.unreadThreads[1]).toMatchObject({
+        threadId: "thread-fwup",
+        highestMailClass: "fwup",
+        mailClassCounts: { steering: 0, fwup: 1, maintenance_context: 0 },
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps mail classification derivable from durable inbox records without changing read state", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

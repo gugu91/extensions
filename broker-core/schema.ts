@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { classifyPinetMail } from "./mail-classification.js";
 import { getDefaultDbPath } from "./paths.js";
 import type { PinetMailClass } from "./mail-classification.js";
 import type {
@@ -225,6 +226,20 @@ function appendMetadataAudit(
       )
     : [];
   metadata[key] = [...existing.slice(-19), audit];
+}
+
+const PINET_MAIL_CLASS_PRIORITY: Record<PinetMailClass, number> = {
+  steering: 0,
+  fwup: 1,
+  maintenance_context: 2,
+};
+
+function comparePinetMailClassPriority(a: PinetMailClass, b: PinetMailClass): number {
+  return PINET_MAIL_CLASS_PRIORITY[a] - PINET_MAIL_CLASS_PRIORITY[b];
+}
+
+function emptyMailClassCounts(): Record<PinetMailClass, number> {
+  return { steering: 0, fwup: 0, maintenance_context: 0 };
 }
 
 function rowToBrokerMessage(row: {
@@ -2520,6 +2535,8 @@ export class BrokerDB implements BrokerDBInterface {
     }
 
     const order = unreadOnly ? "m.created_at ASC, i.id ASC" : "m.created_at DESC, i.id DESC";
+    const limitClause = unreadOnly ? "" : "\n         LIMIT ?";
+    const queryValues = unreadOnly ? values : [...values, limit];
     const rows = db
       .prepare(
         `SELECT
@@ -2532,10 +2549,9 @@ export class BrokerDB implements BrokerDBInterface {
          FROM inbox i
          JOIN messages m ON m.id = i.message_id
          WHERE ${clauses.join(" AND ")}
-         ORDER BY ${order}
-         LIMIT ?`,
+         ORDER BY ${order}${limitClause}`,
       )
-      .all(...values, limit) as unknown as Array<{
+      .all(...queryValues) as unknown as Array<{
       i_id: number;
       i_agent_id: string;
       i_message_id: number;
@@ -2578,13 +2594,37 @@ export class BrokerDB implements BrokerDBInterface {
       },
     }));
 
-    const markedReadIds = messages
+    const prioritizedMessages = unreadOnly
+      ? messages
+          .map((item, index) => ({
+            item,
+            index,
+            mailClass: classifyPinetMail({
+              source: item.message.source,
+              threadId: item.message.threadId,
+              sender: item.message.sender,
+              body: item.message.body,
+              metadata: item.message.metadata,
+            }).class,
+          }))
+          .sort((a, b) => {
+            const classOrder = comparePinetMailClassPriority(a.mailClass, b.mailClass);
+            if (classOrder !== 0) return classOrder;
+            const createdOrder = a.item.message.createdAt.localeCompare(b.item.message.createdAt);
+            if (createdOrder !== 0) return createdOrder;
+            return a.index - b.index;
+          })
+          .slice(0, limit)
+          .map(({ item }) => item)
+      : messages;
+
+    const markedReadIds = prioritizedMessages
       .filter((item) => item.entry.readAt === null)
       .map((item) => item.entry.id);
     if (markRead && markedReadIds.length > 0) {
       this.markRead(markedReadIds, agentId);
       const readAt = new Date().toISOString();
-      for (const item of messages) {
+      for (const item of prioritizedMessages) {
         if (markedReadIds.includes(item.entry.id)) {
           item.entry.readAt = readAt;
         }
@@ -2594,7 +2634,7 @@ export class BrokerDB implements BrokerDBInterface {
     const unreadCountAfter = this.getUnreadInboxCount(agentId);
     const unreadThreads = this.getUnreadThreadSummary(agentId);
     return {
-      messages,
+      messages: prioritizedMessages,
       unreadCountBefore,
       unreadCountAfter,
       unreadThreads,
@@ -2621,34 +2661,79 @@ export class BrokerDB implements BrokerDBInterface {
            m.thread_id AS thread_id,
            m.source AS source,
            COALESCE(t.channel, '') AS channel,
-           COUNT(*) AS unread_count,
-           MAX(m.id) AS latest_message_id,
-           MAX(m.created_at) AS latest_at
+           m.id AS message_id,
+           m.sender AS sender,
+           m.body AS body,
+           m.metadata AS metadata,
+           m.created_at AS created_at
          FROM inbox i
          JOIN messages m ON m.id = i.message_id
          LEFT JOIN threads t ON t.thread_id = m.thread_id
          WHERE i.agent_id = ? AND i.read_at IS NULL
-         GROUP BY m.thread_id, m.source, t.channel
-         ORDER BY latest_at DESC, latest_message_id DESC
-         LIMIT ?`,
+         ORDER BY m.created_at DESC, m.id DESC`,
       )
-      .all(agentId, clampedLimit) as unknown as Array<{
+      .all(agentId) as unknown as Array<{
       thread_id: string;
       source: string;
       channel: string;
-      unread_count: number;
-      latest_message_id: number;
-      latest_at: string;
+      message_id: number;
+      sender: string;
+      body: string;
+      metadata: string | null;
+      created_at: string;
     }>;
 
-    return rows.map((row) => ({
-      threadId: row.thread_id,
-      source: row.source,
-      channel: row.channel,
-      unreadCount: row.unread_count,
-      latestMessageId: row.latest_message_id,
-      latestAt: row.latest_at,
-    }));
+    const summaries = new Map<string, InboxThreadUnreadSummary>();
+    for (const row of rows) {
+      const key = `${row.source}\u0000${row.thread_id}\u0000${row.channel}`;
+      const metadata = row.metadata ? parseJsonMetadata(row.metadata) : null;
+      const mailClass = classifyPinetMail({
+        source: row.source,
+        threadId: row.thread_id,
+        sender: row.sender,
+        body: row.body,
+        metadata,
+      }).class;
+      const existing = summaries.get(key);
+      if (!existing) {
+        const counts = emptyMailClassCounts();
+        counts[mailClass] = 1;
+        summaries.set(key, {
+          threadId: row.thread_id,
+          source: row.source,
+          channel: row.channel,
+          unreadCount: 1,
+          latestMessageId: row.message_id,
+          latestAt: row.created_at,
+          highestMailClass: mailClass,
+          mailClassCounts: counts,
+        });
+        continue;
+      }
+
+      existing.unreadCount += 1;
+      existing.mailClassCounts[mailClass] += 1;
+      if (comparePinetMailClassPriority(mailClass, existing.highestMailClass) < 0) {
+        existing.highestMailClass = mailClass;
+      }
+      if (
+        row.created_at > existing.latestAt ||
+        (row.created_at === existing.latestAt && row.message_id > existing.latestMessageId)
+      ) {
+        existing.latestAt = row.created_at;
+        existing.latestMessageId = row.message_id;
+      }
+    }
+
+    return Array.from(summaries.values())
+      .sort((a, b) => {
+        const classOrder = comparePinetMailClassPriority(a.highestMailClass, b.highestMailClass);
+        if (classOrder !== 0) return classOrder;
+        const latestOrder = b.latestAt.localeCompare(a.latestAt);
+        if (latestOrder !== 0) return latestOrder;
+        return b.latestMessageId - a.latestMessageId;
+      })
+      .slice(0, clampedLimit);
   }
 
   markRead(inboxIds: number[], agentId: string): void {

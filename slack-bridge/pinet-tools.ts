@@ -307,8 +307,18 @@ function formatPinetReadResult(result: PinetReadResult, options: PinetReadOption
   if (result.unreadThreads.length > 0) {
     lines.push("", "Unread thread pointers:");
     for (const thread of result.unreadThreads.slice(0, 10)) {
+      const label = formatPinetMailClassLabel(thread.highestMailClass);
+      const counts = [
+        thread.mailClassCounts.steering > 0 ? `${thread.mailClassCounts.steering} steering` : null,
+        thread.mailClassCounts.fwup > 0 ? `${thread.mailClassCounts.fwup} fwup` : null,
+        thread.mailClassCounts.maintenance_context > 0
+          ? `${thread.mailClassCounts.maintenance_context} maintenance/context`
+          : null,
+      ]
+        .filter((item): item is string => Boolean(item))
+        .join(", ");
       lines.push(
-        `- ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread; latest #${thread.latestMessageId}; pointer=pinet action=read args.thread_id=${thread.threadId} args.unread_only=true`,
+        `- [${label}] ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread${counts ? ` (${counts})` : ""}; latest #${thread.latestMessageId}; pointer=pinet action=read args.thread_id=${thread.threadId} args.unread_only=true`,
       );
     }
   }
