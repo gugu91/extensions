@@ -24,6 +24,7 @@ import { createCommandRegistrationRuntime } from "./command-registration-runtime
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
 import { createSlackRuntimeAccess } from "./slack-runtime-access.js";
 import { createThreadConfirmationPolicy } from "./thread-confirmations.js";
+import { persistDeliveredInboundMessage } from "./broker-inbound-persistence.js";
 import {
   createIMessageAdapter,
   detectIMessageMvpEnvironment,
@@ -703,13 +704,23 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (decision.action === "deliver" || decision.action === "unrouted") {
+          const persisted =
+            routedMessage.source === "slack" && routedMessage.threadId
+              ? persistDeliveredInboundMessage(broker.db, selfId, routedMessage)
+              : null;
+
+          if (persisted && !persisted.result.freshDelivery) {
+            return;
+          }
+
           inbox.push({
             channel: routedMessage.channel,
             threadTs: routedMessage.threadId,
             userId: routedMessage.userId,
-            text: routedMessage.text,
+            text: persisted?.notificationText ?? routedMessage.text,
             timestamp: routedMessage.timestamp,
             metadata: routedMessage.metadata ?? null,
+            ...(persisted ? { brokerInboxId: persisted.result.entry.id } : {}),
             ...(routedMessage.scope ? { scope: routedMessage.scope } : {}),
           });
           updateBadge();
