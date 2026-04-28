@@ -83,13 +83,83 @@ export function chooseSlackSnippetType(upload: {
 }): string | undefined {
   if (upload.source !== "content") return undefined;
   if (upload.byteLength > MAX_SNIPPET_BYTES) return undefined;
-  return inferSlackUploadFiletype(upload.filename, upload.filetype) ?? DEFAULT_SNIPPET_TYPE;
+  return normalizeSnippetType(inferSlackUploadFiletype(upload.filename, upload.filetype));
 }
 
 function isWithinRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
 
+function normalizeSnippetType(filetype: string | undefined): string {
+  return filetype?.trim().toLowerCase() || DEFAULT_SNIPPET_TYPE;
+}
+
+function buildUploadMetadataPayload(
+  upload: PreparedSlackUpload,
+  includeSnippetType: boolean,
+): Record<string, unknown> {
+  return {
+    filename: upload.filename,
+    length: upload.byteLength,
+    ...(includeSnippetType && upload.snippetType ? { snippet_type: upload.snippetType } : {}),
+  };
+}
+
+function isInvalidUploadMetadataError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const lower = error.message.toLowerCase();
+  return lower.includes("files.getuploadurlexternal") && lower.includes("invalid_arguments");
+}
+
+function getUploadHost(uploadUrl: string): string {
+  try {
+    return new URL(uploadUrl).hostname || "<unknown>";
+  } catch {
+    return "<unknown>";
+  }
+}
+
+function formatUploadError(error: unknown): string {
+  if (error instanceof Error) {
+    if (typeof error.cause === "string") {
+      return `${error.message}; cause: ${error.cause}`;
+    }
+
+    if (error.cause instanceof Error) {
+      const cause = [
+        error.cause.message,
+        (error.cause as { code?: unknown }).code,
+        error.cause.name,
+      ]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .join("; ");
+      return cause ? `${error.message}; cause: ${cause}` : error.message;
+    }
+
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function isLikelyProxyOrFirewallFailure(responseText: string, headers?: Headers): boolean {
+  const headerText = [
+    headers?.get("x-proxy-error"),
+    headers?.get("x-proxy-status"),
+    headers?.get("via"),
+    headers?.get("server"),
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  const combined = `${responseText} ${headerText}`.toLowerCase();
+
+  return /(blocked-by-allowlist|possible outbound proxy|blocked by proxy|proxy-firewall|firewall)/.test(
+    combined,
+  );
+}
 export async function resolveSlackUploadPath(
   inputPath: string,
   cwd: string,
@@ -194,14 +264,28 @@ export async function performSlackUpload({
   token,
   fetchImpl = fetch,
 }: PerformSlackUploadOptions): Promise<CompletedSlackUpload> {
-  const getUploadResponse = await slack("files.getUploadURLExternal", token, {
-    filename: upload.filename,
-    length: upload.byteLength,
-    ...(upload.snippetType ? { snippet_type: upload.snippetType } : {}),
-  });
+  let getUploadResponse: SlackResult;
+  try {
+    getUploadResponse = await slack(
+      "files.getUploadURLExternal",
+      token,
+      buildUploadMetadataPayload(upload, true),
+    );
+  } catch (error) {
+    if (upload.snippetType && isInvalidUploadMetadataError(error)) {
+      getUploadResponse = await slack(
+        "files.getUploadURLExternal",
+        token,
+        buildUploadMetadataPayload(upload, false),
+      );
+    } else {
+      throw error;
+    }
+  }
 
   const uploadUrl =
     typeof getUploadResponse.upload_url === "string" ? getUploadResponse.upload_url : null;
+  const uploadHost = uploadUrl ? getUploadHost(uploadUrl) : "<unknown>";
   const fileId = typeof getUploadResponse.file_id === "string" ? getUploadResponse.file_id : null;
   if (!uploadUrl || !fileId) {
     throw new Error("Slack files.getUploadURLExternal did not return an upload URL and file ID.");
@@ -210,20 +294,41 @@ export async function performSlackUpload({
   const rawBody = new Uint8Array(upload.bytes.byteLength);
   rawBody.set(upload.bytes);
 
-  const rawUploadResponse = await fetchImpl(uploadUrl, {
-    method: "POST",
-    headers: {
-      "Content-Length": String(upload.byteLength),
-      "Content-Type":
-        upload.source === "content" ? "text/plain; charset=utf-8" : "application/octet-stream",
-    },
-    body: new Blob([rawBody]),
-  });
+  type RawUploadResponse = Pick<Response, "ok" | "status" | "statusText" | "text"> & {
+    headers?: Headers;
+  };
+  let rawUploadResponse: RawUploadResponse;
+  try {
+    rawUploadResponse = await fetchImpl(uploadUrl, {
+      method: "POST",
+      headers: {
+        "Content-Length": String(upload.byteLength),
+        "Content-Type":
+          upload.source === "content" ? "text/plain; charset=utf-8" : "application/octet-stream",
+      },
+      body: new Blob([rawBody]),
+    });
+  } catch (error) {
+    throw new Error(
+      `Slack raw upload failed (transport): ${formatUploadError(error)}; host=${uploadHost}; filename=${upload.filename} byte_length=${upload.byteLength}`,
+    );
+  }
 
   if (!rawUploadResponse.ok) {
     const details = (await rawUploadResponse.text()).trim();
+    const statusText = rawUploadResponse.statusText;
+    const statusTextForHeader = statusText ? ` ${statusText}` : "";
+    const withDetails =
+      details.length > 0 ? `${statusText ? `${statusText}: ` : ""}${details}` : "";
+    const rawUploadResponseHeaders =
+      rawUploadResponse.headers instanceof Headers ? rawUploadResponse.headers : undefined;
+    const isProxyOrFirewallFailure = isLikelyProxyOrFirewallFailure(
+      details,
+      rawUploadResponseHeaders,
+    );
+    const hint = isProxyOrFirewallFailure ? " [possible outbound proxy/firewall block]" : "";
     throw new Error(
-      `Slack raw upload failed (${rawUploadResponse.status}${rawUploadResponse.statusText ? ` ${rawUploadResponse.statusText}` : ""})${details ? `: ${details}` : ""}`,
+      `Slack raw upload failed (HTTP ${rawUploadResponse.status}${statusTextForHeader})${withDetails ? ` ${withDetails}` : ""}${hint}; host=${uploadHost}; filename=${upload.filename} byte_length=${upload.byteLength}`,
     );
   }
 
