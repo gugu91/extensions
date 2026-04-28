@@ -520,6 +520,177 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("reclassifies the original Slack message as steering for linked arrow-up reaction mail", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("111.222", "slack", "C123", "agent-a");
+      const original = db.insertMessage(
+        "111.222",
+        "slack",
+        "inbound",
+        "U_TARGET",
+        "Please keep an eye on this later.",
+        ["agent-a"],
+        { channel: "C123", timestamp: "111.333", userId: "U_TARGET" },
+      );
+
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "111.222",
+        channel: "C123",
+        userId: "U_REACTOR",
+        userName: "Alice",
+        text: "Reaction trigger from Slack: arrow-up",
+        timestamp: "999.000",
+        metadata: {
+          reactionTrigger: true,
+          reactionName: "arrow_up",
+          reactionAction: "steer",
+          reactorUserId: "U_REACTOR",
+          reactorName: "Alice",
+          reactionEventTs: "999.000",
+          referencedSource: "slack",
+          referencedChannel: "C123",
+          referencedThreadTs: "111.222",
+          referencedMessageTs: "111.333",
+          referencedExternalId: "C123:111.333",
+        },
+      });
+
+      const read = db.readInbox("agent-a", { markRead: false });
+      const reclassified = read.messages.find((item) => item.message.id === original.id)?.message;
+      expect(reclassified?.metadata).toMatchObject({
+        pinet_mail_class: "steering",
+        pinet_mail_class_reason: "slack_reaction_arrow_up",
+      });
+      expect(reclassified?.metadata?.pinet_mail_class_audit).toEqual([
+        expect.objectContaining({
+          class: "steering",
+          reason: "slack_reaction_arrow_up",
+          reactionName: "arrow_up",
+          reactorUserId: "U_REACTOR",
+          reactorName: "Alice",
+          reactionEventTs: "999.000",
+          referencedThreadId: "111.222",
+          referencedMessageTs: "111.333",
+        }),
+      ]);
+      expect(
+        classifyPinetMail({
+          source: reclassified?.source,
+          threadId: reclassified?.threadId,
+          sender: reclassified?.sender,
+          body: reclassified?.body,
+          metadata: reclassified?.metadata,
+        }).class,
+      ).toBe("steering");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reclassifies delivered durable Slack mail from arrow-up reactions", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("222.000", "slack", "C999", "broker");
+      const original = db.queueDeliveredMessage("broker", {
+        source: "slack",
+        threadId: "222.000",
+        channel: "C999",
+        userId: "U_TARGET",
+        text: "Escalate this only if someone reacts upward.",
+        timestamp: "222.111",
+      });
+
+      const reaction = db.queueDeliveredMessage("broker", {
+        source: "slack",
+        threadId: "222.000",
+        channel: "C999",
+        userId: "U_REACTOR",
+        userName: "Alice",
+        text: "Reaction trigger from Slack: arrow-up",
+        timestamp: "999.111",
+        metadata: {
+          reactionTrigger: true,
+          reactionName: "arrow_up",
+          reactionAction: "steer",
+          reactorUserId: "U_REACTOR",
+          referencedSource: "slack",
+          referencedExternalId: "C999:222.111",
+        },
+      });
+
+      expect(reaction.freshDelivery).toBe(true);
+      const read = db.readInbox("broker", { markRead: false });
+      const reclassified = read.messages.find(
+        (item) => item.message.id === original.message.id,
+      )?.message;
+      expect(reclassified?.metadata).toMatchObject({ pinet_mail_class: "steering" });
+      expect(
+        classifyPinetMail({
+          source: reclassified?.source,
+          threadId: reclassified?.threadId,
+          sender: reclassified?.sender,
+          body: reclassified?.body,
+          metadata: reclassified?.metadata,
+        }).class,
+      ).toBe("steering");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not reclassify referenced Slack messages for non-arrow reaction mail", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("111.222", "slack", "C123", "agent-a");
+      const original = db.insertMessage(
+        "111.222",
+        "slack",
+        "inbound",
+        "U_TARGET",
+        "Ordinary follow-up context.",
+        ["agent-a"],
+        { channel: "C123", timestamp: "111.333", userId: "U_TARGET" },
+      );
+
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "111.222",
+        channel: "C123",
+        userId: "U_REACTOR",
+        userName: "Alice",
+        text: "Reaction trigger from Slack: review",
+        timestamp: "999.000",
+        metadata: {
+          reactionTrigger: true,
+          reactionName: "eyes",
+          reactionAction: "review",
+          referencedSource: "slack",
+          referencedExternalId: "C123:111.333",
+        },
+      });
+
+      const read = db.readInbox("agent-a", { markRead: false });
+      const unchanged = read.messages.find((item) => item.message.id === original.id)?.message;
+      expect(unchanged?.metadata).not.toHaveProperty("pinet_mail_class");
+      expect(
+        classifyPinetMail({
+          source: unchanged?.source,
+          threadId: unchanged?.threadId,
+          sender: unchanged?.sender,
+          body: unchanged?.body,
+          metadata: unchanged?.metadata,
+        }).class,
+      ).toBe("fwup");
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps mail classification derivable from durable inbox records without changing read state", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

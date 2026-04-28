@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getDefaultDbPath } from "./paths.js";
+import type { PinetMailClass } from "./mail-classification.js";
 import type {
   AgentInfo,
   ThreadInfo,
@@ -194,6 +195,36 @@ function deriveMessageSyncIdentity(
   }
 
   return { externalId: null, externalTs: explicitExternalTs };
+}
+
+function parseJsonMetadata(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function isArrowUpReactionName(value: string | null): boolean {
+  return value === "arrow_up" || value === "⬆" || value === "⬆️";
+}
+
+function appendMetadataAudit(
+  metadata: Record<string, unknown>,
+  key: string,
+  audit: Record<string, unknown>,
+): void {
+  const existing = Array.isArray(metadata[key])
+    ? (metadata[key] as unknown[]).filter(
+        (item): item is Record<string, unknown> =>
+          item !== null && typeof item === "object" && !Array.isArray(item),
+      )
+    : [];
+  metadata[key] = [...existing.slice(-19), audit];
 }
 
 function rowToBrokerMessage(row: {
@@ -2051,15 +2082,18 @@ export class BrokerDB implements BrokerDBInterface {
   // ─── Interface-compatible queueMessage (single agent) ──
 
   queueMessage(agentId: string, message: InboundMessage): void {
-    this.insertMessage(
-      message.threadId,
-      message.source,
-      "inbound",
-      message.userId,
-      message.text,
-      [agentId],
-      this.buildInboundMessageMetadata(message),
-    );
+    this.withTransaction(() => {
+      this.insertMessage(
+        message.threadId,
+        message.source,
+        "inbound",
+        message.userId,
+        message.text,
+        [agentId],
+        this.buildInboundMessageMetadata(message),
+      );
+      this.reclassifyReferencedMessageFromReaction(message);
+    });
   }
 
   queueDeliveredMessage(agentId: string, message: InboundMessage): DeliveredInboundMessageResult {
@@ -2074,6 +2108,7 @@ export class BrokerDB implements BrokerDBInterface {
         [],
         this.buildInboundMessageMetadata(message),
       );
+      this.reclassifyReferencedMessageFromReaction(message);
 
       const existing = db
         .prepare(
@@ -2130,6 +2165,75 @@ export class BrokerDB implements BrokerDBInterface {
       ...(message.isChannelMention ? { isChannelMention: true } : {}),
       ...(message.scope ? { scope: message.scope } : {}),
     };
+  }
+
+  private reclassifyReferencedMessageFromReaction(message: InboundMessage): void {
+    const metadata = message.metadata;
+    if (!metadata) return;
+
+    const reactionName = getStringMetadataValue(metadata, ["reactionName", "reaction_name"]);
+    if (!isArrowUpReactionName(reactionName)) return;
+
+    const referencedSource =
+      getStringMetadataValue(metadata, ["referencedSource", "referenced_source"]) ?? message.source;
+    const referencedExternalId = getStringMetadataValue(metadata, [
+      "referencedExternalId",
+      "referenced_external_id",
+    ]);
+    const referencedChannel = getStringMetadataValue(metadata, [
+      "referencedChannel",
+      "referenced_channel",
+    ]);
+    const referencedMessageTs = getStringMetadataValue(metadata, [
+      "referencedMessageTs",
+      "referenced_message_ts",
+      "messageTs",
+      "message_ts",
+    ]);
+    const externalId =
+      referencedExternalId ??
+      (referencedSource === "slack" && referencedChannel && referencedMessageTs
+        ? `${referencedChannel}:${referencedMessageTs}`
+        : null);
+    if (!externalId) return;
+
+    this.reclassifyMessageByExternalId(referencedSource, externalId, "steering", {
+      reason: "slack_reaction_arrow_up",
+      reactionName,
+      reactorUserId: getStringMetadataValue(metadata, ["reactorUserId", "reactor_user_id"]),
+      reactorName: getStringMetadataValue(metadata, ["reactorName", "reactor_name"]),
+      reactionEventTs: getStringMetadataValue(metadata, ["reactionEventTs", "reaction_event_ts"]),
+      referencedThreadId: message.threadId,
+      referencedMessageTs,
+    });
+  }
+
+  reclassifyMessageByExternalId(
+    source: string,
+    externalId: string,
+    mailClass: PinetMailClass,
+    audit: Record<string, unknown>,
+  ): BrokerMessage | null {
+    const db = this.getDb();
+    const row = db
+      .prepare("SELECT id, metadata FROM messages WHERE source = ? AND external_id = ?")
+      .get(source, externalId) as { id: number; metadata: string | null } | undefined;
+    if (!row) return null;
+
+    const metadata = parseJsonMetadata(row.metadata);
+    metadata.pinet_mail_class = mailClass;
+    metadata.pinet_mail_class_reason = audit.reason ?? "manual_reclassification";
+    appendMetadataAudit(metadata, "pinet_mail_class_audit", {
+      ...audit,
+      class: mailClass,
+      at: new Date().toISOString(),
+    });
+
+    db.prepare("UPDATE messages SET metadata = ? WHERE id = ?").run(
+      JSON.stringify(metadata),
+      row.id,
+    );
+    return this.getMessageById(row.id);
   }
 
   private getInboxEntryById(id: number, agentId: string): InboxEntry | null {

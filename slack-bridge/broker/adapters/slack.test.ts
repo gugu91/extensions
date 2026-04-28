@@ -1427,6 +1427,21 @@ describe("SlackAdapter — reaction triggers", () => {
         userId: "U_REACTOR",
         userName: "Alice",
         timestamp: "999.000",
+        metadata: expect.objectContaining({
+          reactionTrigger: true,
+          reactionName: "eyes",
+          reactionAction: "review",
+          reactorUserId: "U_REACTOR",
+          reactorName: "Alice",
+          reactionEventTs: "999.000",
+          referencedSource: "slack",
+          referencedChannel: "C123",
+          referencedThreadTs: "111.222",
+          referencedMessageTs: "111.333",
+          referencedExternalId: "C123:111.333",
+          reactedMessageAuthor: "Bob",
+          reactedMessageAuthorId: "U_TARGET",
+        }),
       }),
     );
     expect(handler.mock.calls[0]?.[0]?.text).toContain("Reaction trigger from Slack:");
