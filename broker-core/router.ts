@@ -250,7 +250,7 @@ export class MessageRouter {
     }
 
     const agents = this.db.getAgents();
-    let thread = this.db.getThread(msg.threadId);
+    const thread = this.db.getThread(msg.threadId);
     const explicitDirective = findExplicitThreadDirective(msg.text, agents);
 
     if (explicitDirective) {
@@ -287,14 +287,6 @@ export class MessageRouter {
         return { action: "unrouted" };
       }
 
-      const hintedOwner = resolveAgentFromThreadOwnerHint(msg.metadata, agents);
-      if (hintedOwner && isRoutableOwner(hintedOwner)) {
-        if (thread.ownerAgent !== hintedOwner.id) {
-          this.db.updateThread(msg.threadId, { ownerAgent: hintedOwner.id, channel: msg.channel });
-        }
-        return { action: "deliver", agentId: hintedOwner.id };
-      }
-
       if (thread.ownerAgent) {
         const owner = resolveRoutableThreadOwner(this.db, thread.ownerAgent);
         if (owner) {
@@ -304,11 +296,18 @@ export class MessageRouter {
           return { action: "deliver", agentId: owner.id };
         }
 
-        // Owner is gone or no longer routable — clear ownership so the thread can
-        // be explicitly rebound, but do not leak a known-thread reply to another
-        // worker through generic fallback routing.
+        // Owner is gone or no longer routable — clear ownership and stop. Known
+        // Slack-thread replies must not leak to another worker through latest
+        // bot-message owner hints or channel-assignment fallback; a human must
+        // explicitly retarget the thread if the owner is unavailable.
         this.db.updateThread(msg.threadId, { ownerAgent: null });
-        thread = this.db.getThread(msg.threadId);
+        return { action: "unrouted" };
+      }
+
+      const hintedOwner = resolveAgentFromThreadOwnerHint(msg.metadata, agents);
+      if (hintedOwner && isRoutableOwner(hintedOwner)) {
+        this.db.updateThread(msg.threadId, { ownerAgent: hintedOwner.id, channel: msg.channel });
+        return { action: "deliver", agentId: hintedOwner.id };
       }
 
       const mentioned = findAgentMention(msg.text, agents);

@@ -361,6 +361,75 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("drops stale Slack inbox rows when thread ownership changed before delivery", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-a", "slack", "C123", "agent-a");
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "new reply in thread A",
+        timestamp: "123.456",
+      });
+      db.queueMessage("agent-b", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "new reply in thread A fanout",
+        timestamp: "123.457",
+      });
+
+      expect(db.getInbox("agent-a")).toHaveLength(1);
+      expect(db.getInbox("agent-b")).toHaveLength(0);
+      expect(db.getUnreadInboxCount("agent-b")).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("revalidates stale queued Slack rows on read when the owner changes", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-a", "slack", "C123", "agent-a");
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "reply queued before retarget",
+        timestamp: "123.789",
+      });
+      db.updateThread("thread-a", { ownerAgent: "agent-b" });
+
+      const read = db.readInbox("agent-a", { markRead: false });
+
+      expect(read.messages).toEqual([]);
+      expect(read.unreadCountBefore).toBe(0);
+      expect(read.unreadThreads).toEqual([]);
+      expect(db.getInbox("agent-a")).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not apply Slack thread-affinity pruning to agent-to-agent inbox rows", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("a2a:one:two", "agent", "", "one");
+      db.insertMessage("a2a:one:two", "agent", "inbound", "one", "same", ["two"]);
+
+      expect(db.getInbox("two")).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not deduplicate messages without a transport identity", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

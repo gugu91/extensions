@@ -2029,12 +2029,17 @@ export class BrokerDB implements BrokerDBInterface {
   // ─── Interface-compatible queueMessage (single agent) ──
 
   queueMessage(agentId: string, message: InboundMessage): void {
+    const threadOwner =
+      message.source === "slack" && message.threadId
+        ? this.getThread(message.threadId)?.ownerAgent
+        : null;
     const metadata: Record<string, unknown> = {
       ...message.metadata,
       channel: message.channel,
       userName: message.userName,
       userId: message.userId,
       timestamp: message.timestamp,
+      ...(threadOwner ? { threadAffinityOwnerAgentId: threadOwner } : {}),
       ...(message.isChannelMention ? { isChannelMention: true } : {}),
       ...(message.scope ? { scope: message.scope } : {}),
     };
@@ -2172,7 +2177,60 @@ export class BrokerDB implements BrokerDBInterface {
     return row ? rowToBrokerMessage(row) : null;
   }
 
+  private dropStaleSlackInboxRows(agentId: string): number {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT i.id AS inbox_id,
+                i.agent_id AS agent_id,
+                m.metadata AS metadata,
+                t.owner_agent AS owner_agent
+         FROM inbox i
+         JOIN messages m ON m.id = i.message_id
+         JOIN threads t ON t.thread_id = m.thread_id
+         WHERE i.agent_id = ?
+           AND (i.delivered = 0 OR i.read_at IS NULL)
+           AND m.source = 'slack'
+           AND m.direction = 'inbound'
+           AND t.owner_agent IS NOT NULL`,
+      )
+      .all(agentId) as Array<{
+      inbox_id: number;
+      agent_id: string;
+      metadata: string | null;
+      owner_agent: string;
+    }>;
+
+    const staleIds: number[] = [];
+    for (const row of rows) {
+      if (!row.metadata) continue;
+      let metadata: Record<string, unknown>;
+      try {
+        metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const affinityOwner = metadata.threadAffinityOwnerAgentId;
+      if (typeof affinityOwner !== "string" || affinityOwner.length === 0) continue;
+      if (row.agent_id !== row.owner_agent || affinityOwner !== row.owner_agent) {
+        staleIds.push(row.inbox_id);
+      }
+    }
+
+    if (staleIds.length === 0) return 0;
+
+    const now = new Date().toISOString();
+    const stmt = db.prepare(
+      "UPDATE inbox SET delivered = 1, read_at = COALESCE(read_at, ?) WHERE id = ? AND agent_id = ?",
+    );
+    for (const staleId of staleIds) {
+      stmt.run(now, staleId, agentId);
+    }
+    return staleIds.length;
+  }
+
   getInbox(agentId: string, limit = 50): { entry: InboxEntry; message: BrokerMessage }[] {
+    this.dropStaleSlackInboxRows(agentId);
     const db = this.getDb();
 
     const rows = db
@@ -2234,6 +2292,7 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   readInbox(agentId: string, options: InboxReadOptions = {}): InboxReadResult {
+    this.dropStaleSlackInboxRows(agentId);
     const db = this.getDb();
     const unreadOnly = options.unreadOnly ?? true;
     const markRead = options.markRead ?? true;
@@ -2335,6 +2394,7 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   getUnreadInboxCount(agentId: string): number {
+    this.dropStaleSlackInboxRows(agentId);
     const db = this.getDb();
     const row = db
       .prepare("SELECT COUNT(*) AS count FROM inbox WHERE agent_id = ? AND read_at IS NULL")
@@ -2343,6 +2403,7 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   getUnreadThreadSummary(agentId: string, limit = 20): InboxThreadUnreadSummary[] {
+    this.dropStaleSlackInboxRows(agentId);
     const db = this.getDb();
     const clampedLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
     const rows = db
