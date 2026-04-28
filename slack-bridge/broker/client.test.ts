@@ -778,6 +778,68 @@ describe("BrokerClient — message.send", () => {
 
     client.disconnect();
   });
+
+  it("includes normalized content and blocks in message.send payload when provided", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+    await client.connect();
+    const blocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Transport-aware*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    const sendPromise = client.sendMessage({
+      threadId: "100.200",
+      body: "fallback text",
+      source: "slack",
+      channel: "C123",
+      content: {
+        text: "fallback text",
+        markdown: "**fallback text**",
+        slackBlocks: blocks,
+      },
+      blocks,
+    });
+
+    await waitFor(() => mock.received.length > 0);
+    const req = JSON.parse(mock.received[0]) as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(req.method).toBe("message.send");
+    expect(req.params).toMatchObject({
+      threadId: "100.200",
+      body: "fallback text",
+      source: "slack",
+      channel: "C123",
+      content: {
+        text: "fallback text",
+        markdown: "**fallback text**",
+        slackBlocks: blocks,
+      },
+      blocks,
+    });
+
+    mock.respondTo(mock.connections[0], req.id, {
+      adapter: "slack",
+      messageId: 10,
+      threadId: "100.200",
+      channel: "C123",
+      source: "slack",
+    });
+
+    await expect(sendPromise).resolves.toEqual({
+      adapter: "slack",
+      messageId: 10,
+      threadId: "100.200",
+      channel: "C123",
+      source: "slack",
+    });
+
+    client.disconnect();
+  });
 });
 
 describe("BrokerClient — listThreads / listAgents", () => {

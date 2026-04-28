@@ -180,6 +180,7 @@ import {
 } from "@gugu910/pi-transport-core";
 import type {
   InboundMessage as _InboundMessage,
+  NormalizedMessageContent as _NormalizedMessageContent,
   OutboundMessage as _OutboundMessage,
   MessageAdapter as _MessageAdapter,
   RuntimeScopeCarrier as _RuntimeScopeCarrier,
@@ -188,6 +189,7 @@ import type {
 } from "@gugu910/pi-transport-core";
 
 export type InboundMessage = _InboundMessage;
+export type NormalizedMessageContent = _NormalizedMessageContent;
 export type OutboundMessage = _OutboundMessage;
 export type MessageAdapter = _MessageAdapter;
 export type RuntimeScopeCarrier = _RuntimeScopeCarrier;

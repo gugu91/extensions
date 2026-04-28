@@ -148,10 +148,18 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   async send(msg: OutboundMessage): Promise<void> {
+    const contentSlackBlocks = msg.content?.slackBlocks;
+    const slackBlocks =
+      contentSlackBlocks && contentSlackBlocks.length > 0
+        ? contentSlackBlocks
+        : msg.blocks && msg.blocks.length > 0
+          ? msg.blocks
+          : undefined;
     const body: Record<string, unknown> = {
       channel: msg.channel,
-      text: msg.text,
+      text: msg.content?.text ?? msg.text,
       thread_ts: msg.threadId,
+      ...(slackBlocks ? { blocks: slackBlocks } : {}),
     };
     const scope = msg.scope ?? this.resolveScopeForThread(msg.threadId, msg.channel);
 

@@ -68,6 +68,42 @@ describe("AppleScriptIMessageAdapter", () => {
     expect(runAppleScript).toHaveBeenCalledTimes(1);
   });
 
+  it("uses canonical normalized content text for outbound sends", async () => {
+    const runAppleScript = vi.fn(async () => ({ stdout: "sent", stderr: "" }));
+    const adapter = createIMessageAdapter({
+      runAppleScript,
+      detectEnvironment: () => ({
+        platform: "darwin",
+        homeDir: "/Users/goose",
+        messagesDbPath: "/Users/goose/Library/Messages/chat.db",
+        osascriptPath: APPLESCRIPT_BINARY_PATH,
+        osascriptAvailable: true,
+        messagesDbAvailable: false,
+        canAttemptSend: true,
+        canAttemptHistoryRead: false,
+        readyForLocalMvp: false,
+        blockers: ["missing_messages_db"],
+      }),
+    });
+
+    await adapter.connect();
+    await adapter.send({
+      threadId: "imessage:alice",
+      channel: "chat:alice",
+      text: "legacy **markdown** fallback",
+      content: {
+        text: "plain fallback",
+        markdown: "**plain fallback**",
+      },
+    });
+
+    expect(runAppleScript).toHaveBeenCalledWith({
+      osascriptPath: APPLESCRIPT_BINARY_PATH,
+      scriptLines: buildIMessageSendAppleScript(),
+      args: ["chat:alice", "plain fallback"],
+    });
+  });
+
   it("fails connect when the host cannot attempt iMessage sends and keeps the trust boundary explicit", async () => {
     const adapter = createIMessageAdapter({
       detectEnvironment: () => ({

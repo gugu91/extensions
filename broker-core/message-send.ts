@@ -1,4 +1,10 @@
-import type { BrokerMessage, MessageAdapter, OutboundMessage, ThreadInfo } from "./types.js";
+import type {
+  BrokerMessage,
+  MessageAdapter,
+  NormalizedMessageContent,
+  OutboundMessage,
+  ThreadInfo,
+} from "./types.js";
 
 export interface BrokerMessageSenderDb {
   getThread(threadId: string): ThreadInfo | null;
@@ -31,10 +37,34 @@ export interface SendBrokerMessageInput {
   senderAgentId: string;
   source?: string;
   channel?: string;
+  content?: NormalizedMessageContent;
+  blocks?: ReadonlyArray<Record<string, unknown>>;
   agentName?: string;
   agentEmoji?: string;
   agentOwnerToken?: string;
   metadata?: Record<string, unknown>;
+}
+
+function normalizeMessageContent(
+  content?: NormalizedMessageContent,
+): NormalizedMessageContent | undefined {
+  if (!content) {
+    return undefined;
+  }
+
+  const text = content.text.trim();
+  if (!text) {
+    throw new Error("content.text is required when content is provided.");
+  }
+
+  const markdown = content.markdown?.trim();
+  return {
+    text,
+    ...(markdown ? { markdown } : {}),
+    ...(content.slackBlocks && content.slackBlocks.length > 0
+      ? { slackBlocks: content.slackBlocks }
+      : {}),
+  };
 }
 
 export interface SendBrokerMessageResult {
@@ -69,10 +99,15 @@ export async function sendBrokerMessage(
     throw new Error(`No adapter is registered for transport source ${JSON.stringify(source)}.`);
   }
 
+  const content = normalizeMessageContent(input.content);
+  const messageBody = content?.text ?? body;
+
   const outbound: OutboundMessage = {
     threadId,
     channel,
-    text: body,
+    text: messageBody,
+    ...(content ? { content } : {}),
+    ...(input.blocks && input.blocks.length > 0 ? { blocks: input.blocks } : {}),
     ...(input.agentName ? { agentName: input.agentName } : {}),
     ...(input.agentEmoji ? { agentEmoji: input.agentEmoji } : {}),
     ...(input.agentOwnerToken ? { agentOwnerToken: input.agentOwnerToken } : {}),
@@ -93,7 +128,7 @@ export async function sendBrokerMessage(
     source,
     "outbound",
     input.senderAgentId,
-    body,
+    messageBody,
     [],
     input.metadata,
   );

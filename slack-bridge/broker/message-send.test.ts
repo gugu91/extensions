@@ -92,6 +92,96 @@ describe("sendBrokerMessage", () => {
     expect(result.adapter).toBe("imessage");
   });
 
+  it("passes normalized outbound content and fallback blocks through to the adapter", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+    const legacyBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Legacy blocks*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+    const slackBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Transport-aware blocks*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    const result = await sendBrokerMessage(
+      {
+        db,
+        adapters: [{ name: "slack", send }],
+      },
+      {
+        threadId: "100.200",
+        body: "  raw fallback body  ",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C123",
+        content: {
+          text: " canonical fallback text ",
+          markdown: " **canonical fallback text** ",
+          slackBlocks,
+        },
+        blocks: legacyBlocks,
+      },
+    );
+
+    expect(send).toHaveBeenCalledWith({
+      threadId: "100.200",
+      channel: "C123",
+      text: "canonical fallback text",
+      content: {
+        text: "canonical fallback text",
+        markdown: "**canonical fallback text**",
+        slackBlocks,
+      },
+      blocks: legacyBlocks,
+    });
+    expect(result.message.body).toBe("canonical fallback text");
+  });
+
+  it("omits empty Slack-native content blocks so transports can use legacy fallback blocks", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+    const legacyBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Legacy blocks*" },
+      },
+    ] satisfies ReadonlyArray<Record<string, unknown>>;
+
+    await sendBrokerMessage(
+      {
+        db,
+        adapters: [{ name: "slack", send }],
+      },
+      {
+        threadId: "100.201",
+        body: "fallback text",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C123",
+        content: {
+          text: "fallback text",
+          slackBlocks: [],
+        },
+        blocks: legacyBlocks,
+      },
+    );
+
+    expect(send).toHaveBeenCalledWith({
+      threadId: "100.201",
+      channel: "C123",
+      text: "fallback text",
+      content: {
+        text: "fallback text",
+      },
+      blocks: legacyBlocks,
+    });
+  });
+
   it("reuses the stored thread transport when source and channel are omitted", async () => {
     const db = createFakeDb();
     db.createThread("imessage:chat:bob", "imessage", "chat:bob", "agent-1");
