@@ -76,6 +76,12 @@ export interface InboxReadResult {
   markedReadIds: number[];
 }
 
+export interface DeliveredInboundMessageResult {
+  entry: InboxEntry;
+  message: BrokerMessage;
+  freshDelivery: boolean;
+}
+
 export interface ChannelAssignment {
   channel: string;
   agentId: string;

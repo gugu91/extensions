@@ -422,6 +422,49 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("stores delivered Slack inbox rows as unread durable mail without pending runtime delivery", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-a", "slack", "C123", "broker");
+      const first = db.queueDeliveredMessage("broker", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "durable self-handled Slack mail",
+        timestamp: "123.456",
+      });
+      const replay = db.queueDeliveredMessage("broker", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "durable self-handled Slack mail replay",
+        timestamp: "123.456",
+      });
+
+      expect(first.freshDelivery).toBe(true);
+      expect(replay.freshDelivery).toBe(false);
+      expect(replay.message.id).toBe(first.message.id);
+      expect(db.getInbox("broker")).toHaveLength(0);
+      expect(db.getUnreadInboxCount("broker")).toBe(1);
+
+      const read = db.readInbox("broker", { markRead: false });
+      expect(read.messages).toHaveLength(1);
+      expect(read.messages[0].message.id).toBe(first.message.id);
+      expect(read.messages[0].entry.delivered).toBe(true);
+      expect(read.messages[0].message.metadata).toMatchObject({
+        channel: "C123",
+        userId: "U1",
+        timestamp: "123.456",
+        threadAffinityOwnerAgentId: "broker",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("revalidates stale queued Slack rows on read when the owner changes", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

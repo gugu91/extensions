@@ -10,6 +10,7 @@ import type {
   InboxReadOptions,
   InboxReadResult,
   InboxThreadUnreadSummary,
+  DeliveredInboundMessageResult,
   BacklogEntry,
   BrokerDBInterface,
   InboundMessage,
@@ -2050,11 +2051,76 @@ export class BrokerDB implements BrokerDBInterface {
   // ─── Interface-compatible queueMessage (single agent) ──
 
   queueMessage(agentId: string, message: InboundMessage): void {
+    this.insertMessage(
+      message.threadId,
+      message.source,
+      "inbound",
+      message.userId,
+      message.text,
+      [agentId],
+      this.buildInboundMessageMetadata(message),
+    );
+  }
+
+  queueDeliveredMessage(agentId: string, message: InboundMessage): DeliveredInboundMessageResult {
+    return this.withTransaction(() => {
+      const db = this.getDb();
+      const brokerMessage = this.insertMessage(
+        message.threadId,
+        message.source,
+        "inbound",
+        message.userId,
+        message.text,
+        [],
+        this.buildInboundMessageMetadata(message),
+      );
+
+      const existing = db
+        .prepare(
+          "SELECT id FROM inbox WHERE agent_id = ? AND message_id = ? ORDER BY id ASC LIMIT 1",
+        )
+        .get(agentId, brokerMessage.id) as { id: number } | undefined;
+      if (existing) {
+        db.prepare("UPDATE inbox SET delivered = 1 WHERE id = ? AND agent_id = ?").run(
+          existing.id,
+          agentId,
+        );
+        const entry = this.getInboxEntryById(existing.id, agentId);
+        if (!entry) {
+          throw new Error("Failed to read delivered inbox entry");
+        }
+        return { entry, message: brokerMessage, freshDelivery: false };
+      }
+
+      const now = new Date().toISOString();
+      const result = db
+        .prepare(
+          `INSERT INTO inbox (agent_id, message_id, delivered, created_at)
+           VALUES (?, ?, 1, ?)`,
+        )
+        .run(agentId, brokerMessage.id, now);
+      const inboxId = Number(result.lastInsertRowid);
+      return {
+        entry: {
+          id: inboxId,
+          agentId,
+          messageId: brokerMessage.id,
+          delivered: true,
+          readAt: null,
+          createdAt: now,
+        },
+        message: brokerMessage,
+        freshDelivery: true,
+      };
+    });
+  }
+
+  private buildInboundMessageMetadata(message: InboundMessage): Record<string, unknown> {
     const threadOwner =
       message.source === "slack" && message.threadId
         ? this.getThread(message.threadId)?.ownerAgent
         : null;
-    const metadata: Record<string, unknown> = {
+    return {
       ...message.metadata,
       channel: message.channel,
       userName: message.userName,
@@ -2064,15 +2130,33 @@ export class BrokerDB implements BrokerDBInterface {
       ...(message.isChannelMention ? { isChannelMention: true } : {}),
       ...(message.scope ? { scope: message.scope } : {}),
     };
-    this.insertMessage(
-      message.threadId,
-      message.source,
-      "inbound",
-      message.userId,
-      message.text,
-      [agentId],
-      metadata,
-    );
+  }
+
+  private getInboxEntryById(id: number, agentId: string): InboxEntry | null {
+    const row = this.getDb()
+      .prepare(
+        "SELECT id, agent_id, message_id, delivered, read_at, created_at FROM inbox WHERE id = ? AND agent_id = ?",
+      )
+      .get(id, agentId) as
+      | {
+          id: number;
+          agent_id: string;
+          message_id: number;
+          delivered: number;
+          read_at: string | null;
+          created_at: string;
+        }
+      | undefined;
+    return row
+      ? {
+          id: row.id,
+          agentId: row.agent_id,
+          messageId: row.message_id,
+          delivered: row.delivered === 1,
+          readAt: row.read_at,
+          createdAt: row.created_at,
+        }
+      : null;
   }
 
   // ─── Detailed message insert (used by socket server) ──
