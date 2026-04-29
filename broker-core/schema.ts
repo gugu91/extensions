@@ -1514,14 +1514,14 @@ export class BrokerDB implements BrokerDBInterface {
   }
 
   queueUnroutedMessage(message: InboundMessage, reason = "no_route"): BacklogEntry {
-    const metadata: Record<string, unknown> = {
+    const metadata = this.withInboundMailClassMetadata(message, {
       ...message.metadata,
       channel: message.channel,
       userName: message.userName,
       userId: message.userId,
       timestamp: message.timestamp,
       ...(message.isChannelMention ? { isChannelMention: true } : {}),
-    };
+    });
 
     const existingThread = this.getThread(message.threadId);
     if (!existingThread) {
@@ -2172,7 +2172,7 @@ export class BrokerDB implements BrokerDBInterface {
       message.source === "slack" && message.threadId
         ? this.getThread(message.threadId)?.ownerAgent
         : null;
-    return {
+    return this.withInboundMailClassMetadata(message, {
       ...message.metadata,
       channel: message.channel,
       userName: message.userName,
@@ -2181,6 +2181,31 @@ export class BrokerDB implements BrokerDBInterface {
       ...(threadOwner ? { threadAffinityOwnerAgentId: threadOwner } : {}),
       ...(message.isChannelMention ? { isChannelMention: true } : {}),
       ...(message.scope ? { scope: message.scope } : {}),
+    });
+  }
+
+  private withInboundMailClassMetadata(
+    message: InboundMessage,
+    metadata: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (message.source !== "slack") {
+      return metadata;
+    }
+
+    const classification = classifyPinetMail({
+      source: message.source,
+      threadId: message.threadId,
+      sender: message.userId,
+      body: message.text,
+      metadata,
+    });
+    if (classification.explicit) {
+      return metadata;
+    }
+
+    return {
+      ...metadata,
+      pinetMailClass: classification.class,
     };
   }
 
@@ -2238,6 +2263,7 @@ export class BrokerDB implements BrokerDBInterface {
     if (!row) return null;
 
     const metadata = parseJsonMetadata(row.metadata);
+    metadata.pinetMailClass = mailClass;
     metadata.pinet_mail_class = mailClass;
     metadata.pinet_mail_class_reason = audit.reason ?? "manual_reclassification";
     appendMetadataAudit(metadata, "pinet_mail_class_audit", {
