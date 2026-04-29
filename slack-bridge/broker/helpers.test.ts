@@ -1001,7 +1001,13 @@ describe("BrokerDB", () => {
     expect(deliveries[0].wakeup.id).toBe(scheduled.id);
     expect(deliveries[0].message.body).toBe("Check whether PR #62 merged");
     expect(deliveries[0].message.threadId).toBe("wakeup:worker-1");
-    expect((deliveries[0].message.metadata as Record<string, unknown>).scheduledWakeup).toBe(true);
+    expect(deliveries[0].message.metadata).toEqual(
+      expect.objectContaining({
+        scheduledWakeup: true,
+        a2a: true,
+        pinetMailClass: "fwup",
+      }),
+    );
     expect(db.listScheduledWakeups("worker-1")).toHaveLength(0);
 
     const inbox = db.getInbox("worker-1");

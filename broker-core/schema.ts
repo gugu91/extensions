@@ -2044,6 +2044,8 @@ export class BrokerDB implements BrokerDBInterface {
           {
             senderAgent: "Pinet Scheduler",
             scheduledWakeup: true,
+            a2a: true,
+            pinetMailClass: "fwup",
             wakeupId: row.id,
             fireAt: row.fire_at,
           },

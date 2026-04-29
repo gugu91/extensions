@@ -300,7 +300,30 @@ function formatInboxMetadata(metadata: Record<string, unknown> | null | undefine
   return "";
 }
 
-export function formatInboxMessages(
+function isPinetPointerInboxMessage(message: InboxMessage): boolean {
+  const metadata = message.metadata ?? null;
+  return (
+    metadata?.a2a === true ||
+    metadata?.scheduledWakeup === true ||
+    message.threadTs.startsWith("a2a:") ||
+    message.threadTs.startsWith("wakeup:")
+  );
+}
+
+function inboxMessageToPinetEntry(message: InboxMessage): FollowerInboxEntry {
+  return {
+    ...(message.brokerInboxId != null ? { inboxId: message.brokerInboxId } : {}),
+    message: {
+      threadId: message.threadTs,
+      sender: message.userId,
+      body: message.text,
+      createdAt: message.timestamp,
+      metadata: message.metadata ?? null,
+    },
+  };
+}
+
+function formatSlackInboxMessages(
   messages: InboxMessage[],
   userNames: { get(key: string): string | undefined },
 ): string {
@@ -314,6 +337,25 @@ export function formatInboxMessages(
   });
 
   return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
+}
+
+export function formatInboxMessages(
+  messages: InboxMessage[],
+  userNames: { get(key: string): string | undefined },
+): string {
+  const pinetMessages = messages.filter(isPinetPointerInboxMessage);
+  if (pinetMessages.length === messages.length) {
+    return formatPinetInboxMessages(pinetMessages.map(inboxMessageToPinetEntry));
+  }
+
+  if (pinetMessages.length === 0) {
+    return formatSlackInboxMessages(messages, userNames);
+  }
+
+  const slackMessages = messages.filter((message) => !isPinetPointerInboxMessage(message));
+  return `${formatSlackInboxMessages(slackMessages, userNames)}\n\n${formatPinetInboxMessages(
+    pinetMessages.map(inboxMessageToPinetEntry),
+  )}`;
 }
 
 function getPinetSenderLabel(message: FollowerInboxEntry["message"]): string {
@@ -625,6 +667,8 @@ export function extractPinetControlCommand(message: {
   metadata?: Record<string, unknown> | null;
 }): PinetControlCommand | null {
   const metadata = message.metadata ?? {};
+  if (metadata.scheduledWakeup === true) return null;
+
   const isAgentToAgent =
     metadata.a2a === true ||
     (typeof message.threadId === "string" && message.threadId.startsWith("a2a:"));
@@ -3339,7 +3383,10 @@ export function isAgentToAgentEntry(entry: {
   message: { threadId?: string; metadata?: Record<string, unknown> | null };
 }): boolean {
   const threadId = entry.message.threadId ?? "";
-  return threadId.startsWith("a2a:") || entry.message.metadata?.a2a === true;
+  const metadata = entry.message.metadata ?? null;
+  return (
+    threadId.startsWith("a2a:") || metadata?.a2a === true || metadata?.scheduledWakeup === true
+  );
 }
 
 export function partitionFollowerInboxEntries<

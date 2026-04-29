@@ -433,9 +433,11 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 | `pinet_read`     | Read durable SQLite-backed Pinet inbox context and unread thread pointers                                           |
 | `pinet_agents`   | List connected Pinet agents with status and capabilities                                                            |
 | `pinet_free`     | Mark this Pinet agent idle/free for new work                                                                        |
-| `pinet_schedule` | Schedule a future wake-up for this Pinet agent                                                                      |
+| `pinet_schedule` | Schedule a future wake-up for this Pinet agent as durable follow-up mail                                            |
 
 Durable Pinet inbox notifications are classified as `steering`, `fwup`, or `maintenance/context` from explicit metadata or message cues. Follower prompts receive compact pointers such as `pinet action=read args.thread_id=...` instead of the full durable message body; agents use `pinet_read` to retrieve the actual context. Delivery, read/ack state, and mail classification remain separate.
+
+Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are persisted/stamped as Pinet follow-up mail and surfaced through compact `pinet_read` pointers rather than direct reminder-body prompts. Wake-up bodies and metadata are treated as mail content only; they do not trigger Pinet remote-control commands such as `/exit`, `/reload`, or structured `pinet:control` JSON.
 
 ### Broker commands
 
