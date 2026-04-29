@@ -469,7 +469,7 @@ describe("formatInboxMessages", () => {
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("New Slack messages:");
     expect(result).toContain(
-      "[thread 789.012] (channel mention in <#C789>) will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
+      "[thread 789.012] [fwup] (channel mention in <#C789>) will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
     );
     expect(result).toContain("Use pinet action=read with the pointer before acting.");
     expect(result).toContain("ACK briefly after reading, do the work");
@@ -501,7 +501,7 @@ describe("formatInboxMessages", () => {
     expect(result).toContain("New Slack messages:");
     expect(result).toContain("New Pinet messages:");
     expect(result).toContain(
-      "[thread 789.012] will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
+      "[thread 789.012] [fwup] will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
     );
     expect(result).toContain(
       "[thread a2a:broker:worker] [steering] broker-id (Broker Bunny): inbox_id=17 pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
@@ -535,8 +535,58 @@ describe("formatInboxMessages", () => {
     expect(result).toContain(
       "will: inbox_id=14 pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
     );
+    expect(result).toContain("[fwup]");
     expect(result).toContain('canvas={"canvasId":"F_CANVAS_1"');
     expect(result).not.toContain("Alice mentioned you in a comment");
+  });
+
+  it("suppresses reflex ack guidance for maintenance/context-only durable Slack pointer batches", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C123",
+        threadTs: "123.456",
+        userId: "U1",
+        text: "background context only",
+        timestamp: "123.789",
+        brokerInboxId: 15,
+        metadata: { pinetMailClass: "maintenance_context" },
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain(
+      "[thread 123.456] [maintenance/context] will: inbox_id=15 pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
+    );
+    expect(result).toContain("Treat [maintenance/context] messages as context-only");
+    expect(result).not.toContain("ACK briefly after reading");
+    expect(result).not.toContain("background context only");
+  });
+
+  it("keeps ack guidance when maintenance pointers are batched with inline Slack messages", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C123",
+        threadTs: "123.456",
+        userId: "U1",
+        text: "background context only",
+        timestamp: "123.789",
+        brokerInboxId: 15,
+        metadata: { pinetMailClass: "maintenance_context" },
+      },
+      {
+        channel: "C123",
+        threadTs: "123.999",
+        userId: "U1",
+        text: "please check this inline message",
+        timestamp: "123.999",
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain("[maintenance/context]");
+    expect(result).toContain("For [steering]/[fwup] or inline Slack messages, ACK briefly");
+    expect(result).toContain("will: please check this inline message");
+    expect(result).not.toContain("background context only");
   });
 
   it("falls back to userId when name not in map", () => {
