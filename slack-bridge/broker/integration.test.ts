@@ -970,6 +970,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     const thread = db.getThread("new-msg-ts");
     expect(thread).not.toBeNull();
     expect(thread!.ownerAgent).toBe(reg.agentId);
+    expect(thread!.channel).toBe("C-AUTO");
   });
 
   it("slack.proxy chat.postMessage with thread_ts claims the existing thread", async () => {
@@ -1006,6 +1007,7 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     const thread = db.getThread("existing-thread-ts");
     expect(thread).not.toBeNull();
     expect(thread!.ownerAgent).toBe(reg.agentId);
+    expect(thread!.channel).toBe("C-REPLY");
 
     // The reply ts itself should NOT create a separate thread
     expect(db.getThread("reply-ts")).toBeNull();

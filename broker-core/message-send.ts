@@ -15,6 +15,7 @@ export interface BrokerMessageSenderDb {
     ownerAgent: string | null,
   ): ThreadInfo;
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void;
+  claimThread(threadId: string, agentId: string, source?: string, channel?: string): boolean;
   insertMessage(
     threadId: string,
     source: string,
@@ -102,6 +103,27 @@ export async function sendBrokerMessage(
   const content = normalizeMessageContent(input.content);
   const messageBody = content?.text ?? body;
 
+  let thread = existingThread;
+  if (thread?.ownerAgent && thread.ownerAgent !== input.senderAgentId) {
+    throw new Error(`Thread ${threadId} is already owned by another agent.`);
+  }
+
+  if (!thread || thread.ownerAgent === null) {
+    const claimed = deps.db.claimThread(threadId, input.senderAgentId, source, channel);
+    if (!claimed) {
+      throw new Error(`Thread ${threadId} is already owned by another agent.`);
+    }
+    thread = deps.db.getThread(threadId);
+    if (!thread) {
+      throw new Error(`Thread ${threadId} was claimed but could not be read back.`);
+    }
+  }
+
+  if (thread.source !== source || thread.channel !== channel) {
+    deps.db.updateThread(threadId, { source, channel });
+    thread = { ...thread, source, channel };
+  }
+
   const outbound: OutboundMessage = {
     threadId,
     channel,
@@ -114,14 +136,6 @@ export async function sendBrokerMessage(
     ...(input.metadata ? { metadata: input.metadata } : {}),
   };
   await adapter.send(outbound);
-
-  let thread = existingThread;
-  if (!thread) {
-    thread = deps.db.createThread(threadId, source, channel, input.senderAgentId);
-  } else if (thread.source !== source || thread.channel !== channel) {
-    deps.db.updateThread(threadId, { source, channel });
-    thread = { ...thread, source, channel };
-  }
 
   const message = deps.db.insertMessage(
     threadId,

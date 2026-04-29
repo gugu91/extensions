@@ -32,6 +32,27 @@ function createFakeDb() {
       }
       threads.set(threadId, { ...existing, ...updates });
     },
+    claimThread(threadId: string, agentId: string, source = "slack", channel = "") {
+      const existing = threads.get(threadId);
+      if (existing) {
+        if (existing.ownerAgent && existing.ownerAgent !== agentId) {
+          return false;
+        }
+        threads.set(threadId, { ...existing, ownerAgent: agentId });
+        return true;
+      }
+      const now = new Date().toISOString();
+      threads.set(threadId, {
+        threadId,
+        source,
+        channel,
+        ownerAgent: agentId,
+        ownerBinding: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return true;
+    },
     insertMessage(
       threadId: string,
       source: string,
@@ -204,6 +225,109 @@ describe("sendBrokerMessage", () => {
       channel: "chat:bob",
       text: "follow-up",
     });
+  });
+
+  it("claims an existing unowned transport thread for the sending agent", async () => {
+    const db = createFakeDb();
+    db.createThread("100.300", "slack", "C-OLD", null);
+    const send = vi.fn(async () => undefined);
+
+    const result = await sendBrokerMessage(
+      {
+        db,
+        adapters: [{ name: "slack", send }],
+      },
+      {
+        threadId: "100.300",
+        body: "first agent response",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C-NEW",
+      },
+    );
+
+    expect(db.getThread("100.300")).toMatchObject({
+      source: "slack",
+      channel: "C-NEW",
+      ownerAgent: "agent-1",
+    });
+    expect(result.thread).toMatchObject({ ownerAgent: "agent-1", channel: "C-NEW" });
+  });
+
+  it("does not steal or send to an existing transport thread owned by another agent", async () => {
+    const db = createFakeDb();
+    db.createThread("100.301", "slack", "C123", "other-agent");
+    const send = vi.fn(async () => undefined);
+
+    await expect(
+      sendBrokerMessage(
+        {
+          db,
+          adapters: [{ name: "slack", send }],
+        },
+        {
+          threadId: "100.301",
+          body: "agent response",
+          senderAgentId: "agent-1",
+        },
+      ),
+    ).rejects.toThrow("Thread 100.301 is already owned by another agent.");
+
+    expect(send).not.toHaveBeenCalled();
+    expect(db.getThread("100.301")?.ownerAgent).toBe("other-agent");
+  });
+
+  it("sends only the winning first response for an existing unowned thread", async () => {
+    const db = createFakeDb();
+    db.createThread("100.302", "slack", "C123", null);
+    const send = vi.fn(async () => undefined);
+    const deps = { db, adapters: [{ name: "slack", send }] };
+
+    const results = await Promise.allSettled([
+      sendBrokerMessage(deps, {
+        threadId: "100.302",
+        body: "first response",
+        senderAgentId: "agent-1",
+      }),
+      sendBrokerMessage(deps, {
+        threadId: "100.302",
+        body: "racing response",
+        senderAgentId: "agent-2",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(db.getThread("100.302")?.ownerAgent).toBe("agent-1");
+  });
+
+  it("sends only the winning first response for a fresh thread", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+    const deps = { db, adapters: [{ name: "slack", send }] };
+
+    const results = await Promise.allSettled([
+      sendBrokerMessage(deps, {
+        threadId: "100.303",
+        body: "first fresh response",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C123",
+      }),
+      sendBrokerMessage(deps, {
+        threadId: "100.303",
+        body: "racing fresh response",
+        senderAgentId: "agent-2",
+        source: "slack",
+        channel: "C123",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(db.getThread("100.303")?.ownerAgent).toBe("agent-1");
   });
 
   it("fails cleanly when no adapter is registered for the thread source", async () => {

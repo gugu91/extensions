@@ -328,11 +328,24 @@ export class MessageRouter {
     }
 
     // New thread / top-level message: channel assignment can still steer work.
+    // Persist that assignment as thread ownership so later generic replies in
+    // the same Slack thread route back to the same agent without another
+    // manual broker/human assignment. Existing known threads stay protected by
+    // the `thread` branch above and do not fall back to channel assignment.
     const assignment = this.db.getChannelAssignment(msg.channel);
     if (assignment) {
       const assigned = agents.find((agent) => agent.id === assignment.agentId);
       if (assigned) {
-        return { action: "deliver", agentId: assigned.id };
+        const claimed = this.db.claimThread(msg.threadId, assigned.id, msg.source, msg.channel);
+        if (claimed) {
+          return { action: "deliver", agentId: assigned.id };
+        }
+
+        const claimedThread = this.db.getThread(msg.threadId);
+        const claimedOwner = resolveRoutableThreadOwner(this.db, claimedThread?.ownerAgent ?? null);
+        if (claimedOwner) {
+          return { action: "deliver", agentId: claimedOwner.id };
+        }
       }
     }
 
