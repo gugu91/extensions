@@ -127,7 +127,6 @@ function normalizeDispatcherAction(value: unknown): PinetDispatcherAction {
   const normalized = value
     .trim()
     .replace(/^pinet:/, "")
-    .replace(/^pinet_/, "")
     .toLowerCase() as PinetDispatcherAction;
 
   if (!normalized) {
@@ -658,7 +657,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     description:
       "Dispatch Pinet worker operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this dispatcher for token-efficient Pinet actions and per-action discovery. Use action="help" for action catalog.',
+      'Use this dispatcher for all Pinet actions: send, read, free, schedule, agents, and per-action discovery. Use action="help" for the action catalog and action="send" for Pinet replies/delegation.',
     parameters: Type.Object({
       action: Type.String({
         description: "Action name: help, send, read, free, schedule, or agents.",
@@ -732,104 +731,6 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
           buildPinetDispatcherEnvelope("failed", null, [classifyPinetError(message)]),
         );
       }
-    },
-  });
-
-  pi.registerTool({
-    name: "pinet_message",
-    label: "Pinet Message",
-    description: "Send a message to a connected Pinet agent or broker-only broadcast channel.",
-    promptSnippet:
-      "Compatibility shim for legacy usage. Prefer pinet action=send. Use this for repo-scoped channels like #extensions and Avoid #all for repo-specific announcements.",
-    parameters: Type.Object({
-      to: Type.String({
-        description:
-          "Target agent name/ID, or a broker-only broadcast channel like #extensions. Avoid #all for repo-specific issue/policy announcements.",
-      }),
-      message: Type.String({ description: "Message body" }),
-    }),
-    async execute(_id, params) {
-      return runPinetSendAction(params, deps, "pinet_message");
-    },
-  });
-
-  pi.registerTool({
-    name: "pinet_read",
-    label: "Pinet Read",
-    description: "Read durable SQLite-backed Pinet inbox context with unread/read semantics.",
-    promptSnippet:
-      "Compatibility shim for legacy usage. Prefer pinet action=read. Read bounded Pinet/Slack broker context from the durable SQLite inbox.",
-    parameters: Type.Object({
-      thread_id: Type.Optional(
-        Type.String({ description: "Optional Pinet/Slack broker thread ID to read" }),
-      ),
-      limit: Type.Optional(
-        Type.Number({ description: "Maximum messages to return (default 20, max 100)" }),
-      ),
-      unread_only: Type.Optional(
-        Type.Boolean({ description: "Only return unread rows (default true)" }),
-      ),
-      mark_read: Type.Optional(
-        Type.Boolean({ description: "Mark returned unread rows as read (default true)" }),
-      ),
-    }),
-    async execute(_id, params) {
-      return runPinetReadAction(params, deps, "pinet_read");
-    },
-  });
-
-  pi.registerTool({
-    name: "pinet_free",
-    label: "Pinet Free",
-    description: "Mark this Pinet agent idle/free for new work.",
-    promptSnippet: "Compatibility shim for legacy usage. Prefer pinet action=free.",
-    parameters: Type.Object({
-      note: Type.Optional(
-        Type.String({ description: "Optional short note about what you just finished" }),
-      ),
-    }),
-    async execute(_id, params) {
-      return runPinetFreeAction(params, deps, "pinet_free");
-    },
-  });
-
-  pi.registerTool({
-    name: "pinet_schedule",
-    label: "Pinet Schedule",
-    description: "Schedule a future wake-up for this Pinet agent.",
-    promptSnippet: "Compatibility shim for legacy usage. Prefer pinet action=schedule.",
-    parameters: Type.Object({
-      delay: Type.Optional(
-        Type.String({ description: "Relative delay like 5m, 30s, 1h30m, or 1d" }),
-      ),
-      at: Type.Optional(
-        Type.String({ description: "Absolute ISO-8601 UTC time, e.g. 2026-04-02T14:30:00Z" }),
-      ),
-      message: Type.String({ description: "Reminder or wake-up message to deliver later" }),
-    }),
-    async execute(_id, params) {
-      return runPinetScheduleAction(params, deps, "pinet_schedule");
-    },
-  });
-
-  pi.registerTool({
-    name: "pinet_agents",
-    label: "Pinet Agents",
-    description: "List connected Pinet agents with status and capabilities.",
-    promptSnippet: "Compatibility shim for legacy usage. Prefer pinet action=agents.",
-    parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "Preferred repo name for routing" })),
-      branch: Type.Optional(Type.String({ description: "Preferred branch for routing" })),
-      role: Type.Optional(
-        Type.String({ description: "Preferred agent role, e.g. broker or worker" }),
-      ),
-      required_tools: Type.Optional(
-        Type.String({ description: "Comma-separated required capability/tool tags" }),
-      ),
-      task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
-    }),
-    async execute(_toolCallId, params) {
-      return runPinetAgentsAction(params, deps, "pinet_agents");
     },
   });
 }

@@ -41,7 +41,7 @@ const delivered: DeliveredInboundMessageResult = {
 };
 
 describe("broker inbound persistence", () => {
-  it("builds compact pinet_read pointers for durable inbound mail", () => {
+  it("builds compact dispatcher read pointers for durable inbound mail", () => {
     expect(buildPinetReadPointer("123.456")).toBe(
       "pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
     );
@@ -62,6 +62,8 @@ describe("broker inbound persistence", () => {
 
     expect(store.queueDeliveredMessage).toHaveBeenCalledWith("broker", message);
     expect(result.result).toBe(delivered);
-    expect(result.notificationText).toContain("Use pinet_read with the pointer before acting.");
+    expect(result.notificationText).toContain(
+      "Use pinet action=read with the pointer before acting.",
+    );
   });
 });

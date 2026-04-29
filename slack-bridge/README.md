@@ -426,18 +426,15 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 ### Multi-agent tools
 
-| Tool             | Description                                                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `pinet`          | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`) |
-| `pinet_message`  | Send a message to a connected Pinet agent or broker-only broadcast channel                                          |
-| `pinet_read`     | Read durable SQLite-backed Pinet inbox context and unread thread pointers                                           |
-| `pinet_agents`   | List connected Pinet agents with status and capabilities                                                            |
-| `pinet_free`     | Mark this Pinet agent idle/free for new work                                                                        |
-| `pinet_schedule` | Schedule a future wake-up for this Pinet agent as durable follow-up mail                                            |
+| Tool    | Description                                                                                                         |
+| ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`) |
 
-Durable Pinet inbox notifications are classified as `steering`, `fwup`, or `maintenance/context` from explicit metadata or message cues. Follower prompts receive compact pointers such as `pinet action=read args.thread_id=...` instead of the full durable message body; agents use `pinet_read` to retrieve the actual context. Delivery, read/ack state, and mail classification remain separate.
+Use the dispatcher for all Pinet actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, and `pinet action=agents`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
 
-Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are persisted/stamped as Pinet follow-up mail and surfaced through compact `pinet_read` pointers rather than direct reminder-body prompts. Wake-up bodies and metadata are treated as mail content only; they do not trigger Pinet remote-control commands such as `/exit`, `/reload`, or structured `pinet:control` JSON.
+Durable Pinet inbox notifications are classified as `steering`, `fwup`, or `maintenance/context` from explicit metadata or message cues. Follower prompts receive compact pointers such as `pinet action=read args.thread_id=...` instead of the full durable message body; agents use `pinet action=read` to retrieve the actual context. Delivery, read/ack state, and mail classification remain separate.
+
+Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are persisted/stamped as Pinet follow-up mail and surfaced through compact `pinet action=read` pointers rather than direct reminder-body prompts. Wake-up bodies and metadata are treated as mail content only; they do not trigger Pinet remote-control commands such as `/exit`, `/reload`, or structured `pinet:control` JSON.
 
 ### Broker commands
 

@@ -618,7 +618,7 @@ describe("formatPinetInboxMessages", () => {
       "[thread a2a:broker:worker] [steering] broker-id (Broker Bunny): inbox_id=17 pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
     expect(result).not.toContain("Take issue #175");
-    expect(result).toContain("Use pinet_read with the pointer before acting.");
+    expect(result).toContain("Use pinet action=read with the pointer before acting.");
     expect(result).toContain("ACK briefly after reading, do the work");
   });
 
@@ -663,7 +663,7 @@ describe("formatPinetInboxMessages", () => {
       "[thread wakeup:worker-1] [fwup] scheduler (Pinet Scheduler): inbox_id=42 pointer=pinet action=read args.thread_id=wakeup:worker-1 args.unread_only=true",
     );
     expect(result).not.toContain("Check whether PR #62 merged");
-    expect(result).toContain("Use pinet_read with the pointer before acting.");
+    expect(result).toContain("Use pinet action=read with the pointer before acting.");
   });
 
   it("marks terminal stand-down messages as maintenance/context and suppresses reflex ack guidance", () => {
@@ -709,7 +709,7 @@ describe("formatPinetInboxMessages", () => {
 
     expect(result).toContain("[maintenance/context]");
     expect(result).toContain("[steering]");
-    expect(result).toContain("Reply via pinet_message for steering/follow-up only.");
+    expect(result).toContain("Reply via pinet action=send for steering/follow-up only.");
     expect(result).toContain("For [steering], ACK briefly after reading, do the work");
     expect(result).toContain(
       "do NOT acknowledge or reply unless you have a real blocker or materially new finding",
@@ -1414,8 +1414,8 @@ describe("buildBrokerPromptGuidelines", () => {
     const joined = guidelines.join(" ");
     expect(joined).toContain("ALLOWED");
     expect(joined).toContain("Route messages");
-    expect(joined).toContain("pinet_agents");
-    expect(joined).toContain("pinet_message");
+    expect(joined).toContain("pinet action=agents");
+    expect(joined).toContain("pinet action=send");
   });
 
   it("includes a refusal template for coding requests", () => {
@@ -1433,10 +1433,10 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(joined).toContain("stall");
   });
 
-  it("instructs to use pinet_message instead of Agent tool", () => {
+  it("instructs to use pinet action=send instead of Agent tool", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
-    expect(joined).toContain("pinet_message");
+    expect(joined).toContain("pinet action=send");
   });
 
   it("treats code-reviewer as delegated worker work, not broker work", () => {
@@ -1467,7 +1467,7 @@ describe("buildBrokerPromptGuidelines", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
     expect(joined).toContain("REPO-SCOPED DELEGATION");
-    expect(joined).toContain("pinet_agents");
+    expect(joined).toContain("pinet action=agents");
     expect(joined).toContain("extensions-repo work");
     expect(joined).toContain("workers/subagents");
     expect(joined).toContain("never borrow idle workers from another repo");
@@ -1492,8 +1492,8 @@ describe("buildWorkerPromptGuidelines", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
     expect(joined).toContain("PINET DELEGATION RULES");
-    expect(joined).toContain("pinet_agents");
-    expect(joined).toContain("pinet_message");
+    expect(joined).toContain("pinet action=agents");
+    expect(joined).toContain("pinet action=send");
   });
 
   it("tells workers not to use the Agent tool for mesh delegation", () => {
@@ -1513,7 +1513,7 @@ describe("buildWorkerPromptGuidelines", () => {
   it("mirrors repo-scoped and prioritized-issue delegation rules for workers", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
-    expect(joined).toContain("pinet_agents` with the target repo");
+    expect(joined).toContain("pinet action=agents` with the target repo");
     expect(joined).toContain("same repo/worktree");
     expect(joined).toContain("maintainer priority/approval");
     expect(joined).toContain("maintainer approval");
@@ -1523,7 +1523,7 @@ describe("buildWorkerPromptGuidelines", () => {
   it("tells workers to explicitly mark themselves idle/free when work is done", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
-    expect(joined).toContain("pinet_free");
+    expect(joined).toContain("pinet action=free");
     expect(joined).toContain("/pinet-free");
     expect(joined).toContain("idle/free");
   });

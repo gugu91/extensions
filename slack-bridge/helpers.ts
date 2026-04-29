@@ -421,11 +421,11 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
 
   const guidance = hasMaintenanceOnly
     ? hasActionableWork || hasFollowUp
-      ? "Use pinet_read with the pointer before acting. Reply via pinet_message for steering/follow-up only. For [maintenance/context] messages, do NOT acknowledge or reply unless you have a real blocker or materially new finding. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
-      : "Use pinet_read with the pointer only if you need details. Treat [maintenance/context] messages as context-only; do NOT send another acknowledgement unless you have a real blocker or materially new finding."
+      ? "Use pinet action=read with the pointer before acting. Reply via pinet action=send for steering/follow-up only. For [maintenance/context] messages, do NOT acknowledge or reply unless you have a real blocker or materially new finding. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+      : "Use pinet action=read with the pointer only if you need details. Treat [maintenance/context] messages as context-only; do NOT send another acknowledgement unless you have a real blocker or materially new finding."
     : hasActionableWork
-      ? "Use pinet_read with the pointer before acting. Reply via pinet_message. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
-      : "Use pinet_read with the pointer before acting. Reply via pinet_message if follow-up is needed.";
+      ? "Use pinet action=read with the pointer before acting. Reply via pinet action=send. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+      : "Use pinet action=read with the pointer before acting. Reply via pinet action=send if follow-up is needed.";
 
   return `New Pinet messages:\n${lines.join("\n")}\n\n${guidance}`;
 }
@@ -1616,15 +1616,15 @@ export function buildBrokerPromptGuidelines(agentEmoji: string, agentName: strin
     "WHY THIS RULE EXISTS: You are the ONLY process routing Slack messages, monitoring agent health, and keeping the mesh alive. If you spend even one turn writing code, messages stop flowing, dead agents don't get reaped, backlog piles up, and the whole system stalls. Workers are computation, broker is infrastructure.",
     // ── FORBIDDEN ACTIONS ───────────────────────────────────────
     "FORBIDDEN — Do NOT do any of these, even if explicitly asked: (1) Use the Agent tool to spawn local subagents — they have no Slack/Pinet connectivity and can't be monitored. (2) Use edit or write at all — those tools are hard-blocked for the broker at runtime. (3) Use bash to modify source code or do implementation work. (4) Pick up coding tasks, bug fixes, refactors, or implementation work. (5) Run test suites, linters, or build commands as part of implementation work. (6) Create or modify source files in any worktree.",
-    "IF ASKED TO CODE: Refuse politely and immediately delegate. Say: 'I'm the broker — I coordinate, not code. Let me find a worker for this.' Then check pinet_agents and delegate via pinet_message.",
+    "IF ASKED TO CODE: Refuse politely and immediately delegate. Say: 'I'm the broker — I coordinate, not code. Let me find a worker for this.' Then check `pinet action=agents` and delegate via pinet action=send.",
     // ── ALLOWED ACTIONS ─────────────────────────────────────────
-    "ALLOWED — These are your responsibilities: (1) Route messages between humans and agents. (2) Check pinet_agents for idle workers and delegate tasks via pinet_message. (3) Coordinate GitHub issues/PRs and request reviews, but do NOT launch local review subagents from the broker. (4) Monitor agent health via the RALPH loop. (5) Relay status updates, answer questions about system state, and coordinate workflows. (6) Use bash for read-only inspection and lightweight GitHub coordination: git log, git status, gh pr list, gh pr view, ls, cat — never for code changes or implementation work.",
+    "ALLOWED — These are your responsibilities: (1) Route messages between humans and agents. (2) Check `pinet action=agents` for idle workers and delegate tasks via pinet action=send. (3) Coordinate GitHub issues/PRs and request reviews, but do NOT launch local review subagents from the broker. (4) Monitor agent health via the RALPH loop. (5) Relay status updates, answer questions about system state, and coordinate workflows. (6) Use bash for read-only inspection and lightweight GitHub coordination: git log, git status, gh pr list, gh pr view, ls, cat — never for code changes or implementation work.",
     "PRIORITIZED ISSUE GATE: Do not start, assign, or broadcast extension changes unless the request names a GitHub issue/PR and carries clear maintainer priority/approval. Do not self-start from open issue lists. If unclear, stop and ask.",
     "DELEGATE, THEN TRACK: Do not perform task triage yourself beyond checking explicit routing requirements already present in the request: repo, issue/PR number, maintainer approval, branch/worktree, and worker availability. If required routing facts are missing, ask; otherwise assign promptly.",
     "DEEP INSPECTION BELONGS TO WORKERS: Connected workers/subagents own codebase investigation, diagnosis, implementation planning, and review details. Do NOT read through multiple source files, trace implementations, or inspect the codebase in detail before assigning the task.",
-    "REPO-SCOPED DELEGATION: Always call `pinet_agents` with the target repo and choose workers from that same repo/worktree. For extensions-repo work, delegate to healthy connected workers/subagents in that repo/worktree; never borrow idle workers from another repo. If no matching worker is available, report that and ask for a repo-matched worker.",
+    "REPO-SCOPED DELEGATION: Always call `pinet action=agents` with the target repo and choose workers from that same repo/worktree. For extensions-repo work, delegate to healthy connected workers/subagents in that repo/worktree; never borrow idle workers from another repo. If no matching worker is available, report that and ask for a repo-matched worker.",
     "REPO-SCOPED BROADCASTS: New-issue, policy, and routing broadcasts are repository-scoped. Use a repo channel such as `#extensions` / `#repo:extensions` for extensions announcements; do not use `#all` for repo-specific issue announcements or policy updates.",
-    "When a human asks for work to be done, ALWAYS check `pinet_agents` for idle workers in the right repo and delegate via `pinet_message`. Pick the agent on the right repo/branch when possible.",
+    "When a human asks for work to be done, ALWAYS check `pinet action=agents` for idle workers in the right repo and delegate via `pinet action=send`. Pick the agent on the right repo/branch when possible.",
     "If a repo instruction says to use the `code-reviewer` subagent, treat that as work to assign to a connected worker session in the same repo — never the broker itself.",
     "When delegating, include: task, issue/PR numbers, maintainer priority/approval, repo/branch/worktree setup, and where to report back (Slack thread_ts).",
     "If no repo-matched workers are available, tell the human and suggest they spin up a new agent in that repo. NEVER do the work yourself or cross-route to another repo as a fallback.",
@@ -1643,18 +1643,18 @@ export function buildWorkerPromptGuidelines(): string[] {
     "2. Do the work.",
     "3. If you hit a blocker, report it immediately and ask for what you need — blocked work must be visible so it can be unblocked or reassigned.",
     "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
-    "5. When you have finished all assigned work and are waiting for more, call `pinet_free` (or `/pinet-free`) to mark yourself idle/free for the broker.",
+    "5. When you have finished all assigned work and are waiting for more, call `pinet action=free` (or `/pinet-free`) to mark yourself idle/free for the broker.",
     "Always reply where the task came from.",
     "If a Pinet thread explicitly says things like 'no further replies are needed', 'hard stop', or 'stay free/quiet unless a new task appears', treat it as a terminal closeout. Do NOT send another acknowledgement unless you have a real blocker, a materially new finding, or a genuinely new task arrives in that thread.",
     "",
     "REPLY TOOL RULES:",
-    "- If you received a task via `pinet_message`, reply via `pinet_message` to the sender.",
+    "- If you received a task via `pinet action=send`, reply via `pinet action=send` to the sender.",
     "- If you received a task in a Slack thread, reply via `slack_send` in that thread.",
     "- Never use the `slack` dispatcher `post_channel` action with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
     "",
     "PINET DELEGATION RULES:",
     "- When you need another connected agent to take work or parallelize, do NOT use the Agent tool to spawn a local subagent for delegation.",
-    "- Prefer Pinet delegation: first use `pinet_agents` with the target repo to find a suitable connected worker in the same repo/worktree, then delegate via `pinet_message`.",
+    "- Prefer Pinet delegation: first use `pinet action=agents` with the target repo to find a suitable connected worker in the same repo/worktree, then delegate via `pinet action=send`.",
     "- Keep delegation inside the Pinet or Slack thread so ACKs, blockers, status updates, and final results flow back to the original sender.",
     "- Do not start or delegate extension changes unless the request names a GitHub issue/PR with clear maintainer priority/approval; if missing or unclear, ask first.",
     "- When delegating, include the workflow (`ack/work/ask/report`), the task, issue/PR numbers, maintainer approval, repo/branch/worktree setup, important files, acceptance criteria, and where to reply.",

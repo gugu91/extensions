@@ -22,9 +22,6 @@ export const READ_ONLY_TOOLS = new Set([
   "slack:confirm_action",
   "pinet:agents",
   "pinet:read",
-  "pinet_agents",
-  "pinet_read",
-  "pinet_message",
   "memory_read",
   "memory_search",
   "memory_list",
@@ -58,16 +55,14 @@ export const WRITE_TOOLS = new Set([
   "pinet:schedule",
   "pinet:send",
   "pinet:free",
-  "pinet_schedule",
-  "pinet_free",
-  "pinet_send",
 ]);
 
 /**
  * Match a tool name against glob patterns (supports `*` wildcard).
- * Slack dispatcher actions use `slack:<action>` names; legacy `slack_<action>`
- * guardrail patterns still match during migration. Pinet follows the same
- * `pinet:<action>` / `pinet_<action>` compatibility pattern.
+ * Slack and Pinet dispatcher actions use `<namespace>:<action>` names; legacy
+ * `<namespace>_<action>` guardrail patterns still match during migration. Pinet
+ * direct tools are no longer registered, but keeping alias matching prevents old
+ * security configs from silently failing open.
  * Returns true if the tool name matches any of the patterns.
  */
 export function matchesToolPattern(toolName: string, patterns: string[]): boolean {
@@ -82,6 +77,11 @@ export function matchesToolPattern(toolName: string, patterns: string[]): boolea
     candidates.add(`pinet_${toolName.slice("pinet:".length)}`);
   } else if (toolName.startsWith("pinet_")) {
     candidates.add(`pinet:${toolName.slice("pinet_".length)}`);
+  }
+  if (toolName === "pinet_message" || toolName === "pinet:send" || toolName === "pinet_send") {
+    candidates.add("pinet_message");
+    candidates.add("pinet:send");
+    candidates.add("pinet_send");
   }
 
   for (const pattern of patterns) {
@@ -120,6 +120,11 @@ export function isToolBlocked(toolName: string, guardrails: SecurityGuardrails):
     readOnlyCandidates.add(`pinet_${toolName.slice("pinet:".length)}`);
   } else if (toolName.startsWith("pinet_")) {
     readOnlyCandidates.add(`pinet:${toolName.slice("pinet_".length)}`);
+  }
+  if (toolName === "pinet_message" || toolName === "pinet:send" || toolName === "pinet_send") {
+    readOnlyCandidates.add("pinet_message");
+    readOnlyCandidates.add("pinet:send");
+    readOnlyCandidates.add("pinet_send");
   }
 
   for (const candidate of readOnlyCandidates) {
@@ -276,7 +281,7 @@ export function buildBrokerToolGuardrailsPrompt(): string {
     `The following tools are BLOCKED for the broker role: ${forbidden}.`,
     "The Agent tool (including code-reviewer and other local subagents) spawns local workers with no Slack/Pinet connectivity — they can't be monitored, can't own threads, and can't coordinate with humans.",
     "The edit and write tools are blocked because the broker is coordination infrastructure, not an implementation worker.",
-    "Use pinet_message to delegate coding or review work to connected Pinet agents instead.",
+    "Use pinet action=send to delegate coding or review work to connected Pinet agents instead.",
   ].join("\n");
 }
 

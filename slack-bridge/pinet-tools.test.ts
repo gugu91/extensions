@@ -78,30 +78,24 @@ describe("registerPinetTools", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the generic Pinet tools", () => {
+  it("registers the default Pinet surface", () => {
     const tools = registerWithDeps(createDeps());
 
-    expect([...tools.keys()]).toEqual([
-      "pinet",
-      "pinet_message",
-      "pinet_read",
-      "pinet_free",
-      "pinet_schedule",
-      "pinet_agents",
-    ]);
+    expect([...tools.keys()]).toEqual(["pinet"]);
   });
 
-  it("guides repo-scoped broadcasts away from #all", () => {
+  it("standardizes send/delegation on the dispatcher", () => {
     const tools = registerWithDeps(createDeps());
-    const pinetMessage = tools.get("pinet_message");
+    const pinet = tools.get("pinet");
 
-    expect(pinetMessage?.promptSnippet).toContain("Avoid #all");
-    expect(pinetMessage?.promptSnippet).toContain("#extensions");
-    expect(pinetMessage?.promptSnippet).toContain("repo-specific");
-    expect(JSON.stringify(pinetMessage?.parameters)).toContain("Avoid #all");
+    expect(pinet?.promptSnippet).toContain("Use this dispatcher for all Pinet actions");
+    expect(pinet?.promptSnippet).toContain('action="send"');
+    expect(JSON.stringify(pinet?.parameters)).toContain(
+      "help, send, read, free, schedule, or agents",
+    );
   });
 
-  it("uses the broker broadcast path for broadcast pinet_message targets", async () => {
+  it("uses the broker broadcast path for broadcast dispatcher send targets", async () => {
     const sendPinetBroadcastMessage = vi.fn((channel: string, _body: string) => ({
       channel,
       messageIds: [21, 22],
@@ -110,19 +104,26 @@ describe("registerPinetTools", () => {
     const deps = createDeps({ sendPinetBroadcastMessage });
     const tools = registerWithDeps(deps);
 
-    const result = (await tools.get("pinet_message")?.execute("tool-call-1", {
-      to: "#extensions",
-      message: "hello mesh",
+    const result = (await tools.get("pinet")?.execute("tool-call-1", {
+      action: "send",
+      args: {
+        to: "#extensions",
+        message: "hello mesh",
+      },
     })) as {
-      content: Array<{ text: string }>;
-      details: { channel: string; messageIds: number[]; recipients: string[] };
+      details: {
+        data: {
+          text: string;
+          details: { channel: string; messageIds: number[]; recipients: string[] };
+        };
+      };
     };
 
     expect(sendPinetBroadcastMessage).toHaveBeenCalledWith("#extensions", "hello mesh");
-    expect(result.content[0]?.text).toBe(
+    expect(result.details.data.text).toBe(
       "Broadcast sent to #extensions (2 agents: Worker One, Worker Two).",
     );
-    expect(result.details).toEqual({
+    expect(result.details.data.details).toEqual({
       channel: "#extensions",
       messageIds: [21, 22],
       recipients: ["Worker One", "Worker Two"],
@@ -167,27 +168,32 @@ describe("registerPinetTools", () => {
     const deps = createDeps({ readPinetInbox });
     const tools = registerWithDeps(deps);
 
-    const result = (await tools.get("pinet_read")?.execute("tool-call-read", {
-      thread_id: "a2a:broker:worker",
-      limit: 5,
+    const result = (await tools.get("pinet")?.execute("tool-call-read", {
+      action: "read",
+      args: {
+        thread_id: "a2a:broker:worker",
+        limit: 5,
+      },
     })) as {
-      content: Array<{ text: string }>;
-      details: { markedReadIds: number[] };
+      details: {
+        status: "succeeded";
+        data: { text: string; details: { markedReadIds: number[] } };
+      };
     };
 
     expect(readPinetInbox).toHaveBeenCalledWith({ threadId: "a2a:broker:worker", limit: 5 });
-    expect(result.content[0]?.text).toContain(
+    expect(result.details.data.text).toContain(
       "Pinet read (unread) from thread a2a:broker:worker: 1 message.",
     );
-    expect(result.content[0]?.text).toContain("Unread before: 2; unread after: 1.");
-    expect(result.content[0]?.text).toContain(
+    expect(result.details.data.text).toContain("Unread before: 2; unread after: 1.");
+    expect(result.details.data.text).toContain(
       "- [steering] [agent/a2a:broker:worker #44] broker: please inspect #594",
     );
-    expect(result.content[0]?.text).toContain(
+    expect(result.details.data.text).toContain(
       "- [steering] a2a:broker:worker (agent): 1 unread (1 steering); latest #45; pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
-    expect(result.content[0]?.text).toContain("Marked read: 31.");
-    expect(result.details.markedReadIds).toEqual([31]);
+    expect(result.details.data.text).toContain("Marked read: 31.");
+    expect(result.details.data.details.markedReadIds).toEqual([31]);
   });
 
   it("routes action-dispatched help through the dispatcher", async () => {
@@ -219,6 +225,17 @@ describe("registerPinetTools", () => {
     );
   });
 
+  it("rejects legacy direct-tool names as dispatcher action values", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-legacy-action", {
+      action: "pinet_send",
+    })) as { details: { status: string; errors: Array<{ message: string }> } };
+
+    expect(result.details.status).toBe("failed");
+    expect(result.details.errors[0]?.message).toContain("Unknown Pinet action: pinet_send");
+  });
+
   it("routes action-dispatched pinet send", async () => {
     const sendPinetAgentMessage = vi.fn(async (_to: string, _message: string) => ({
       messageId: 41,
@@ -244,7 +261,7 @@ describe("registerPinetTools", () => {
     expect(result.content[0]?.text).toContain('"status": "succeeded"');
   });
 
-  it("formats pinet_free responses with note and queued inbox count", async () => {
+  it("formats action-dispatched free responses with note and queued inbox count", async () => {
     const signalAgentFree = vi.fn(async () => ({
       queuedInboxCount: 2,
       drainedQueuedInbox: false,
@@ -252,25 +269,31 @@ describe("registerPinetTools", () => {
     const deps = createDeps({ signalAgentFree });
     const tools = registerWithDeps(deps);
 
-    const result = (await tools.get("pinet_free")?.execute("tool-call-2", {
-      note: "wrapped up #395",
+    const result = (await tools.get("pinet")?.execute("tool-call-2", {
+      action: "free",
+      args: { note: "wrapped up #395" },
     })) as {
-      content: Array<{ text: string }>;
-      details: { status: string; note: string | null; queuedInboxCount: number };
+      details: {
+        status: "succeeded";
+        data: {
+          text: string;
+          details: { status: string; note: string | null; queuedInboxCount: number };
+        };
+      };
     };
 
     expect(signalAgentFree).toHaveBeenCalledWith(undefined, { requirePinet: true });
-    expect(result.content[0]?.text).toBe(
+    expect(result.details.data.text).toBe(
       "Marked this Pinet agent idle/free for new work. Note: wrapped up #395. 2 queued inbox items remain.",
     );
-    expect(result.details).toEqual({
+    expect(result.details.data.details).toEqual({
       status: "idle",
       note: "wrapped up #395",
       queuedInboxCount: 2,
     });
   });
 
-  it("routes pinet_schedule through the broker wake-up callback", async () => {
+  it("routes action-dispatched schedule through the broker wake-up callback", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
@@ -281,20 +304,24 @@ describe("registerPinetTools", () => {
     const deps = createDeps({ scheduleBrokerWakeup });
     const tools = registerWithDeps(deps);
 
-    const result = (await tools.get("pinet_schedule")?.execute("tool-call-3", {
-      delay: "5m",
-      message: "check queue",
+    const result = (await tools.get("pinet")?.execute("tool-call-3", {
+      action: "schedule",
+      args: { delay: "5m", message: "check queue" },
     })) as {
-      content: Array<{ text: string }>;
-      details: { id: number; fireAt: string };
+      details: {
+        status: "succeeded";
+        data: { text: string; details: { id: number; fireAt: string } };
+      };
     };
 
     expect(scheduleBrokerWakeup).toHaveBeenCalledWith("2026-04-14T12:05:00.000Z", "check queue");
-    expect(result.content[0]?.text).toBe("Wake-up scheduled for 2026-04-14T12:05:00.000Z (id: 7).");
-    expect(result.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
+    expect(result.details.data.text).toBe(
+      "Wake-up scheduled for 2026-04-14T12:05:00.000Z (id: 7).",
+    );
+    expect(result.details.data.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
   });
 
-  it("renders broker pinet_agents output with routing hints and outbound counts", async () => {
+  it("renders broker pinet agents output with routing hints and outbound counts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
@@ -302,22 +329,30 @@ describe("registerPinetTools", () => {
     const deps = createDeps({ listBrokerAgents });
     const tools = registerWithDeps(deps);
 
-    const result = (await tools.get("pinet_agents")?.execute("tool-call-4", {
-      repo: "extensions",
-      required_tools: "read, edit",
-      task: "review #395",
+    const result = (await tools.get("pinet")?.execute("tool-call-4", {
+      action: "agents",
+      args: {
+        repo: "extensions",
+        required_tools: "read, edit",
+        task: "review #395",
+      },
     })) as {
-      content: Array<{ text: string }>;
-      details: { hint: { repo?: string; requiredTools?: string[]; task?: string } };
+      details: {
+        status: "succeeded";
+        data: {
+          text: string;
+          details: { hint: { repo?: string; requiredTools?: string[]; task?: string } };
+        };
+      };
     };
 
     expect(listBrokerAgents).toHaveBeenCalledTimes(1);
-    expect(result.content[0]?.text).toContain(
+    expect(result.details.data.text).toContain(
       "Agent routing hints: repo=extensions · tools=read,edit · task=review #395",
     );
-    expect(result.content[0]?.text).toContain("Golden Chalk Rabbit");
-    expect(result.content[0]?.text).toContain("outbound: 3 this session");
-    expect(result.details.hint).toEqual({
+    expect(result.details.data.text).toContain("Golden Chalk Rabbit");
+    expect(result.details.data.text).toContain("outbound: 3 this session");
+    expect(result.details.data.details.hint).toEqual({
       repo: "extensions",
       branch: undefined,
       role: undefined,
