@@ -207,7 +207,7 @@ describe("createSlackToolPolicyRuntime", () => {
     ).resolves.toEqual({
       block: true,
       reason:
-        'Tool "edit" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet_message to delegate to a connected worker instead.',
+        'Tool "edit" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet action=send to delegate to a connected worker instead.',
     });
     expect(requireToolPolicy).not.toHaveBeenCalled();
   });

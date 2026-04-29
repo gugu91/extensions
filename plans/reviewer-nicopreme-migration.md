@@ -183,7 +183,7 @@ The `subagent` tool call above.
 ### From Pinet delegation
 
 Agents inside this mesh that need a review should still reply via
-`pinet_message` with the final verdict. The reviewer posts to PiComms and
+`pinet action=send` with the final verdict. The reviewer posts to PiComms and
 GitHub itself; the delegating agent just relays the summary.
 
 ## 6. Caveats & known issues

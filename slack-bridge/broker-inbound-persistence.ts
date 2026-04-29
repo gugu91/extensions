@@ -27,7 +27,7 @@ export function buildPersistedInboundNotificationText(message: BrokerMessage): s
   return [
     `Durable ${message.source} mail stored in SQLite as message #${message.id}.`,
     buildPinetReadPointer(message.threadId),
-    "Use pinet_read with the pointer before acting.",
+    "Use pinet action=read with the pointer before acting.",
   ].join(" ");
 }
 

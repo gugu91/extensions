@@ -166,7 +166,12 @@ describe("slack-bridge top-level shutdown", () => {
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(slackDispatcher).toBeDefined();
-    expect(tools.has("pinet_free")).toBe(true);
+    expect(tools.has("pinet")).toBe(true);
+    expect(tools.has("pinet_message")).toBe(false);
+    expect(tools.has("pinet_read")).toBe(false);
+    expect(tools.has("pinet_free")).toBe(false);
+    expect(tools.has("pinet_schedule")).toBe(false);
+    expect(tools.has("pinet_agents")).toBe(false);
     expect(commands.has("pinet-start")).toBe(true);
     expect(commands.has("pinet-free")).toBe(true);
     expect(commands.has("pinet-skin")).toBe(true);
@@ -3525,7 +3530,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("following broker"), "info");
   });
 
-  it("retries follower idle status sync after pinet_free fails once so workers do not stay stuck working", async () => {
+  it("retries follower idle status sync after dispatcher free fails once so workers do not stay stuck working", async () => {
     vi.useFakeTimers();
 
     const tools = new Map<string, ToolDefinition>();
@@ -3630,12 +3635,12 @@ describe("slack-bridge Pinet reconnect", () => {
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
     const follow = commands.get("pinet-follow");
-    const pinetFree = tools.get("pinet_free");
+    const pinet = tools.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(follow).toBeDefined();
-    expect(pinetFree).toBeDefined();
+    expect(pinet).toBeDefined();
 
     try {
       await sessionStart?.({}, ctx);
@@ -3647,9 +3652,12 @@ describe("slack-bridge Pinet reconnect", () => {
       });
       expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
 
-      await expect(pinetFree!.execute("tool-call-1", {})).rejects.toThrow(
-        "status sync failed once",
-      );
+      const failedFree = (await pinet!.execute("tool-call-1", {
+        action: "free",
+        args: {},
+      })) as { details: { status: string; errors: Array<{ message: string }> } };
+      expect(failedFree.details.status).toBe("failed");
+      expect(failedFree.details.errors[0]?.message).toContain("status sync failed once");
       expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working", "idle"]);
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -3953,7 +3961,7 @@ describe("slack-bridge Pinet reconnect", () => {
     }
   });
 
-  it("sends structured control envelopes for follower pinet_message commands", async () => {
+  it("sends structured control envelopes for follower dispatcher send commands", async () => {
     const tools = new Map<string, ToolDefinition>();
     const commands = new Map<string, CommandDefinition>();
     const events = new Map<string, EventHandler>();
@@ -4017,18 +4025,21 @@ describe("slack-bridge Pinet reconnect", () => {
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
     const follow = commands.get("pinet-follow");
-    const pinetMessage = tools.get("pinet_message");
+    const pinet = tools.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(follow).toBeDefined();
-    expect(pinetMessage).toBeDefined();
+    expect(pinet).toBeDefined();
 
     await sessionStart?.({}, ctx);
     await follow?.handler("", ctx);
-    await pinetMessage?.execute("tool-call-1", {
-      to: "receiver-agent",
-      message: "/reload",
+    await pinet?.execute("tool-call-1", {
+      action: "send",
+      args: {
+        to: "receiver-agent",
+        message: "/reload",
+      },
     });
 
     expect(sendCalls).toEqual([

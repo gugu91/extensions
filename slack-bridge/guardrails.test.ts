@@ -65,9 +65,15 @@ describe("matchesToolPattern", () => {
     expect(matchesToolPattern("slack:upload", ["slack_upload"])).toBe(true);
   });
 
-  it("matches legacy pinet underscore patterns against dispatcher action names", () => {
+  it("matches legacy Pinet underscore guardrail patterns against dispatcher action names", () => {
     expect(matchesToolPattern("pinet:send", ["pinet_send"])).toBe(true);
     expect(matchesToolPattern("pinet_read", ["pinet:read"])).toBe(true);
+  });
+
+  it("treats former pinet_message policies as send guardrail aliases", () => {
+    expect(matchesToolPattern("pinet:send", ["pinet_message"])).toBe(true);
+    expect(matchesToolPattern("pinet:send", ["pinet_send"])).toBe(true);
+    expect(matchesToolPattern("pinet_message", ["pinet:send"])).toBe(true);
   });
 });
 
@@ -139,6 +145,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("pinet:send")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:schedule")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:free")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet_message")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:read")).toBe(true);
     expect(READ_ONLY_TOOLS.has("pinet:agents")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:read")).toBe(false);
@@ -146,11 +153,13 @@ describe("isToolBlocked", () => {
     expect(READ_ONLY_TOOLS.has("pinet:send")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:schedule")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:free")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("pinet_message")).toBe(false);
   });
 
-  it("maps pinet dispatcher and legacy names for readOnly checks", () => {
+  it("classifies Pinet dispatcher and legacy policy names for readOnly checks", () => {
     const g: SecurityGuardrails = { readOnly: true };
     expect(isToolBlocked("pinet:send", g)).toBe(true);
+    expect(isToolBlocked("pinet_message", g)).toBe(true);
     expect(isToolBlocked("pinet_send", g)).toBe(true);
     expect(isToolBlocked("pinet:read", g)).toBe(false);
     expect(isToolBlocked("pinet_read", g)).toBe(false);
@@ -162,6 +171,11 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("slack:create_channel", g)).toBe(true); // explicit block via legacy pattern
     expect(isToolBlocked("slack_create_channel", g)).toBe(true); // legacy spelling still maps
     expect(isToolBlocked("read", g)).toBe(false); // read-only tool
+  });
+
+  it("applies legacy send blocks to dispatcher send", () => {
+    expect(isToolBlocked("pinet:send", { blockedTools: ["pinet_send"] })).toBe(true);
+    expect(isToolBlocked("pinet:send", { blockedTools: ["pinet_message"] })).toBe(true);
   });
 });
 
@@ -178,6 +192,13 @@ describe("toolNeedsConfirmation", () => {
     const g: SecurityGuardrails = { requireConfirmation: ["memory_*"] };
     expect(toolNeedsConfirmation("memory_write", g)).toBe(true);
     expect(toolNeedsConfirmation("memory_sync", g)).toBe(true);
+  });
+
+  it("applies legacy send confirmation policies to dispatcher send", () => {
+    expect(toolNeedsConfirmation("pinet:send", { requireConfirmation: ["pinet_send"] })).toBe(true);
+    expect(toolNeedsConfirmation("pinet:send", { requireConfirmation: ["pinet_message"] })).toBe(
+      true,
+    );
   });
 
   it("returns false when tool does not match", () => {
@@ -383,8 +404,7 @@ describe("isBrokerForbiddenTool", () => {
   });
 
   it("returns false for allowed tools", () => {
-    expect(isBrokerForbiddenTool("pinet_message")).toBe(false);
-    expect(isBrokerForbiddenTool("pinet_agents")).toBe(false);
+    expect(isBrokerForbiddenTool("pinet")).toBe(false);
     expect(isBrokerForbiddenTool("slack_send")).toBe(false);
     expect(isBrokerForbiddenTool("read")).toBe(false);
     expect(isBrokerForbiddenTool("bash")).toBe(false);
@@ -405,9 +425,9 @@ describe("buildBrokerToolGuardrailsPrompt", () => {
     expect(prompt).toContain("BLOCKED");
   });
 
-  it("recommends pinet_message as the alternative", () => {
+  it("recommends dispatcher send as the alternative", () => {
     const prompt = buildBrokerToolGuardrailsPrompt();
-    expect(prompt).toContain("pinet_message");
+    expect(prompt).toContain("pinet action=send");
   });
 
   it("explains why local subagents and file mutation tools are forbidden", () => {

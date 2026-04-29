@@ -82,7 +82,7 @@ export function createSlackToolPolicyRuntime(
     if (deps.getBrokerRole() === "broker" && isBrokerForbiddenTool(event.toolName)) {
       return {
         block: true,
-        reason: `Tool "${event.toolName}" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet_message to delegate to a connected worker instead.`,
+        reason: `Tool "${event.toolName}" is forbidden for the broker role. The broker coordinates — it does not code. Use pinet action=send to delegate to a connected worker instead.`,
       };
     }
 
