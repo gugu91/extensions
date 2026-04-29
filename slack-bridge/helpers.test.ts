@@ -476,6 +476,40 @@ describe("formatInboxMessages", () => {
     expect(result).not.toContain("secret Slack body");
   });
 
+  it("formats mixed broker-backed Slack and Pinet messages as durable read pointers", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C789",
+        threadTs: "789.012",
+        userId: "U1",
+        text: "secret Slack body",
+        timestamp: "789.012",
+        brokerInboxId: 13,
+      },
+      {
+        channel: "",
+        threadTs: "a2a:broker:worker",
+        userId: "broker-id",
+        text: "secret Pinet body",
+        timestamp: "790.000",
+        brokerInboxId: 17,
+        metadata: { senderAgent: "Broker Bunny", a2a: true, pinetMailClass: "steering" },
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain("New Slack messages:");
+    expect(result).toContain("New Pinet messages:");
+    expect(result).toContain(
+      "[thread 789.012] will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
+    );
+    expect(result).toContain(
+      "[thread a2a:broker:worker] [steering] broker-id (Broker Bunny): inbox_id=17 pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
+    );
+    expect(result).not.toContain("secret Slack body");
+    expect(result).not.toContain("secret Pinet body");
+  });
+
   it("preserves compact Slack metadata on broker-backed pointer notifications", () => {
     const msgs: InboxMessage[] = [
       {
