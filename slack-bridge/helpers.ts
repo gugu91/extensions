@@ -12,6 +12,7 @@ import {
   type RuntimeScopeCarrier,
 } from "@gugu910/pi-transport-core";
 import type { ReactionCommandSettings } from "./reaction-triggers.js";
+import { buildPinetReadPointer } from "./broker-inbound-persistence.js";
 import { matchesToolPattern } from "./guardrails.js";
 
 // ─── Settings ────────────────────────────────────────────
@@ -323,20 +324,37 @@ function inboxMessageToPinetEntry(message: InboxMessage): FollowerInboxEntry {
   };
 }
 
+function formatSlackInboxLine(
+  message: InboxMessage,
+  senderLabel: string,
+  metadataSuffix: string,
+): string {
+  const prefix = message.isChannelMention
+    ? `[thread ${message.threadTs}] (channel mention in <#${message.channel}>) ${senderLabel}:`
+    : `[thread ${message.threadTs}] ${senderLabel}:`;
+
+  if (message.brokerInboxId != null) {
+    return `${prefix} inbox_id=${message.brokerInboxId} ${buildPinetReadPointer(message.threadTs)}${metadataSuffix}`;
+  }
+
+  return `${prefix} ${message.text}${metadataSuffix}`;
+}
+
 function formatSlackInboxMessages(
   messages: InboxMessage[],
   userNames: { get(key: string): string | undefined },
 ): string {
+  const hasDurablePointer = messages.some((message) => message.brokerInboxId != null);
   const lines = messages.map((m) => {
     const n = userNames.get(m.userId) ?? m.userId;
-    const metadataSuffix = formatInboxMetadata(m.metadata);
-    if (m.isChannelMention) {
-      return `[thread ${m.threadTs}] (channel mention in <#${m.channel}>) ${n}: ${m.text}${metadataSuffix}`;
-    }
-    return `[thread ${m.threadTs}] ${n}: ${m.text}${metadataSuffix}`;
+    return formatSlackInboxLine(m, n, formatInboxMetadata(m.metadata));
   });
 
-  return `New Slack messages:\n${lines.join("\n")}\n\nACK briefly, do the work, report blockers immediately, report the outcome when done.`;
+  const guidance = hasDurablePointer
+    ? "Use pinet action=read with the pointer before acting. ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+    : "ACK briefly, do the work, report blockers immediately, report the outcome when done.";
+
+  return `New Slack messages:\n${lines.join("\n")}\n\n${guidance}`;
 }
 
 export function formatInboxMessages(
@@ -382,13 +400,7 @@ export function isTerminalPinetStandDownMessage(body: string | null | undefined)
 }
 
 function formatPinetInboxPointer(entry: FollowerInboxEntry): string {
-  const threadId = entry.message.threadId?.trim() ?? "";
-  const parts = [
-    "pointer=pinet action=read",
-    threadId ? `args.thread_id=${threadId}` : null,
-    "args.unread_only=true",
-  ].filter((part): part is string => Boolean(part));
-  return parts.join(" ");
+  return buildPinetReadPointer(entry.message.threadId ?? "");
 }
 
 export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string {
