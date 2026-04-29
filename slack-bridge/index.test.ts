@@ -3648,8 +3648,13 @@ describe("slack-bridge Pinet reconnect", () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => {
-        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"));
+        expect(sendUserMessage).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "pointer=pinet action=read args.thread_id=100.1 args.unread_only=true",
+          ),
+        );
       });
+      expect(sendUserMessage.mock.calls[0]?.[0]).not.toContain("hello from broker");
       expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
 
       const failedFree = (await pinet!.execute("tool-call-1", {
@@ -3792,8 +3797,13 @@ describe("slack-bridge Pinet reconnect", () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => {
-        expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"));
+        expect(sendUserMessage).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "pointer=pinet action=read args.thread_id=100.1 args.unread_only=true",
+          ),
+        );
       });
+      expect(sendUserMessage.mock.calls[0]?.[0]).not.toContain("hello from broker");
       expect(updateStatus.mock.calls.map(([status]) => status)).toEqual(["working"]);
 
       await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
@@ -3951,7 +3961,12 @@ describe("slack-bridge Pinet reconnect", () => {
       await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
 
       expect(sendUserMessage).toHaveBeenCalledTimes(1);
-      expect(sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("hello from broker"));
+      expect(sendUserMessage).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "pointer=pinet action=read args.thread_id=100.1 args.unread_only=true",
+        ),
+      );
+      expect(sendUserMessage.mock.calls[0]?.[0]).not.toContain("hello from broker");
 
       await sessionShutdown?.({}, ctx);
       expect(setStatus).toHaveBeenCalled();

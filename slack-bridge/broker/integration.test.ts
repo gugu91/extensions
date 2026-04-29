@@ -130,6 +130,36 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("inbox.read still returns unread context after delivery ack", async () => {
+    const reg1 = await client.register("sender-agent", "📤");
+    expect(reg1.agentId).toBeDefined();
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    await client2.register("receiver-agent", "📥");
+
+    await client.send("thread-ack-read", "Unread until read");
+
+    const pending = await client2.pollInbox();
+    expect(pending).toHaveLength(1);
+    await client2.ackMessages([pending[0].inboxId]);
+    expect(await client2.pollInbox()).toEqual([]);
+
+    const unread = await client2.readInbox({ threadId: "thread-ack-read", unreadOnly: true });
+    expect(unread.unreadCountBefore).toBe(1);
+    expect(unread.messages.map((item) => item.message.body)).toEqual(["Unread until read"]);
+    expect(unread.markedReadIds).toHaveLength(1);
+    expect(unread.unreadCountAfter).toBe(0);
+
+    const unreadAgain = await client2.readInbox({ threadId: "thread-ack-read", unreadOnly: true });
+    expect(unreadAgain.messages).toEqual([]);
+    expect(unreadAgain.unreadCountBefore).toBe(0);
+
+    client2.disconnect();
+  });
+
   it("sender does not receive own messages", async () => {
     await client.register("solo-agent", "🤖");
     await client.send("thread-solo", "Talking to myself");

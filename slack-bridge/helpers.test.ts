@@ -453,6 +453,58 @@ describe("formatInboxMessages", () => {
     expect(result).toContain("will: check this");
   });
 
+  it("formats broker-backed Slack messages as Pinet read pointers without the body", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C789",
+        threadTs: "789.012",
+        userId: "U1",
+        text: "secret Slack body",
+        timestamp: "789.012",
+        brokerInboxId: 13,
+        isChannelMention: true,
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain("New Slack messages:");
+    expect(result).toContain(
+      "[thread 789.012] (channel mention in <#C789>) will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
+    );
+    expect(result).toContain("Use pinet action=read with the pointer before acting.");
+    expect(result).toContain("ACK briefly after reading, do the work");
+    expect(result).not.toContain("secret Slack body");
+  });
+
+  it("preserves compact Slack metadata on broker-backed pointer notifications", () => {
+    const msgs: InboxMessage[] = [
+      {
+        channel: "C123",
+        threadTs: "123.456",
+        userId: "U1",
+        text: "Alice mentioned you in a comment",
+        timestamp: "123.789",
+        brokerInboxId: 14,
+        metadata: {
+          slackFiles: [
+            {
+              id: "F_CANVAS_1",
+              title: "Launch plan",
+              permalink: "https://example.slack.com/docs/T/F_CANVAS_1",
+            },
+          ],
+        },
+      },
+    ];
+
+    const result = formatInboxMessages(msgs, names);
+    expect(result).toContain(
+      "will: inbox_id=14 pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
+    );
+    expect(result).toContain('canvas={"canvasId":"F_CANVAS_1"');
+    expect(result).not.toContain("Alice mentioned you in a comment");
+  });
+
   it("falls back to userId when name not in map", () => {
     const msgs: InboxMessage[] = [
       {
