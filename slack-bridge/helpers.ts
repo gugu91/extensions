@@ -324,14 +324,28 @@ function inboxMessageToPinetEntry(message: InboxMessage): FollowerInboxEntry {
   };
 }
 
+function classifySlackInboxMessage(message: InboxMessage) {
+  return classifyPinetMail({
+    source: "slack",
+    threadId: message.threadTs,
+    sender: message.userId,
+    body: message.text,
+    metadata: message.metadata,
+  });
+}
+
 function formatSlackInboxLine(
   message: InboxMessage,
   senderLabel: string,
   metadataSuffix: string,
 ): string {
+  const classLabel =
+    message.brokerInboxId != null
+      ? ` [${formatPinetMailClassLabel(classifySlackInboxMessage(message).class)}]`
+      : "";
   const prefix = message.isChannelMention
-    ? `[thread ${message.threadTs}] (channel mention in <#${message.channel}>) ${senderLabel}:`
-    : `[thread ${message.threadTs}] ${senderLabel}:`;
+    ? `[thread ${message.threadTs}]${classLabel} (channel mention in <#${message.channel}>) ${senderLabel}:`
+    : `[thread ${message.threadTs}]${classLabel} ${senderLabel}:`;
 
   if (message.brokerInboxId != null) {
     return `${prefix} inbox_id=${message.brokerInboxId} ${buildPinetReadPointer(message.threadTs)}${metadataSuffix}`;
@@ -344,14 +358,32 @@ function formatSlackInboxMessages(
   messages: InboxMessage[],
   userNames: { get(key: string): string | undefined },
 ): string {
-  const hasDurablePointer = messages.some((message) => message.brokerInboxId != null);
+  const durableClassifications = messages
+    .filter((message) => message.brokerInboxId != null)
+    .map(classifySlackInboxMessage);
+  const hasDurablePointer = durableClassifications.length > 0;
   const lines = messages.map((m) => {
     const n = userNames.get(m.userId) ?? m.userId;
     return formatSlackInboxLine(m, n, formatInboxMetadata(m.metadata));
   });
 
+  const hasMaintenance = durableClassifications.some(
+    (classification) => classification.class === "maintenance_context",
+  );
+  const hasActionableWork = durableClassifications.some(
+    (classification) => classification.class === "steering",
+  );
+  const hasFollowUp = durableClassifications.some(
+    (classification) => classification.class === "fwup",
+  );
+  const hasInlineSlackMessage = messages.some((message) => message.brokerInboxId == null);
+
   const guidance = hasDurablePointer
-    ? "Use pinet action=read with the pointer before acting. ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+    ? hasMaintenance
+      ? hasActionableWork || hasFollowUp || hasInlineSlackMessage
+        ? "Use pinet action=read with the pointer before acting. For [maintenance/context] messages, do NOT acknowledge or reply unless you have a real blocker or materially new finding. For [steering]/[fwup] or inline Slack messages, ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+        : "Use pinet action=read with the pointer only if you need details. Treat [maintenance/context] messages as context-only; do NOT send another acknowledgement unless you have a real blocker or materially new finding."
+      : "Use pinet action=read with the pointer before acting. ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
     : "ACK briefly, do the work, report blockers immediately, report the outcome when done.";
 
   return `New Slack messages:\n${lines.join("\n")}\n\n${guidance}`;
