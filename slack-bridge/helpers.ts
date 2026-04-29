@@ -3386,6 +3386,23 @@ export interface CallSlackAPIOptions {
  * Handles 429 rate-limit responses by waiting retry-after duration and retrying.
  * Throws error if retries are exhausted or API returns error.
  */
+function formatSlackApiResponseMetadata(data: SlackResult): string {
+  const metadata = data.response_metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return "";
+  }
+
+  const messages = (metadata as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) {
+    return "";
+  }
+
+  const details = messages
+    .filter((message): message is string => typeof message === "string" && message.length > 0)
+    .join("; ");
+  return details ? ` (${details})` : "";
+}
+
 export async function callSlackAPI(
   method: string,
   token: string,
@@ -3411,7 +3428,11 @@ export async function callSlackAPI(
   }
 
   const data = (await res.json()) as SlackResult;
-  if (!data.ok) throw new Error(`Slack ${method}: ${data.error ?? "unknown error"}`);
+  if (!data.ok) {
+    throw new Error(
+      `Slack ${method}: ${data.error ?? "unknown error"}${formatSlackApiResponseMetadata(data)}`,
+    );
+  }
   return data;
 }
 
