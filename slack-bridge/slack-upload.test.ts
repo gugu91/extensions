@@ -317,6 +317,48 @@ describe("performSlackUpload", () => {
     });
   });
 
+  it("adds context when Slack rejects upload metadata after the snippet_type retry", async () => {
+    const slack = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("Slack files.getUploadURLExternal: invalid_arguments ([ERROR] bad snippet_type)"),
+      )
+      .mockRejectedValueOnce(
+        new Error(
+          "Slack files.getUploadURLExternal: invalid_arguments ([ERROR] missing required field: filename)",
+        ),
+      );
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "",
+    }));
+
+    const upload = await prepareSlackUpload(
+      {
+        content: "const answer = 42;\n",
+        filename: "release-notes.txt",
+        title: "Release notes",
+      },
+      "/repo",
+      "/tmp",
+    );
+
+    await expect(
+      performSlackUpload({
+        upload,
+        channelId: "C123",
+        slack,
+        token: "xoxb-token",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(
+      'Slack files.getUploadURLExternal: invalid_arguments after retry without snippet_type; Slack rejected upload metadata for filename="release-notes.txt" byte_length=19.',
+    );
+    expect(slack).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces raw upload failures", async () => {
     const slack = vi.fn().mockResolvedValue({
       ok: true,

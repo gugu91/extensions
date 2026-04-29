@@ -86,4 +86,21 @@ describe("callSlackApi", () => {
       "Slack chat.postMessage: channel_not_found",
     );
   });
+
+  it("includes Slack response metadata messages in API errors", async () => {
+    const fetchSpy = vi.fn(async () =>
+      makeResponse(200, {
+        ok: false,
+        error: "invalid_arguments",
+        response_metadata: {
+          messages: ["[ERROR] missing required field: length", "[ERROR] bad snippet_type"],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchSpy as unknown as typeof fetch);
+
+    await expect(callSlackApi("files.getUploadURLExternal", "xoxb-token", {})).rejects.toThrow(
+      "Slack files.getUploadURLExternal: invalid_arguments ([ERROR] missing required field: length; [ERROR] bad snippet_type)",
+    );
+  });
 });

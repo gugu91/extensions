@@ -114,6 +114,16 @@ function isInvalidUploadMetadataError(error: unknown): boolean {
   return lower.includes("files.getuploadurlexternal") && lower.includes("invalid_arguments");
 }
 
+function formatUploadMetadataRetryError(
+  upload: PreparedSlackUpload,
+  retryError: unknown,
+  originalError: unknown,
+): Error {
+  return new Error(
+    `Slack files.getUploadURLExternal: invalid_arguments after retry without snippet_type; Slack rejected upload metadata for filename=${JSON.stringify(upload.filename)} byte_length=${upload.byteLength}. retry_error=${formatUploadError(retryError)}; original_error=${formatUploadError(originalError)}`,
+  );
+}
+
 function getUploadHost(uploadUrl: string): string {
   try {
     return new URL(uploadUrl).hostname || "<unknown>";
@@ -273,11 +283,18 @@ export async function performSlackUpload({
     );
   } catch (error) {
     if (upload.snippetType && isInvalidUploadMetadataError(error)) {
-      getUploadResponse = await slack(
-        "files.getUploadURLExternal",
-        token,
-        buildUploadMetadataPayload(upload, false),
-      );
+      try {
+        getUploadResponse = await slack(
+          "files.getUploadURLExternal",
+          token,
+          buildUploadMetadataPayload(upload, false),
+        );
+      } catch (retryError) {
+        if (isInvalidUploadMetadataError(retryError)) {
+          throw formatUploadMetadataRetryError(upload, retryError, error);
+        }
+        throw retryError;
+      }
     } else {
       throw error;
     }
