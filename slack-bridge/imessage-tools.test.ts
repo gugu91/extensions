@@ -50,6 +50,24 @@ function createBrokerStub() {
         }
       },
     ),
+    claimThread: vi.fn((threadId: string, ownerAgent: string, source = "slack", channel = "") => {
+      if (thread && thread.threadId === threadId) {
+        if (thread.ownerAgent && thread.ownerAgent !== ownerAgent) {
+          return false;
+        }
+        thread = { ...thread, ownerAgent };
+        return true;
+      }
+      thread = {
+        threadId,
+        source,
+        channel,
+        ownerAgent,
+        createdAt: now,
+        updatedAt: now,
+      };
+      return true;
+    }),
     insertMessage: vi.fn(
       (
         threadId: string,

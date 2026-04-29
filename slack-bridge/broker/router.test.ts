@@ -335,7 +335,7 @@ describe("MessageRouter — route", () => {
     expect(db.threads.get("t-100")?.ownerAgent).toBeNull();
   });
 
-  it("routes to channel assignment when no thread owner", () => {
+  it("routes to channel assignment and claims new Slack threads for later follow-up", () => {
     const agent = makeAgent({ id: "a2", name: "ChannelBot" });
     db.agents = [agent];
     db.channelAssignments.set("C001", { channel: "C001", agentId: "a2" });
@@ -343,6 +343,21 @@ describe("MessageRouter — route", () => {
     const decision = router.route(makeMessage({ channel: "C001" }));
 
     expect(decision).toEqual({ action: "deliver", agentId: "a2" });
+    expect(db.threads.get("t-100")).toMatchObject({
+      source: "slack",
+      channel: "C001",
+      ownerAgent: "a2",
+    });
+
+    const followUp = router.route(
+      makeMessage({
+        threadId: "t-100",
+        channel: "C001",
+        text: "generic follow-up without another assignment cue",
+      }),
+    );
+
+    expect(followUp).toEqual({ action: "deliver", agentId: "a2" });
   });
 
   it("routes by agent name mention when no thread owner or channel assignment", () => {

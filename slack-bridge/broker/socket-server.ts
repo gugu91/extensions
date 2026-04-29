@@ -1062,9 +1062,13 @@ export class BrokerSocketServer {
       if (method === "chat.postMessage" && state.agentId) {
         const threadTs = typeof apiParams.thread_ts === "string" ? apiParams.thread_ts : null;
         const messageTs = typeof result.ts === "string" ? (result.ts as string) : null;
+        const postChannel = typeof apiParams.channel === "string" ? apiParams.channel : undefined;
         const effectiveTs = threadTs ?? messageTs;
         if (effectiveTs) {
-          this.router.claimThread(effectiveTs, state.agentId, undefined, "slack");
+          const claimed = this.router.claimThread(effectiveTs, state.agentId, postChannel, "slack");
+          if (claimed && postChannel) {
+            this.db.updateThread(effectiveTs, { source: "slack", channel: postChannel });
+          }
         }
       }
 
