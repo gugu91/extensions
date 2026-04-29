@@ -303,6 +303,35 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("stamps queued unrouted Slack backlog mail with an explicit class", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+
+    try {
+      const backlog = db.queueUnroutedMessage({
+        source: "slack",
+        threadId: "123.456",
+        channel: "C123",
+        userId: "U1",
+        userName: "User One",
+        text: "Please handle issue #608 and report blockers immediately.",
+        timestamp: "123.456",
+      });
+      db.assignBacklogEntry(backlog.id, "agent-1");
+
+      const read = db.readInbox("agent-1", { markRead: false });
+      expect(read.messages[0].message.metadata).toMatchObject({
+        channel: "C123",
+        userId: "U1",
+        timestamp: "123.456",
+        pinetMailClass: "steering",
+        threadAffinityOwnerAgentId: "agent-1",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not reopen assigned backlog when a Slack message replay is queued unrouted", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);
@@ -392,6 +421,66 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("stamps worker-routed Slack inbox mail with an explicit class", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-a", "slack", "C123", "agent-a");
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "Task: handle issue #608. ACK/work/ask/report.",
+        timestamp: "123.456",
+      });
+
+      const read = db.readInbox("agent-a", { markRead: false });
+      expect(read.messages[0].message.metadata).toMatchObject({
+        channel: "C123",
+        userId: "U1",
+        timestamp: "123.456",
+        threadAffinityOwnerAgentId: "agent-a",
+        pinetMailClass: "steering",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves explicit Slack mail class metadata when queueing inbound mail", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-a", "slack", "C123", "agent-a");
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "Task: handle this now. ACK/work/ask/report.",
+        timestamp: "123.456",
+        metadata: { pinetMailClass: "maintenance_context" },
+      });
+
+      const read = db.readInbox("agent-a", { markRead: false });
+      expect(read.messages[0].message.metadata).toMatchObject({
+        pinetMailClass: "maintenance_context",
+      });
+      expect(
+        classifyPinetMail({
+          source: read.messages[0].message.source,
+          threadId: read.messages[0].message.threadId,
+          sender: read.messages[0].message.sender,
+          body: read.messages[0].message.body,
+          metadata: read.messages[0].message.metadata,
+        }).class,
+      ).toBe("maintenance_context");
+    } finally {
+      db.close();
+    }
+  });
+
   it("drops stale Slack inbox rows when thread ownership changed before delivery", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);
@@ -459,6 +548,7 @@ describe("BrokerDB message sync identity", () => {
         userId: "U1",
         timestamp: "123.456",
         threadAffinityOwnerAgentId: "broker",
+        pinetMailClass: "fwup",
       });
     } finally {
       db.close();
