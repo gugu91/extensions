@@ -22,7 +22,7 @@ It connects agents to each other, to Slack, to Neovim, and to any future adapter
 
 6. **Workers are computation, broker is infrastructure** — workers do tasks. The broker keeps the lights on. They don't share a process lifetime.
 
-7. **Extensions stay thin** — tools like `slack_send`, `comment_add`, and `pinet action=send` are shims over the broker. They don't own state.
+7. **Extensions stay thin** — tools like `slack action=send`, `comment_add`, and `pinet action=send` are shims over the broker. They don't own state.
 
 ## What this enables
 

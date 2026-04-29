@@ -96,6 +96,13 @@ interface SlackActionToolDefinition extends ToolDefinition {
 }
 
 const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> = {
+  inbox: [{ action: "inbox", args: {} }],
+  send: [
+    {
+      action: "send",
+      args: { text: "ACK — I’m taking a look now.", thread_ts: "1712345678.000100" },
+    },
+  ],
   react: [{ action: "react", args: { emoji: "👀", thread_ts: "1712345678.000100" } }],
   read: [{ action: "read", args: { thread_ts: "1712345678.000100", limit: 20 } }],
   upload: [
@@ -201,6 +208,12 @@ function normalizeSlackDispatcherActionName(value: unknown): string {
     throw new Error("slack action is required. Use action='help' to list available actions.");
   }
   if (normalized.startsWith("slack:")) return normalized.slice("slack:".length);
+  return normalized;
+}
+
+function normalizeRegisteredSlackActionName(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized.startsWith("slack:")) return normalized.slice("slack:".length);
   if (normalized.startsWith("slack_")) return normalized.slice("slack_".length);
   return normalized;
 }
@@ -208,11 +221,7 @@ function normalizeSlackDispatcherActionName(value: unknown): string {
 function normalizeSlackGuardrailToolName(toolName: string): string {
   const normalized = toolName.trim().toLowerCase().replace(/-/g, "_");
   if (normalized.startsWith("slack:")) return normalized;
-  if (
-    normalized.startsWith("slack_") &&
-    normalized !== "slack_inbox" &&
-    normalized !== "slack_send"
-  ) {
+  if (normalized.startsWith("slack_")) {
     return `slack:${normalized.slice("slack_".length)}`;
   }
   return toolName;
@@ -413,8 +422,8 @@ function buildSlackInboxPromptGuidelines(): string[] {
   return [
     "You are connected to Slack via the slack-bridge extension.",
     "When Slack messages arrive: ACK briefly, do the work, report blockers immediately, and report the outcome when done.",
-    "Use slack_send for direct assistant-thread replies. Use the slack dispatcher for non-hot Slack actions such as reactions, reads, uploads, schedules, channel posts, pins, bookmarks, canvases, modals, presence, exports, and confirmations.",
-    "Call slack with action='help' for the cold-action catalogue, or action='help' with args.topic for a specific action schema and examples.",
+    "Use slack with action='send' for assistant-thread replies and action='inbox' to drain pending Slack messages. Use the same dispatcher for reactions, reads, uploads, schedules, channel posts, pins, bookmarks, canvases, modals, presence, exports, and confirmations.",
+    "Call slack with action='help' for the action catalogue, or action='help' with args.topic for a specific action schema and examples.",
     "Security guardrails may be active for Slack-triggered actions. Cold Slack actions are checked with slack:<action> guardrail names.",
     "Reaction-triggered requests may arrive as structured 'Reaction trigger from Slack:' messages — treat them as explicit user instructions attached to the referenced Slack message or thread.",
   ];
@@ -422,7 +431,7 @@ function buildSlackInboxPromptGuidelines(): string[] {
 
 function buildSlackSendPromptGuidelines(): string[] {
   return [
-    "Use slack_send for replies in the current Slack assistant thread; always reply where the task came from.",
+    "Use slack with action='send' for replies in the current Slack assistant thread; always reply where the task came from.",
     "For rich Block Kit JSON examples or modal/canvas patterns, load the slack-bridge skill instead of relying on tool schemas.",
   ];
 }
@@ -596,7 +605,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
   const slackActionRegistry = new Map<string, SlackActionToolDefinition>();
 
   function registerSlackAction(definition: SlackActionToolDefinition): void {
-    const action = normalizeSlackDispatcherActionName(definition.name);
+    const action = normalizeRegisteredSlackActionName(definition.name);
     if (action === "help") {
       throw new Error("slack help is reserved for dispatcher schema discovery.");
     }
@@ -657,19 +666,19 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     name: "slack",
     label: "Slack",
     description:
-      "Dispatcher for non-hot Slack actions: react, read, upload, schedule, presence, export, post_channel, read_channel, confirm_action, delete, pin, bookmark, create_channel, project_create, canvas_comments_read, canvas_create, canvas_update, modal_open, modal_push, modal_update, and help. Use slack_inbox and slack_send for hot-path inbox/reply work.",
+      "Single dispatcher for Slack actions: inbox, send, react, read, upload, schedule, presence, export, post_channel, read_channel, confirm_action, delete, pin, bookmark, create_channel, project_create, canvas_comments_read, canvas_create, canvas_update, modal_open, modal_push, modal_update, and help.",
     promptSnippet:
-      "Run non-hot Slack actions through a compact dispatcher. Use action='help' for the action catalogue or args.topic for a specific schema.",
+      "Run Slack actions through a compact dispatcher. Use action='help' for the action catalogue or args.topic for a specific schema.",
     promptGuidelines: [
-      "Use slack_inbox and slack_send for the hot path. Use this dispatcher for every other Slack action.",
-      "Cold actions are guarded as slack:<action>, for example slack:upload or slack:canvas_update.",
+      "Use slack action='inbox' for pending messages and action='send' for replies. Use the same dispatcher for every Slack action.",
+      "Actions are guarded as slack:<action>, for example slack:send, slack:upload, or slack:canvas_update.",
       "The dispatcher returns {status,data,errors,warnings}. On input errors, call action='help' with args.topic for the action schema.",
       "For Block Kit templates, modal patterns, and canvas examples, load the slack-bridge skill lazily.",
     ],
     parameters: Type.Object({
       action: Type.String({
         description:
-          "Action name: help | react | read | upload | schedule | presence | export | post_channel | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
+          "Action name: help | inbox | send | react | read | upload | schedule | presence | export | post_channel | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
       }),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
@@ -1189,8 +1198,8 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     return snapshot;
   }
 
-  pi.registerTool({
-    name: "slack_inbox",
+  registerSlackAction({
+    name: "inbox",
     label: "Slack Inbox",
     description:
       "Return pending Slack messages that arrived since the last check, then clear the queue.",
@@ -1431,8 +1440,8 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     },
   });
 
-  pi.registerTool({
-    name: "slack_send",
+  registerSlackAction({
+    name: "send",
     label: "Slack Send",
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
@@ -1453,7 +1462,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     }),
     async execute(_id, params) {
       requireToolPolicy(
-        "slack_send",
+        "slack:send",
         params.thread_ts,
         `thread_ts=${params.thread_ts ?? ""} | text=${params.text} | blocks=${summarizeSlackBlocksForPolicy(params.blocks)}`,
       );
@@ -2921,7 +2930,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           content: [
             {
               type: "text",
-              text: `A matching confirmation request is already pending in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding.`,
+              text: `A matching confirmation request is already pending in thread ${params.thread_ts}. Wait for the user's response via slack action='inbox' before proceeding.`,
             },
           ],
           details: {
@@ -2946,7 +2955,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         content: [
           {
             type: "text",
-            text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack_inbox before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
+            text: `Confirmation requested in thread ${params.thread_ts}. Wait for the user's response via slack action='inbox' before proceeding. If the user approves, continue with the action. If denied, inform them and skip the action.`,
           },
         ],
         details: {

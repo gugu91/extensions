@@ -63,6 +63,10 @@ describe("matchesToolPattern", () => {
   it("matches legacy Slack underscore patterns against dispatcher action names", () => {
     expect(matchesToolPattern("slack:canvas_update", ["slack_canvas_*"])).toBe(true);
     expect(matchesToolPattern("slack:upload", ["slack_upload"])).toBe(true);
+    expect(matchesToolPattern("slack:send", ["slack_send"])).toBe(true);
+    expect(matchesToolPattern("slack:inbox", ["slack_inbox"])).toBe(true);
+    expect(matchesToolPattern("slack_send", ["slack:send"])).toBe(true);
+    expect(matchesToolPattern("slack_inbox", ["slack:inbox"])).toBe(true);
   });
 
   it("matches legacy Pinet underscore guardrail patterns against dispatcher action names", () => {
@@ -124,6 +128,10 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("slack:modal_open")).toBe(true);
     expect(WRITE_TOOLS.has("slack:modal_push")).toBe(true);
     expect(WRITE_TOOLS.has("slack:modal_update")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack:send")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack:inbox")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("slack_send")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("slack_inbox")).toBe(false);
     expect(READ_ONLY_TOOLS.has("slack:export")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack:presence")).toBe(true);
     expect(READ_ONLY_TOOLS.has("slack:canvas_comments_read")).toBe(true);
@@ -174,6 +182,8 @@ describe("isToolBlocked", () => {
   });
 
   it("applies legacy send blocks to dispatcher send", () => {
+    expect(isToolBlocked("slack:send", { blockedTools: ["slack_send"] })).toBe(true);
+    expect(isToolBlocked("slack_send", { blockedTools: ["slack:send"] })).toBe(true);
     expect(isToolBlocked("pinet:send", { blockedTools: ["pinet_send"] })).toBe(true);
     expect(isToolBlocked("pinet:send", { blockedTools: ["pinet_message"] })).toBe(true);
   });
@@ -304,7 +314,7 @@ describe("buildSecurityPrompt", () => {
     expect(prompt).toContain("write");
     // Should mention allowed tools
     expect(prompt).toContain("read");
-    expect(prompt).toContain("slack_send");
+    expect(prompt).toContain("slack:send");
   });
 
   it("includes blocked tools section", () => {
@@ -320,6 +330,7 @@ describe("buildSecurityPrompt", () => {
     expect(prompt).toContain("bash");
     expect(prompt).toContain("edit");
     expect(prompt).toContain('action "confirm_action"');
+    expect(prompt).toContain("slack action='inbox'");
   });
 
   it("includes all sections when all guardrails are active", () => {
@@ -405,7 +416,7 @@ describe("isBrokerForbiddenTool", () => {
 
   it("returns false for allowed tools", () => {
     expect(isBrokerForbiddenTool("pinet")).toBe(false);
-    expect(isBrokerForbiddenTool("slack_send")).toBe(false);
+    expect(isBrokerForbiddenTool("slack:send")).toBe(false);
     expect(isBrokerForbiddenTool("read")).toBe(false);
     expect(isBrokerForbiddenTool("bash")).toBe(false);
   });

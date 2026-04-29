@@ -2086,11 +2086,11 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const slackSend = tools.get("slack_send");
+    const slackDispatcher = tools.get("slack");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
-    expect(slackSend).toBeDefined();
+    expect(slackDispatcher).toBeDefined();
 
     await sessionStart?.({}, ctx);
     await Promise.resolve();
@@ -2136,9 +2136,12 @@ describe("slack-bridge top-level shutdown", () => {
       }),
     });
 
-    await slackSend!.execute("tool-1", {
-      thread_ts: "100.1",
-      text: "reply from the agent",
+    await slackDispatcher!.execute("tool-1", {
+      action: "send",
+      args: {
+        thread_ts: "100.1",
+        text: "reply from the agent",
+      },
     });
 
     const chatPostMessageCall = fetchSpy.mock.calls.find(

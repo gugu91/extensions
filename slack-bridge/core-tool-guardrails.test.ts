@@ -117,9 +117,9 @@ describe("core tool Slack guardrails", () => {
     expect(
       evaluateSlackOriginCoreToolPolicy({
         turn: { threadTs: "100.1", threadCount: 1 },
-        toolName: "slack_send",
+        toolName: "slack:send",
         input: { thread_ts: "100.1", text: "hi" },
-        guardrails: { blockedTools: ["slack_send"] },
+        guardrails: { blockedTools: ["slack:send"] },
         requireToolPolicy: () => {
           throw new Error("should not run");
         },

@@ -1,5 +1,10 @@
 # Issue #588 — Extension tool token-footprint audit
 
+> Follow-up note: the Slack surface has since been standardized on a single
+> `slack` dispatcher. Historical references below to direct tools such as
+> `slack_inbox` and `slack_send` describe the measured pre-consolidation
+> surface, not the current default registration target.
+
 ## Scope
 
 Repo tool surfaces audited in this pass:

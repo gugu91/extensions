@@ -6,8 +6,8 @@ description: Warm reference for the @gugu910/pi-slack-bridge Slack dispatcher. U
 # Slack Bridge Warm Reference
 
 Use this skill when the compact `slack` dispatcher schema is not enough. The
-hot path stays small: `slack_inbox` receives work, `slack_send` replies in the
-current assistant thread, and `slack` handles the cold action surface.
+public Slack surface is a single tool: `slack` with actions such as `inbox`,
+`send`, `upload`, and `canvas_update`.
 
 ## Dispatcher contract
 
@@ -35,13 +35,14 @@ On failure, inspect `errors[0].class`, `retryable`, and `hint`. Prefer
 `slack({"action":"help","args":{"topic":"..."}})` before guessing an action
 schema.
 
-Guardrails match cold actions as `slack:<action>` (for example
-`slack:upload`, `slack:delete`, `slack:canvas_update`). Legacy
-`slack_<action>` patterns may be accepted during migration, but new configs
-should use the colon form.
+Guardrails match actions as `slack:<action>` (for example `slack:send`,
+`slack:upload`, `slack:delete`, `slack:canvas_update`). Legacy `slack_<action>`
+patterns may be accepted during migration, but new configs should use the colon
+form.
 
 ## Action quick map
 
+- Inbox/replies: `inbox`, `send`
 - Thread/channel messaging: `post_channel`, `read`, `read_channel`, `export`
 - Lightweight acknowledgement: `react`
 - Files/snippets: `upload`
@@ -57,7 +58,7 @@ should use the colon form.
 ## Block Kit patterns
 
 No Block Kit builder tool is registered. Build the JSON inline and pass it to
-`slack_send` or `slack` action `post_channel` as `blocks`.
+`slack` action `send` or `post_channel` as `blocks`.
 
 ### Status report
 
@@ -85,9 +86,12 @@ Use with:
 
 ```json
 {
-  "text": "Deploy complete — branch main, checks passed.",
-  "thread_ts": "1712345678.000100",
-  "blocks": []
+  "action": "send",
+  "args": {
+    "text": "Deploy complete — branch main, checks passed.",
+    "thread_ts": "1712345678.000100",
+    "blocks": []
+  }
 }
 ```
 
@@ -336,7 +340,7 @@ error and retry the guarded call unchanged after approval:
 }
 ```
 
-Wait for `slack_inbox` to deliver the approval before retrying the guarded
+Wait for `slack` action `inbox` to deliver the approval before retrying the guarded
 action. Every destructive delete also needs `confirm: true` after verifying the
 target; whole-thread deletion additionally needs `thread: true` and only works
 when every message in the target thread was posted by the current bot:

@@ -11,8 +11,8 @@ export const READ_ONLY_TOOLS = new Set([
   "read",
   "rg",
   "slack",
-  "slack_inbox",
-  "slack_send",
+  "slack:inbox",
+  "slack:send",
   "slack:help",
   "slack:read",
   "slack:read_channel",
@@ -242,7 +242,7 @@ export function buildSecurityPrompt(guardrails: SecurityGuardrails): string {
       [
         "✋ CONFIRMATION REQUIRED:",
         `Before using tools matching these patterns: [${guardrails.requireConfirmation!.join(", ")}], you MUST first call slack with action "confirm_action" and args containing thread_ts, the exact action string required by the guarded tool, and the tool name (for dispatcher actions, use slack:<action> or pinet:<action>).`,
-        "Wait for the user's response via slack_inbox. Only proceed if the user approves. If denied, inform the user and skip the action.",
+        "Wait for the user's response via slack action='inbox'. Only proceed if the user approves. If denied, inform the user and skip the action.",
       ].join("\n"),
     );
   }

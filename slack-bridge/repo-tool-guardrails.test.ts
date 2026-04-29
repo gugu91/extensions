@@ -101,9 +101,9 @@ describe("repo tool Slack guardrails", () => {
     expect(
       evaluateSlackOriginRepoToolPolicy({
         turn: { threadTs: "100.1", threadCount: 1 },
-        toolName: "slack_send",
+        toolName: "slack:send",
         input: { text: "hi" },
-        guardrails: { blockedTools: ["slack_send"] },
+        guardrails: { blockedTools: ["slack:send"] },
         requireToolPolicy: () => {
           throw new Error("should not run");
         },

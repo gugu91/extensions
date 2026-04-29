@@ -185,7 +185,7 @@ User opens Pinet in Slack sidebar
   └─► types a message
         └─► 👀 reaction appears (thinking)
               └─► message queued for pi agent
-                    └─► agent responds via slack_send
+                    └─► agent responds via `slack` action `send`
                           └─► 👀 removed, reply appears in thread
 ```
 
@@ -196,16 +196,16 @@ Messages queue while the agent is busy. When the agent finishes, it automaticall
 Slack-bridge uses progressive disclosure to keep the per-turn tool surface
 small:
 
-| Tool          | Description                                                                 |
-| ------------- | --------------------------------------------------------------------------- |
-| `slack_inbox` | Hot-path inbox drain for pending incoming Slack messages                    |
-| `slack_send`  | Hot-path reply tool for Slack assistant threads                             |
-| `slack`       | Dispatcher for all non-hot Slack actions; call `action: "help"` for schemas |
+| Tool    | Description                                                                                 |
+| ------- | ------------------------------------------------------------------------------------------- |
+| `slack` | Single Slack dispatcher; call `action: "help"` for schemas and progressive action discovery |
 
-Cold Slack actions live behind the `slack` dispatcher:
+All Slack actions live behind the `slack` dispatcher:
 
 | Dispatcher action      | Description                                                                       |
 | ---------------------- | --------------------------------------------------------------------------------- |
+| `inbox`                | Drain pending incoming Slack messages                                             |
+| `send`                 | Reply in the current Slack assistant thread                                       |
 | `react`                | Add an emoji reaction to a message                                                |
 | `read`                 | Read messages from a thread                                                       |
 | `upload`               | Upload files, snippets, or diffs into Slack                                       |
@@ -231,24 +231,26 @@ Use `slack` with `action: "help"` for the action catalogue, or
 `action: "help", args: { "topic": "canvas_update" }` for a specific JSON
 schema and example invocations. Dispatcher responses use a consistent
 `{ "status", "data", "errors", "warnings" }` envelope. Guardrails match
-cold Slack actions as `slack:<action>` (for example `slack:upload` or
-`slack:canvas_update`); legacy `slack_<action>` patterns are accepted during
-migration.
+Slack actions as `slack:<action>` (for example `slack:send`, `slack:upload`, or
+`slack:canvas_update`); legacy `slack_<action>` guardrail patterns are accepted
+during migration. Dispatcher action inputs should use the bare action name such
+as `send` or `upload`; old direct-tool spellings such as `slack_send` or
+`slack_upload` are rejected as unknown actions so stale prompts fail closed.
 
 #### Tool and workflow usage notes
 
-- **Reply where the work arrived.** Use `slack_send` for assistant-thread
-  replies. If a task was delivered in a Slack thread, acknowledge briefly,
-  do the work, report blockers immediately, and finish with the outcome. If
-  you know only a channel/thread pair, use dispatcher action `post_channel`
-  with `channel` and optional `thread_ts` instead.
+- **Reply where the work arrived.** Use dispatcher action `send` for
+  assistant-thread replies. If a task was delivered in a Slack thread,
+  acknowledge briefly, do the work, report blockers immediately, and finish
+  with the outcome. If you know only a channel/thread pair, use dispatcher
+  action `post_channel` with `channel` and optional `thread_ts` instead.
 - **Channel posting is explicit.** `post_channel` posts to a named channel or
   channel ID. When `channel` is omitted, it first resolves a provided
   `thread_ts` to a tracked thread channel, then falls back to `defaultChannel`
-  from settings. `slack_send` is intentionally narrower and resolves the
-  current tracked assistant thread/DM context.
+  from settings. Dispatcher action `send` is intentionally narrower and resolves
+  the current tracked assistant thread/DM context.
 - **Rich messages use Block Kit JSON.** Pass `blocks` directly to
-  `slack_send` or `post_channel`; keep `text` as the notification/fallback.
+  dispatcher action `send` or `post_channel`; keep `text` as the notification/fallback.
   Block Kit builder tools are not registered by this package. Load the bundled
   `slack-bridge` skill for copyable status-report, button, code, and diff
   templates.
@@ -290,11 +292,11 @@ migration.
   name, and the exact action string required by the guarded tool. The safest
   flow is: attempt the guarded call, copy the `requires confirmation for action
 ...` string from the error, request confirmation, wait for the user's approval
-  via `slack_inbox`, then retry the guarded call unchanged. Batched
+  via dispatcher action `inbox`, then retry the guarded call unchanged. Batched
   multi-thread Slack turns cannot satisfy a single-thread confirmation.
 - **Reaction and interaction triggers are explicit tasks.** Reaction-triggered
-  requests and Block Kit/modal interaction payloads arrive through
-  `slack_inbox` with metadata; treat them as user instructions tied to the
+  requests and Block Kit/modal interaction payloads arrive through dispatcher
+  action `inbox` with metadata; treat them as user instructions tied to the
   referenced Slack thread or message.
 
 #### Common dispatcher examples
@@ -303,16 +305,19 @@ Reply in the current Slack assistant thread with Block Kit:
 
 ```json
 {
-  "text": "Deploy complete — branch main, checks passed.",
-  "blocks": [
-    {
-      "type": "section",
-      "fields": [
-        { "type": "mrkdwn", "text": "*Branch*\n`main`" },
-        { "type": "mrkdwn", "text": "*Checks*\n✅ lint/typecheck/test" }
-      ]
-    }
-  ]
+  "action": "send",
+  "args": {
+    "text": "Deploy complete — branch main, checks passed.",
+    "blocks": [
+      {
+        "type": "section",
+        "fields": [
+          { "type": "mrkdwn", "text": "*Branch*\n`main`" },
+          { "type": "mrkdwn", "text": "*Checks*\n✅ lint/typecheck/test" }
+        ]
+      }
+    ]
+  }
 }
 ```
 

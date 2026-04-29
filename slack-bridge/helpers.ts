@@ -1649,7 +1649,7 @@ export function buildWorkerPromptGuidelines(): string[] {
     "",
     "REPLY TOOL RULES:",
     "- If you received a task via `pinet action=send`, reply via `pinet action=send` to the sender.",
-    "- If you received a task in a Slack thread, reply via `slack_send` in that thread.",
+    "- If you received a task in a Slack thread, reply via `slack` with `action=send` in that thread.",
     "- Never use the `slack` dispatcher `post_channel` action with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
     "",
     "PINET DELEGATION RULES:",

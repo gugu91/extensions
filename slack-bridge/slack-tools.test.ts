@@ -38,6 +38,20 @@ function unwrapSlackDispatcherResponse(response: ToolResponse): ToolResponse {
   };
 }
 
+async function executeSlackAction(
+  tools: Map<string, ToolDefinition>,
+  action: string,
+  args: Record<string, unknown> = {},
+): Promise<ToolResponse> {
+  const dispatcher = tools.get("slack");
+  if (!dispatcher) {
+    throw new Error("Expected slack dispatcher to be registered");
+  }
+  return unwrapSlackDispatcherResponse(
+    await dispatcher.execute(`slack:${action}`, { action, args }),
+  );
+}
+
 describe("registerSlackTools", () => {
   function setup() {
     const tools = new Map<string, ToolDefinition>();
@@ -342,7 +356,7 @@ describe("registerSlackTools", () => {
     };
   }
 
-  it("reads the latest security prompt when slack_inbox executes", async () => {
+  it("reads the latest security prompt when slack inbox action executes", async () => {
     const { inbox, tools, setSecurityPrompt } = setup();
     inbox.push({
       channel: "D123",
@@ -354,7 +368,7 @@ describe("registerSlackTools", () => {
 
     setSecurityPrompt("UPDATED SECURITY PROMPT");
 
-    const response = await tools.get("slack_inbox")!.execute("tool-1", {});
+    const response = await executeSlackAction(tools, "inbox");
     expect(response.content?.[0]?.text).toContain("UPDATED SECURITY PROMPT");
     expect(response.content?.[0]?.text).not.toContain("INITIAL SECURITY PROMPT");
   });
@@ -928,12 +942,12 @@ describe("registerSlackTools", () => {
     expect(response.details?.count).toBe(1);
   });
 
-  it("includes blocks when slack_send posts a rich message", async () => {
+  it("includes blocks when slack send action posts a rich message", async () => {
     const { slack, tools, setResolveThreadChannel, noteThreadReply, clearPendingAttention } =
       setup();
     setResolveThreadChannel(async () => "D123");
 
-    await tools.get("slack_send")!.execute("tool-14", {
+    await executeSlackAction(tools, "send", {
       thread_ts: "123.456",
       text: "Deploy complete",
       blocks: [
@@ -994,7 +1008,7 @@ describe("registerSlackTools", () => {
       },
     });
 
-    const response = await tools.get("slack_inbox")!.execute("tool-16", {});
+    const response = await executeSlackAction(tools, "inbox");
 
     expect(response.content?.[0]?.text).toContain('metadata={"kind":"slack_block_action"');
     expect(response.content?.[0]?.text).toContain('"actionId":"review.approve"');
@@ -1017,12 +1031,14 @@ describe("registerSlackTools", () => {
     });
   });
 
-  it("registers only the hot Slack tools plus the dispatcher", () => {
+  it("registers only the Slack dispatcher tool", () => {
     const { registeredTools } = setup();
 
     const slackTools = [...registeredTools.keys()].filter((name) => name.startsWith("slack"));
 
-    expect(slackTools).toEqual(["slack", "slack_inbox", "slack_send"]);
+    expect(slackTools).toEqual(["slack"]);
+    expect(registeredTools.has("slack_inbox")).toBe(false);
+    expect(registeredTools.has("slack_send")).toBe(false);
     expect(registeredTools.has("slack_blocks_build")).toBe(false);
     expect(registeredTools.has("slack_modal_build")).toBe(false);
     expect(registeredTools.has("slack_post_channel")).toBe(false);
@@ -1037,7 +1053,21 @@ describe("registerSlackTools", () => {
     const catalogEnvelope = catalogResponse.details as SlackDispatcherEnvelope;
     expect(catalogEnvelope.status).toBe("succeeded");
     expect(catalogResponse.content?.[0]?.text).toContain('"status": "succeeded"');
+    expect(catalogResponse.content?.[0]?.text).toContain('"action": "inbox"');
+    expect(catalogResponse.content?.[0]?.text).toContain('"action": "send"');
     expect(catalogResponse.content?.[0]?.text).toContain('"action": "post_channel"');
+
+    const sendSchemaResponse = await dispatcher.execute("tool-help-send", {
+      action: "help",
+      args: { topic: "send" },
+    });
+    const sendSchemaEnvelope = sendSchemaResponse.details as SlackDispatcherEnvelope;
+    expect(sendSchemaEnvelope.status).toBe("succeeded");
+    expect(sendSchemaEnvelope.data).toMatchObject({
+      action: "send",
+      guardrail_tool: "slack:send",
+      examples: [expect.objectContaining({ action: "send" })],
+    });
 
     const schemaResponse = await dispatcher.execute("tool-help-topic", {
       action: "help",
@@ -1070,6 +1100,27 @@ describe("registerSlackTools", () => {
         }),
       ],
     });
+  });
+
+  it("rejects legacy direct-tool names as dispatcher action values", async () => {
+    const { registeredTools } = setup();
+    const dispatcher = registeredTools.get("slack")!;
+
+    const sendResponse = await dispatcher.execute("tool-legacy-send-action", {
+      action: "slack_send",
+    });
+    const sendEnvelope = sendResponse.details as SlackDispatcherEnvelope;
+
+    expect(sendEnvelope.status).toBe("failed");
+    expect(sendEnvelope.errors[0]?.message).toContain("Unknown Slack action 'slack_send'");
+
+    const inboxResponse = await dispatcher.execute("tool-legacy-inbox-action", {
+      action: "slack_inbox",
+    });
+    const inboxEnvelope = inboxResponse.details as SlackDispatcherEnvelope;
+
+    expect(inboxEnvelope.status).toBe("failed");
+    expect(inboxEnvelope.errors[0]?.message).toContain("Unknown Slack action 'slack_inbox'");
   });
 
   it("opens a modal and embeds thread context in private_metadata", async () => {
@@ -1153,7 +1204,7 @@ describe("registerSlackTools", () => {
       },
     });
 
-    const response = await tools.get("slack_inbox")!.execute("tool-21", {});
+    const response = await executeSlackAction(tools, "inbox");
 
     expect(response.content?.[0]?.text).toContain('metadata={"kind":"slack_view_submission"');
     expect(response.content?.[0]?.text).toContain('"triggerId":"trigger-1"');
