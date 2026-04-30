@@ -1024,12 +1024,13 @@ describe("registerSlackTools", () => {
       expect.any(Object),
     );
     expect(response.details).toMatchObject({
-      ts: "123.456",
+      thread_ts: "123.456",
       channel: "D123",
       delivery: "pinet",
       adapter: "slack",
       messageId: 42,
     });
+    expect(response.details).not.toHaveProperty("ts");
   });
 
   it("falls back to direct Slack delivery when Pinet thread delivery fails", async () => {
@@ -1088,9 +1089,45 @@ describe("registerSlackTools", () => {
       expect.any(Object),
     );
     expect(response.details).toMatchObject({
-      ts: "222.333",
+      thread_ts: "222.333",
       channel: "resolved:deployments",
       delivery: "pinet",
+    });
+    expect(response.details).not.toHaveProperty("ts");
+  });
+
+  it("falls back to direct Slack delivery when Pinet message.send times out", async () => {
+    const {
+      slack,
+      tools,
+      setResolveThreadChannel,
+      setPinetDeliveryAvailable,
+      sendPinetSlackMessage,
+    } = setup();
+    setResolveThreadChannel(async () => "D123");
+    setPinetDeliveryAvailable(true);
+    sendPinetSlackMessage.mockRejectedValueOnce(new Error("Request timed out: message.send"));
+
+    const response = await tools.get("slack_send")!.execute("tool-pinet-timeout-fallback", {
+      thread_ts: "123.456",
+      text: "Timeout fallback reply",
+    });
+
+    expect(sendPinetSlackMessage).toHaveBeenCalledOnce();
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel: "D123",
+        thread_ts: "123.456",
+        text: "Timeout fallback reply",
+      }),
+    );
+    expect(response.details).toMatchObject({
+      ts: "123.456",
+      channel: "D123",
+      delivery: "slack",
+      fallbackReason: "Request timed out: message.send",
     });
   });
 

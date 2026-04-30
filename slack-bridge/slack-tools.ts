@@ -257,6 +257,7 @@ function isPinetDeliveryFallbackError(error: unknown): boolean {
     lower.includes("not connected") ||
     lower.includes("disconnected") ||
     lower.includes("timeout") ||
+    lower.includes("timed out") ||
     lower.includes("econn") ||
     lower.includes("socket") ||
     lower.includes("no transport source") ||
@@ -640,7 +641,8 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     threadTs?: string;
     blocks?: Array<Record<string, unknown>>;
   }): Promise<{
-    ts: string;
+    ts?: string;
+    threadTs?: string;
     channel: string;
     blocksCount: number;
     delivery: "pinet" | "slack";
@@ -661,7 +663,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             ...(blocks ? { blocks } : {}),
           });
           return {
-            ts: input.threadTs,
+            threadTs: input.threadTs,
             channel: result.channel,
             blocksCount: blocks?.length ?? 0,
             delivery: "pinet",
@@ -1578,7 +1580,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         ...(params.blocks ? { blocks: params.blocks } : {}),
       });
       const ts = delivery.ts;
-      const actualTs = params.thread_ts ?? ts;
+      const threadTs = params.thread_ts ?? delivery.threadTs;
+      const actualTs = threadTs ?? ts;
+      if (!actualTs) {
+        throw new Error("Slack delivery did not return a message timestamp.");
+      }
 
       noteThreadReply(actualTs, channel);
 
@@ -1592,11 +1598,12 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             type: "text",
             text: params.thread_ts
               ? `Replied in thread ${params.thread_ts}.`
-              : `Sent message (thread_ts: ${ts}). Use this to continue the conversation.`,
+              : `Sent message (thread_ts: ${actualTs}). Use this to continue the conversation.`,
           },
         ],
         details: {
-          ts,
+          ...(ts ? { ts } : {}),
+          ...(threadTs ? { thread_ts: threadTs } : {}),
           channel,
           blocksCount: delivery.blocksCount,
           delivery: delivery.delivery,
@@ -2177,7 +2184,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         ...(params.blocks ? { blocks: params.blocks } : {}),
       });
       const ts = delivery.ts;
-      const actualTs = params.thread_ts ?? ts;
+      const threadTs = params.thread_ts ?? delivery.threadTs;
+      const actualTs = threadTs ?? ts;
+      if (!actualTs) {
+        throw new Error("Slack delivery did not return a message timestamp.");
+      }
 
       noteThreadReply(actualTs, channelId);
 
@@ -2188,11 +2199,12 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             type: "text",
             text: params.thread_ts
               ? `Replied in thread ${params.thread_ts} in channel ${channelLabel}.`
-              : `Posted to #${channelLabel} (ts: ${ts}).`,
+              : `Posted to #${channelLabel} (ts: ${actualTs}).`,
           },
         ],
         details: {
-          ts,
+          ...(ts ? { ts } : {}),
+          ...(threadTs ? { thread_ts: threadTs } : {}),
           channel: channelId,
           blocksCount: delivery.blocksCount,
           delivery: delivery.delivery,
