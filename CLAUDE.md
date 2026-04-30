@@ -45,8 +45,9 @@ are skipped on re-runs.
 2. **Write tests** for any new logic — extract pure functions into `helpers.ts` files and test them
 3. **Check locally**: `pnpm lint && pnpm typecheck && pnpm test`
 4. **Create a PR** — base on `main` (or stack on a feature branch)
-5. **Request review** — use the `code-reviewer` subagent (see below)
-6. **Address feedback**, then merge
+5. **Check CI yourself** after opening or updating a PR; investigate failures before handing off
+6. **Request review** — use the `code-reviewer` subagent (see below)
+7. **Address feedback**, then merge
 
 ## Code review
 
@@ -79,6 +80,7 @@ The reviewer posts findings to PiComms and GitHub. Fix any critical/warning issu
 ## GitHub
 
 - Remote: `github.com:gugu91/extensions.git`
+- GitHub org/repo owner is `gugu91`; npm package scope is `@gugu910`
 - Auth: `GH_TOKEN=$(gh auth token --user gugu91)` prefix for `gh` commands
 - Create PRs with `gh pr create`
 - Merge with `gh pr merge`
