@@ -69,6 +69,7 @@ import { createPinetRegistrationGate } from "./pinet-registration-gate.js";
 import { createBrokerRuntimeAccess } from "./broker-runtime-access.js";
 import { createInboxDrainRuntime } from "./inbox-drain-runtime.js";
 import { createAgentCompletionRuntime } from "./agent-completion-runtime.js";
+import { sendBrokerMessage } from "./broker/message-send.js";
 import {
   type SlackBridgeRuntimeMode,
   resolveSlackBridgeStartupRuntimeMode,
@@ -1058,6 +1059,65 @@ export default function (pi: ExtensionAPI) {
       requireToolPolicy,
       getBotUserId: () => botUserId,
       registerConfirmationRequest,
+      pinetDelivery: {
+        isAvailable: () => pinetEnabled && brokerRole !== null,
+        sendSlackMessage: async (input) => {
+          const content = {
+            text: input.text,
+            markdown: input.text,
+            ...(input.blocks && input.blocks.length > 0 ? { slackBlocks: input.blocks } : {}),
+          };
+          if (brokerRole === "broker") {
+            const broker = getActiveBroker();
+            const selfId = getActiveBrokerSelfId();
+            if (!broker || !selfId) {
+              throw new Error("Broker agent identity is unavailable.");
+            }
+            const result = await sendBrokerMessage(
+              {
+                db: broker.db,
+                adapters: broker.adapters,
+              },
+              {
+                threadId: input.threadId,
+                body: input.text,
+                senderAgentId: selfId,
+                source: "slack",
+                channel: input.channel,
+                content,
+                ...(input.blocks && input.blocks.length > 0 ? { blocks: input.blocks } : {}),
+                agentName,
+                agentEmoji,
+                agentOwnerToken,
+              },
+            );
+            return {
+              adapter: result.adapter,
+              messageId: result.message.id,
+              threadId: result.thread.threadId,
+              channel: result.thread.channel,
+              source: result.thread.source,
+            };
+          }
+          if (brokerRole === "follower") {
+            if (!brokerClient?.client) {
+              throw new Error("Pinet is in an unexpected state.");
+            }
+            return brokerClient.client.sendMessage({
+              threadId: input.threadId,
+              body: input.text,
+              source: "slack",
+              channel: input.channel,
+              content,
+              ...(input.blocks && input.blocks.length > 0 ? { blocks: input.blocks } : {}),
+              agentName,
+              agentEmoji,
+              agentOwnerToken,
+            });
+          }
+          throw new Error("Pinet is in an unexpected state.");
+        },
+      },
     },
     pinetTools: {
       pinetEnabled: () => pinetEnabled,
