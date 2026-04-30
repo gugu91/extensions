@@ -1593,6 +1593,16 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(joined).toContain("NEVER do the work yourself");
   });
 
+  it("allows the broker to start repo-scoped Pinet follower workers via tmux", () => {
+    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
+    const joined = guidelines.join(" ");
+    expect(joined).toContain("Use tmux only to launch repo-scoped Pinet follower workers");
+    expect(joined).toContain("create a tmux session in the target repo");
+    expect(joined).toContain("/pinet-follow");
+    expect(joined).toContain("wait for the worker in `pinet action=agents`");
+    expect(joined).toContain("then delegate via `pinet action=send`");
+  });
+
   it("requires maintainer-prioritized issues before routing extension changes", () => {
     const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
     const joined = guidelines.join(" ");
