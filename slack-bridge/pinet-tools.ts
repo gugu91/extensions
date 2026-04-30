@@ -141,13 +141,13 @@ const PINET_OUTPUT_OPTION_PARAMETERS = {
 };
 
 function normalizePinetOutputOptions(args: Record<string, unknown>): PinetOutputOptions {
-  const rawFormat = args.format;
+  const rawFormat = args.format ?? args.f ?? args["-f"];
   const format = rawFormat == null ? "cli" : String(rawFormat).trim().toLowerCase();
   if (format !== "cli" && format !== "json") {
     throw new Error('format must be "cli" or "json".');
   }
 
-  const rawFull = args.full;
+  const rawFull = args.full ?? args["--full"];
   if (rawFull != null && typeof rawFull !== "boolean") {
     throw new Error("full must be a boolean when provided.");
   }
@@ -450,53 +450,22 @@ function buildCompactPinetReadDetails(result: PinetReadResult): Record<string, u
 }
 
 function formatPinetReadResultCompact(result: PinetReadResult, options: PinetReadOptions): string {
-  const scope = options.threadId ? `thread ${options.threadId}` : "your Pinet inbox";
   const mode = options.unreadOnly === false ? "latest" : "unread";
-  const lines = [
-    `Pinet read (${mode}) from ${scope}: ${result.messages.length} message${result.messages.length === 1 ? "" : "s"}.`,
-    `Unread before: ${result.unreadCountBefore}; unread after: ${result.unreadCountAfter}.`,
-  ];
+  const markedSuffix =
+    result.markedReadIds.length > 0 ? `; marked ${result.markedReadIds.length}` : "";
+  const unreadThreadSuffix =
+    result.unreadThreads.length > 0
+      ? `; ${result.unreadThreads.length} unread thread${result.unreadThreads.length === 1 ? "" : "s"}`
+      : "";
 
-  if (result.messages.length > 0) {
-    lines.push("");
-    for (const item of result.messages) {
-      const classification = classifyPinetMail({
-        source: item.message.source,
-        threadId: item.message.threadId,
-        sender: item.message.sender,
-        body: item.message.body,
-        metadata: item.message.metadata,
-      });
-      const label = formatPinetMailClassLabel(classification.class);
-      lines.push(
-        `- [${label}] [${item.message.source}/${item.message.threadId} #${item.message.id}] ${item.message.sender}: ${truncateText(item.message.body)}`,
-      );
-    }
-  }
-
-  if (result.unreadThreads.length > 0) {
-    lines.push("", "Unread thread pointers:");
-    for (const thread of result.unreadThreads.slice(0, 10)) {
-      const label = formatPinetMailClassLabel(thread.highestMailClass);
-      const counts = summarizeUnreadThreadCounts(thread);
-      lines.push(
-        `- [${label}] ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread${counts ? ` (${counts})` : ""}; latest #${thread.latestMessageId}; pointer=pinet action=read args.thread_id=${thread.threadId} args.unread_only=true`,
-      );
-    }
-  }
-
-  if (result.markedReadIds.length > 0) {
-    lines.push("", `Marked read: ${result.markedReadIds.join(", ")}.`);
-  }
-  lines.push("", "Use args.full=true for exact message bodies and full metadata in visible text.");
-
-  return lines.join("\n");
+  return `Pinet read: ${result.messages.length} ${mode} message${result.messages.length === 1 ? "" : "s"}; unread ${result.unreadCountBefore}→${result.unreadCountAfter}${markedSuffix}${unreadThreadSuffix}.`;
 }
 
 function runPinetSendAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
   toolName: string,
+  output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
     const to = typeof params.to === "string" ? params.to.trim() : "";
@@ -520,7 +489,9 @@ function runPinetSendAction(
         content: [
           {
             type: "text",
-            text: `Broadcast sent to ${result.channel} (${result.recipients.length} agents: ${preview}${suffix}).`,
+            text: output.full
+              ? `Broadcast sent to ${result.channel} (${result.recipients.length} agents: ${preview}${suffix}).`
+              : `Pinet broadcast sent to ${result.channel} (${result.recipients.length} recipients).`,
           },
         ],
         details: {
@@ -534,7 +505,12 @@ function runPinetSendAction(
     const result = await deps.sendPinetAgentMessage(to, message);
     return {
       content: [
-        { type: "text", text: `Message sent to ${result.target} (id: ${result.messageId}).` },
+        {
+          type: "text",
+          text: output.full
+            ? `Message sent to ${result.target} (id: ${result.messageId}).`
+            : `Pinet message sent to ${result.target}.`,
+        },
       ],
       details: { messageId: result.messageId, target: result.target },
     };
@@ -590,6 +566,7 @@ function runPinetFreeAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
   toolName: string,
+  output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
     const note = typeof params.note === "string" ? params.note.trim() : "";
@@ -607,7 +584,9 @@ function runPinetFreeAction(
       content: [
         {
           type: "text",
-          text: `Marked this Pinet agent idle/free for new work.${noteSuffix}${inboxSuffix}`,
+          text: output.full
+            ? `Marked this Pinet agent idle/free for new work.${noteSuffix}${inboxSuffix}`
+            : `Pinet free: idle${result.queuedInboxCount > 0 ? `; ${result.queuedInboxCount} queued` : ""}.`,
         },
       ],
       details: {
@@ -623,6 +602,7 @@ function runPinetScheduleAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
   toolName: string,
+  output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
     const delay = typeof params.delay === "string" ? params.delay : undefined;
@@ -650,7 +630,9 @@ function runPinetScheduleAction(
         content: [
           {
             type: "text",
-            text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
+            text: output.full
+              ? `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`
+              : `Pinet wake-up scheduled for ${wakeup.fireAt}.`,
           },
         ],
         details: wakeup,
@@ -663,7 +645,9 @@ function runPinetScheduleAction(
         content: [
           {
             type: "text",
-            text: `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`,
+            text: output.full
+              ? `Wake-up scheduled for ${wakeup.fireAt} (id: ${wakeup.id}).`
+              : `Pinet wake-up scheduled for ${wakeup.fireAt}.`,
           },
         ],
         details: wakeup,
@@ -712,26 +696,17 @@ function buildCompactAgentDetails(
   };
 }
 
-function formatCompactAgentList(agents: AgentDisplayInfo[]): string {
-  if (agents.length === 0) return "(no agents connected)";
-
-  return agents
-    .map((agent) => {
-      const parts = [
-        getAgentRepo(agent) ? `repo=${getAgentRepo(agent)}` : null,
-        getAgentBranch(agent) ? `branch=${getAgentBranch(agent)}` : null,
-        getAgentRole(agent) ? `role=${getAgentRole(agent)}` : null,
-        agent.routingScore != null ? `score=${agent.routingScore}` : null,
-      ].filter((item): item is string => Boolean(item));
-      const health = agent.health ? ` [${agent.health}]` : "";
-      const caps = agent.capabilityTags ?? [];
-      const capPreview = caps.slice(0, 4).join(", ");
-      const capSuffix = caps.length > 4 ? ` (+${caps.length - 4} more)` : "";
-      const capsText = capPreview ? ` caps: ${capPreview}${capSuffix}` : "";
-      const context = parts.length > 0 ? ` — ${parts.join(" · ")}` : "";
-      return `${agent.emoji} ${agent.name} (${agent.id}) — ${agent.status}${health}${context}${capsText}`;
-    })
-    .join("\n");
+function formatCompactAgentList(agents: AgentDisplayInfo[], hint: PinetAgentsRoutingHint): string {
+  const hintParts = [
+    hint.repo ? `repo=${hint.repo}` : null,
+    hint.branch ? `branch=${hint.branch}` : null,
+    hint.role ? `role=${hint.role}` : null,
+    hint.requiredTools && hint.requiredTools.length > 0
+      ? `tools=${hint.requiredTools.join(",")}`
+      : null,
+  ].filter((item): item is string => Boolean(item));
+  const hintSuffix = hintParts.length > 0 ? `; hints ${hintParts.join(" · ")}` : "";
+  return `Pinet agents: ${agents.length} visible${hintSuffix}.`;
 }
 
 function runPinetAgentsAction(
@@ -793,9 +768,9 @@ function runPinetAgentsAction(
       recentDisconnectWindowMs: recentGhostWindowMs,
     }).map(toDisplay);
     const agents = rankAgentsForRouting(visibleAgents, hint);
-    const header = hasHint ? `${buildPinetAgentsHintText(hint)}\n\n` : "";
+    const header = hasHint && output.full ? `${buildPinetAgentsHintText(hint)}\n\n` : "";
     const text = `${header}${
-      output.full ? formatAgentList(agents, os.homedir()) : formatCompactAgentList(agents)
+      output.full ? formatAgentList(agents, os.homedir()) : formatCompactAgentList(agents, hint)
     }`;
 
     return {
@@ -825,7 +800,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       message: Type.String({ description: "Message body" }),
       ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
-    execute: (_id, params) => runPinetSendAction(params, deps, "pinet:send"),
+    execute: (_id, params, output) => runPinetSendAction(params, deps, "pinet:send", output),
   });
 
   registerAction({
@@ -858,7 +833,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       ),
       ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
-    execute: (_id, params) => runPinetFreeAction(params, deps, "pinet:free"),
+    execute: (_id, params, output) => runPinetFreeAction(params, deps, "pinet:free", output),
   });
 
   registerAction({
@@ -874,7 +849,8 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       message: Type.String({ description: "Reminder or wake-up message to deliver later" }),
       ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
-    execute: (_id, params) => runPinetScheduleAction(params, deps, "pinet:schedule"),
+    execute: (_id, params, output) =>
+      runPinetScheduleAction(params, deps, "pinet:schedule", output),
   });
 
   registerAction({
@@ -901,7 +877,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     description:
       "Dispatch Pinet worker operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this dispatcher for all Pinet actions: send, read, free, schedule, agents, and per-action discovery. Use action="send" for Pinet replies/delegation. Defaults to compact cli output while preserving structured data.details; pass args.format="json" for the envelope in content or args.full=true for verbose text/full_details.',
+      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, and help. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
     parameters: Type.Object({
       action: Type.String({
         description: "Action name: help, send, read, free, schedule, or agents.",
@@ -909,7 +885,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
           description:
-            'Action arguments. Add format="cli"|"json" and full=true for explicit presentation control. Pinet data.details stays backward-compatible; compact previews may appear as compact_details.',
+            'Action arguments. Add format="cli"|"json" (or f/"-f") and full=true (or "--full": true) for explicit presentation control. data.details stays backward-compatible.',
         }),
       ),
     }),
