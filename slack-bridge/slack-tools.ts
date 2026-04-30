@@ -88,6 +88,32 @@ interface SlackDispatcherEnvelope {
   warnings: string[];
 }
 
+type SlackOutputFormat = "cli" | "json";
+
+interface SlackOutputOptions {
+  format: SlackOutputFormat;
+  full: boolean;
+}
+
+const SLACK_OUTPUT_OPTION_PARAMETERS = {
+  format: Type.Optional(
+    Type.String({ description: 'Response presentation format: "cli" (default) or "json".' }),
+  ),
+  response_format: Type.Optional(
+    Type.String({
+      description:
+        "Alias for response presentation format. Use this when an action already owns a format argument, such as export.",
+    }),
+  ),
+  full: Type.Optional(
+    Type.Boolean({
+      description: "Include full structured details instead of compact default details.",
+    }),
+  ),
+};
+
+const SLACK_ACTIONS_WITH_FORMAT_ARG = new Set(["export"]);
+
 interface SlackActionToolDefinition extends ToolDefinition {
   name: string;
   description?: string;
@@ -374,22 +400,77 @@ function extractToolResponseDetails(response: unknown): unknown {
   return isRecord(response) && "details" in response ? response.details : undefined;
 }
 
-function buildSlackDispatcherResponse(envelope: SlackDispatcherEnvelope): {
+function extractToolResponseFullDetails(response: unknown): unknown {
+  return isRecord(response) && "fullDetails" in response ? response.fullDetails : undefined;
+}
+
+function normalizeSlackOutputOptions(action: string, args: unknown): SlackOutputOptions {
+  if (args != null && !isRecord(args)) {
+    throw new Error("slack args must be an object.");
+  }
+
+  const ownsFormatArg = SLACK_ACTIONS_WITH_FORMAT_ARG.has(action);
+  const rawResponseFormat = isRecord(args) ? args.response_format : undefined;
+  const rawFormat =
+    rawResponseFormat ?? (isRecord(args) && !ownsFormatArg ? args.format : undefined);
+  const normalizedFormat = rawFormat == null ? "cli" : String(rawFormat).trim().toLowerCase();
+  if (normalizedFormat !== "cli" && normalizedFormat !== "json") {
+    throw new Error(
+      ownsFormatArg
+        ? 'response_format must be "cli" or "json" when provided.'
+        : 'format must be "cli" or "json" when provided.',
+    );
+  }
+  const format: SlackOutputFormat = normalizedFormat;
+
+  const rawFull = isRecord(args) ? args.full : undefined;
+  if (rawFull != null && typeof rawFull !== "boolean") {
+    throw new Error("full must be a boolean when provided.");
+  }
+
+  return { format, full: rawFull === true };
+}
+
+function getSlackEnvelopeCliText(envelope: SlackDispatcherEnvelope): string {
+  if (envelope.status === "succeeded" && isRecord(envelope.data)) {
+    const text = envelope.data.text;
+    if (typeof text === "string" && text.length > 0) return text;
+  }
+  return JSON.stringify(envelope, null, 2);
+}
+
+function buildSlackDispatcherResponse(
+  envelope: SlackDispatcherEnvelope,
+  output: SlackOutputOptions = { format: "json", full: true },
+): {
   content: Array<{ type: "text"; text: string }>;
   details: SlackDispatcherEnvelope;
 } {
   return {
-    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+    content: [
+      {
+        type: "text",
+        text:
+          output.format === "json"
+            ? JSON.stringify(envelope, null, 2)
+            : getSlackEnvelopeCliText(envelope),
+      },
+    ],
     details: envelope,
   };
 }
 
-function buildSlackActionSuccessEnvelope(response: unknown): SlackDispatcherEnvelope {
+function buildSlackActionSuccessEnvelope(
+  response: unknown,
+  output: SlackOutputOptions = { format: "json", full: true },
+): SlackDispatcherEnvelope {
   return {
     status: "succeeded",
     data: {
       text: extractToolResponseText(response),
-      details: extractToolResponseDetails(response),
+      details: output.full
+        ? (extractToolResponseFullDetails(response) ?? extractToolResponseDetails(response))
+        : extractToolResponseDetails(response),
     },
     errors: [],
     warnings: [],
@@ -407,6 +488,24 @@ function buildSlackActionFailureEnvelope(error: unknown): SlackDispatcherEnvelop
 
 function getSlackDispatcherExamples(action: string): Array<Record<string, unknown>> {
   return SLACK_DISPATCHER_EXAMPLES[action] ?? [{ action, args: {} }];
+}
+
+function buildSlackOutputControlsHelp(action?: string): Record<string, unknown> {
+  const ownsFormatArg = action != null && SLACK_ACTIONS_WITH_FORMAT_ARG.has(action);
+  return {
+    format: ownsFormatArg
+      ? "Reserved for this action's own payload format; use response_format for dispatcher output."
+      : 'Optional response presentation: "cli" (default) or "json".',
+    response_format:
+      'Optional response presentation alias: "cli" (default) or "json". Prefer this when an action already owns a format argument.',
+    full: "Optional boolean. Include full structured details instead of compact default details.",
+  };
+}
+
+function truncateSlackText(value: string, maxLength = 180): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= maxLength) return collapsed;
+  return `${collapsed.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 function buildSlackInboxPromptGuidelines(): string[] {
@@ -626,6 +725,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           guardrail_tool: `slack:${action}`,
           args_schema: definition.parameters ?? {},
           examples: getSlackDispatcherExamples(action),
+          output_controls: buildSlackOutputControlsHelp(action),
         },
         errors: [],
         warnings: [],
@@ -647,6 +747,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             guardrail_tool: `slack:${action}`,
           })),
         ],
+        output_controls: buildSlackOutputControlsHelp(),
       },
       errors: [],
       warnings: [],
@@ -659,7 +760,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     description:
       "Dispatcher for non-hot Slack actions: react, read, upload, schedule, presence, export, post_channel, read_channel, confirm_action, delete, pin, bookmark, create_channel, project_create, canvas_comments_read, canvas_create, canvas_update, modal_open, modal_push, modal_update, and help. Use slack_inbox and slack_send for hot-path inbox/reply work.",
     promptSnippet:
-      "Run non-hot Slack actions through a compact dispatcher. Use action='help' for the action catalogue or args.topic for a specific schema.",
+      "Run non-hot Slack actions through a compact dispatcher. Use action='help' for the action catalogue or args.topic for a specific schema. Defaults to compact cli output; pass args.format='json' (or args.response_format='json' when the action owns format) or args.full=true for structured/full details.",
     promptGuidelines: [
       "Use slack_inbox and slack_send for the hot path. Use this dispatcher for every other Slack action.",
       "Cold actions are guarded as slack:<action>, for example slack:upload or slack:canvas_update.",
@@ -674,7 +775,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
           description:
-            "Action arguments. Call slack with action='help' and args.topic='<action>' for the exact JSON schema and examples.",
+            "Action arguments. Call slack with action='help' and args.topic='<action>' for the exact JSON schema and examples. Add format='cli'|'json' and full=true for explicit presentation control; use response_format when the action already has a format field.",
         }),
       ),
     }),
@@ -683,13 +784,21 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         const action = normalizeSlackDispatcherActionName(params.action);
         const args = params.args ?? {};
 
+        let output: SlackOutputOptions;
+        try {
+          output = normalizeSlackOutputOptions(action, args);
+        } catch (error) {
+          return buildSlackDispatcherResponse(buildSlackActionFailureEnvelope(error));
+        }
+
         if (action === "help") {
-          return buildSlackDispatcherResponse(buildSlackDispatcherHelpEnvelope(args));
+          return buildSlackDispatcherResponse(buildSlackDispatcherHelpEnvelope(args), output);
         }
 
         if (!isRecord(args)) {
           return buildSlackDispatcherResponse(
             buildSlackActionFailureEnvelope(new Error("slack args must be an object.")),
+            output,
           );
         }
 
@@ -699,6 +808,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
             buildSlackActionFailureEnvelope(
               new Error(`Unknown Slack action '${action}'. Use action='help' to list actions.`),
             ),
+            output,
           );
         }
 
@@ -709,12 +819,18 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           undefined,
           undefined as unknown as ExtensionContext,
         );
-        return buildSlackDispatcherResponse(buildSlackActionSuccessEnvelope(response));
+        return buildSlackDispatcherResponse(
+          buildSlackActionSuccessEnvelope(response, output),
+          output,
+        );
       } catch (error) {
         if (isAbortError(error)) {
           throw error;
         }
-        return buildSlackDispatcherResponse(buildSlackActionFailureEnvelope(error));
+        return buildSlackDispatcherResponse(buildSlackActionFailureEnvelope(error), {
+          format: "json",
+          full: true,
+        });
       }
     },
   });
@@ -1675,6 +1791,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     parameters: Type.Object({
       thread_ts: Type.String({ description: "Thread to read." }),
       limit: Type.Optional(Type.Number({ description: "Max messages (default 20)" })),
+      ...SLACK_OUTPUT_OPTION_PARAMETERS,
     }),
     async execute(_id, params) {
       requireToolPolicy(
@@ -1695,18 +1812,45 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
       });
 
       const messages = response.messages as Record<string, unknown>[];
-      const lines: string[] = [];
-      for (const message of messages) {
-        const userId = message.user as string | undefined;
-        const name = userId ? await resolveUser(userId) : "bot";
-        const text = (message.text as string) ?? "";
-        const ts = message.ts as string;
-        lines.push(`[${ts}] ${name}: ${text}`);
+      const full = params.full === true;
+      const formattedMessages = await Promise.all(
+        messages.map(async (message) => {
+          const userId = message.user as string | undefined;
+          const name = userId ? await resolveUser(userId) : "bot";
+          const text = (message.text as string) ?? "";
+          const ts = message.ts as string;
+          return { ts, name, text, preview: truncateSlackText(text) };
+        }),
+      );
+      const lines = formattedMessages.map((message) =>
+        full
+          ? `[${message.ts}] ${message.name}: ${message.text}`
+          : `[${message.ts}] ${message.name}: ${message.preview}`,
+      );
+      if (!full && messages.length > 0) {
+        lines.push("", "Use args.full=true for exact message text.");
       }
 
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
-        details: { count: messages.length },
+        details: full
+          ? { count: messages.length }
+          : {
+              count: messages.length,
+              messages: formattedMessages.map((message) => ({
+                ts: message.ts,
+                user: message.name,
+                preview: message.preview,
+              })),
+            },
+        fullDetails: {
+          count: messages.length,
+          messages: formattedMessages.map((message) => ({
+            ts: message.ts,
+            user: message.name,
+            text: message.text,
+          })),
+        },
       };
     },
   });
@@ -2520,6 +2664,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         Type.String({ description: "Thread timestamp to read replies from" }),
       ),
       limit: Type.Optional(Type.Number({ description: "Max messages to return (default 20)" })),
+      ...SLACK_OUTPUT_OPTION_PARAMETERS,
     }),
     async execute(_id, params) {
       requireToolPolicy(
@@ -2547,18 +2692,47 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         messages = (response.messages as Record<string, unknown>[]).reverse();
       }
 
-      const lines: string[] = [];
-      for (const message of messages) {
-        const userId = message.user as string | undefined;
-        const name = userId ? await resolveUser(userId) : "bot";
-        const text = (message.text as string) ?? "";
-        const ts = message.ts as string;
-        lines.push(`[${ts}] ${name}: ${text}`);
+      const full = params.full === true;
+      const formattedMessages = await Promise.all(
+        messages.map(async (message) => {
+          const userId = message.user as string | undefined;
+          const name = userId ? await resolveUser(userId) : "bot";
+          const text = (message.text as string) ?? "";
+          const ts = message.ts as string;
+          return { ts, name, text, preview: truncateSlackText(text) };
+        }),
+      );
+      const lines = formattedMessages.map((message) =>
+        full
+          ? `[${message.ts}] ${message.name}: ${message.text}`
+          : `[${message.ts}] ${message.name}: ${message.preview}`,
+      );
+      if (!full && messages.length > 0) {
+        lines.push("", "Use args.full=true for exact channel message text.");
       }
 
       return {
         content: [{ type: "text", text: lines.join("\n") || "(no messages)" }],
-        details: { count: messages.length, channel: channelId },
+        details: full
+          ? { count: messages.length, channel: channelId }
+          : {
+              count: messages.length,
+              channel: channelId,
+              messages: formattedMessages.map((message) => ({
+                ts: message.ts,
+                user: message.name,
+                preview: message.preview,
+              })),
+            },
+        fullDetails: {
+          count: messages.length,
+          channel: channelId,
+          messages: formattedMessages.map((message) => ({
+            ts: message.ts,
+            user: message.name,
+            text: message.text,
+          })),
+        },
       };
     },
   });
