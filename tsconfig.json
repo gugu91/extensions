@@ -14,6 +14,8 @@
       "@gugu910/pi-broker-core": ["./broker-core/index.ts"],
       "@gugu910/pi-broker-core/*": ["./broker-core/*.ts"],
       "@gugu910/pi-imessage-bridge": ["./imessage-bridge/index.ts"],
+      "@gugu910/pi-pinet-core": ["./pinet-core/index.ts"],
+      "@gugu910/pi-pinet-core/*": ["./pinet-core/*.ts"],
       "@gugu910/pi-transport-core": ["./transport-core/index.ts"]
     }
   },
@@ -22,6 +24,7 @@
     "broker-core/**/*.ts",
     "browser-playwright/**/*.ts",
     "imessage-bridge/**/*.ts",
+    "pinet-core/**/*.ts",
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",
     "slack-api/**/*.ts",

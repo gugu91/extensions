@@ -17,6 +17,14 @@ export default defineConfig({
         replacement: fileURLToPath(new URL("../imessage-bridge/index.ts", import.meta.url)),
       },
       {
+        find: /^@gugu910\/pi-pinet-core$/,
+        replacement: fileURLToPath(new URL("../pinet-core/index.ts", import.meta.url)),
+      },
+      {
+        find: /^@gugu910\/pi-pinet-core\/(.+)$/,
+        replacement: `${fileURLToPath(new URL("../pinet-core/", import.meta.url))}$1.ts`,
+      },
+      {
         find: /^@gugu910\/pi-transport-core$/,
         replacement: fileURLToPath(new URL("../transport-core/index.ts", import.meta.url)),
       },

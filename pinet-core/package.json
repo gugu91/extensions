@@ -16,6 +16,9 @@
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
+    "./output-options": "./dist/output-options.js",
+    "./pinet-read-formatting": "./dist/pinet-read-formatting.js",
+    "./scheduled-wakeups": "./dist/scheduled-wakeups.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -27,7 +30,8 @@
     "build": "node ../scripts/build-package.mjs",
     "prepack": "pnpm run build",
     "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run *.test.ts"
   },
   "dependencies": {
     "@gugu910/pi-broker-core": "workspace:*",
