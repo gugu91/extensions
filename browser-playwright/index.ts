@@ -27,12 +27,15 @@ import {
   buildBrowserDiscovery,
   buildCapabilities,
   describeBrowserActions,
+  formatBrowserResponseText,
   getBooleanArg,
   getNumberArg,
   getStringArg,
+  normalizeBrowserOutputOptions,
   parseBrowserToolRequest,
   requireStringArg,
   type BrowserAction,
+  type BrowserToolEnvelope,
   type BrowserToolRequest,
 } from "./protocol.ts";
 import { loadStoredStorageState, type StorageStateSummary } from "./storage-state.ts";
@@ -632,7 +635,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     result: Record<string, unknown>,
     artifacts: Array<Record<string, unknown>> = [],
   ) {
-    const envelope = {
+    const envelope: BrowserToolEnvelope = {
       backend: request.backend,
       action: request.action,
       session_id:
@@ -644,9 +647,10 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       result,
       artifacts,
     };
+    const output = normalizeBrowserOutputOptions(request.args);
 
     return {
-      content: [{ type: "text" as const, text: JSON.stringify(envelope, null, 2) }],
+      content: [{ type: "text" as const, text: formatBrowserResponseText(envelope, output) }],
       details: envelope,
     };
   }
@@ -1212,11 +1216,12 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
     description:
       "Playwright-first single browser tool. In this environment, use the browser tool without a backend override; the extension owns the runtime, proxy, socket, and session complexity behind one narrow interface.",
     promptSnippet:
-      "Use the single browser tool for browsing in this environment. The supported local path is Playwright; call action='info' for compact help/schema discovery.",
+      "Use the single browser tool for browsing in this environment. Defaults are compact CLI-style; pass args.format='json' or args.full=true for verbose details.",
     promptGuidelines: [
       "Prefer the single browser tool over many browser_* actions.",
       "Use action + args for action-specific fields; input_json is compatibility-only for older callers.",
       "Call browser with action='info' and no session_id for the action catalogue, or args.topic='<action>' for a compact action schema.",
+      "Default visible output is terse CLI text; use args.format='json' (or args.f/args['-f']) or args.full=true (or args['--full']=true) for full envelope details.",
       "Omit backend for normal use here; Playwright is the supported local path in this Anthropic sandbox.",
       "Treat agent-browser as experimental and unavailable locally; daemon compatibility is not a supported path in this repo.",
       "Direct top-level localhost navigation is intentionally allowed for same-host local-app testing; treat it as local-power access, not a generic public-web sandbox.",
@@ -1247,7 +1252,7 @@ export default function browserPlaywrightExtension(pi: ExtensionAPI) {
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
           description:
-            "Preferred structured action payload. Use scalar fields such as url, selector, value, timeout_ms, label, full_page, or topic. Call action='info' with args.topic='<action>' for help/schema discovery.",
+            "Preferred structured action payload. Use scalar fields such as url, selector, value, timeout_ms, label, full_page, or topic. Output controls: format='cli'|'json' (or f/'-f') and full=true (or '--full'). Call action='info' with args.topic='<action>' for help/schema discovery.",
         }),
       ),
       input_json: Type.Optional(
