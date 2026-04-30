@@ -44,6 +44,26 @@ export interface SlackToolsThreadContextPort {
   clearPendingAttention: (threadTs: string) => void;
 }
 
+export interface SlackPinetDeliveryInput {
+  threadId: string;
+  channel: string;
+  text: string;
+  blocks?: ReadonlyArray<Record<string, unknown>>;
+}
+
+export interface SlackPinetDeliveryResult {
+  adapter: string;
+  messageId: number;
+  threadId: string;
+  channel: string;
+  source: string;
+}
+
+export interface SlackPinetDeliveryPort {
+  isAvailable: () => boolean;
+  sendSlackMessage: (input: SlackPinetDeliveryInput) => Promise<SlackPinetDeliveryResult>;
+}
+
 export interface RegisterSlackToolsDeps {
   getBotToken: () => string;
   getDefaultChannel: () => string | undefined;
@@ -69,6 +89,7 @@ export interface RegisterSlackToolsDeps {
     conflict?: { toolPattern: string; action: string };
   };
   getBotUserId: () => string | null;
+  pinetDelivery?: SlackPinetDeliveryPort;
 }
 
 type SlackDispatcherStatus = "succeeded" | "failed";
@@ -575,6 +596,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     requireToolPolicy: requireToolPolicyForName,
     registerConfirmationRequest,
     getBotUserId,
+    pinetDelivery,
   } = deps;
 
   async function resolveTrackedThreadChannel(threadTs: string | undefined): Promise<string | null> {
@@ -591,6 +613,70 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
   function requireToolPolicy(toolName: string, threadTs: string | undefined, action: string): void {
     requireToolPolicyForName(normalizeSlackGuardrailToolName(toolName), threadTs, action);
+  }
+
+  async function deliverSlackMessage(input: {
+    channel: string;
+    text: string;
+    threadTs?: string;
+    blocks?: Array<Record<string, unknown>>;
+  }): Promise<{
+    ts: string;
+    channel: string;
+    blocksCount: number;
+    delivery: "pinet" | "slack";
+    adapter?: string;
+    messageId?: number;
+    fallbackReason?: string;
+  }> {
+    const blocks = input.blocks ? normalizeSlackBlocksInput(input.blocks) : undefined;
+    let fallbackReason: string | undefined;
+
+    if (input.threadTs && pinetDelivery) {
+      try {
+        if (pinetDelivery.isAvailable()) {
+          const result = await pinetDelivery.sendSlackMessage({
+            threadId: input.threadTs,
+            channel: input.channel,
+            text: input.text,
+            ...(blocks ? { blocks } : {}),
+          });
+          return {
+            ts: input.threadTs,
+            channel: result.channel,
+            blocksCount: blocks?.length ?? 0,
+            delivery: "pinet",
+            adapter: result.adapter,
+            messageId: result.messageId,
+          };
+        }
+      } catch (error) {
+        fallbackReason = getErrorMessage(error);
+      }
+    }
+
+    const body: Record<string, unknown> = {
+      channel: input.channel,
+      text: input.text,
+      metadata: {
+        event_type: "pi_agent_msg",
+        event_payload: { agent: getAgentName(), agent_owner: getAgentOwnerToken() },
+      },
+    };
+    if (blocks) {
+      body.blocks = blocks;
+    }
+    if (input.threadTs) body.thread_ts = input.threadTs;
+
+    const response = await slack("chat.postMessage", getBotToken(), body);
+    const ts = (response.message as { ts: string }).ts;
+    return {
+      ts,
+      channel: input.channel,
+      blocksCount: blocks?.length ?? 0,
+      delivery: "slack",
+      ...(fallbackReason ? { fallbackReason } : {}),
+    };
   }
 
   const slackActionRegistry = new Map<string, SlackActionToolDefinition>();
@@ -1465,21 +1551,13 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         );
       }
 
-      const body: Record<string, unknown> = {
+      const delivery = await deliverSlackMessage({
         channel,
         text: params.text,
-        metadata: {
-          event_type: "pi_agent_msg",
-          event_payload: { agent: getAgentName(), agent_owner: getAgentOwnerToken() },
-        },
-      };
-      if (params.blocks) {
-        body.blocks = normalizeSlackBlocksInput(params.blocks);
-      }
-      if (params.thread_ts) body.thread_ts = params.thread_ts;
-
-      const response = await slack("chat.postMessage", getBotToken(), body);
-      const ts = (response.message as { ts: string }).ts;
+        ...(params.thread_ts ? { threadTs: params.thread_ts } : {}),
+        ...(params.blocks ? { blocks: params.blocks } : {}),
+      });
+      const ts = delivery.ts;
       const actualTs = params.thread_ts ?? ts;
 
       noteThreadReply(actualTs, channel);
@@ -1497,7 +1575,15 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
               : `Sent message (thread_ts: ${ts}). Use this to continue the conversation.`,
           },
         ],
-        details: { ts, channel, blocksCount: params.blocks?.length ?? 0 },
+        details: {
+          ts,
+          channel,
+          blocksCount: delivery.blocksCount,
+          delivery: delivery.delivery,
+          ...(delivery.adapter ? { adapter: delivery.adapter } : {}),
+          ...(delivery.messageId ? { messageId: delivery.messageId } : {}),
+          ...(delivery.fallbackReason ? { fallbackReason: delivery.fallbackReason } : {}),
+        },
       };
     },
   });
@@ -2064,21 +2150,13 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         throw new Error("No channel specified and no defaultChannel configured in settings.json.");
       }
 
-      const body: Record<string, unknown> = {
+      const delivery = await deliverSlackMessage({
         channel: channelId,
         text: params.text,
-        metadata: {
-          event_type: "pi_agent_msg",
-          event_payload: { agent: getAgentName(), agent_owner: getAgentOwnerToken() },
-        },
-      };
-      if (params.blocks) {
-        body.blocks = normalizeSlackBlocksInput(params.blocks);
-      }
-      if (params.thread_ts) body.thread_ts = params.thread_ts;
-
-      const response = await slack("chat.postMessage", getBotToken(), body);
-      const ts = (response.message as { ts: string }).ts;
+        ...(params.thread_ts ? { threadTs: params.thread_ts } : {}),
+        ...(params.blocks ? { blocks: params.blocks } : {}),
+      });
+      const ts = delivery.ts;
       const actualTs = params.thread_ts ?? ts;
 
       noteThreadReply(actualTs, channelId);
@@ -2093,7 +2171,15 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
               : `Posted to #${channelLabel} (ts: ${ts}).`,
           },
         ],
-        details: { ts, channel: channelId, blocksCount: params.blocks?.length ?? 0 },
+        details: {
+          ts,
+          channel: channelId,
+          blocksCount: delivery.blocksCount,
+          delivery: delivery.delivery,
+          ...(delivery.adapter ? { adapter: delivery.adapter } : {}),
+          ...(delivery.messageId ? { messageId: delivery.messageId } : {}),
+          ...(delivery.fallbackReason ? { fallbackReason: delivery.fallbackReason } : {}),
+        },
       };
     },
   });

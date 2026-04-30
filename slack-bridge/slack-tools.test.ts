@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { registerSlackTools } from "./slack-tools.js";
+import { registerSlackTools, type SlackPinetDeliveryInput } from "./slack-tools.js";
 import type { InboxMessage } from "./helpers.js";
 import type { SlackResult } from "./slack-api.js";
 
@@ -233,6 +233,14 @@ describe("registerSlackTools", () => {
     const noteThreadReply = vi.fn();
     const clearPendingAttention = vi.fn();
     const requireToolPolicy = vi.fn();
+    let pinetDeliveryAvailable = false;
+    const sendPinetSlackMessage = vi.fn(async (input: SlackPinetDeliveryInput) => ({
+      adapter: "slack",
+      messageId: 42,
+      threadId: input.threadId,
+      channel: input.channel,
+      source: "slack",
+    }));
 
     registerSlackTools(pi, {
       getBotToken: () => botToken,
@@ -256,6 +264,10 @@ describe("registerSlackTools", () => {
       requireToolPolicy,
       registerConfirmationRequest: () => ({ status: "created" }),
       getBotUserId: () => "U_BOT",
+      pinetDelivery: {
+        isAvailable: () => pinetDeliveryAvailable,
+        sendSlackMessage: sendPinetSlackMessage,
+      },
     });
 
     const registeredTools = new Map(tools);
@@ -339,6 +351,10 @@ describe("registerSlackTools", () => {
       noteThreadReply,
       clearPendingAttention,
       requireToolPolicy,
+      setPinetDeliveryAvailable: (value: boolean) => {
+        pinetDeliveryAvailable = value;
+      },
+      sendPinetSlackMessage,
     };
   }
 
@@ -977,6 +993,105 @@ describe("registerSlackTools", () => {
         blocks: [{ type: "header", text: { type: "plain_text", text: "Deploy status" } }],
       }),
     );
+  });
+
+  it("prefers Pinet delivery for slack_send thread replies when available", async () => {
+    const {
+      slack,
+      tools,
+      setResolveThreadChannel,
+      setPinetDeliveryAvailable,
+      sendPinetSlackMessage,
+    } = setup();
+    setResolveThreadChannel(async () => "D123");
+    setPinetDeliveryAvailable(true);
+
+    const response = await tools.get("slack_send")!.execute("tool-pinet-send", {
+      thread_ts: "123.456",
+      text: "Steady reply",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Steady reply*" } }],
+    });
+
+    expect(sendPinetSlackMessage).toHaveBeenCalledWith({
+      threadId: "123.456",
+      channel: "D123",
+      text: "Steady reply",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Steady reply*" } }],
+    });
+    expect(slack).not.toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.any(String),
+      expect.any(Object),
+    );
+    expect(response.details).toMatchObject({
+      ts: "123.456",
+      channel: "D123",
+      delivery: "pinet",
+      adapter: "slack",
+      messageId: 42,
+    });
+  });
+
+  it("falls back to direct Slack delivery when Pinet thread delivery fails", async () => {
+    const {
+      slack,
+      tools,
+      setResolveThreadChannel,
+      setPinetDeliveryAvailable,
+      sendPinetSlackMessage,
+    } = setup();
+    setResolveThreadChannel(async () => "D123");
+    setPinetDeliveryAvailable(true);
+    sendPinetSlackMessage.mockRejectedValueOnce(new Error("broker unavailable"));
+
+    const response = await tools.get("slack_send")!.execute("tool-pinet-fallback", {
+      thread_ts: "123.456",
+      text: "Fallback reply",
+    });
+
+    expect(sendPinetSlackMessage).toHaveBeenCalledOnce();
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel: "D123",
+        thread_ts: "123.456",
+        text: "Fallback reply",
+      }),
+    );
+    expect(response.details).toMatchObject({
+      ts: "123.456",
+      channel: "D123",
+      delivery: "slack",
+      fallbackReason: "broker unavailable",
+    });
+  });
+
+  it("prefers Pinet delivery for threaded slack_post_channel messages", async () => {
+    const { slack, tools, setPinetDeliveryAvailable, sendPinetSlackMessage } = setup();
+    setPinetDeliveryAvailable(true);
+
+    const response = await tools.get("slack_post_channel")!.execute("tool-pinet-channel", {
+      channel: "deployments",
+      thread_ts: "222.333",
+      text: "Threaded status",
+    });
+
+    expect(sendPinetSlackMessage).toHaveBeenCalledWith({
+      threadId: "222.333",
+      channel: "resolved:deployments",
+      text: "Threaded status",
+    });
+    expect(slack).not.toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.any(String),
+      expect.any(Object),
+    );
+    expect(response.details).toMatchObject({
+      ts: "222.333",
+      channel: "resolved:deployments",
+      delivery: "pinet",
+    });
   });
 
   it("returns structured inbox messages including block action metadata", async () => {
