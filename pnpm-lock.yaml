@@ -109,6 +109,9 @@ importers:
       "@gugu910/pi-imessage-bridge":
         specifier: workspace:*
         version: link:../imessage-bridge
+      "@gugu910/pi-pinet-core":
+        specifier: workspace:*
+        version: link:../pinet-core
       "@gugu910/pi-transport-core":
         specifier: workspace:*
         version: link:../transport-core

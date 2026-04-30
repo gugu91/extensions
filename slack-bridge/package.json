@@ -46,6 +46,7 @@
   "dependencies": {
     "@gugu910/pi-broker-core": "workspace:*",
     "@gugu910/pi-imessage-bridge": "workspace:*",
+    "@gugu910/pi-pinet-core": "workspace:*",
     "@gugu910/pi-transport-core": "workspace:*",
     "@sinclair/typebox": "^0.34.49"
   }

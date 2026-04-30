@@ -3,7 +3,11 @@ import { readMeshSecret } from "./auth.js";
 import { DEFAULT_SOCKET_PATH as PINET_DEFAULT_SOCKET_PATH } from "./paths.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import { RPC_AGENT_NAME_CONFLICT, RPC_METHOD_NOT_FOUND } from "./types.js";
-import type { PinetMailClass } from "@gugu910/pi-broker-core/mail-classification";
+import type {
+  PinetReadOptions,
+  PinetReadResult,
+  PinetUnreadThreadSummary,
+} from "@gugu910/pi-pinet-core/pinet-read-formatting";
 import type { ClientAgentInfo, NormalizedMessageContent } from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
@@ -22,38 +26,12 @@ export interface InboxItem {
   };
 }
 
-export interface PinetReadMessage {
-  inboxId: number;
-  delivered: boolean;
-  readAt: string | null;
-  message: InboxItem["message"];
-}
-
-export interface PinetUnreadThreadSummary {
-  threadId: string;
-  source: string;
-  channel: string;
-  unreadCount: number;
-  latestMessageId: number;
-  latestAt: string;
-  highestMailClass: PinetMailClass;
-  mailClassCounts: Record<PinetMailClass, number>;
-}
-
-export interface PinetReadResult {
-  messages: PinetReadMessage[];
-  unreadCountBefore: number;
-  unreadCountAfter: number;
-  unreadThreads: PinetUnreadThreadSummary[];
-  markedReadIds: number[];
-}
-
-export interface PinetReadOptions {
-  threadId?: string;
-  limit?: number;
-  unreadOnly?: boolean;
-  markRead?: boolean;
-}
+export type {
+  PinetReadMessage,
+  PinetReadOptions,
+  PinetReadResult,
+  PinetUnreadThreadSummary,
+} from "@gugu910/pi-pinet-core/pinet-read-formatting";
 
 export interface ThreadInfo {
   threadId: string;
