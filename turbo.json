@@ -1,6 +1,16 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
+    "build": {
+      "inputs": [
+        "**/*.ts",
+        "!**/*.test.ts",
+        "tsconfig.json",
+        "../tsconfig.json",
+        "../types/**/*.d.ts"
+      ],
+      "outputs": ["dist/**"]
+    },
     "lint": {
       "inputs": ["**/*.ts", "eslint.config.mjs", "../eslint.config.mjs"],
       "outputs": []

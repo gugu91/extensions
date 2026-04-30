@@ -13,6 +13,72 @@ function createDb(): { db: BrokerDB; dir: string } {
   return { db, dir };
 }
 
+function createLegacyV11Db(dbPath: string): void {
+  const sqlite = new DatabaseSync(dbPath);
+  try {
+    sqlite.exec(`
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        stable_id TEXT,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        connected_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        last_heartbeat TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'idle',
+        disconnected_at TEXT,
+        resumable_until TEXT,
+        idle_since TEXT,
+        last_activity TEXT
+      );
+      CREATE TABLE threads (
+        thread_id TEXT PRIMARY KEY NOT NULL,
+        source TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        owner_agent TEXT,
+        owner_binding TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
+        sender TEXT NOT NULL,
+        body TEXT NOT NULL,
+        metadata TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE inbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        delivered INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE task_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        branch TEXT,
+        pr_number INTEGER,
+        status TEXT NOT NULL DEFAULT 'assigned',
+        thread_id TEXT NOT NULL,
+        source_message_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(issue_number)
+      );
+      PRAGMA user_version = 11;
+    `);
+  } finally {
+    sqlite.close();
+  }
+}
+
 function createLegacyV12Db(dbPath: string): void {
   const sqlite = new DatabaseSync(dbPath);
   try {
@@ -97,6 +163,73 @@ describe("BrokerDB message sync identity", () => {
   afterEach(() => {
     for (const dir of cleanupDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates v11 databases before creating indexes for newer columns", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "broker-core-schema-"));
+    cleanupDirs.push(dir);
+    const dbPath = path.join(dir, "broker.db");
+    createLegacyV11Db(dbPath);
+
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy
+        .prepare(
+          `INSERT INTO threads (thread_id, source, channel, owner_agent, owner_binding, created_at, updated_at)
+           VALUES (?, 'slack', ?, NULL, NULL, ?, ?)`,
+        )
+        .run("123.456", "C123", "2026-04-25T00:00:00.000Z", "2026-04-25T00:00:00.000Z");
+      legacy
+        .prepare(
+          `INSERT INTO messages (thread_id, source, direction, sender, body, metadata, created_at)
+           VALUES (?, 'slack', 'inbound', 'U1', 'legacy Slack message', ?, ?)`,
+        )
+        .run(
+          "123.456",
+          JSON.stringify({ channel: "C123", timestamp: "123.456" }),
+          "2026-04-25T00:00:01.000Z",
+        );
+      legacy
+        .prepare(
+          "INSERT INTO inbox (agent_id, message_id, delivered, created_at) VALUES ('agent-1', 1, 0, ?)",
+        )
+        .run("2026-04-25T00:00:02.000Z");
+    } finally {
+      legacy.close();
+    }
+
+    const db = new BrokerDB(dbPath);
+    try {
+      db.initialize();
+      expect(db.getInbox("agent-1")[0]).toMatchObject({
+        entry: { readAt: null },
+        message: { externalId: "C123:123.456" },
+      });
+    } finally {
+      db.close();
+    }
+
+    const inspect = new DatabaseSync(dbPath);
+    try {
+      const version = inspect.prepare("PRAGMA user_version").get() as { user_version: number };
+      const messageColumns = new Set(
+        (inspect.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>).map(
+          (row) => row.name,
+        ),
+      );
+      const inboxColumns = new Set(
+        (inspect.prepare("PRAGMA table_info(inbox)").all() as Array<{ name: string }>).map(
+          (row) => row.name,
+        ),
+      );
+
+      expect(version.user_version).toBe(13);
+      expect(messageColumns.has("external_id")).toBe(true);
+      expect(messageColumns.has("external_ts")).toBe(true);
+      expect(inboxColumns.has("read_at")).toBe(true);
+    } finally {
+      inspect.close();
     }
   });
 
