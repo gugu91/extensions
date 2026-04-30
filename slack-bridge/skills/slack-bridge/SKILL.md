@@ -20,7 +20,8 @@ Call the dispatcher with an action and action-specific args:
 }
 ```
 
-Every dispatcher response uses this envelope:
+Every dispatcher response has this envelope in tool `details`, while the default
+visible `content` is compact CLI-style text:
 
 ```json
 {
@@ -30,6 +31,11 @@ Every dispatcher response uses this envelope:
   "warnings": []
 }
 ```
+
+Pass `args.format="json"` when you need the envelope in visible content, and
+`args.full=true` when you need full structured details instead of compact
+defaults. If an action already owns a `format` argument, such as `export`, use
+`args.response_format="json"` for response presentation.
 
 On failure, inspect `errors[0].class`, `retryable`, and `hint`. Prefer
 `slack({"action":"help","args":{"topic":"..."}})` before guessing an action

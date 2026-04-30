@@ -196,6 +196,98 @@ describe("registerPinetTools", () => {
     expect(result.details.data.details.markedReadIds).toEqual([31]);
   });
 
+  it("keeps pinet read structured details backward-compatible while compacting default text", async () => {
+    const longBody = `please inspect ${"important context ".repeat(20)}and keep exact body`;
+    const readPinetInbox = vi.fn(async () => ({
+      messages: [
+        {
+          inboxId: 31,
+          delivered: true,
+          readAt: "2026-04-25T12:00:00.000Z",
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent" as const,
+            direction: "inbound" as const,
+            sender: "broker",
+            body: longBody,
+            metadata: { a2a: true, priority: "high" },
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 1,
+      unreadCountAfter: 0,
+      unreadThreads: [],
+      markedReadIds: [31],
+    }));
+    const deps = createDeps({ readPinetInbox });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-read-compact-details", {
+      action: "read",
+      args: { thread_id: "a2a:broker:worker" },
+    })) as {
+      content: Array<{ text: string }>;
+      details: {
+        data: {
+          text: string;
+          details: { messages: Array<{ message: { body: string; metadata: unknown } }> };
+          compact_details: { messages: Array<{ preview: string }> };
+        };
+      };
+    };
+
+    expect(result.content[0]?.text).toContain("Use args.full=true");
+    expect(result.content[0]?.text).not.toContain(longBody);
+    expect(result.details.data.text).not.toContain(longBody);
+    expect(result.details.data.details.messages[0]?.message.body).toBe(longBody);
+    expect(result.details.data.details.messages[0]?.message.metadata).toEqual({
+      a2a: true,
+      priority: "high",
+    });
+    expect(result.details.data.compact_details.messages[0]?.preview).toContain("…");
+  });
+
+  it("keeps pinet read format=json structured details backward-compatible", async () => {
+    const body = "exact json body";
+    const readPinetInbox = vi.fn(async () => ({
+      messages: [
+        {
+          inboxId: 31,
+          delivered: true,
+          readAt: "2026-04-25T12:00:00.000Z",
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent" as const,
+            direction: "inbound" as const,
+            sender: "broker",
+            body,
+            metadata: { a2a: true },
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 1,
+      unreadCountAfter: 0,
+      unreadThreads: [],
+      markedReadIds: [31],
+    }));
+    const deps = createDeps({ readPinetInbox });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-read-json-details", {
+      action: "read",
+      args: { thread_id: "a2a:broker:worker", format: "json" },
+    })) as { content: Array<{ text: string }> };
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}") as {
+      data: { details: { messages: Array<{ message: { body: string } }> } };
+    };
+
+    expect(envelope.data.details.messages[0]?.message.body).toBe(body);
+  });
+
   it("routes action-dispatched help through the dispatcher", async () => {
     const tools = registerWithDeps(createDeps());
 
@@ -249,6 +341,7 @@ describe("registerPinetTools", () => {
       args: {
         to: "alpha",
         message: "dispatch now",
+        format: "json",
       },
     })) as {
       content: Array<{ text: string }>;
@@ -335,6 +428,7 @@ describe("registerPinetTools", () => {
         repo: "extensions",
         required_tools: "read, edit",
         task: "review #395",
+        full: true,
       },
     })) as {
       details: {
@@ -359,5 +453,42 @@ describe("registerPinetTools", () => {
       requiredTools: ["read", "edit"],
       task: "review #395",
     });
+  });
+
+  it("keeps pinet agents structured details backward-compatible by default", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
+
+    const listBrokerAgents = vi.fn(() => [makeAgent({ metadata: { repo: "extensions" } })]);
+    const deps = createDeps({ listBrokerAgents });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-agents-compact-details", {
+      action: "agents",
+      args: { repo: "extensions" },
+    })) as {
+      content: Array<{ text: string }>;
+      details: {
+        data: {
+          text: string;
+          details: { agents: Array<{ name: string; metadata: unknown }>; hint: { repo?: string } };
+          compact_details: { count: number; agents: Array<{ name: string; repo: string | null }> };
+        };
+      };
+    };
+
+    expect(result.content[0]?.text).toContain("Golden Chalk Rabbit");
+    expect(result.details.data.text).not.toContain("pid:");
+    expect(result.details.data.details.agents[0]?.name).toBe("Golden Chalk Rabbit");
+    expect(result.details.data.details.agents[0]?.metadata).toEqual(
+      expect.objectContaining({ repo: "extensions" }),
+    );
+    expect(result.details.data.details.hint.repo).toBe("extensions");
+    expect(result.details.data.compact_details).toEqual(
+      expect.objectContaining({
+        count: 1,
+        agents: [expect.objectContaining({ name: "Golden Chalk Rabbit", repo: "extensions" })],
+      }),
+    );
   });
 });

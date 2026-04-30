@@ -432,6 +432,8 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 Use the dispatcher for all Pinet actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, and `pinet action=agents`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
 
+Dispatcher content defaults to compact CLI-style text for noisy reads and agent lists while preserving the structured `data.details` contract for callers. Pass `args.format="json"` for the dispatcher envelope in content, or `args.full=true` for verbose text plus `full_details`.
+
 Durable Pinet inbox notifications are classified as `steering`, `fwup`, or `maintenance/context` from explicit metadata or message cues. Follower prompts receive compact pointers such as `pinet action=read args.thread_id=...` instead of the full durable message body; agents use `pinet action=read` to retrieve the actual context. Delivery, read/ack state, and mail classification remain separate.
 
 Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are persisted/stamped as Pinet follow-up mail and surfaced through compact `pinet action=read` pointers rather than direct reminder-body prompts. Wake-up bodies and metadata are treated as mail content only; they do not trigger Pinet remote-control commands such as `/exit`, `/reload`, or structured `pinet:control` JSON.

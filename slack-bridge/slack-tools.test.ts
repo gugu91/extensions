@@ -437,6 +437,77 @@ describe("registerSlackTools", () => {
     });
   });
 
+  it("returns compact Slack read previews by default and full text on request", async () => {
+    const { tools, setConversationsReplies, setResolveThreadChannel, setResolveUser } = setup();
+    setResolveThreadChannel(async () => "C-DB");
+    setResolveUser(async (userId: string) => (userId === "U123" ? "Ada" : userId));
+    const longText = `${"status ".repeat(40)}done`;
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [{ ts: "123.001", user: "U123", text: longText }],
+      } as SlackResult,
+      {
+        ok: true,
+        messages: [{ ts: "123.001", user: "U123", text: longText }],
+      } as SlackResult,
+    ]);
+
+    const compact = await tools.get("slack_read")!.execute("tool-read-compact", {
+      thread_ts: "123.456",
+    });
+    expect(compact.content?.[0]?.text).toContain("Use args.full=true for exact message text.");
+    expect(compact.content?.[0]?.text).not.toContain(longText);
+    expect(compact.details?.messages).toEqual([
+      expect.objectContaining({
+        ts: "123.001",
+        user: "Ada",
+        preview: expect.stringContaining("status"),
+      }),
+    ]);
+
+    const full = await tools.get("slack_read")!.execute("tool-read-full", {
+      thread_ts: "123.456",
+      full: true,
+    });
+    expect(full.content?.[0]?.text).toContain(longText);
+    expect(full.details?.messages).toEqual([
+      expect.objectContaining({ ts: "123.001", user: "Ada", text: longText }),
+    ]);
+  });
+
+  it("uses compact dispatcher text by default and JSON when requested", async () => {
+    const { registeredTools, setConversationsReplies, setResolveThreadChannel, setResolveUser } =
+      setup();
+    setResolveThreadChannel(async () => "C-DB");
+    setResolveUser(async (userId: string) => (userId === "U123" ? "Ada" : userId));
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [{ ts: "123.001", user: "U123", text: "compact dispatcher body" }],
+      } as SlackResult,
+      {
+        ok: true,
+        messages: [{ ts: "123.002", user: "U123", text: "json dispatcher body" }],
+      } as SlackResult,
+    ]);
+    const dispatcher = registeredTools.get("slack")!;
+
+    const compact = await dispatcher.execute("tool-dispatch-read-compact", {
+      action: "read",
+      args: { thread_ts: "123.456" },
+    });
+    expect(compact.content?.[0]?.text).toContain("Ada: compact dispatcher body");
+    expect(compact.content?.[0]?.text).not.toContain('"status": "succeeded"');
+
+    const json = await dispatcher.execute("tool-dispatch-read-json", {
+      action: "read",
+      args: { thread_ts: "123.456", format: "json" },
+    });
+    expect(json.content?.[0]?.text).toContain('"status": "succeeded"');
+    expect(json.content?.[0]?.text).toContain("json dispatcher body");
+  });
+
   it("uses thread channel resolution for slack_delete", async () => {
     const { slack, tools, setResolveThreadChannel } = setup();
     setResolveThreadChannel(async (threadTs: string | undefined) => {
@@ -928,6 +999,41 @@ describe("registerSlackTools", () => {
     expect(response.details?.count).toBe(1);
   });
 
+  it("keeps slack_export format separate from dispatcher response_format", async () => {
+    const { registeredTools, setConversationsReplies, setResolveThreadChannel, setResolveUser } =
+      setup();
+    setResolveThreadChannel(async () => "C-DB");
+    setResolveUser(async (userId: string) => (userId === "U123" ? "alice" : userId));
+    setConversationsReplies([
+      {
+        ok: true,
+        messages: [{ ts: "123.456", user: "U123", text: "export json body" }],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+      {
+        ok: true,
+        messages: [{ ts: "123.456", user: "U123", text: "export envelope body" }],
+        response_metadata: { next_cursor: "" },
+      } as SlackResult,
+    ]);
+    const dispatcher = registeredTools.get("slack")!;
+
+    const exportJson = await dispatcher.execute("tool-export-json", {
+      action: "export",
+      args: { thread_ts: "123.456", format: "json" },
+    });
+    expect(exportJson.content?.[0]?.text).toContain("export json body");
+    expect(exportJson.content?.[0]?.text).toContain('"messages"');
+    expect(exportJson.content?.[0]?.text).not.toContain('"status": "succeeded"');
+
+    const envelopeJson = await dispatcher.execute("tool-export-response-json", {
+      action: "export",
+      args: { thread_ts: "123.456", format: "json", response_format: "json" },
+    });
+    expect(envelopeJson.content?.[0]?.text).toContain('"status": "succeeded"');
+    expect(envelopeJson.content?.[0]?.text).toContain("export envelope body");
+  });
+
   it("includes blocks when slack_send posts a rich message", async () => {
     const { slack, tools, setResolveThreadChannel, noteThreadReply, clearPendingAttention } =
       setup();
@@ -1051,6 +1157,8 @@ describe("registerSlackTools", () => {
       examples: [expect.objectContaining({ action: "post_channel" })],
     });
     expect(schemaResponse.content?.[0]?.text).toContain("args_schema");
+    expect(JSON.stringify(schemaEnvelope.data)).toContain("output_controls");
+    expect(JSON.stringify(schemaEnvelope.data)).toContain("response_format");
 
     const confirmationHelp = await dispatcher.execute("tool-help-confirm", {
       action: "help",

@@ -78,16 +78,29 @@ type PinetDispatcherErrorClass = "input" | "state" | "runtime" | "network";
 
 type PinetDispatcherStatus = "succeeded" | "failed";
 
+type PinetOutputFormat = "cli" | "json";
+
+interface PinetOutputOptions {
+  format: PinetOutputFormat;
+  full: boolean;
+}
+
 interface PinetToolResult {
   content: Array<{ type: "text"; text: string }>;
   details?: unknown;
+  compactDetails?: unknown;
+  fullDetails?: unknown;
 }
 
 interface PinetActionDefinition {
   name: PinetDispatcherAction;
   description: string;
   parameters: unknown;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<PinetToolResult>;
+  execute: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+    output: PinetOutputOptions,
+  ) => Promise<PinetToolResult>;
 }
 
 interface PinetDispatcherError {
@@ -107,13 +120,54 @@ interface PinetDispatcherEnvelope {
 const PINET_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> = {
   send: [{ action: "send", args: { to: "@worker", message: "Please review PR #123" } }],
   read: [
-    { action: "read", args: { thread_id: "a2a:broker:worker-1", limit: 20 } },
-    { action: "read", args: { unread_only: false, mark_read: false } },
+    { action: "read", args: { thread_id: "a2a:<broker>:<worker>", limit: 20 } },
+    { action: "read", args: { unread_only: false, mark_read: false, full: true } },
   ],
-  free: [{ action: "free", args: { note: "Wrapped up #395" } }],
+  free: [{ action: "free", args: { note: "Wrapped up <issue>" } }],
   schedule: [{ action: "schedule", args: { delay: "30m", message: "Check queue state" } }],
-  agents: [{ action: "agents", args: { repo: "extensions", role: "worker" } }],
+  agents: [{ action: "agents", args: { repo: "<repo>", role: "worker", full: true } }],
 };
+
+const PINET_OUTPUT_OPTION_PARAMETERS = {
+  format: Type.Optional(
+    Type.String({ description: 'Response presentation format: "cli" (default) or "json".' }),
+  ),
+  full: Type.Optional(
+    Type.Boolean({
+      description:
+        "Include full verbose text/full_details; default visible content stays compact while data.details remains backward-compatible.",
+    }),
+  ),
+};
+
+function normalizePinetOutputOptions(args: Record<string, unknown>): PinetOutputOptions {
+  const rawFormat = args.format;
+  const format = rawFormat == null ? "cli" : String(rawFormat).trim().toLowerCase();
+  if (format !== "cli" && format !== "json") {
+    throw new Error('format must be "cli" or "json".');
+  }
+
+  const rawFull = args.full;
+  if (rawFull != null && typeof rawFull !== "boolean") {
+    throw new Error("full must be a boolean when provided.");
+  }
+
+  return { format, full: rawFull === true };
+}
+
+function truncateText(value: string, maxLength = 180): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= maxLength) return collapsed;
+  return `${collapsed.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function getRecordString(
+  record: Record<string, unknown> | null | undefined,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -206,12 +260,31 @@ function buildPinetDispatcherEnvelope(
   return { status, data, errors, warnings };
 }
 
-function wrapDispatcherEnvelope(envelope: PinetDispatcherEnvelope): {
+function getPinetEnvelopeCliText(envelope: PinetDispatcherEnvelope): string {
+  if (envelope.status === "succeeded" && isRecord(envelope.data)) {
+    const text = envelope.data.text;
+    if (typeof text === "string" && text.length > 0) return text;
+  }
+  return JSON.stringify(envelope, null, 2);
+}
+
+function wrapDispatcherEnvelope(
+  envelope: PinetDispatcherEnvelope,
+  output: PinetOutputOptions = { format: "json", full: true },
+): {
   content: Array<{ type: "text"; text: string }>;
   details: PinetDispatcherEnvelope;
 } {
   return {
-    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+    content: [
+      {
+        type: "text",
+        text:
+          output.format === "json"
+            ? JSON.stringify(envelope, null, 2)
+            : getPinetEnvelopeCliText(envelope),
+      },
+    ],
     details: envelope,
   };
 }
@@ -278,7 +351,7 @@ function buildPinetAgentsHintText(hint: PinetAgentsRoutingHint): string {
     .join(" · ")}`;
 }
 
-function formatPinetReadResult(result: PinetReadResult, options: PinetReadOptions): string {
+function formatPinetReadResultFull(result: PinetReadResult, options: PinetReadOptions): string {
   const scope = options.threadId ? `thread ${options.threadId}` : "your Pinet inbox";
   const mode = options.unreadOnly === false ? "latest" : "unread";
   const lines = [
@@ -325,6 +398,97 @@ function formatPinetReadResult(result: PinetReadResult, options: PinetReadOption
   if (result.markedReadIds.length > 0) {
     lines.push("", `Marked read: ${result.markedReadIds.join(", ")}.`);
   }
+
+  return lines.join("\n");
+}
+
+function summarizeUnreadThreadCounts(thread: PinetReadResult["unreadThreads"][number]): string {
+  return [
+    thread.mailClassCounts.steering > 0 ? `${thread.mailClassCounts.steering} steering` : null,
+    thread.mailClassCounts.fwup > 0 ? `${thread.mailClassCounts.fwup} fwup` : null,
+    thread.mailClassCounts.maintenance_context > 0
+      ? `${thread.mailClassCounts.maintenance_context} maintenance/context`
+      : null,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join(", ");
+}
+
+function buildCompactPinetReadDetails(result: PinetReadResult): Record<string, unknown> {
+  return {
+    messageCount: result.messages.length,
+    unreadCountBefore: result.unreadCountBefore,
+    unreadCountAfter: result.unreadCountAfter,
+    markedReadIds: result.markedReadIds,
+    messages: result.messages.map((item) => {
+      const classification = classifyPinetMail({
+        source: item.message.source,
+        threadId: item.message.threadId,
+        sender: item.message.sender,
+        body: item.message.body,
+        metadata: item.message.metadata,
+      });
+      return {
+        inboxId: item.inboxId,
+        messageId: item.message.id,
+        threadId: item.message.threadId,
+        source: item.message.source,
+        sender: item.message.sender,
+        class: classification.class,
+        preview: truncateText(item.message.body),
+      };
+    }),
+    unreadThreads: result.unreadThreads.slice(0, 10).map((thread) => ({
+      threadId: thread.threadId,
+      source: thread.source,
+      unreadCount: thread.unreadCount,
+      latestMessageId: thread.latestMessageId,
+      highestMailClass: thread.highestMailClass,
+      mailClassSummary: summarizeUnreadThreadCounts(thread),
+    })),
+  };
+}
+
+function formatPinetReadResultCompact(result: PinetReadResult, options: PinetReadOptions): string {
+  const scope = options.threadId ? `thread ${options.threadId}` : "your Pinet inbox";
+  const mode = options.unreadOnly === false ? "latest" : "unread";
+  const lines = [
+    `Pinet read (${mode}) from ${scope}: ${result.messages.length} message${result.messages.length === 1 ? "" : "s"}.`,
+    `Unread before: ${result.unreadCountBefore}; unread after: ${result.unreadCountAfter}.`,
+  ];
+
+  if (result.messages.length > 0) {
+    lines.push("");
+    for (const item of result.messages) {
+      const classification = classifyPinetMail({
+        source: item.message.source,
+        threadId: item.message.threadId,
+        sender: item.message.sender,
+        body: item.message.body,
+        metadata: item.message.metadata,
+      });
+      const label = formatPinetMailClassLabel(classification.class);
+      lines.push(
+        `- [${label}] [${item.message.source}/${item.message.threadId} #${item.message.id}] ${item.message.sender}: ${truncateText(item.message.body)}`,
+      );
+    }
+  }
+
+  if (result.unreadThreads.length > 0) {
+    lines.push("", "Unread thread pointers:");
+    for (const thread of result.unreadThreads.slice(0, 10)) {
+      const label = formatPinetMailClassLabel(thread.highestMailClass);
+      const counts = summarizeUnreadThreadCounts(thread);
+      lines.push(
+        `- [${label}] ${thread.threadId} (${thread.source}${thread.channel ? `/${thread.channel}` : ""}): ${thread.unreadCount} unread${counts ? ` (${counts})` : ""}; latest #${thread.latestMessageId}; pointer=pinet action=read args.thread_id=${thread.threadId} args.unread_only=true`,
+      );
+    }
+  }
+
+  if (result.markedReadIds.length > 0) {
+    lines.push("", `Marked read: ${result.markedReadIds.join(", ")}.`);
+  }
+  lines.push("", "Use args.full=true for exact message bodies and full metadata in visible text.");
 
   return lines.join("\n");
 }
@@ -381,12 +545,13 @@ function runPinetReadAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
   toolName: string,
+  output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
     deps.requireToolPolicy(
       toolName,
       undefined,
-      `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""}`,
+      `thread_id=${params.thread_id ?? ""} | limit=${params.limit ?? ""} | unread_only=${params.unread_only ?? ""} | mark_read=${params.mark_read ?? ""} | format=${output.format} | full=${output.full}`,
     );
 
     if (!deps.pinetEnabled()) {
@@ -406,8 +571,17 @@ function runPinetReadAction(
 
     const result = await deps.readPinetInbox(options);
     return {
-      content: [{ type: "text", text: formatPinetReadResult(result, options) }],
+      content: [
+        {
+          type: "text",
+          text: output.full
+            ? formatPinetReadResultFull(result, options)
+            : formatPinetReadResultCompact(result, options),
+        },
+      ],
       details: result,
+      compactDetails: buildCompactPinetReadDetails(result),
+      fullDetails: result,
     };
   })();
 }
@@ -500,10 +674,71 @@ function runPinetScheduleAction(
   })();
 }
 
+function getAgentRepo(agent: AgentDisplayInfo): string | undefined {
+  return getRecordString(agent.metadata, "repo");
+}
+
+function getAgentBranch(agent: AgentDisplayInfo): string | undefined {
+  return getRecordString(agent.metadata, "branch");
+}
+
+function getAgentRole(agent: AgentDisplayInfo): string | undefined {
+  return getRecordString(agent.metadata, "role");
+}
+
+function buildCompactAgentDetails(
+  agents: AgentDisplayInfo[],
+  hint: PinetAgentsRoutingHint,
+): Record<string, unknown> {
+  return {
+    count: agents.length,
+    hint,
+    agents: agents.map((agent) => {
+      const capabilityTags = agent.capabilityTags ?? [];
+      return {
+        id: agent.id,
+        name: agent.name,
+        emoji: agent.emoji,
+        status: agent.status,
+        health: agent.health ?? null,
+        repo: getAgentRepo(agent) ?? null,
+        branch: getAgentBranch(agent) ?? null,
+        role: getAgentRole(agent) ?? null,
+        routingScore: agent.routingScore ?? null,
+        capabilityTags: capabilityTags.slice(0, 4),
+        capabilityCount: capabilityTags.length,
+      };
+    }),
+  };
+}
+
+function formatCompactAgentList(agents: AgentDisplayInfo[]): string {
+  if (agents.length === 0) return "(no agents connected)";
+
+  return agents
+    .map((agent) => {
+      const parts = [
+        getAgentRepo(agent) ? `repo=${getAgentRepo(agent)}` : null,
+        getAgentBranch(agent) ? `branch=${getAgentBranch(agent)}` : null,
+        getAgentRole(agent) ? `role=${getAgentRole(agent)}` : null,
+        agent.routingScore != null ? `score=${agent.routingScore}` : null,
+      ].filter((item): item is string => Boolean(item));
+      const health = agent.health ? ` [${agent.health}]` : "";
+      const caps = agent.capabilityTags ?? [];
+      const capPreview = caps.slice(0, 4).join(", ");
+      const capSuffix = caps.length > 4 ? ` (+${caps.length - 4} more)` : "";
+      const capsText = capPreview ? ` caps: ${capPreview}${capSuffix}` : "";
+      const context = parts.length > 0 ? ` — ${parts.join(" · ")}` : "";
+      return `${agent.emoji} ${agent.name} (${agent.id}) — ${agent.status}${health}${context}${capsText}`;
+    })
+    .join("\n");
+}
+
 function runPinetAgentsAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
   toolName: string,
+  output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
     const hint: PinetAgentsRoutingHint = {
@@ -523,7 +758,7 @@ function runPinetAgentsAction(
     deps.requireToolPolicy(
       toolName,
       undefined,
-      `repo=${hint.repo ?? ""} | branch=${hint.branch ?? ""} | role=${hint.role ?? ""} | required_tools=${params.required_tools ?? ""} | task=${hint.task ?? ""}`,
+      `repo=${hint.repo ?? ""} | branch=${hint.branch ?? ""} | role=${hint.role ?? ""} | required_tools=${params.required_tools ?? ""} | task=${hint.task ?? ""} | format=${output.format} | full=${output.full}`,
     );
 
     if (!deps.pinetEnabled()) {
@@ -559,11 +794,15 @@ function runPinetAgentsAction(
     }).map(toDisplay);
     const agents = rankAgentsForRouting(visibleAgents, hint);
     const header = hasHint ? `${buildPinetAgentsHintText(hint)}\n\n` : "";
-    const text = `${header}${formatAgentList(agents, os.homedir())}`;
+    const text = `${header}${
+      output.full ? formatAgentList(agents, os.homedir()) : formatCompactAgentList(agents)
+    }`;
 
     return {
       content: [{ type: "text", text }],
       details: { agents, hint },
+      compactDetails: buildCompactAgentDetails(agents, hint),
+      fullDetails: { agents, hint },
     };
   })();
 }
@@ -584,6 +823,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
           "Target agent name/ID, or a broker-only broadcast channel like #extensions. Avoid #all for repo-specific issue/policy announcements.",
       }),
       message: Type.String({ description: "Message body" }),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
     execute: (_id, params) => runPinetSendAction(params, deps, "pinet:send"),
   });
@@ -604,8 +844,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       mark_read: Type.Optional(
         Type.Boolean({ description: "Mark returned unread rows as read (default true)" }),
       ),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
-    execute: (_id, params) => runPinetReadAction(params, deps, "pinet:read"),
+    execute: (_id, params, output) => runPinetReadAction(params, deps, "pinet:read", output),
   });
 
   registerAction({
@@ -615,6 +856,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       note: Type.Optional(
         Type.String({ description: "Optional short note about what you just finished" }),
       ),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
     execute: (_id, params) => runPinetFreeAction(params, deps, "pinet:free"),
   });
@@ -630,6 +872,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
         Type.String({ description: "Absolute ISO-8601 UTC time, e.g. 2026-04-02T14:30:00Z" }),
       ),
       message: Type.String({ description: "Reminder or wake-up message to deliver later" }),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
     execute: (_id, params) => runPinetScheduleAction(params, deps, "pinet:schedule"),
   });
@@ -647,8 +890,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
         Type.String({ description: "Comma-separated required capability/tool tags" }),
       ),
       task: Type.Optional(Type.String({ description: "Optional natural-language task hint" })),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
-    execute: (_id, params) => runPinetAgentsAction(params, deps, "pinet:agents"),
+    execute: (_id, params, output) => runPinetAgentsAction(params, deps, "pinet:agents", output),
   });
 
   pi.registerTool({
@@ -657,12 +901,17 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     description:
       "Dispatch Pinet worker operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this dispatcher for all Pinet actions: send, read, free, schedule, agents, and per-action discovery. Use action="help" for the action catalog and action="send" for Pinet replies/delegation.',
+      'Use this dispatcher for all Pinet actions: send, read, free, schedule, agents, and per-action discovery. Use action="send" for Pinet replies/delegation. Defaults to compact cli output while preserving structured data.details; pass args.format="json" for the envelope in content or args.full=true for verbose text/full_details.',
     parameters: Type.Object({
       action: Type.String({
         description: "Action name: help, send, read, free, schedule, or agents.",
       }),
-      args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      args: Type.Optional(
+        Type.Record(Type.String(), Type.Unknown(), {
+          description:
+            'Action arguments. Add format="cli"|"json" and full=true for explicit presentation control. Pinet data.details stays backward-compatible; compact previews may appear as compact_details.',
+        }),
+      ),
     }),
     async execute(toolCallId, params) {
       let normalizedAction: PinetDispatcherAction;
@@ -683,7 +932,25 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
 
       if (normalizedAction === "help") {
         const args = isRecord(params.args) ? params.args : {};
-        return wrapDispatcherEnvelope(buildPinetDispatcherHelpEnvelope(args, actionDefinitions));
+        let output: PinetOutputOptions;
+        try {
+          output = normalizePinetOutputOptions(args);
+        } catch (error) {
+          return wrapDispatcherEnvelope(
+            buildPinetDispatcherEnvelope("failed", null, [
+              {
+                class: "input",
+                message: getErrorMessage(error),
+                retryable: false,
+                hint: 'Use format="cli" or format="json" and full as a boolean.',
+              },
+            ]),
+          );
+        }
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherHelpEnvelope(args, actionDefinitions),
+          output,
+        );
       }
 
       const definition = actionDefinitions.get(normalizedAction);
@@ -713,14 +980,37 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
         );
       }
 
+      let output: PinetOutputOptions;
       try {
-        const result = await definition.execute(toolCallId, params.args);
+        output = normalizePinetOutputOptions(params.args);
+      } catch (error) {
+        return wrapDispatcherEnvelope(
+          buildPinetDispatcherEnvelope("failed", null, [
+            {
+              class: "input",
+              message: getErrorMessage(error),
+              retryable: false,
+              hint: 'Use format="cli" or format="json" and full as a boolean.',
+            },
+          ]),
+        );
+      }
+
+      try {
+        const result = await definition.execute(toolCallId, params.args, output);
         return wrapDispatcherEnvelope(
           buildPinetDispatcherEnvelope("succeeded", {
             action: definition.name,
             text: result.content[0]?.text ?? "",
             details: result.details ?? null,
+            ...(result.compactDetails !== undefined && !output.full
+              ? { compact_details: result.compactDetails }
+              : {}),
+            ...(output.full && result.fullDetails !== undefined
+              ? { full_details: result.fullDetails }
+              : {}),
           }),
+          output,
         );
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
