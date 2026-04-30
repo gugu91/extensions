@@ -49,8 +49,9 @@ describe("registerSlackTools", () => {
 
     const inbox: InboxMessage[] = [];
     let botToken = "xoxb-initial";
-    let defaultChannel = "general";
+    let defaultChannel: string | undefined = "general";
     let securityPrompt = "INITIAL SECURITY PROMPT";
+    let lastDmChannel: string | null = null;
     let resolveUser = async (userId: string) => userId;
     let conversationsRepliesResponses: SlackResult[] = [];
     let usersListResponse: SlackResult = {
@@ -251,7 +252,7 @@ describe("registerSlackTools", () => {
       getAgentName: () => "Radiant Koala",
       getAgentEmoji: () => "🐨",
       getAgentOwnerToken: () => "owner:test-token",
-      getLastDmChannel: () => null,
+      getLastDmChannel: () => lastDmChannel,
       updateBadge: () => {},
       resolveUser: async (userId) => resolveUser(userId),
       threadContext: {
@@ -315,11 +316,14 @@ describe("registerSlackTools", () => {
       setBotToken: (value: string) => {
         botToken = value;
       },
-      setDefaultChannel: (value: string) => {
+      setDefaultChannel: (value: string | undefined) => {
         defaultChannel = value;
       },
       setSecurityPrompt: (value: string) => {
         securityPrompt = value;
+      },
+      setLastDmChannel: (value: string | null) => {
+        lastDmChannel = value;
       },
       setResolveUser: (fn: (userId: string) => Promise<string>) => {
         resolveUser = fn;
@@ -1048,6 +1052,53 @@ describe("registerSlackTools", () => {
     });
     expect(envelopeJson.content?.[0]?.text).toContain('"status": "succeeded"');
     expect(envelopeJson.content?.[0]?.text).toContain("export envelope body");
+  });
+
+  it("sends slack_send to the configured default channel when no thread context exists", async () => {
+    const { slack, tools, setDefaultChannel, setLastDmChannel, noteThreadReply } = setup();
+    setDefaultChannel("ops-alerts");
+    setLastDmChannel("D-STALE");
+
+    const response = await tools.get("slack_send")!.execute("tool-send-default-channel", {
+      text: "Default channel update",
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "chat.postMessage",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel: "resolved:ops-alerts",
+        text: "Default channel update",
+      }),
+    );
+    expect(response.content?.[0]?.text).toBe(
+      "Sent message (thread_ts: 123.456). Use this to continue the conversation.",
+    );
+    expect(response.details).toMatchObject({
+      ts: "123.456",
+      channel: "resolved:ops-alerts",
+      delivery: "slack",
+    });
+    expect(noteThreadReply).toHaveBeenCalledWith("123.456", "resolved:ops-alerts");
+  });
+
+  it("keeps a clear slack_send error when no thread context or default channel exists", async () => {
+    const { slack, tools, setDefaultChannel } = setup();
+    setDefaultChannel(undefined);
+
+    await expect(
+      tools.get("slack_send")!.execute("tool-send-no-default-channel", {
+        text: "No target update",
+      }),
+    ).rejects.toThrow(
+      "No active Slack thread and no defaultChannel configured in settings.json. Set slack-bridge.defaultChannel or use the slack dispatcher action post_channel with a channel.",
+    );
+
+    expect(slack).not.toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.any(String),
+      expect.any(Object),
+    );
   });
 
   it("includes blocks when slack_send posts a rich message", async () => {

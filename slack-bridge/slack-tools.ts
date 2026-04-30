@@ -734,6 +734,22 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     requireToolPolicyForName(normalizeSlackGuardrailToolName(toolName), threadTs, action);
   }
 
+  async function resolveSlackSendChannel(threadTs: string | undefined): Promise<string | null> {
+    const trackedThreadChannel = await resolveTrackedThreadChannel(threadTs);
+    if (trackedThreadChannel) return trackedThreadChannel;
+
+    if (!threadTs) {
+      const defaultChannel = getDefaultChannel();
+      if (defaultChannel) return resolveChannel(defaultChannel);
+      return null;
+    }
+
+    const lastDmChannel = getLastDmChannel();
+    if (lastDmChannel) return lastDmChannel;
+
+    return null;
+  }
+
   async function deliverSlackMessage(input: {
     channel: string;
     text: string;
@@ -1682,10 +1698,12 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         `thread_ts=${params.thread_ts ?? ""} | text=${params.text} | blocks=${summarizeSlackBlocksForPolicy(params.blocks)}`,
       );
 
-      const channel = (await resolveTrackedThreadChannel(params.thread_ts)) ?? getLastDmChannel();
+      const channel = await resolveSlackSendChannel(params.thread_ts);
       if (!channel) {
         throw new Error(
-          "No active Slack thread. If you know the channel and thread_ts, use the slack dispatcher action post_channel instead.",
+          params.thread_ts
+            ? "No active Slack thread. If you know the channel and thread_ts, use the slack dispatcher action post_channel instead."
+            : "No active Slack thread and no defaultChannel configured in settings.json. Set slack-bridge.defaultChannel or use the slack dispatcher action post_channel with a channel.",
         );
       }
 
