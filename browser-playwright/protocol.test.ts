@@ -4,10 +4,13 @@ import {
   buildBrowserDiscovery,
   buildCapabilities,
   describeBrowserActions,
+  formatBrowserResponseText,
   getBooleanArg,
   getNumberArg,
   getStringArg,
+  normalizeBrowserOutputOptions,
   parseBrowserToolRequest,
+  type BrowserToolEnvelope,
 } from "./protocol.ts";
 
 test("parseBrowserToolRequest prefers top-level args for the single browser tool envelope", () => {
@@ -180,6 +183,82 @@ test("buildBrowserDiscovery action schemas match runtime-supported argument name
 
 test("buildBrowserDiscovery rejects unknown schema topics clearly", () => {
   assert.throws(() => buildBrowserDiscovery("unknown"), /Unsupported browser info topic/i);
+});
+
+test("normalizeBrowserOutputOptions defaults to compact cli and accepts aliases", () => {
+  assert.deepEqual(normalizeBrowserOutputOptions({}), { format: "cli", full: false });
+  assert.deepEqual(normalizeBrowserOutputOptions({ f: "json", "--full": true }), {
+    format: "json",
+    full: true,
+  });
+  assert.deepEqual(normalizeBrowserOutputOptions({ "-f": "cli", full: true }), {
+    format: "cli",
+    full: true,
+  });
+});
+
+test("normalizeBrowserOutputOptions rejects invalid format and full values", () => {
+  assert.throws(
+    () => normalizeBrowserOutputOptions({ format: "xml" }),
+    /format must be "cli" or "json"/i,
+  );
+  assert.throws(() => normalizeBrowserOutputOptions({ full: "true" }), /full must be a boolean/i);
+});
+
+test("formatBrowserResponseText uses compact cli text by default while preserving details", () => {
+  const envelope: BrowserToolEnvelope = {
+    backend: "playwright",
+    action: "navigate",
+    session_id: "browser_123",
+    page_id: "page_abc",
+    capabilities: buildCapabilities("playwright"),
+    result: {
+      session_id: "browser_123",
+      page: {
+        page_id: "page_abc",
+        url: "https://example.com/docs",
+        title: "Docs",
+      },
+    },
+    artifacts: [],
+  };
+
+  const text = formatBrowserResponseText(envelope, { format: "cli", full: false });
+  assert.match(text, /^Browser navigated:/);
+  assert.match(text, /https:\/\/example\.com\/docs/);
+  assert.doesNotMatch(text, /"capabilities"/);
+});
+
+test("formatBrowserResponseText returns the structured envelope for explicit json or full", () => {
+  const envelope: BrowserToolEnvelope = {
+    backend: "playwright",
+    action: "screenshot",
+    session_id: "browser_123",
+    page_id: "page_abc",
+    capabilities: buildCapabilities("playwright"),
+    result: {
+      session_id: "browser_123",
+      page_id: "page_abc",
+      path: ".pi/artifacts/browser-playwright/browser_123/example.png",
+      full_page: false,
+    },
+    artifacts: [
+      { kind: "screenshot", path: ".pi/artifacts/browser-playwright/browser_123/example.png" },
+    ],
+  };
+
+  const jsonText = formatBrowserResponseText(envelope, { format: "json", full: false });
+  assert.deepEqual(JSON.parse(jsonText), envelope);
+
+  const fullText = formatBrowserResponseText(envelope, { format: "cli", full: true });
+  assert.deepEqual(JSON.parse(fullText), envelope);
+});
+
+test("buildBrowserDiscovery advertises compact defaults and output opt-ins", () => {
+  const catalog = buildBrowserDiscovery(undefined);
+  assert.match(JSON.stringify(catalog), /Defaults to compact CLI text/);
+  assert.match(JSON.stringify(catalog), /args\.format='json'/);
+  assert.match(JSON.stringify(catalog), /--full/);
 });
 
 test("describeBrowserActions summarizes the typed browser action enum", () => {

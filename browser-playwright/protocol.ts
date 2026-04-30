@@ -45,6 +45,21 @@ export type BrowserCapabilities = {
   notes?: string[];
 };
 
+export type BrowserToolEnvelope = {
+  backend: BrowserBackend;
+  action: BrowserAction;
+  session_id: string | null;
+  page_id: string | null;
+  capabilities: BrowserCapabilities;
+  result: Record<string, unknown>;
+  artifacts: Array<Record<string, unknown>>;
+};
+
+export type BrowserOutputOptions = {
+  format: "cli" | "json";
+  full: boolean;
+};
+
 type BrowserActionSchema = {
   description: string;
   requires_session_id?: boolean;
@@ -270,6 +285,197 @@ export function getNumberArg(args: BrowserArgs, key: string): number | undefined
   return typeof value === "number" ? value : undefined;
 }
 
+export function normalizeBrowserOutputOptions(args: BrowserArgs): BrowserOutputOptions {
+  const rawFormat = args.format ?? args.f ?? args["-f"];
+  const format = rawFormat == null ? "cli" : String(rawFormat).trim().toLowerCase();
+  if (format !== "cli" && format !== "json") {
+    throw new Error('browser output format must be "cli" or "json".');
+  }
+
+  const rawFull = args.full ?? args["--full"];
+  if (rawFull != null && typeof rawFull !== "boolean") {
+    throw new Error("browser output full must be a boolean when provided.");
+  }
+
+  return { format, full: rawFull === true };
+}
+
+function compactTruncate(value: string, maxLength = 900): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 18)).trimEnd()}… [truncated]`;
+}
+
+function recordValue(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = record[key];
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function arrayValue(record: Record<string, unknown>, key: string): unknown[] {
+  const value = record[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberValue(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function booleanValue(record: Record<string, unknown> | null, key: string): boolean | null {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function countFromCollection(record: Record<string, unknown>, key: string): number | null {
+  const collection = recordValue(record, key);
+  return numberValue(collection, "count");
+}
+
+function formatMaybeTitle(title: string | null): string {
+  return title ? `; title=${JSON.stringify(compactTruncate(title, 120))}` : "";
+}
+
+function formatPageSummary(page: Record<string, unknown> | null): string {
+  if (!page) return "page=unknown";
+  const pageId = stringValue(page, "page_id") ?? "unknown";
+  const url = stringValue(page, "url");
+  const title = stringValue(page, "title");
+  return `page=${pageId}${url ? `; url=${compactTruncate(url, 180)}` : ""}${formatMaybeTitle(title)}`;
+}
+
+function formatItemPreview(items: unknown[], maxItems = 5): string {
+  const lines = items
+    .slice(0, maxItems)
+    .map((item) => {
+      if (item == null || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const text = stringValue(record, "text") ?? stringValue(record, "name") ?? null;
+      const href = stringValue(record, "href");
+      const value = text ?? href;
+      return value ? `- ${compactTruncate(value.replace(/\s+/g, " ").trim(), 180)}` : null;
+    })
+    .filter((line): line is string => Boolean(line));
+  return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+}
+
+function formatBrowserCompactText(envelope: BrowserToolEnvelope): string {
+  const result = envelope.result;
+  const blockedStatus = stringValue(result, "status") === "blocked";
+  const unavailable = booleanValue(result, "available") === false;
+  if (blockedStatus || unavailable) {
+    const reason = stringValue(result, "reason");
+    return `Browser ${envelope.backend} unavailable${reason ? `: ${compactTruncate(reason, 220)}` : "."}`;
+  }
+
+  const sessionId = stringValue(result, "session_id") ?? envelope.session_id;
+  const pageId = stringValue(result, "page_id") ?? envelope.page_id;
+
+  switch (envelope.action) {
+    case "start": {
+      const pages = arrayValue(result, "pages");
+      const activePageId = stringValue(result, "active_page_id") ?? "none";
+      const headless = booleanValue(result, "headless");
+      return `Browser started: session=${sessionId ?? "unknown"}; active=${activePageId}; pages=${pages.length}${headless == null ? "" : `; headless=${headless}`}.`;
+    }
+    case "info": {
+      const actions = arrayValue(result, "actions");
+      if (actions.length > 0 && !sessionId) {
+        const names = actions
+          .map((action) =>
+            action != null && typeof action === "object" && !Array.isArray(action)
+              ? stringValue(action as Record<string, unknown>, "action")
+              : null,
+          )
+          .filter((action): action is string => Boolean(action));
+        return `Browser actions: ${names.join(", ")}. Use action='info' args.topic='<action|schema>'; args.format='json' for full details.`;
+      }
+      const network = recordValue(result, "network_summary");
+      const blocked = numberValue(network, "blocked_requests") ?? 0;
+      const failed = numberValue(network, "failed_requests") ?? 0;
+      return `Browser info: session=${sessionId ?? "unknown"}; pages=${numberValue(result, "page_count") ?? arrayValue(result, "pages").length}; active=${stringValue(result, "active_page_id") ?? "none"}; blocked=${blocked}; failed=${failed}.`;
+    }
+    case "navigate":
+      return `Browser navigated: ${formatPageSummary(recordValue(result, "page"))}.`;
+    case "snapshot": {
+      const title = stringValue(result, "title");
+      const url = stringValue(result, "url");
+      const text = stringValue(result, "text");
+      const counts = [
+        ["headings", countFromCollection(result, "headings")],
+        ["links", countFromCollection(result, "links")],
+        ["buttons", countFromCollection(result, "buttons")],
+        ["fields", countFromCollection(result, "fields")],
+      ]
+        .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+        .map(([name, count]) => `${name}=${count}`)
+        .join("; ");
+      const header = `Browser snapshot: page=${pageId ?? "unknown"}${url ? `; url=${compactTruncate(url, 180)}` : ""}${formatMaybeTitle(title)}${counts ? `; ${counts}` : ""}.`;
+      return text ? `${header}\n${compactTruncate(text.replace(/\n{3,}/g, "\n\n"))}` : header;
+    }
+    case "extract": {
+      const selector = stringValue(result, "selector");
+      const text = stringValue(result, "text");
+      const items = arrayValue(result, "items");
+      const matchCount = numberValue(result, "match_count");
+      const truncated = booleanValue(result, "truncated") === true ? "; truncated=true" : "";
+      const header = selector
+        ? `Browser extract: selector=${JSON.stringify(selector)}; matches=${matchCount ?? "unknown"}; items=${items.length}${truncated}.`
+        : `Browser extract: body text${stringValue(result, "url") ? `; url=${compactTruncate(stringValue(result, "url")!, 180)}` : ""}.`;
+      if (!selector && text)
+        return `${header}\n${compactTruncate(text.replace(/\n{3,}/g, "\n\n"))}`;
+      return `${header}${formatItemPreview(items)}`;
+    }
+    case "click": {
+      const blocked = recordValue(result, "blocked_request") ? "; blocked_request=true" : "";
+      return `Browser clicked: selector=${JSON.stringify(stringValue(result, "clicked_selector") ?? "")}; ${formatPageSummary(recordValue(result, "active_page"))}${blocked}.`;
+    }
+    case "fill":
+      return `Browser filled: selector=${JSON.stringify(stringValue(result, "selector") ?? "")}; value_length=${numberValue(result, "value_length") ?? 0}; page=${pageId ?? "unknown"}.`;
+    case "press": {
+      const blocked = recordValue(result, "blocked_request") ? "; blocked_request=true" : "";
+      return `Browser pressed: key=${JSON.stringify(stringValue(result, "key") ?? "")}; page=${pageId ?? "unknown"}${stringValue(result, "url") ? `; url=${compactTruncate(stringValue(result, "url")!, 180)}` : ""}${blocked}.`;
+    }
+    case "wait":
+      return `Browser wait matched: ${stringValue(result, "matched") ?? "unknown"}; page=${pageId ?? "unknown"}${stringValue(result, "url") ? `; url=${compactTruncate(stringValue(result, "url")!, 180)}` : ""}.`;
+    case "screenshot":
+      return `Browser screenshot: path=${stringValue(result, "path") ?? "unknown"}; page=${pageId ?? "unknown"}; full_page=${booleanValue(result, "full_page") === true}.`;
+    case "tabs": {
+      const pages = arrayValue(result, "pages");
+      const pagePreview = pages
+        .slice(0, 5)
+        .map((page) =>
+          page != null && typeof page === "object" && !Array.isArray(page)
+            ? stringValue(page as Record<string, unknown>, "page_id")
+            : null,
+        )
+        .filter((id): id is string => Boolean(id));
+      return `Browser tabs: pages=${numberValue(result, "page_count") ?? pages.length}; active=${stringValue(result, "active_page_id") ?? "none"}${pagePreview.length > 0 ? `; ids=${pagePreview.join(",")}` : ""}.`;
+    }
+    case "close":
+      return `Browser closed: ${stringValue(result, "closed") ?? "target"}${pageId ? `; page=${pageId}` : ""}${booleanValue(result, "session_closed") === true ? "; session_closed=true" : ""}.`;
+    default:
+      return `Browser ${envelope.action}: ok.`;
+  }
+}
+
+export function formatBrowserResponseText(
+  envelope: BrowserToolEnvelope,
+  options: BrowserOutputOptions,
+): string {
+  if (options.format === "json" || options.full) {
+    return JSON.stringify(envelope, null, 2);
+  }
+  return formatBrowserCompactText(envelope);
+}
+
 export function buildCapabilities(backend: BrowserBackend): BrowserCapabilities {
   if (backend === "playwright") {
     return {
@@ -308,6 +514,8 @@ export function buildBrowserDiscovery(topic: string | undefined): Record<string,
     contract: {
       preferred_shape: "browser({ action, args?, session_id?, page_id?, backend? })",
       args: "Preferred structured carrier for action-specific scalar fields.",
+      output:
+        "Defaults to compact CLI text. Use args.format='json' (or args.f/args['-f']) for the structured envelope, or args.full=true (or args['--full']=true) for verbose visible output.",
       input_json: "Compatibility-only JSON string carrier; do not use for new calls.",
       backend: "Omit for normal local use; Playwright is the supported local path.",
       top_level_ids: "Top-level session_id/page_id are authoritative; conflicting nested IDs fail.",

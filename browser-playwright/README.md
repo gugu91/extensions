@@ -48,6 +48,8 @@ Parameters:
 - `args` — preferred structured object with action-specific scalar inputs such as
   `url`, `selector`, `value`, `timeout_ms`, `label`, `full_page`, or `topic`
   - use this for new calls
+  - output controls live here too: `format: "cli" | "json"` (or `f`/`-f`) and
+    `full: true` (or `--full: true`)
   - `args` and `input_json` may carry duplicate fields only when the values match
 - `session_id` — optional session handle for actions that operate on an existing session
   - top-level `session_id` is authoritative; conflicting nested values fail clearly
@@ -63,7 +65,13 @@ Parameters:
 
 ## Response shape
 
-Every call returns one shared envelope:
+Default visible output is compact CLI-style text, for example:
+
+```text
+Browser navigated: page=page_abc; url=https://example.com/docs; title="Docs".
+```
+
+Every call still preserves the same structured envelope in tool `details`:
 
 - `backend`
 - `action`
@@ -73,12 +81,17 @@ Every call returns one shared envelope:
 - `result`
 - `artifacts`
 
-This keeps backend differences explicit instead of overpromising parity.
+Use `args.format: "json"` (or `args.f`/`args["-f"]`) to emit that structured
+envelope as visible JSON. Use `args.full: true` (or `args["--full"]: true`) for
+verbose visible output. This keeps backend differences explicit instead of
+overpromising parity while keeping routine successes quiet.
 
 ## Supported path in Anthropic sandbox
 
 - Use `browser-playwright` and the single `browser` tool for local browsing in this repo.
 - Use `action` + `args` for action-specific fields.
+- Omit output options for compact CLI text; opt into `args.format: "json"` or
+  `args.full: true` only when you need verbose details.
 - Omit `backend` for normal use; Playwright is the supported local path.
 - Treat `input_json` as compatibility-only for older callers.
 - Treat `agent-browser` as hidden/experimental only. Local daemon compatibility is a non-goal here.
@@ -311,7 +324,7 @@ Saved Playwright login/session state is supported in a narrow, explicit way.
 
 - place trusted Playwright `storageState` JSON files under
   `.pi/state/browser-playwright/`
-- reuse one explicitly via the `start` action and `storage_state_name` inside `input_json` (today's stable action-input carrier)
+- reuse one explicitly via the `start` action and `storage_state_name` inside `args`
 - the extension never auto-saves browser state on close or shutdown
 
 Treat `.pi/state/browser-playwright/` as trusted, secret-bearing auth material for the current workspace and host.

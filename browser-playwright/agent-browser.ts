@@ -1,10 +1,16 @@
-import { buildCapabilities, type BrowserToolRequest } from "./protocol.ts";
+import {
+  buildCapabilities,
+  formatBrowserResponseText,
+  normalizeBrowserOutputOptions,
+  type BrowserToolEnvelope,
+  type BrowserToolRequest,
+} from "./protocol.ts";
 
 export function buildAgentBrowserModeResult(request: BrowserToolRequest): {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 } {
-  const result: Record<string, unknown> = {
+  const result: BrowserToolEnvelope = {
     backend: "agent-browser",
     action: request.action,
     session_id: request.sessionId ?? null,
@@ -25,9 +31,10 @@ export function buildAgentBrowserModeResult(request: BrowserToolRequest): {
     },
     artifacts: [],
   };
+  const output = normalizeBrowserOutputOptions(request.args);
 
   return {
-    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    content: [{ type: "text", text: formatBrowserResponseText(result, output) }],
     details: result,
   };
 }
