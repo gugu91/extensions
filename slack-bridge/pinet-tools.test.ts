@@ -88,8 +88,8 @@ describe("registerPinetTools", () => {
     const tools = registerWithDeps(createDeps());
     const pinet = tools.get("pinet");
 
-    expect(pinet?.promptSnippet).toContain("Use this dispatcher for all Pinet actions");
-    expect(pinet?.promptSnippet).toContain('action="send"');
+    expect(pinet?.promptSnippet).toContain("Use this compact dispatcher for Pinet actions");
+    expect(pinet?.promptSnippet).toContain('args.format="json"');
     expect(JSON.stringify(pinet?.parameters)).toContain(
       "help, send, read, free, schedule, or agents",
     );
@@ -120,9 +120,7 @@ describe("registerPinetTools", () => {
     };
 
     expect(sendPinetBroadcastMessage).toHaveBeenCalledWith("#extensions", "hello mesh");
-    expect(result.details.data.text).toBe(
-      "Broadcast sent to #extensions (2 agents: Worker One, Worker Two).",
-    );
+    expect(result.details.data.text).toBe("Pinet broadcast sent to #extensions (2 recipients).");
     expect(result.details.data.details).toEqual({
       channel: "#extensions",
       messageIds: [21, 22],
@@ -182,17 +180,11 @@ describe("registerPinetTools", () => {
     };
 
     expect(readPinetInbox).toHaveBeenCalledWith({ threadId: "a2a:broker:worker", limit: 5 });
-    expect(result.details.data.text).toContain(
-      "Pinet read (unread) from thread a2a:broker:worker: 1 message.",
+    expect(result.details.data.text).toBe(
+      "Pinet read: 1 unread message; unread 2→1; marked 1; 1 unread thread.",
     );
-    expect(result.details.data.text).toContain("Unread before: 2; unread after: 1.");
-    expect(result.details.data.text).toContain(
-      "- [steering] [agent/a2a:broker:worker #44] broker: please inspect #594",
-    );
-    expect(result.details.data.text).toContain(
-      "- [steering] a2a:broker:worker (agent): 1 unread (1 steering); latest #45; pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
-    );
-    expect(result.details.data.text).toContain("Marked read: 31.");
+    expect(result.details.data.text).not.toContain("please inspect #594");
+    expect(result.details.data.text).not.toContain("pointer=pinet action=read");
     expect(result.details.data.details.markedReadIds).toEqual([31]);
   });
 
@@ -238,7 +230,7 @@ describe("registerPinetTools", () => {
       };
     };
 
-    expect(result.content[0]?.text).toContain("Use args.full=true");
+    expect(result.content[0]?.text).toBe("Pinet read: 1 unread message; unread 1→0; marked 1.");
     expect(result.content[0]?.text).not.toContain(longBody);
     expect(result.details.data.text).not.toContain(longBody);
     expect(result.details.data.details.messages[0]?.message.body).toBe(longBody);
@@ -279,13 +271,50 @@ describe("registerPinetTools", () => {
 
     const result = (await tools.get("pinet")?.execute("tool-call-read-json-details", {
       action: "read",
-      args: { thread_id: "a2a:broker:worker", format: "json" },
+      args: { thread_id: "a2a:broker:worker", f: "json" },
     })) as { content: Array<{ text: string }> };
     const envelope = JSON.parse(result.content[0]?.text ?? "{}") as {
       data: { details: { messages: Array<{ message: { body: string } }> } };
     };
 
     expect(envelope.data.details.messages[0]?.message.body).toBe(body);
+  });
+
+  it("shows exact Pinet read bodies only with explicit full output", async () => {
+    const body = "exact full body";
+    const readPinetInbox = vi.fn(async () => ({
+      messages: [
+        {
+          inboxId: 31,
+          delivered: true,
+          readAt: "2026-04-25T12:00:00.000Z",
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent" as const,
+            direction: "inbound" as const,
+            sender: "broker",
+            body,
+            metadata: { a2a: true },
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 1,
+      unreadCountAfter: 0,
+      unreadThreads: [],
+      markedReadIds: [31],
+    }));
+    const deps = createDeps({ readPinetInbox });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-read-full-details", {
+      action: "read",
+      args: { thread_id: "a2a:broker:worker", full: true },
+    })) as { content: Array<{ text: string }>; details: { data: { full_details: unknown } } };
+
+    expect(result.content[0]?.text).toContain(body);
+    expect(result.details.data.full_details).toBeDefined();
   });
 
   it("routes action-dispatched help through the dispatcher", async () => {
@@ -351,7 +380,29 @@ describe("registerPinetTools", () => {
     expect(sendPinetAgentMessage).toHaveBeenCalledWith("alpha", "dispatch now");
     expect(result.details.status).toBe("succeeded");
     expect(result.details.data.action).toBe("send");
+    expect(result.details.data.text).toBe("Pinet message sent to alpha.");
     expect(result.content[0]?.text).toContain('"status": "succeeded"');
+  });
+
+  it("honors explicit full output for pinet send", async () => {
+    const sendPinetAgentMessage = vi.fn(async (_to: string, _message: string) => ({
+      messageId: 41,
+      target: "alpha",
+    }));
+    const deps = createDeps({ sendPinetAgentMessage });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-send-full", {
+      action: "send",
+      args: {
+        to: "alpha",
+        message: "dispatch now",
+        "--full": true,
+      },
+    })) as { details: { data: { text: string; details: { messageId: number } } } };
+
+    expect(result.details.data.text).toBe("Message sent to alpha (id: 41).");
+    expect(result.details.data.details.messageId).toBe(41);
   });
 
   it("formats action-dispatched free responses with note and queued inbox count", async () => {
@@ -376,9 +427,7 @@ describe("registerPinetTools", () => {
     };
 
     expect(signalAgentFree).toHaveBeenCalledWith(undefined, { requirePinet: true });
-    expect(result.details.data.text).toBe(
-      "Marked this Pinet agent idle/free for new work. Note: wrapped up #395. 2 queued inbox items remain.",
-    );
+    expect(result.details.data.text).toBe("Pinet free: idle; 2 queued.");
     expect(result.details.data.details).toEqual({
       status: "idle",
       note: "wrapped up #395",
@@ -408,9 +457,7 @@ describe("registerPinetTools", () => {
     };
 
     expect(scheduleBrokerWakeup).toHaveBeenCalledWith("2026-04-14T12:05:00.000Z", "check queue");
-    expect(result.details.data.text).toBe(
-      "Wake-up scheduled for 2026-04-14T12:05:00.000Z (id: 7).",
-    );
+    expect(result.details.data.text).toBe("Pinet wake-up scheduled for 2026-04-14T12:05:00.000Z.");
     expect(result.details.data.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
   });
 
@@ -477,7 +524,8 @@ describe("registerPinetTools", () => {
       };
     };
 
-    expect(result.content[0]?.text).toContain("Golden Chalk Rabbit");
+    expect(result.content[0]?.text).toBe("Pinet agents: 1 visible; hints repo=extensions.");
+    expect(result.content[0]?.text).not.toContain("Golden Chalk Rabbit");
     expect(result.details.data.text).not.toContain("pid:");
     expect(result.details.data.details.agents[0]?.name).toBe("Golden Chalk Rabbit");
     expect(result.details.data.details.agents[0]?.metadata).toEqual(

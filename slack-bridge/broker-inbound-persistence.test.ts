@@ -46,7 +46,7 @@ describe("broker inbound persistence", () => {
       "pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
     );
     expect(buildPersistedInboundNotificationText(delivered.message)).toContain(
-      "Durable slack mail stored in SQLite as message #42.",
+      "Durable slack mail stored as #42.",
     );
     expect(buildPersistedInboundNotificationText(delivered.message)).toContain(
       "pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
@@ -62,8 +62,8 @@ describe("broker inbound persistence", () => {
 
     expect(store.queueDeliveredMessage).toHaveBeenCalledWith("broker", message);
     expect(result.result).toBe(delivered);
-    expect(result.notificationText).toContain(
-      "Use pinet action=read with the pointer before acting.",
+    expect(result.notificationText).toBe(
+      "Durable slack mail stored as #42. pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
     );
   });
 });

@@ -379,11 +379,9 @@ function formatSlackInboxMessages(
   const hasInlineSlackMessage = messages.some((message) => message.brokerInboxId == null);
 
   const guidance = hasDurablePointer
-    ? hasMaintenance
-      ? hasActionableWork || hasFollowUp || hasInlineSlackMessage
-        ? "Use pinet action=read with the pointer before acting. For [maintenance/context] messages, do NOT acknowledge or reply unless you have a real blocker or materially new finding. For [steering]/[fwup] or inline Slack messages, ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
-        : "Use pinet action=read with the pointer only if you need details. Treat [maintenance/context] messages as context-only; do NOT send another acknowledgement unless you have a real blocker or materially new finding."
-      : "Use pinet action=read with the pointer before acting. ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
+    ? hasMaintenance && !hasActionableWork && !hasFollowUp && !hasInlineSlackMessage
+      ? "Context-only pointer(s); read only if needed."
+      : "Read pointer(s) before acting; reply/ACK only for actionable work."
     : "ACK briefly, do the work, report blockers immediately, report the outcome when done.";
 
   return `New Slack messages:\n${lines.join("\n")}\n\n${guidance}`;
@@ -465,11 +463,11 @@ export function formatPinetInboxMessages(entries: FollowerInboxEntry[]): string 
 
   const guidance = hasMaintenanceOnly
     ? hasActionableWork || hasFollowUp
-      ? "Use pinet action=read with the pointer before acting. Reply via pinet action=send for steering/follow-up only. For [maintenance/context] messages, do NOT acknowledge or reply unless you have a real blocker or materially new finding. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
-      : "Use pinet action=read with the pointer only if you need details. Treat [maintenance/context] messages as context-only; do NOT send another acknowledgement unless you have a real blocker or materially new finding."
+      ? "Read pointer(s) before acting; reply via pinet action=send for steering/follow-up."
+      : "Context-only pointer(s); read only if needed."
     : hasActionableWork
-      ? "Use pinet action=read with the pointer before acting. Reply via pinet action=send. For [steering], ACK briefly after reading, do the work, report blockers immediately, report the outcome when done."
-      : "Use pinet action=read with the pointer before acting. Reply via pinet action=send if follow-up is needed.";
+      ? "Read pointer(s) before acting; reply via pinet action=send."
+      : "Read pointer(s) if follow-up is needed; reply via pinet action=send when needed.";
 
   return `New Pinet messages:\n${lines.join("\n")}\n\n${guidance}`;
 }

@@ -471,8 +471,8 @@ describe("formatInboxMessages", () => {
     expect(result).toContain(
       "[thread 789.012] [fwup] (channel mention in <#C789>) will: inbox_id=13 pointer=pinet action=read args.thread_id=789.012 args.unread_only=true",
     );
-    expect(result).toContain("Use pinet action=read with the pointer before acting.");
-    expect(result).toContain("ACK briefly after reading, do the work");
+    expect(result).toContain("Read pointer(s) before acting; reply/ACK only for actionable work.");
+    expect(result).not.toContain("ACK briefly after reading, do the work");
     expect(result).not.toContain("secret Slack body");
   });
 
@@ -557,7 +557,7 @@ describe("formatInboxMessages", () => {
     expect(result).toContain(
       "[thread 123.456] [maintenance/context] will: inbox_id=15 pointer=pinet action=read args.thread_id=123.456 args.unread_only=true",
     );
-    expect(result).toContain("Treat [maintenance/context] messages as context-only");
+    expect(result).toContain("Context-only pointer(s); read only if needed.");
     expect(result).not.toContain("ACK briefly after reading");
     expect(result).not.toContain("background context only");
   });
@@ -584,7 +584,7 @@ describe("formatInboxMessages", () => {
 
     const result = formatInboxMessages(msgs, names);
     expect(result).toContain("[maintenance/context]");
-    expect(result).toContain("For [steering]/[fwup] or inline Slack messages, ACK briefly");
+    expect(result).toContain("Read pointer(s) before acting; reply/ACK only for actionable work.");
     expect(result).toContain("will: please check this inline message");
     expect(result).not.toContain("background context only");
   });
@@ -754,8 +754,8 @@ describe("formatPinetInboxMessages", () => {
       "[thread a2a:broker:worker] [steering] broker-id (Broker Bunny): inbox_id=17 pointer=pinet action=read args.thread_id=a2a:broker:worker args.unread_only=true",
     );
     expect(result).not.toContain("Take issue #175");
-    expect(result).toContain("Use pinet action=read with the pointer before acting.");
-    expect(result).toContain("ACK briefly after reading, do the work");
+    expect(result).toContain("Read pointer(s) before acting; reply via pinet action=send.");
+    expect(result).not.toContain("ACK briefly after reading, do the work");
   });
 
   it("falls back to the sender id when no senderAgent metadata exists", () => {
@@ -799,7 +799,9 @@ describe("formatPinetInboxMessages", () => {
       "[thread wakeup:worker-1] [fwup] scheduler (Pinet Scheduler): inbox_id=42 pointer=pinet action=read args.thread_id=wakeup:worker-1 args.unread_only=true",
     );
     expect(result).not.toContain("Check whether PR #62 merged");
-    expect(result).toContain("Use pinet action=read with the pointer before acting.");
+    expect(result).toContain(
+      "Read pointer(s) if follow-up is needed; reply via pinet action=send when needed.",
+    );
   });
 
   it("marks terminal stand-down messages as maintenance/context and suppresses reflex ack guidance", () => {
@@ -815,8 +817,8 @@ describe("formatPinetInboxMessages", () => {
     ]);
 
     expect(result).toContain("[maintenance/context]");
-    expect(result).toContain("Treat [maintenance/context] messages as context-only");
-    expect(result).toContain("do NOT send another acknowledgement");
+    expect(result).toContain("Context-only pointer(s); read only if needed.");
+    expect(result).not.toContain("do NOT send another acknowledgement");
     expect(result).not.toContain("Hard stop on this thread");
     expect(result).not.toContain(
       "ACK briefly, do the work, report blockers immediately, report the outcome when done.",
@@ -845,9 +847,11 @@ describe("formatPinetInboxMessages", () => {
 
     expect(result).toContain("[maintenance/context]");
     expect(result).toContain("[steering]");
-    expect(result).toContain("Reply via pinet action=send for steering/follow-up only.");
-    expect(result).toContain("For [steering], ACK briefly after reading, do the work");
     expect(result).toContain(
+      "Read pointer(s) before acting; reply via pinet action=send for steering/follow-up.",
+    );
+    expect(result).not.toContain("For [steering], ACK briefly after reading, do the work");
+    expect(result).not.toContain(
       "do NOT acknowledge or reply unless you have a real blocker or materially new finding",
     );
   });
