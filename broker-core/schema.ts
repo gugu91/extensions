@@ -403,21 +403,36 @@ function createCoreTables(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_messages_thread
       ON messages(thread_id, created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_source_external_id
-      ON messages(source, external_id)
-      WHERE external_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_messages_source_external_ts
-      ON messages(source, external_ts);
     CREATE INDEX IF NOT EXISTS idx_inbox_agent_delivered
       ON inbox(agent_id, delivered, created_at);
-    CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
-      ON inbox(agent_id, read_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_inbox_message
       ON inbox(message_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_agent_message_pending_unique
       ON inbox(agent_id, message_id)
       WHERE delivered = 0;
   `);
+
+  const messageColumns = getTableColumns(db, "messages");
+  if (messageColumns.has("external_id")) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_source_external_id
+        ON messages(source, external_id)
+        WHERE external_id IS NOT NULL;
+    `);
+  }
+  if (messageColumns.has("external_ts")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_messages_source_external_ts
+        ON messages(source, external_ts);
+    `);
+  }
+
+  if (getTableColumns(db, "inbox").has("read_at")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_inbox_agent_read
+        ON inbox(agent_id, read_at, created_at);
+    `);
+  }
 }
 
 function createBacklogTable(db: DatabaseSync): void {

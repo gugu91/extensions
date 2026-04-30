@@ -22,6 +22,7 @@
     "format:check:lua": "stylua --check nvim-bridge/nvim",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
+    "build": "turbo run build",
     "test": "turbo run test",
     "deploy:slack": "node --experimental-strip-types ./slack-bridge/deploy-manifest.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm format:check",
