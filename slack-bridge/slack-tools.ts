@@ -247,6 +247,25 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isPinetDeliveryFallbackError(error: unknown): boolean {
+  const lower = getErrorMessage(error).toLowerCase();
+  if (lower.includes("already owned")) return false;
+  return (
+    lower.includes("not running") ||
+    lower.includes("unexpected state") ||
+    lower.includes("unavailable") ||
+    lower.includes("not connected") ||
+    lower.includes("disconnected") ||
+    lower.includes("timeout") ||
+    lower.includes("econn") ||
+    lower.includes("socket") ||
+    lower.includes("no transport source") ||
+    lower.includes("no transport channel") ||
+    lower.includes("no adapter") ||
+    lower.includes("identity is unavailable")
+  );
+}
+
 function classifySlackDispatcherError(error: unknown): SlackDispatcherError {
   const message = getErrorMessage(error);
   const lower = message.toLowerCase();
@@ -651,6 +670,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           };
         }
       } catch (error) {
+        if (!isPinetDeliveryFallbackError(error)) throw error;
         fallbackReason = getErrorMessage(error);
       }
     }

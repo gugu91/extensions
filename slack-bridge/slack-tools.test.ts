@@ -1094,6 +1094,34 @@ describe("registerSlackTools", () => {
     });
   });
 
+  it("does not bypass healthy Pinet ownership rejections with direct Slack fallback", async () => {
+    const {
+      slack,
+      tools,
+      setResolveThreadChannel,
+      setPinetDeliveryAvailable,
+      sendPinetSlackMessage,
+    } = setup();
+    setResolveThreadChannel(async () => "D123");
+    setPinetDeliveryAvailable(true);
+    sendPinetSlackMessage.mockRejectedValueOnce(
+      new Error("Thread 123.456 is already owned by another agent."),
+    );
+
+    await expect(
+      tools.get("slack_send")!.execute("tool-pinet-owned-thread", {
+        thread_ts: "123.456",
+        text: "Do not bypass ownership",
+      }),
+    ).rejects.toThrow("already owned");
+
+    expect(slack).not.toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.any(String),
+      expect.any(Object),
+    );
+  });
+
   it("returns structured inbox messages including block action metadata", async () => {
     const { inbox, tools } = setup();
     inbox.push({
