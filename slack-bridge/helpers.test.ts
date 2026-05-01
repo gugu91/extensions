@@ -53,7 +53,7 @@ import {
   isAgentToAgentEntry,
   partitionFollowerInboxEntries,
   syncBrokerInboxEntries,
-  buildBrokerPromptGuidelines,
+  buildBrokerProtocolGuardrailsPrompt,
   buildWorkerPromptGuidelines,
   buildIdentityReplyGuidelines,
   buildAgentPersonalityGuidelines,
@@ -1522,106 +1522,22 @@ describe("Pinet skin helpers", () => {
   });
 });
 
-// ─── buildBrokerPromptGuidelines ──────────────────────────────
+// ─── buildBrokerProtocolGuardrailsPrompt ──────────────────────────────
 
-describe("buildBrokerPromptGuidelines", () => {
-  it("returns broker-specific coordination guidelines", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    expect(guidelines.length).toBeGreaterThan(0);
-    expect(guidelines[0]).toContain("BROKER");
-    expect(guidelines[0]).toContain("Solar Mantis");
-  });
+describe("buildBrokerProtocolGuardrailsPrompt", () => {
+  it("keeps only runtime-backed broker protocol restrictions hard-coded", () => {
+    const prompt = buildBrokerProtocolGuardrailsPrompt();
 
-  it("contains a hard rule against writing code", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("HARD RULE");
-    expect(joined).toContain("NEVER WRITE CODE");
-  });
-
-  it("lists forbidden actions explicitly", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("FORBIDDEN");
-    expect(joined).toContain("Agent tool");
-    expect(joined).toContain("edit");
-    expect(joined).toContain("write");
-    expect(joined).toContain("bash");
-  });
-
-  it("lists allowed actions explicitly", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("ALLOWED");
-    expect(joined).toContain("Route messages");
-    expect(joined).toContain("pinet action=agents");
-    expect(joined).toContain("pinet action=send");
-  });
-
-  it("includes a refusal template for coding requests", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("IF ASKED TO CODE");
-    expect(joined).toContain("Refuse");
-    expect(joined).toContain("delegate");
-  });
-
-  it("explains why the constraint exists (mesh stalls)", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("mesh");
-    expect(joined).toContain("stall");
-  });
-
-  it("instructs to use pinet action=send instead of Agent tool", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("pinet action=send");
-  });
-
-  it("treats code-reviewer as delegated worker work, not broker work", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("code-reviewer");
-    expect(joined).toContain("connected worker session");
-    expect(joined).not.toContain("run code reviews via the code-reviewer subagent");
-  });
-
-  it("tells broker to never do the work as a fallback", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("NEVER do the work yourself");
-  });
-
-  it("requires maintainer-prioritized issues before routing extension changes", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("PRIORITIZED ISSUE GATE");
-    expect(joined).toContain("maintainer priority/approval");
-    expect(joined).toContain("Do not self-start from open issue lists");
-    expect(joined).toContain("stop and ask");
-    expect(joined).not.toContain("@gugu91");
-  });
-
-  it("keeps broker delegation and broadcasts scoped to the target repo", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("REPO-SCOPED DELEGATION");
-    expect(joined).toContain("pinet action=agents");
-    expect(joined).toContain("extensions-repo work");
-    expect(joined).toContain("workers/subagents");
-    expect(joined).toContain("never borrow idle workers from another repo");
-    expect(joined).toContain("REPO-SCOPED BROADCASTS");
-    expect(joined).toContain("do not use `#all`");
-  });
-
-  it("keeps broker triage minimal before connected workers own investigation", () => {
-    const guidelines = buildBrokerPromptGuidelines("🦗", "Solar Mantis");
-    const joined = guidelines.join(" ");
-    expect(joined).toContain("DELEGATE, THEN TRACK");
-    expect(joined).toContain("Do not perform task triage yourself");
-    expect(joined).toContain("Connected workers/subagents own codebase investigation");
-    expect(joined).not.toContain("TRIAGE, THEN DELEGATE");
+    expect(prompt).toContain("BROKER PROTOCOL BOUNDARY");
+    expect(prompt).toContain("Broker prompt MD can replace broker coordination policy");
+    expect(prompt).toContain("Agent tool");
+    expect(prompt).toContain("edit");
+    expect(prompt).toContain("write");
+    expect(prompt).toContain("runtime");
+    expect(prompt).toContain("diagnostics must never echo private prompt file contents");
+    expect(prompt).not.toContain("PRIORITIZED ISSUE GATE");
+    expect(prompt).not.toContain("RALPH LOOP");
+    expect(prompt).not.toContain("REPO-SCOPED DELEGATION");
   });
 });
 

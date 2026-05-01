@@ -1,0 +1,238 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import {
+  loadBrokerPrompt,
+  renderBrokerPromptContent,
+  resolveBrokerPromptCandidates,
+} from "./broker-prompt-loader.js";
+
+const execFileAsync = promisify(execFile);
+
+let tempRoot: string;
+let workspaceRoot: string;
+let homeDir: string;
+let packagedDefaultPath: string;
+
+async function writeText(filePath: string, content: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content, "utf8");
+}
+
+async function writeBuffer(filePath: string, content: Buffer): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content);
+}
+
+function loaderOptions() {
+  return {
+    workspaceRoot,
+    homeDir,
+    defaultPromptPath: packagedDefaultPath,
+  };
+}
+
+beforeEach(async () => {
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broker-prompt-loader-"));
+  workspaceRoot = path.join(tempRoot, "workspace");
+  homeDir = path.join(tempRoot, "home");
+  packagedDefaultPath = path.join(tempRoot, "pkg", "prompts", "broker", "default.md");
+  await fs.mkdir(workspaceRoot, { recursive: true });
+  await fs.mkdir(homeDir, { recursive: true });
+  await writeText(packagedDefaultPath, "PACKAGED DEFAULT {{agentName}}");
+});
+
+afterEach(async () => {
+  await fs.rm(tempRoot, { recursive: true, force: true });
+});
+
+describe("resolveBrokerPromptCandidates", () => {
+  it("orders workspace override, user-local override, then packaged default", () => {
+    const candidates = resolveBrokerPromptCandidates(loaderOptions());
+
+    expect(candidates.map((candidate) => candidate.source)).toEqual([
+      "workspace",
+      "user",
+      "packaged",
+    ]);
+    expect(candidates[0]?.path).toBe(
+      path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
+    );
+    expect(candidates[1]?.path).toBe(
+      path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md"),
+    );
+    expect(candidates[2]?.path).toBe(packagedDefaultPath);
+  });
+});
+
+describe("loadBrokerPrompt", () => {
+  it("loads the workspace override when it is the first valid candidate", async () => {
+    await writeText(
+      path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
+      "WORKSPACE PROMPT",
+    );
+    await writeText(
+      path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md"),
+      "USER PROMPT",
+    );
+
+    const result = await loadBrokerPrompt(loaderOptions());
+
+    expect(result).toMatchObject({ source: "workspace", content: "WORKSPACE PROMPT" });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("resolves the workspace override from the git root when launched from a nested directory", async () => {
+    await execFileAsync("git", ["init"], { cwd: workspaceRoot });
+    const nestedDir = path.join(workspaceRoot, "packages", "app");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await writeText(
+      path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
+      "ROOT WORKSPACE PROMPT",
+    );
+
+    const result = await loadBrokerPrompt({
+      cwd: nestedDir,
+      homeDir,
+      defaultPromptPath: packagedDefaultPath,
+    });
+
+    expect(result).toMatchObject({ source: "workspace", content: "ROOT WORKSPACE PROMPT" });
+  });
+
+  it("loads the user-local override when the workspace override is absent", async () => {
+    await writeText(
+      path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md"),
+      "USER PROMPT",
+    );
+
+    const result = await loadBrokerPrompt(loaderOptions());
+
+    expect(result).toMatchObject({ source: "user", content: "USER PROMPT" });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("loads the packaged default when overrides are absent", async () => {
+    const result = await loadBrokerPrompt(loaderOptions());
+
+    expect(result).toMatchObject({ source: "packaged", content: "PACKAGED DEFAULT {{agentName}}" });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns and falls through from an invalid workspace override to a valid user override", async () => {
+    await writeText(
+      path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
+      "TOO LARGE",
+    );
+    await writeText(path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md"), "USER");
+
+    const result = await loadBrokerPrompt({ ...loaderOptions(), maxBytes: 4 });
+
+    expect(result.source).toBe("user");
+    expect(result.content).toBe("USER");
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({ source: "workspace", reason: "too_large" });
+    expect(result.warnings[0]?.message).not.toContain(workspaceRoot);
+    expect(result.warnings[0]?.message).not.toContain("TOO LARGE");
+  });
+
+  it("warns and falls through from invalid overrides to the packaged default", async () => {
+    await writeText(path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"), "");
+    await writeBuffer(
+      path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md"),
+      Buffer.from([0xff, 0xfe, 0xfd]),
+    );
+
+    const result = await loadBrokerPrompt(loaderOptions());
+
+    expect(result.source).toBe("packaged");
+    expect(result.content).toBe("PACKAGED DEFAULT {{agentName}}");
+    expect(result.warnings.map((entry) => [entry.source, entry.reason])).toEqual([
+      ["workspace", "empty"],
+      ["user", "invalid_utf8"],
+    ]);
+  });
+
+  it("rejects workspace symlink escapes and continues to packaged default", async () => {
+    const outsideDir = path.join(tempRoot, "outside");
+    const outsideFile = path.join(outsideDir, "secret.md");
+    const linkPath = path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md");
+    await writeText(outsideFile, "SECRET PROMPT");
+    await fs.mkdir(path.dirname(linkPath), { recursive: true });
+    await fs.symlink(outsideFile, linkPath);
+
+    const result = await loadBrokerPrompt(loaderOptions());
+
+    expect(result.source).toBe("packaged");
+    expect(result.content).toBe("PACKAGED DEFAULT {{agentName}}");
+    expect(result.warnings[0]).toMatchObject({ source: "workspace", reason: "unsafe_path" });
+    expect(result.warnings[0]?.message).not.toContain(outsideFile);
+    expect(result.warnings[0]?.message).not.toContain("SECRET PROMPT");
+  });
+
+  it("rejects user-local symlink escapes and continues to packaged default", async () => {
+    const outsideDir = path.join(tempRoot, "outside-user");
+    const outsideFile = path.join(outsideDir, "secret.md");
+    const linkPath = path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md");
+    await writeText(outsideFile, "USER SECRET PROMPT");
+    await fs.mkdir(path.dirname(linkPath), { recursive: true });
+    await fs.symlink(outsideFile, linkPath);
+
+    const result = await loadBrokerPrompt(loaderOptions());
+
+    expect(result.source).toBe("packaged");
+    expect(result.warnings[0]).toMatchObject({ source: "user", reason: "unsafe_path" });
+    expect(result.warnings[0]?.message).not.toContain(outsideFile);
+    expect(result.warnings[0]?.message).not.toContain("USER SECRET PROMPT");
+  });
+
+  it("fails closed when the packaged default is missing or invalid", async () => {
+    await fs.rm(packagedDefaultPath, { force: true });
+
+    await expect(loadBrokerPrompt(loaderOptions())).rejects.toThrow(
+      "No valid broker prompt candidates found",
+    );
+  });
+});
+
+describe("renderBrokerPromptContent", () => {
+  it("renders broker identity placeholders without changing other MD", () => {
+    expect(
+      renderBrokerPromptContent("Hello {{agentEmoji}} {{agentName}}. Keep **Markdown**.", {
+        agentEmoji: "🦫",
+        agentName: "Prism Bronze Beaver",
+      }),
+    ).toBe("Hello 🦫 Prism Bronze Beaver. Keep **Markdown**.");
+  });
+});
+
+describe("packaged default broker prompt", () => {
+  it("keeps replaceable default policy in MD rather than hard-coded broker prompt helpers", async () => {
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "default.md");
+    const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
+
+    expect(defaultPrompt).toContain("NEVER WRITE CODE");
+    expect(defaultPrompt).toContain("PRIORITIZED ISSUE GATE");
+    expect(defaultPrompt).toContain("REPO-SCOPED DELEGATION");
+    expect(defaultPrompt).toContain("RALPH LOOP");
+    expect(defaultPrompt).toContain("{{agentEmoji}} {{agentName}}");
+  });
+
+  it("copies prompt assets into dist/prompts so the packaged default is loadable", async () => {
+    await execFileAsync("node", ["../scripts/build-package.mjs"], { cwd: process.cwd() });
+
+    const distPromptPath = path.join(process.cwd(), "dist", "prompts", "broker", "default.md");
+    await expect(fs.access(distPromptPath)).resolves.toBeUndefined();
+    const result = await loadBrokerPrompt({
+      workspaceRoot,
+      homeDir,
+      defaultPromptPath: distPromptPath,
+    });
+
+    expect(result.source).toBe("packaged");
+    expect(result.content).toContain("PRIORITIZED ISSUE GATE");
+  });
+});
