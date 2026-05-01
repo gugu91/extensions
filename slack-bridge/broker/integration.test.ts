@@ -160,6 +160,61 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     client2.disconnect();
   });
 
+  it("inbox.read denies cross-agent thread reads while preserving broker self-read visibility", async () => {
+    const brokerReg = await client.register("broker-agent", "🐊");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const workerA = new BrokerClient({ host: info.host, port: info.port });
+    const workerB = new BrokerClient({ host: info.host, port: info.port });
+    await workerA.connect();
+    await workerB.connect();
+
+    try {
+      const workerAReg = await workerA.register("worker-a", "🅰️");
+      const workerBReg = await workerB.register("worker-b", "🅱️");
+
+      await client.sendAgentMessage(workerBReg.agentId, "private task for worker B");
+      const workerBThread = `a2a:${brokerReg.agentId}:${workerBReg.agentId}`;
+
+      const crossRead = await workerA.readInbox({
+        threadId: workerBThread,
+        unreadOnly: false,
+        markRead: true,
+      });
+      expect(crossRead.messages).toEqual([]);
+      expect(crossRead.markedReadIds).toEqual([]);
+      expect(crossRead.unreadCountBefore).toBe(0);
+      expect(crossRead.unreadCountAfter).toBe(0);
+
+      const workerBOwnRead = await workerB.readInbox({ threadId: workerBThread, markRead: false });
+      expect(workerBOwnRead.messages.map((item) => item.message.body)).toEqual([
+        "private task for worker B",
+      ]);
+      expect(workerBOwnRead.unreadCountBefore).toBe(1);
+      expect(workerBOwnRead.unreadCountAfter).toBe(1);
+
+      await workerA.sendAgentMessage(brokerReg.agentId, "status for broker only");
+      const brokerThread = `a2a:${workerAReg.agentId}:${brokerReg.agentId}`;
+
+      const workerBProbe = await workerB.readInbox({
+        threadId: brokerThread,
+        unreadOnly: false,
+        markRead: true,
+      });
+      expect(workerBProbe.messages).toEqual([]);
+      expect(workerBProbe.markedReadIds).toEqual([]);
+
+      const brokerRead = await client.readInbox({ threadId: brokerThread, markRead: false });
+      expect(brokerRead.messages.map((item) => item.message.body)).toEqual([
+        "status for broker only",
+      ]);
+    } finally {
+      workerA.disconnect();
+      workerB.disconnect();
+    }
+  });
+
   it("sender does not receive own messages", async () => {
     await client.register("solo-agent", "🤖");
     await client.send("thread-solo", "Talking to myself");
