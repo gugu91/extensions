@@ -61,11 +61,46 @@ describe("createPinetRegistrationGate", () => {
     expect(() => gate.assertCanRegister()).toThrow(gate.getBlockReason());
   });
 
-  it("uses the session header parentSession signal when evaluating the block state", () => {
+  it("allows normal continued sessions even when the session has parent lineage", () => {
     const gate = createPinetRegistrationGate({
-      getArgv: () => [],
-      getStdinIsTTY: () => true,
-      getStdoutIsTTY: () => true,
+      getArgv: () => ["--continue"],
+      getStdinIsTTY: () => false,
+      getStdoutIsTTY: () => false,
+    });
+    const ctx = createContext({
+      hasUI: true,
+      sessionFile: "/tmp/session.json",
+      leafId: "leaf-2",
+      parentSession: "parent-session-id",
+    });
+
+    expect(gate.evaluateSessionStart(ctx)).toBe(false);
+    expect(gate.isBlocked()).toBe(false);
+    expect(() => gate.assertCanRegister()).not.toThrow();
+  });
+
+  it("blocks parented headless sessions when evaluating the block state", () => {
+    const gate = createPinetRegistrationGate({
+      getArgv: () => ["--mode", "rpc"],
+      getStdinIsTTY: () => false,
+      getStdoutIsTTY: () => false,
+    });
+    const ctx = createContext({
+      hasUI: false,
+      sessionFile: "/tmp/session.json",
+      leafId: "leaf-2",
+      parentSession: "parent-session-id",
+    });
+
+    expect(gate.evaluateSessionStart(ctx)).toBe(true);
+    expect(gate.isBlocked()).toBe(true);
+  });
+
+  it("blocks continued sessions when they still look like parented headless subagents", () => {
+    const gate = createPinetRegistrationGate({
+      getArgv: () => ["--continue", "--mode", "rpc"],
+      getStdinIsTTY: () => false,
+      getStdoutIsTTY: () => false,
     });
     const ctx = createContext({
       hasUI: true,
