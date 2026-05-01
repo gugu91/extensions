@@ -1621,6 +1621,9 @@ describe("buildBrokerPromptGuidelines", () => {
     expect(joined).toContain("extensions-repo work");
     expect(joined).toContain("workers/subagents");
     expect(joined).toContain("never borrow idle workers from another repo");
+    expect(joined).toContain("start repo-scoped Pinet follower capacity via the tmux flow");
+    expect(joined).toContain("only report the capacity gap if you cannot safely start a worker");
+    expect(joined).not.toContain("ask for a repo-matched worker");
     expect(joined).toContain("REPO-SCOPED BROADCASTS");
     expect(joined).toContain("do not use `#all`");
   });
