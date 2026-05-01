@@ -134,7 +134,7 @@ const PINET_OUTPUT_OPTION_PARAMETERS = {
   full: Type.Optional(
     Type.Boolean({
       description:
-        "Include full verbose text/full_details; default visible content stays compact while data.details remains backward-compatible.",
+        "Include full verbose text/details; default cli output keeps data.details compact.",
     }),
   ),
 };
@@ -265,6 +265,16 @@ function wrapDispatcherEnvelope(
     ],
     details: envelope,
   };
+}
+
+function selectPinetResultDetails(result: PinetToolResult, output: PinetOutputOptions): unknown {
+  if (output.format === "json" || output.full) {
+    return result.details ?? null;
+  }
+  if (result.compactDetails !== undefined) {
+    return result.compactDetails;
+  }
+  return result.details ?? null;
 }
 
 function buildPinetDispatcherHelpEnvelope(
@@ -753,7 +763,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
           description:
-            'Action arguments. Add format="cli"|"json" (or f/"-f") and full=true (or "--full": true) for explicit presentation control. data.details stays backward-compatible.',
+            'Action arguments. Add format="cli"|"json" (or f/"-f") and full=true (or "--full": true) for explicit presentation control. Default cli keeps data.details compact; format="json" or full=true exposes full structured details.',
         }),
       ),
     }),
@@ -846,13 +856,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
           buildPinetDispatcherEnvelope("succeeded", {
             action: definition.name,
             text: result.content[0]?.text ?? "",
-            details: result.details ?? null,
-            ...(result.compactDetails !== undefined && !output.full
-              ? { compact_details: result.compactDetails }
-              : {}),
-            ...(output.full && result.fullDetails !== undefined
-              ? { full_details: result.fullDetails }
-              : {}),
+            details: selectPinetResultDetails(result, output),
           }),
           output,
         );
