@@ -7,8 +7,10 @@ import {
   parseMemberJoinedChannel,
   SlackAdapter,
   RECONNECT_DELAY_MS,
+  SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD,
+  SLACK_THREAD_CACHE_MAX_SIZE,
 } from "./slack.js";
-import { SlackSocketModeClient } from "../../slack-access.js";
+import { SlackSocketModeClient, type SlackThreadContext } from "../../slack-access.js";
 import type { OutboundMessage } from "./types.js";
 
 async function waitForAssertion(assertion: () => void, attempts = 50): Promise<void> {
@@ -732,7 +734,89 @@ describe("SlackAdapter", () => {
       },
     });
 
-    expect(rememberKnownThread).toHaveBeenCalledWith("123.456", "C123");
+    expect(rememberKnownThread).toHaveBeenCalledWith("123.456", "C123", null);
+  });
+
+  it("bounds the in-memory tracked thread cache", async () => {
+    const adapter = new SlackAdapter(baseConfig);
+    vi.spyOn(
+      adapter as unknown as { setSuggestedPrompts: () => Promise<void> },
+      "setSuggestedPrompts",
+    ).mockResolvedValue(undefined);
+
+    const adapterPort = adapter as unknown as {
+      onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+    };
+
+    for (let i = 0; i <= SLACK_THREAD_CACHE_MAX_SIZE; i += 1) {
+      await adapterPort.onThreadStarted({
+        type: "assistant_thread_started",
+        assistant_thread: {
+          channel_id: "C123",
+          thread_ts: `${i}.000`,
+          user_id: "U123",
+        },
+      });
+    }
+
+    const tracked = adapter.getTrackedThreadIds();
+    expect(tracked.size).toBe(SLACK_THREAD_CACHE_MAX_SIZE);
+    expect(tracked.has("0.000")).toBe(false);
+    expect(tracked.has(`${SLACK_THREAD_CACHE_MAX_SIZE}.000`)).toBe(true);
+  });
+
+  it("bounds pending attention reactions retained per thread", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users.info")) {
+        return new Response(JSON.stringify({ ok: true, user: { real_name: "Alice" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/reactions.add")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const adapter = new SlackAdapter(baseConfig);
+      adapter.onInbound(vi.fn());
+      const adapterPort = adapter as unknown as {
+        botUserId: string | null;
+        onMessage: (evt: Record<string, unknown>) => Promise<void>;
+        pendingEyes: {
+          get: (threadTs: string) => { channel: string; messageTs: string }[] | undefined;
+        };
+      };
+      adapterPort.botUserId = "U_BOT";
+
+      for (let i = 0; i <= SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD; i += 1) {
+        await adapterPort.onMessage({
+          type: "message",
+          user: "U_ALLOWED",
+          text: `message ${i}`,
+          channel: "D1",
+          channel_type: "im",
+          thread_ts: "1.1",
+          ts: `1.${i + 2}`,
+        });
+      }
+
+      const pending = adapterPort.pendingEyes.get("1.1") ?? [];
+      expect(pending).toHaveLength(SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD);
+      expect(pending[0]?.messageTs).toBe("1.3");
+      expect(pending.at(-1)?.messageTs).toBe(
+        `1.${SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD + 2}`,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("registers an inbound handler", () => {
@@ -961,7 +1045,7 @@ describe("SlackAdapter", () => {
       }),
     );
 
-    expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123");
+    expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123", null);
     expect(handler).toHaveBeenCalledWith({
       source: "slack",
       threadId: "123.000",
@@ -1078,7 +1162,7 @@ describe("SlackAdapter", () => {
       }),
     );
 
-    expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123");
+    expect(rememberKnownThread).toHaveBeenCalledWith("123.000", "C123", null);
     expect(handler).toHaveBeenCalledWith({
       source: "slack",
       threadId: "123.000",
@@ -1247,6 +1331,146 @@ describe("SlackAdapter — allowlist filtering", () => {
       expect(endpoints).toContain("https://slack.com/api/users.info");
       expect(endpoints).toContain("https://slack.com/api/reactions.add");
     });
+  });
+
+  it("suppresses legacy broker-known threaded DMs when durable context is missing", async () => {
+    fetchMock.mockImplementation(async () => {
+      throw new Error("legacy suppressed path should not call Slack APIs");
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+      isKnownThread: () => false,
+      getKnownThread: (threadTs) =>
+        threadTs === "1.1" ? { channelId: "D1", context: null } : null,
+    });
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "legacy reply after restart",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.1",
+      ts: "1.2",
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rehydrates known Slack thread context into inbound scope after cache eviction", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/users.info")) {
+        expect(parsedBody.user).toBe("U_ALLOWED");
+        return mockSlackResponse({ user: { real_name: "Alice Example" } });
+      }
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const knownThreads = new Map<
+      string,
+      {
+        channelId: string;
+        context?: SlackThreadContext | null;
+      }
+    >();
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+      isKnownThread: (threadTs) => knownThreads.has(threadTs),
+      getKnownThread: (threadTs) => knownThreads.get(threadTs) ?? null,
+      rememberKnownThread: (threadTs, channelId, context) => {
+        knownThreads.set(threadTs, { channelId, context });
+      },
+    });
+    vi.spyOn(
+      adapter as unknown as { setSuggestedPrompts: () => Promise<void> },
+      "setSuggestedPrompts",
+    ).mockResolvedValue(undefined);
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    const adapterPort = adapter as unknown as {
+      botUserId: string | null;
+      onThreadStarted: (evt: Record<string, unknown>) => Promise<void>;
+      onMessage: (evt: Record<string, unknown>) => Promise<void>;
+    };
+    adapterPort.botUserId = "U_BOT";
+
+    await adapterPort.onThreadStarted({
+      type: "assistant_thread_started",
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "1.1",
+        user_id: "U_ALLOWED",
+        context: {
+          channel_id: "C_TEAM",
+          team_id: "T001",
+        },
+      },
+    });
+
+    for (let i = 0; i < SLACK_THREAD_CACHE_MAX_SIZE; i += 1) {
+      await adapterPort.onThreadStarted({
+        type: "assistant_thread_started",
+        assistant_thread: {
+          channel_id: "D1",
+          thread_ts: `evict-${i}`,
+          user_id: "U_ALLOWED",
+        },
+      });
+    }
+    expect(adapter.getTrackedThreadIds().has("1.1")).toBe(false);
+
+    await adapterPort.onMessage({
+      type: "message",
+      user: "U_ALLOWED",
+      text: "hello after eviction",
+      channel: "D1",
+      channel_type: "im",
+      thread_ts: "1.1",
+      ts: "1.2",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1.1",
+        scope: {
+          workspace: {
+            provider: "slack",
+            source: "compatibility",
+            compatibilityKey: "default",
+            workspaceId: "T001",
+            channelId: "C_TEAM",
+          },
+          instance: {
+            source: "compatibility",
+            compatibilityKey: "default",
+          },
+        },
+      }),
+    );
   });
 
   it("carries known Slack thread team context into the inbound scope carrier", async () => {
@@ -1418,7 +1642,7 @@ describe("SlackAdapter — reaction triggers", () => {
       event_ts: "999.000",
     });
 
-    expect(rememberKnownThread).toHaveBeenCalledWith("111.222", "C123");
+    expect(rememberKnownThread).toHaveBeenCalledWith("111.222", "C123", null);
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "slack",

@@ -38,6 +38,8 @@ export interface ThreadInfo {
   source: string;
   channel: string;
   ownerAgent: string | null;
+  ownerBinding?: "explicit" | null;
+  metadata?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }

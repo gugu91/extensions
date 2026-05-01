@@ -11,9 +11,10 @@ import {
   resolvePinetMeshAuth,
   syncBrokerInboxEntries,
 } from "./helpers.js";
-import { startBroker, type Broker } from "./broker/index.js";
+import { startBroker, type Broker, type ThreadInfo } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
 import { SlackAdapter } from "./broker/adapters/slack.js";
+import type { SlackThreadContext } from "./slack-access.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
 import {
@@ -179,6 +180,35 @@ export interface BrokerRuntime {
 function normalizeOptionalSetting(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+export function readStoredSlackThreadContext(
+  metadata: Record<string, unknown> | null | undefined,
+): SlackThreadContext | null {
+  const value = metadata?.slackThreadContext;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.channelId !== "string" || record.channelId.length === 0) return null;
+  if (typeof record.scope !== "object" || record.scope === null || Array.isArray(record.scope)) {
+    return null;
+  }
+
+  return {
+    channelId: record.channelId,
+    ...(typeof record.teamId === "string" && record.teamId.length > 0
+      ? { teamId: record.teamId }
+      : {}),
+    scope: record.scope as SlackThreadContext["scope"],
+  };
+}
+
+export function shouldRouteKnownSlackThread(
+  thread: Pick<ThreadInfo, "source" | "channel" | "metadata"> | null,
+): boolean {
+  if (!thread || thread.source !== "slack") return false;
+  if (!thread.channel.startsWith("D")) return true;
+  return readStoredSlackThreadContext(thread.metadata) !== null;
 }
 
 export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
@@ -546,9 +576,26 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         allowAllWorkspaceUsers: deps.shouldAllowAllWorkspaceUsers(),
         suggestedPrompts: settings.suggestedPrompts,
         reactionCommands: settings.reactionCommands,
-        isKnownThread: (threadTs: string) => broker.db.getThread(threadTs) != null,
-        rememberKnownThread: (threadTs: string, channelId: string) => {
-          broker.db.updateThread(threadTs, { source: "slack", channel: channelId });
+        isKnownThread: (threadTs: string) =>
+          shouldRouteKnownSlackThread(broker.db.getThread(threadTs)),
+        getKnownThread: (threadTs: string) => {
+          const thread = broker.db.getThread(threadTs);
+          if (!thread || thread.source !== "slack") return null;
+          return {
+            channelId: thread.channel,
+            context: readStoredSlackThreadContext(thread.metadata),
+          };
+        },
+        rememberKnownThread: (threadTs: string, channelId: string, context) => {
+          const existingMetadata = broker.db.getThread(threadTs)?.metadata ?? {};
+          broker.db.updateThread(threadTs, {
+            source: "slack",
+            channel: channelId,
+            metadata: {
+              ...existingMetadata,
+              ...(context ? { slackThreadContext: context } : {}),
+            },
+          });
         },
         onAppHomeOpened: async ({ userId }) => {
           await deps.onAppHomeOpened(userId, ctx);
