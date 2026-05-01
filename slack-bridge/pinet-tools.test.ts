@@ -175,7 +175,7 @@ describe("registerPinetTools", () => {
     })) as {
       details: {
         status: "succeeded";
-        data: { text: string; details: { markedReadIds: number[] } };
+        data: { text: string; details: { markedReadIds: number[]; messageCount: number } };
       };
     };
 
@@ -186,9 +186,10 @@ describe("registerPinetTools", () => {
     expect(result.details.data.text).not.toContain("please inspect #594");
     expect(result.details.data.text).not.toContain("pointer=pinet action=read");
     expect(result.details.data.details.markedReadIds).toEqual([31]);
+    expect(result.details.data.details.messageCount).toBe(1);
   });
 
-  it("keeps pinet read structured details backward-compatible while compacting default text", async () => {
+  it("keeps pinet read default cli details compact without exposing full bodies", async () => {
     const longBody = `please inspect ${"important context ".repeat(20)}and keep exact body`;
     const readPinetInbox = vi.fn(async () => ({
       messages: [
@@ -224,8 +225,9 @@ describe("registerPinetTools", () => {
       details: {
         data: {
           text: string;
-          details: { messages: Array<{ message: { body: string; metadata: unknown } }> };
-          compact_details: { messages: Array<{ preview: string }> };
+          details: { messages: Array<{ preview: string; message?: { body?: string } }> };
+          compact_details?: unknown;
+          full_details?: unknown;
         };
       };
     };
@@ -233,12 +235,11 @@ describe("registerPinetTools", () => {
     expect(result.content[0]?.text).toBe("Pinet read: 1 unread message; unread 1→0; marked 1.");
     expect(result.content[0]?.text).not.toContain(longBody);
     expect(result.details.data.text).not.toContain(longBody);
-    expect(result.details.data.details.messages[0]?.message.body).toBe(longBody);
-    expect(result.details.data.details.messages[0]?.message.metadata).toEqual({
-      a2a: true,
-      priority: "high",
-    });
-    expect(result.details.data.compact_details.messages[0]?.preview).toContain("…");
+    expect(result.details.data.details.messages[0]?.preview).toContain("…");
+    expect(result.details.data.details.messages[0]?.preview).not.toContain("keep exact body");
+    expect(result.details.data.details.messages[0]?.message?.body).toBeUndefined();
+    expect(result.details.data.compact_details).toBeUndefined();
+    expect(result.details.data.full_details).toBeUndefined();
   });
 
   it("keeps pinet read format=json structured details backward-compatible", async () => {
@@ -311,10 +312,62 @@ describe("registerPinetTools", () => {
     const result = (await tools.get("pinet")?.execute("tool-call-read-full-details", {
       action: "read",
       args: { thread_id: "a2a:broker:worker", full: true },
-    })) as { content: Array<{ text: string }>; details: { data: { full_details: unknown } } };
+    })) as {
+      content: Array<{ text: string }>;
+      details: {
+        data: {
+          details: { messages: Array<{ message: { body: string } }> };
+          full_details?: unknown;
+        };
+      };
+    };
 
     expect(result.content[0]?.text).toContain(body);
-    expect(result.details.data.full_details).toBeDefined();
+    expect(result.details.data.details.messages[0]?.message.body).toBe(body);
+    expect(result.details.data.full_details).toBeUndefined();
+  });
+
+  it("keeps format=json plus full from duplicating read bodies into full_details", async () => {
+    const body = "exact json full body";
+    const readPinetInbox = vi.fn(async () => ({
+      messages: [
+        {
+          inboxId: 31,
+          delivered: true,
+          readAt: "2026-04-25T12:00:00.000Z",
+          message: {
+            id: 44,
+            threadId: "a2a:broker:worker",
+            source: "agent" as const,
+            direction: "inbound" as const,
+            sender: "broker",
+            body,
+            metadata: { a2a: true },
+            createdAt: "2026-04-25T11:59:00.000Z",
+          },
+        },
+      ],
+      unreadCountBefore: 1,
+      unreadCountAfter: 0,
+      unreadThreads: [],
+      markedReadIds: [31],
+    }));
+    const deps = createDeps({ readPinetInbox });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-read-json-full-details", {
+      action: "read",
+      args: { thread_id: "a2a:broker:worker", format: "json", full: true },
+    })) as { content: Array<{ text: string }> };
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}") as {
+      data: {
+        details: { messages: Array<{ message: { body: string } }> };
+        full_details?: unknown;
+      };
+    };
+
+    expect(envelope.data.details.messages[0]?.message.body).toBe(body);
+    expect(envelope.data.full_details).toBeUndefined();
   });
 
   it("routes action-dispatched help through the dispatcher", async () => {
@@ -502,7 +555,7 @@ describe("registerPinetTools", () => {
     });
   });
 
-  it("keeps pinet agents structured details backward-compatible by default", async () => {
+  it("keeps pinet agents default cli details compact", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
@@ -518,8 +571,12 @@ describe("registerPinetTools", () => {
       details: {
         data: {
           text: string;
-          details: { agents: Array<{ name: string; metadata: unknown }>; hint: { repo?: string } };
-          compact_details: { count: number; agents: Array<{ name: string; repo: string | null }> };
+          details: {
+            count: number;
+            agents: Array<{ name: string; repo: string | null; metadata?: unknown }>;
+            hint: { repo?: string };
+          };
+          compact_details?: unknown;
         };
       };
     };
@@ -528,15 +585,9 @@ describe("registerPinetTools", () => {
     expect(result.content[0]?.text).not.toContain("Golden Chalk Rabbit");
     expect(result.details.data.text).not.toContain("pid:");
     expect(result.details.data.details.agents[0]?.name).toBe("Golden Chalk Rabbit");
-    expect(result.details.data.details.agents[0]?.metadata).toEqual(
-      expect.objectContaining({ repo: "extensions" }),
-    );
+    expect(result.details.data.details.agents[0]?.repo).toBe("extensions");
+    expect(result.details.data.details.agents[0]?.metadata).toBeUndefined();
     expect(result.details.data.details.hint.repo).toBe("extensions");
-    expect(result.details.data.compact_details).toEqual(
-      expect.objectContaining({
-        count: 1,
-        agents: [expect.objectContaining({ name: "Golden Chalk Rabbit", repo: "extensions" })],
-      }),
-    );
+    expect(result.details.data.compact_details).toBeUndefined();
   });
 });
