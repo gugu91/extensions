@@ -223,11 +223,17 @@ describe("BrokerDB message sync identity", () => {
           (row) => row.name,
         ),
       );
+      const threadColumns = new Set(
+        (inspect.prepare("PRAGMA table_info(threads)").all() as Array<{ name: string }>).map(
+          (row) => row.name,
+        ),
+      );
 
-      expect(version.user_version).toBe(13);
+      expect(version.user_version).toBe(14);
       expect(messageColumns.has("external_id")).toBe(true);
       expect(messageColumns.has("external_ts")).toBe(true);
       expect(inboxColumns.has("read_at")).toBe(true);
+      expect(threadColumns.has("metadata")).toBe(true);
     } finally {
       inspect.close();
     }
@@ -397,6 +403,31 @@ describe("BrokerDB message sync identity", () => {
       expect(inbox?.read_at).toBe("2026-04-25T00:00:02.500Z");
     } finally {
       inspect.close();
+    }
+  });
+
+  it("persists thread metadata", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread({
+        threadId: "thread-metadata",
+        source: "slack",
+        channel: "C123",
+        ownerAgent: null,
+        metadata: { slackThreadContext: { channelId: "C_TEAM", teamId: "T1" } },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      expect(db.getThread("thread-metadata")?.metadata).toEqual({
+        slackThreadContext: { channelId: "C_TEAM", teamId: "T1" },
+      });
+
+      db.updateThread("thread-metadata", { metadata: { migrated: true } });
+      expect(db.getThread("thread-metadata")?.metadata).toEqual({ migrated: true });
+    } finally {
+      db.close();
     }
   });
 

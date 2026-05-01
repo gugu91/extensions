@@ -53,8 +53,17 @@ export interface SlackAdapterConfig {
   reactionCommands?: ReactionCommandSettings;
   /** Check whether a thread_ts belongs to a known thread in the broker DB. */
   isKnownThread?: (threadTs: string) => boolean;
+  /** Load durable thread metadata from the broker DB after cache eviction. */
+  getKnownThread?: (threadTs: string) => {
+    channelId: string;
+    context?: ParsedThreadStarted["context"] | null;
+  } | null;
   /** Persist thread metadata in the broker DB without claiming ownership. */
-  rememberKnownThread?: (threadTs: string, channelId: string) => void;
+  rememberKnownThread?: (
+    threadTs: string,
+    channelId: string,
+    context?: ParsedThreadStarted["context"] | null,
+  ) => void;
   /** Best-effort callback for Home tab opens. */
   onAppHomeOpened?: (event: ParsedAppHomeOpened) => Promise<void> | void;
 }
@@ -65,6 +74,12 @@ interface SlackThreadInfo {
   userId: string;
   context?: ParsedThreadStarted["context"];
 }
+
+export const SLACK_THREAD_CACHE_MAX_SIZE = 5000;
+export const SLACK_THREAD_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+export const SLACK_PENDING_ATTENTION_MAX_THREADS = 1000;
+export const SLACK_PENDING_ATTENTION_TTL_MS = 2 * 60 * 60 * 1000;
+export const SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD = 50;
 
 export class SlackAdapter implements MessageAdapter {
   readonly name = "slack";
@@ -78,7 +93,7 @@ export class SlackAdapter implements MessageAdapter {
   private inboundHandler: ((msg: InboundMessage) => void) | null = null;
   private readonly reactionCommands: Map<string, { action: string; prompt: string }>;
 
-  private readonly threads = new Map<string, SlackThreadInfo>();
+  private readonly threads: TtlCache<string, SlackThreadInfo>;
   private readonly userNames = new TtlCache<string, string>({
     maxSize: 2000,
     ttlMs: 60 * 60 * 1000,
@@ -87,10 +102,18 @@ export class SlackAdapter implements MessageAdapter {
     maxSize: SLACK_SOCKET_DELIVERY_DEDUP_MAX_SIZE,
     ttlMs: SLACK_SOCKET_DELIVERY_DEDUP_TTL_MS,
   });
-  private readonly pendingEyes = new Map<string, { channel: string; messageTs: string }[]>();
+  private readonly pendingEyes: TtlCache<string, { channel: string; messageTs: string }[]>;
 
   constructor(config: SlackAdapterConfig) {
     this.config = config;
+    this.threads = new TtlCache<string, SlackThreadInfo>({
+      maxSize: SLACK_THREAD_CACHE_MAX_SIZE,
+      ttlMs: SLACK_THREAD_CACHE_TTL_MS,
+    });
+    this.pendingEyes = new TtlCache<string, { channel: string; messageTs: string }[]>({
+      maxSize: SLACK_PENDING_ATTENTION_MAX_THREADS,
+      ttlMs: SLACK_PENDING_ATTENTION_TTL_MS,
+    });
     this.allowlist = buildAllowlist(
       {
         allowedUsers: config.allowedUsers,
@@ -195,7 +218,8 @@ export class SlackAdapter implements MessageAdapter {
   }
 
   getTrackedThreadIds(): Set<string> {
-    return new Set(this.threads.keys());
+    this.threads.sweep();
+    return new Set([...this.threads.entries()].map(([threadTs]) => threadTs));
   }
 
   isConnected(): boolean {
@@ -205,7 +229,7 @@ export class SlackAdapter implements MessageAdapter {
   private resolveScopeForThread(threadTs: string, channelId: string) {
     return buildSlackThreadRuntimeScope({
       channelId,
-      context: this.threads.get(threadTs)?.context ?? null,
+      context: this.getThread(threadTs)?.context ?? null,
     });
   }
 
@@ -229,7 +253,7 @@ export class SlackAdapter implements MessageAdapter {
 
     this.threads.set(info.threadTs, info);
     try {
-      this.config.rememberKnownThread?.(info.threadTs, info.channelId);
+      this.config.rememberKnownThread?.(info.threadTs, info.channelId, info.context ?? null);
     } catch {
       /* best effort — DB cache sync must not break Slack event handling */
     }
@@ -242,10 +266,16 @@ export class SlackAdapter implements MessageAdapter {
     const parsed = isParsedThreadContextChanged(event) ? event : extractThreadContextChanged(event);
     if (!parsed) return;
 
-    const existing = this.threads.get(parsed.threadTs);
+    const existing = this.getThread(parsed.threadTs);
     if (!existing || !parsed.context) return;
 
     existing.context = parsed.context;
+    this.threads.set(parsed.threadTs, existing);
+    try {
+      this.config.rememberKnownThread?.(parsed.threadTs, existing.channelId, existing.context);
+    } catch {
+      /* best effort — DB cache sync must not break Slack event handling */
+    }
   }
 
   private async onAppHomeOpened(
@@ -312,14 +342,14 @@ export class SlackAdapter implements MessageAdapter {
         (reactedMessage.ts as string | undefined) ??
         item.ts;
 
-      if (!this.threads.has(threadTs)) {
+      if (!this.getThread(threadTs)) {
         this.threads.set(threadTs, {
           channelId: item.channel,
           threadTs,
           userId: (reactedMessage.user as string | undefined) ?? userId,
         });
         try {
-          this.config.rememberKnownThread?.(threadTs, item.channel);
+          this.config.rememberKnownThread?.(threadTs, item.channel, null);
         } catch {
           /* best effort — DB cache sync must not break reaction handling */
         }
@@ -341,7 +371,7 @@ export class SlackAdapter implements MessageAdapter {
           ? reactedMessage.text
           : "(no text)";
 
-      const threadInfo = this.threads.get(threadTs);
+      const threadInfo = this.getThread(threadTs);
       const reactionEventTs = (evt.event_ts as string | undefined) ?? item.ts;
       this.inboundHandler?.({
         source: "slack",
@@ -399,9 +429,18 @@ export class SlackAdapter implements MessageAdapter {
     );
     if (!classified.relevant) return;
 
-    const { threadTs, channel, userId, text, isChannelMention, messageTs, metadata } = classified;
+    const { threadTs, channel, userId, text, isDM, isChannelMention, messageTs, metadata } =
+      classified;
 
-    if (!this.threads.has(threadTs)) {
+    if (
+      isDM &&
+      typeof evt.thread_ts === "string" &&
+      this.shouldSuppressLegacyThreadedDm(threadTs)
+    ) {
+      return;
+    }
+
+    if (!this.getThread(threadTs)) {
       this.threads.set(threadTs, {
         channelId: channel,
         threadTs,
@@ -414,12 +453,15 @@ export class SlackAdapter implements MessageAdapter {
     void this.addReaction(channel, messageTs, "eyes");
     const pending = this.pendingEyes.get(threadTs) ?? [];
     pending.push({ channel, messageTs });
+    if (pending.length > SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD) {
+      pending.splice(0, pending.length - SLACK_PENDING_ATTENTION_MAX_MESSAGES_PER_THREAD);
+    }
     this.pendingEyes.set(threadTs, pending);
 
     const userName = await this.resolveUser(userId);
     if (this.shuttingDown) return;
 
-    const threadInfo = this.threads.get(threadTs);
+    const threadInfo = this.getThread(threadTs);
     this.inboundHandler?.({
       source: "slack",
       threadId: threadTs,
@@ -445,7 +487,7 @@ export class SlackAdapter implements MessageAdapter {
     timestamp: string;
     metadata: Record<string, unknown>;
   }): Promise<void> {
-    if (!this.threads.has(normalized.threadTs)) {
+    if (!this.getThread(normalized.threadTs)) {
       this.threads.set(normalized.threadTs, {
         channelId: normalized.channel,
         threadTs: normalized.threadTs,
@@ -454,7 +496,7 @@ export class SlackAdapter implements MessageAdapter {
     }
 
     try {
-      this.config.rememberKnownThread?.(normalized.threadTs, normalized.channel);
+      this.config.rememberKnownThread?.(normalized.threadTs, normalized.channel, null);
     } catch {
       /* best effort — DB cache sync must not break Slack event handling */
     }
@@ -464,7 +506,7 @@ export class SlackAdapter implements MessageAdapter {
     const userName = await this.resolveUser(normalized.userId);
     if (this.shuttingDown) return;
 
-    const threadInfo = this.threads.get(normalized.threadTs);
+    const threadInfo = this.getThread(normalized.threadTs);
     this.inboundHandler?.({
       source: "slack",
       threadId: normalized.threadTs,
@@ -493,6 +535,34 @@ export class SlackAdapter implements MessageAdapter {
       timestamp: String(Date.now() / 1000),
       scope: buildSlackThreadRuntimeScope({ channelId: event.channel }),
     });
+  }
+
+  private shouldSuppressLegacyThreadedDm(threadTs: string): boolean {
+    const cached = this.threads.get(threadTs);
+    if (cached) return false;
+
+    const known = this.config.getKnownThread?.(threadTs);
+    return !!known && known.channelId.startsWith("D") && !known.context;
+  }
+
+  private getThread(threadTs: string): SlackThreadInfo | undefined {
+    const cached = this.threads.get(threadTs);
+    if (cached) {
+      this.threads.set(threadTs, cached);
+      return cached;
+    }
+
+    const known = this.config.getKnownThread?.(threadTs);
+    if (!known?.channelId) return undefined;
+
+    const restored: SlackThreadInfo = {
+      channelId: known.channelId,
+      threadTs,
+      userId: "",
+      ...(known.context ? { context: known.context } : {}),
+    };
+    this.threads.set(threadTs, restored);
+    return restored;
   }
 
   private async addReaction(channel: string, ts: string, emoji: string): Promise<void> {
