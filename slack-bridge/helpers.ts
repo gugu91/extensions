@@ -1962,22 +1962,12 @@ export interface PinetRegistrationContext {
 }
 
 export function isLikelyLocalSubagentContext(context: PinetRegistrationContext = {}): boolean {
-  const parentSession = context.sessionHeader?.parentSession;
-  if (typeof parentSession === "string" && parentSession.trim().length > 0) {
-    return true;
-  }
-
   const argv = context.argv ?? process.argv.slice(2);
   const hasNoSession = argv.includes("--no-session");
   const hasPrint = argv.includes("--print") || argv.includes("-p");
   const modeIndex = argv.indexOf("--mode");
   const mode = modeIndex >= 0 ? argv[modeIndex + 1] : undefined;
   const hasHeadlessMode = mode === "json" || mode === "rpc";
-
-  if (hasNoSession && (hasPrint || hasHeadlessMode)) {
-    return true;
-  }
-
   const sessionFile =
     typeof context.sessionFile === "string" && context.sessionFile.trim().length > 0
       ? context.sessionFile.trim()
@@ -1986,13 +1976,36 @@ export function isLikelyLocalSubagentContext(context: PinetRegistrationContext =
     typeof context.leafId === "string" && context.leafId.trim().length > 0
       ? context.leafId.trim()
       : undefined;
+  const hasExplicitTTYSignal =
+    context.stdinIsTTY !== undefined || context.stdoutIsTTY !== undefined;
+  const hasTTY = Boolean(
+    (context.stdinIsTTY ?? process.stdin.isTTY) || (context.stdoutIsTTY ?? process.stdout.isTTY),
+  );
+
+  const parentSession = context.sessionHeader?.parentSession;
+  if (typeof parentSession === "string" && parentSession.trim().length > 0) {
+    // parentSession is lineage metadata for both real subagents and normal resumed/forked
+    // sessions. Treat it as a subagent signal only when paired with headless execution
+    // evidence. A persisted `pi --continue` session can legitimately have parent lineage
+    // and no TTY in automated launches, so no-TTY alone is only decisive for parented
+    // sessions when there is no persisted session file.
+    if (
+      hasHeadlessMode ||
+      context.hasUI === false ||
+      (hasExplicitTTYSignal && !hasTTY && !sessionFile)
+    ) {
+      return true;
+    }
+  }
+
+  if (hasNoSession && (hasPrint || hasHeadlessMode)) {
+    return true;
+  }
+
   // Agent-tool subagents commonly show up as ephemeral leaf sessions: no persisted
   // session file, a generated leaf id, and no attached TTY. Those should never join
   // the mesh even when auto-follow is enabled.
   const hasEphemeralLeafSession = !sessionFile && Boolean(leafId);
-  const hasTTY = Boolean(
-    (context.stdinIsTTY ?? process.stdin.isTTY) || (context.stdoutIsTTY ?? process.stdout.isTTY),
-  );
 
   return hasEphemeralLeafSession && (hasHeadlessMode || context.hasUI === false || !hasTTY);
 }

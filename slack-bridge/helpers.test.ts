@@ -1791,11 +1791,70 @@ describe("resolveBrokerStableId", () => {
 });
 
 describe("isLikelyLocalSubagentContext", () => {
-  it("detects branched or child sessions via parentSession header", () => {
+  it("does not treat parentSession lineage alone as a local subagent", () => {
     expect(
       isLikelyLocalSubagentContext({
         sessionHeader: { parentSession: "/tmp/pi/parent-session.jsonl" },
         argv: [],
+        sessionFile: "/tmp/pi/continued-session.jsonl",
+        leafId: "leaf-1",
+        hasUI: true,
+        stdinIsTTY: true,
+        stdoutIsTTY: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not classify normal continued sessions with parentSession lineage as subagents", () => {
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionHeader: { parentSession: "/tmp/pi/parent-session.jsonl" },
+        argv: ["--continue"],
+        sessionFile: "/tmp/pi/continued-session.jsonl",
+        leafId: "leaf-continued",
+        hasUI: true,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("detects parented headless sessions as local subagents", () => {
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionHeader: { parentSession: "/tmp/pi/parent-session.jsonl" },
+        argv: ["--mode", "rpc"],
+        sessionFile: "/tmp/pi/subagent-session.jsonl",
+        leafId: "leaf-subagent",
+        hasUI: false,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("still detects continued parented sessions when they are headless", () => {
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionHeader: { parentSession: "/tmp/pi/parent-session.jsonl" },
+        argv: ["--continue"],
+        sessionFile: "/tmp/pi/subagent-session.jsonl",
+        leafId: "leaf-subagent",
+        hasUI: false,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      isLikelyLocalSubagentContext({
+        sessionHeader: { parentSession: "/tmp/pi/parent-session.jsonl" },
+        argv: ["--continue", "--mode", "rpc"],
+        sessionFile: "/tmp/pi/subagent-session.jsonl",
+        leafId: "leaf-subagent",
+        hasUI: true,
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
       }),
     ).toBe(true);
   });
