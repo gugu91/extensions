@@ -42,6 +42,7 @@ const packageConfigs = {
     excludeFiles: new Set(["vitest.config.ts"]),
     excludePrefixes: [],
     vendorDirs: [],
+    assetDirs: ["prompts"],
     importRewrites: [],
   },
   "nvim-bridge": {
@@ -124,6 +125,25 @@ async function collectTsFiles(baseDir, rootDir, localConfig = config) {
   return files.sort();
 }
 
+async function copyDirectory(sourceDir, outputDir) {
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  await fs.mkdir(outputDir, { recursive: true });
+
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const outputPath = path.join(outputDir, entry.name);
+
+    if (entry.isDirectory()) {
+      await copyDirectory(sourcePath, outputPath);
+      continue;
+    }
+
+    if (entry.isFile()) {
+      await fs.copyFile(sourcePath, outputPath);
+    }
+  }
+}
+
 async function build() {
   await fs.rm(distDir, { recursive: true, force: true });
 
@@ -186,6 +206,10 @@ async function build() {
 
     await fs.mkdir(path.dirname(item.outputPath), { recursive: true });
     await fs.writeFile(item.outputPath, transpiled.outputText, "utf8");
+  }
+
+  for (const assetDir of config.assetDirs ?? []) {
+    await copyDirectory(path.join(packageDir, assetDir), path.join(distDir, assetDir));
   }
 }
 

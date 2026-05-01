@@ -424,6 +424,18 @@ Pinet supports a broker/follower architecture for coordinating multiple pi agent
 
 Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": true`) to auto-connect when a broker is running.
 
+### Broker prompt MD
+
+Broker coordination policy is loaded from Markdown rather than a settings selector. The broker scans for the first valid prompt in this order:
+
+1. workspace override: `.pi/slack-bridge/broker-prompt.md` under the current repo/worktree root
+2. user-local override: `~/.pi/agent/slack-bridge/broker-prompt.md`
+3. packaged default: `dist/prompts/broker/default.md`
+
+Invalid higher-priority files (unsafe symlink/path escape, unreadable file, oversized content, invalid UTF-8/binary-looking content, or empty file) emit a concise warning and fall through to lower-priority candidates. Warnings identify only the candidate kind and reason; prompt bodies and private paths are not echoed.
+
+Only broker prompt content is replaceable. Broker runtime/tool restrictions remain code-owned and are appended after the loaded MD prompt, including the forbidden local `Agent` path and broker `edit`/`write` blocking. Followers keep append-only worker guidance and do not load broker prompt MD. Prompt changes are picked up on `/pinet-start` / runtime restart; this slice does not hot-reload per turn.
+
 ### Multi-agent tools
 
 | Tool    | Description                                                                                                         |
