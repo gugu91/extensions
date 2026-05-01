@@ -221,6 +221,20 @@ describe("packaged default broker prompt", () => {
     expect(defaultPrompt).toContain("{{agentEmoji}} {{agentName}}");
   });
 
+  it("documents safe repo-scoped follower startup before reporting capacity gaps", async () => {
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "default.md");
+    const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
+
+    expect(defaultPrompt).toContain("Use tmux only to launch repo-scoped Pinet follower workers");
+    expect(defaultPrompt).toContain("create a tmux session in the target repo");
+    expect(defaultPrompt).toContain("/pinet-follow");
+    expect(defaultPrompt).toContain(
+      "only report the capacity gap if you cannot safely start a worker",
+    );
+    expect(defaultPrompt).not.toContain("ask for a repo-matched worker");
+    expect(defaultPrompt).not.toContain("suggest they spin up a new agent in that repo");
+  });
+
   it("copies prompt assets into dist/prompts so the packaged default is loadable", async () => {
     await execFileAsync("node", ["../scripts/build-package.mjs"], { cwd: process.cwd() });
 
