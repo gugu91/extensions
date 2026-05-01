@@ -673,10 +673,14 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
 
   registerAction({
     name: "read",
-    description: "Read durable SQLite-backed Pinet inbox context with unread/read semantics.",
+    description:
+      "Read this agent's durable SQLite-backed Pinet inbox context with unread/read semantics. Ordinary workers only see rows addressed to their own agent identity; broker coordination visibility is limited to broker-addressed inbox rows.",
     parameters: Type.Object({
       thread_id: Type.Optional(
-        Type.String({ description: "Optional Pinet/Slack broker thread ID to read" }),
+        Type.String({
+          description:
+            "Optional Pinet/Slack broker thread ID to filter this agent's own inbox rows; it does not grant cross-agent thread access.",
+        }),
       ),
       limit: Type.Optional(
         Type.Number({ description: "Maximum messages to return (default 20, max 100)" }),

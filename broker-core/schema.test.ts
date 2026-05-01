@@ -581,6 +581,48 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("scopes explicit thread reads to the requesting agent's inbox rows", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("a2a:broker:agent-a", "agent", "", "broker");
+      db.createThread("a2a:broker:agent-b", "agent", "", "broker");
+      db.insertMessage("a2a:broker:agent-a", "agent", "inbound", "broker", "private for A", [
+        "agent-a",
+      ]);
+      const privateForB = db.insertMessage(
+        "a2a:broker:agent-b",
+        "agent",
+        "inbound",
+        "broker",
+        "private for B",
+        ["agent-b"],
+      );
+
+      const crossRead = db.readInbox("agent-a", {
+        threadId: "a2a:broker:agent-b",
+        unreadOnly: false,
+        markRead: true,
+      });
+
+      expect(crossRead.messages).toEqual([]);
+      expect(crossRead.markedReadIds).toEqual([]);
+      expect(crossRead.unreadCountBefore).toBe(1);
+      expect(crossRead.unreadCountAfter).toBe(1);
+
+      const ownerRead = db.readInbox("agent-b", {
+        threadId: "a2a:broker:agent-b",
+        markRead: false,
+      });
+      expect(ownerRead.messages).toHaveLength(1);
+      expect(ownerRead.messages[0].message.id).toBe(privateForB.id);
+      expect(ownerRead.messages[0].message.body).toBe("private for B");
+      expect(ownerRead.unreadCountBefore).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("preserves explicit Slack mail class metadata when queueing inbound mail", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);
