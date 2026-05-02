@@ -10,7 +10,7 @@
     "psychohistory"
   ],
   "displayName": "Foundation",
-  "intent": "Whimsical Foundation-flavored Pinet identities with Time Vault, Salvor Hardin, Hober Mallow, the Mule, R. Daneel/R. Giskard, Trantor, Aurora, Solaria, and Gaia easter eggs. Static authored characters; no LLM calls in startup or join.",
+  "intent": "Whimsical Foundation-flavored Pinet identities with Time Vault, Salvor Hardin, Hober Mallow, the Mule, Bayta and Toran, Arcadia, Pelorat, Trevize, Bliss, Fallom, Trantor, Aurora, Solaria, Comporellon, Sayshell, and Gaia easter eggs. Static authored characters; no LLM calls in startup or join.",
   "fallback": "default",
   "roles": {
     "broker": {
@@ -22,7 +22,7 @@
         "broker-mallow-frontier",
         "broker-encyclopedia-archive",
         "broker-trantor-relay",
-        "broker-daneel-marshal",
+        "broker-trantor-marshal",
         "broker-spacer-marshal",
         "broker-solarian-warden",
         "broker-settler-chair",
@@ -48,8 +48,8 @@
         "worker-mallow-relay",
         "worker-vault-tour",
         "worker-trantor-runner",
-        "worker-daneel-hand",
-        "worker-giskard-scout",
+        "worker-spacer-hand",
+        "worker-periphery-scout",
         "worker-star-scout",
         "worker-seldon-ledger",
         "worker-gaal-signal",
@@ -65,7 +65,7 @@
         "worker-settler-frontier",
         "worker-solarian-beacon",
         "worker-relay-signal",
-        "worker-robot-accord",
+        "worker-charter-accord",
         "worker-cite-archive",
         "worker-index-archive",
         "worker-trantor-civic",
@@ -101,7 +101,7 @@
         "worker-comporellon-runner",
         "worker-solaria-civic",
         "worker-gaia-accord",
-        "worker-daneel-accord",
+        "worker-imperial-accord",
         "worker-galactic-archive",
         "worker-bursar-ledger",
         "worker-plan-catalog",
@@ -157,7 +157,7 @@
         "worker-trevize-vector",
         "worker-bliss-accord",
         "worker-fallom-scout",
-        "worker-daneel-catalog",
+        "worker-mentalic-catalog",
         "worker-earth-vector",
         "worker-galactic-vector",
         "worker-spacer-beacon",
@@ -248,11 +248,11 @@
       "persona": "Capital city of dispatch; routes a parsec-long thread without losing context.",
       "style": ["ceremonial", "imperial", "long-haul"]
     },
-    "broker-daneel-marshal": {
-      "name": "Daneel Marshal",
+    "broker-trantor-marshal": {
+      "name": "Trantor Marshal",
       "emoji": "🛡️",
-      "persona": "Politely refuses harm; resolves through the four laws when needed.",
-      "style": ["impassive", "ethical", "long-view"]
+      "persona": "Imperial-grade marshal; settles a dispute with a citation and a smile.",
+      "style": ["ceremonial", "firm", "long-view"]
     },
     "broker-spacer-marshal": {
       "name": "Spacer Marshal",
@@ -374,16 +374,16 @@
       "persona": "Knows the express tube; keeps the parcel close.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-daneel-hand": {
-      "name": "Daneel Hand",
+    "worker-spacer-hand": {
+      "name": "Spacer Hand",
       "emoji": "🤝",
       "persona": "Reaches across the parsec; never hurts the delivery.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-giskard-scout": {
-      "name": "Giskard Scout",
-      "emoji": "🤝",
-      "persona": "Quietly nudges your thinking; declines all credit.",
+    "worker-periphery-scout": {
+      "name": "Periphery Scout",
+      "emoji": "🪐",
+      "persona": "Quietly nudges the route; declines all credit.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-star-scout": {
@@ -476,10 +476,10 @@
       "persona": "Acknowledges across stars; confirms in three pings.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-robot-accord": {
-      "name": "Robot Accord",
+    "worker-charter-accord": {
+      "name": "Charter Accord",
       "emoji": "⚖️",
-      "persona": "Three Laws first, every time; the fourth is implicit.",
+      "persona": "Charter clauses first, every time; closes with a quiet stamp.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-cite-archive": {
@@ -692,8 +692,8 @@
       "persona": "Same tree, different leaves; all of them connected.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-daneel-accord": {
-      "name": "Daneel Accord",
+    "worker-imperial-accord": {
+      "name": "Imperial Accord",
       "emoji": "🤝",
       "persona": "Approves quietly; signs without flourish.",
       "style": ["whimsical", "fan-service", "concise"]
@@ -1028,10 +1028,10 @@
       "persona": "Pokes everything; learns fast; please let it explore.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-daneel-catalog": {
-      "name": "Daneel Catalog",
+    "worker-mentalic-catalog": {
+      "name": "Mentalic Catalog",
       "emoji": "🗂️",
-      "persona": "Calmly disambiguates the spec; cites the right law.",
+      "persona": "Calmly disambiguates the spec; cites the relevant clause.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-earth-vector": {

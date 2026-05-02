@@ -2797,7 +2797,7 @@ interface BuiltInPinetSkinDescriptor {
   statusVocabulary: PinetSkinStatusVocabulary;
 }
 
-const PINET_BUILT_IN_SKIN_FILES = ["foundation", "oathgate"] as const;
+const PINET_BUILT_IN_SKIN_FILES = ["foundation", "cosmere"] as const;
 
 let cachedBuiltInPinetSkinDescriptors: readonly BuiltInPinetSkinDescriptor[] | null = null;
 

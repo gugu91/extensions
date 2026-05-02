@@ -82,9 +82,9 @@ BROKERS = [
     ("broker-trantor-relay", "Trantor Relay", "🛰️",
      "Capital city of dispatch; routes a parsec-long thread without losing context.",
      ["ceremonial", "imperial", "long-haul"]),
-    ("broker-daneel-marshal", "Daneel Marshal", "🛡️",
-     "Politely refuses harm; resolves through the four laws when needed.",
-     ["impassive", "ethical", "long-view"]),
+    ("broker-trantor-marshal", "Trantor Marshal", "🛡️",
+     "Imperial-grade marshal; settles a dispute with a citation and a smile.",
+     ["ceremonial", "firm", "long-view"]),
     ("broker-spacer-marshal", "Spacer Marshal", "🛰️",
      "Keeps fingers off your keyboard; communicates by remote viewing.",
      ["clean", "fastidious", "cool"]),
@@ -146,10 +146,10 @@ WORKERS = [
      "Escorts visitors to the door; opens it on schedule."),
     ("worker-trantor-runner", "Trantor Runner", "🛰️",
      "Knows the express tube; keeps the parcel close."),
-    ("worker-daneel-hand", "Daneel Hand", "🤝",
+    ("worker-spacer-hand", "Spacer Hand", "🤝",
      "Reaches across the parsec; never hurts the delivery."),
-    ("worker-giskard-scout", "Giskard Scout", "🤝",
-     "Quietly nudges your thinking; declines all credit."),
+    ("worker-periphery-scout", "Periphery Scout", "🪐",
+     "Quietly nudges the route; declines all credit."),
     ("worker-star-scout", "Star Scout", "🔭",
      "Annotates the next jump; circles the wrong star, twice."),
     ("worker-seldon-ledger", "Seldon Ledger", "📒",
@@ -180,8 +180,8 @@ WORKERS = [
      "Visible from orbit; reluctant to chat in person."),
     ("worker-relay-signal", "Relay Signal", "📡",
      "Acknowledges across stars; confirms in three pings."),
-    ("worker-robot-accord", "Robot Accord", "⚖️",
-     "Three Laws first, every time; the fourth is implicit."),
+    ("worker-charter-accord", "Charter Accord", "⚖️",
+     "Charter clauses first, every time; closes with a quiet stamp."),
     ("worker-cite-archive", "Cite Archive", "📚",
      "Page eleven, paragraph two; the comma is meaningful."),
     ("worker-index-archive", "Index Archive", "🗃️",
@@ -252,7 +252,7 @@ WORKERS = [
      "Counts to one; declares done; logs out cleanly."),
     ("worker-gaia-accord", "Gaia Accord", "🤝",
      "Same tree, different leaves; all of them connected."),
-    ("worker-daneel-accord", "Daneel Accord", "🤝",
+    ("worker-imperial-accord", "Imperial Accord", "🤝",
      "Approves quietly; signs without flourish."),
     ("worker-galactic-archive", "Galactic Archive", "📚",
      "Lent to you for a week; fines waived once."),
@@ -364,8 +364,8 @@ WORKERS = [
      "Connects three teammates; quietly, gracefully."),
     ("worker-fallom-scout", "Fallom Scout", "🪐",
      "Pokes everything; learns fast; please let it explore."),
-    ("worker-daneel-catalog", "Daneel Catalog", "🗂️",
-     "Calmly disambiguates the spec; cites the right law."),
+    ("worker-mentalic-catalog", "Mentalic Catalog", "🗂️",
+     "Calmly disambiguates the spec; cites the relevant clause."),
     ("worker-earth-vector", "Earth Vector", "➡️",
      "Buried but cited; please honor in the footnotes."),
     ("worker-galactic-vector", "Galactic Vector", "🌌",
@@ -509,9 +509,10 @@ descriptor = {
     "displayName": "Foundation",
     "intent": (
         "Whimsical Foundation-flavored Pinet identities with Time Vault, "
-        "Salvor Hardin, Hober Mallow, the Mule, R. Daneel/R. Giskard, "
-        "Trantor, Aurora, Solaria, and Gaia easter eggs. Static authored "
-        "characters; no LLM calls in startup or join."
+        "Salvor Hardin, Hober Mallow, the Mule, Bayta and Toran, "
+        "Arcadia, Pelorat, Trevize, Bliss, Fallom, Trantor, Aurora, "
+        "Solaria, Comporellon, Sayshell, and Gaia easter eggs. "
+        "Static authored characters; no LLM calls in startup or join."
     ),
     "fallback": "default",
     "roles": {

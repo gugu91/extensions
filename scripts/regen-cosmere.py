@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate slack-bridge/skins/oathgate.json with whimsical Cosmere
+"""Regenerate slack-bridge/skins/cosmere.json with whimsical Cosmere
 identities (Mistborn / Stormlight / Isles of the Emberdark flavor).
 
 Constraints (enforced by helpers.test.ts):
@@ -552,8 +552,9 @@ assert len(worker_seen) > 100, (
 # --- assemble descriptor -------------------------------------------
 descriptor = {
     "key": "cosmere",
+    # Aliases must NOT duplicate the primary key; the loader resolves
+    # the canonical key separately.
     "aliases": [
-        "cosmere",
         "cosmere-inspired",
         "oathgate",
         "fantasy metal",
@@ -618,11 +619,11 @@ for entry in WORKERS:
         "style": style,
     }
 
-with open("slack-bridge/skins/oathgate.json", "w", encoding="utf-8") as fh:
+with open("slack-bridge/skins/cosmere.json", "w", encoding="utf-8") as fh:
     json.dump(descriptor, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
 
 print(
-    f"wrote oathgate.json: {len(BROKERS)} brokers, {len(WORKERS)} workers, "
+    f"wrote cosmere.json: {len(BROKERS)} brokers, {len(WORKERS)} workers, "
     f"{len(worker_seen)} unique workers / 300 deterministic seeds."
 )
