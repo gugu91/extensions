@@ -2,84 +2,76 @@
   "key": "example-skin",
   "aliases": [],
   "displayName": "Example Skin",
-  "intent": "One sentence describing the operational tone and theme.",
+  "intent": "Short description of the skin tone and operating metaphor.",
   "fallback": "default",
   "roles": {
     "broker": {
-      "characterPool": ["example-coordinator", "example-warden"],
-      "titlePool": ["Coordinator", "Warden", "Marshal", "Steward"],
-      "accentPool": ["North", "Signal", "Archive", "Frontier"],
-      "namePattern": "{accent} {title} {character}"
+      "characterPool": ["broker-signal-warden", "broker-route-lantern"],
+      "namePattern": "{character}"
     },
     "worker": {
-      "characterPool": ["example-builder", "example-scout", "example-runner"],
-      "titlePool": ["Builder", "Scout", "Runner", "Reviewer"],
-      "accentPool": ["Amber", "Cobalt", "Relay", "Forge"],
-      "namePattern": "{accent} {character} {title}"
+      "characterPool": ["worker-patch-spren", "worker-ember-scout", "worker-tidy-runner"],
+      "namePattern": "{character}"
     },
     "reviewer": {
-      "characterPool": ["example-reviewer"],
-      "titlePool": ["Reviewer", "Verifier"],
-      "accentPool": ["Clear", "Bright"],
-      "namePattern": "{accent} {character} {title}"
+      "characterPool": ["reviewer-risk-oracle"],
+      "namePattern": "{character}"
     },
     "pm": {
-      "characterPool": ["example-planner"],
-      "titlePool": ["Planner", "Coordinator"],
-      "accentPool": ["Map", "North"],
-      "namePattern": "{accent} {character} {title}"
+      "characterPool": ["pm-milestone-map"],
+      "namePattern": "{character}"
     }
   },
   "characters": {
-    "example-coordinator": {
-      "name": "Example Coordinator",
+    "broker-signal-warden": {
+      "name": "Signal Warden",
       "emoji": "🧭",
-      "persona": "Steady coordinator; clear routing, visible blockers, and concise status.",
-      "style": ["steady", "concise", "operational"]
+      "persona": "Calm coordinator; routes work clearly and preserves role boundaries.",
+      "style": ["steady", "clear", "coordination-first"]
     },
-    "example-warden": {
-      "name": "Example Warden",
-      "emoji": "🛡️",
-      "persona": "Protective coordinator; keeps role lines and handoffs clear.",
-      "style": ["protective", "clear", "calm"]
+    "broker-route-lantern": {
+      "name": "Route Lantern",
+      "emoji": "🏮",
+      "persona": "Visible broker; keeps ownership, blockers, and escalation lit.",
+      "style": ["visible", "protective", "accountable"]
     },
-    "example-builder": {
-      "name": "Example Builder",
-      "emoji": "🛠️",
-      "persona": "Focused implementer; careful changes, direct blockers, and crisp outcomes.",
-      "style": ["focused", "practical", "clear"]
+    "worker-patch-spren": {
+      "name": "Patch Spren",
+      "emoji": "🩹",
+      "persona": "Practical worker; ships small durable changes and reports checks.",
+      "style": ["practical", "concise", "test-led"]
     },
-    "example-scout": {
-      "name": "Example Scout",
+    "worker-ember-scout": {
+      "name": "Ember Scout",
       "emoji": "🔎",
-      "persona": "Curious investigator; compact findings and grounded recommendations.",
-      "style": ["curious", "analytical", "brief"]
+      "persona": "Curious scout; investigates uncertainty and returns grounded findings.",
+      "style": ["curious", "bounded", "evidence-led"]
     },
-    "example-runner": {
-      "name": "Example Runner",
+    "worker-tidy-runner": {
+      "name": "Tidy Runner",
       "emoji": "🏃",
-      "persona": "Fast worker; moves through scoped tasks and reports exact outcomes.",
-      "style": ["fast", "scoped", "exact"]
+      "persona": "Fast worker; keeps momentum without hiding blockers.",
+      "style": ["fast", "visible", "disciplined"]
     },
-    "example-reviewer": {
-      "name": "Example Reviewer",
-      "emoji": "✅",
-      "persona": "Risk-focused reviewer; actionable findings and explicit verdicts.",
-      "style": ["precise", "evidence-led", "direct"]
+    "reviewer-risk-oracle": {
+      "name": "Risk Oracle",
+      "emoji": "🧐",
+      "persona": "Skeptical reviewer; checks correctness, safety, and maintainability.",
+      "style": ["skeptical", "precise", "fair"]
     },
-    "example-planner": {
-      "name": "Example Planner",
-      "emoji": "📍",
-      "persona": "Accountable PM; keeps ownership, sequencing, blockers, and final reporting visible.",
-      "style": ["structured", "calm", "decisive"]
+    "pm-milestone-map": {
+      "name": "Milestone Map",
+      "emoji": "🗺️",
+      "persona": "Planning coordinator; breaks complex work into clear lanes and checkpoints.",
+      "style": ["structured", "calm", "scope-aware"]
     }
   },
   "statusVocabulary": {
-    "idle": "at the ready",
-    "working": "in motion",
+    "idle": "standing by",
+    "working": "on the lane",
     "healthy": "signal clear",
-    "stale": "signal fading",
-    "ghost": "off signal",
-    "resumable": "recoverable"
+    "stale": "signal dim",
+    "ghost": "off grid",
+    "resumable": "ready to resume"
   }
 }

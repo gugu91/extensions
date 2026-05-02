@@ -1372,16 +1372,16 @@ describe("Pinet skin helpers", () => {
     expect(broker.theme).toBe("foundation");
     expect(worker.theme).toBe("foundation");
     expect(broker.name).toMatch(
-      /(Director|Warden|Speaker|Marshal|Archivist|Provost|Steward|Prime|Coordinator|Gatekeeper|Chair|Chief|Lead|Keeper|Clerk|Regent)/,
-    );
-    expect(broker.name).toMatch(
-      /(Seldan|Vara|Orren|Maelin|Tovan|Irysa|Calder|Serin|Navo|Halix|Renna|Oskar)/,
+      /(Archive|Civic|Relay|Frontier|Vector|Prime|Concord|Vault|Signal|Ledger|Mandate|Chair|Coordinator|Keeper|Warden|Marshal|Regent|Speaker)/,
     );
     expect(worker.name).toMatch(
-      /(Analyst|Envoy|Relay|Surveyor|Ratifier|Indexer|Archivist|Scout|Observer|Clerk|Mapper|Operator|Witness|Courier|Auditor|Signalist|Custodian|Scribe|Verifier|Pathfinder)/,
+      /(Archive|Civic|Relay|Frontier|Vector|Concord|Vault|Signal|Ledger|Beacon|Orbit|Accord|Catalog|Gate|Evidence|Scout|Runner|Worker|Clerk|Hand)/,
     );
-    expect(worker.name).toMatch(
-      /(Pax|Mira|Solan|Tess|Orli|Juno|Kael|Nara|Dalen|Cira|Voss|Lena|Arno|Siva|Maren|Tali|Eamon|Nyx|Selka|Roven|Adri|Mica|Elin|Bram)/,
+    expect(broker.name).not.toMatch(
+      /^(Archive|Civic|Relay|Frontier|Vector|Prime|Concord|Vault) (Director|Warden|Speaker|Marshal|Archivist|Provost|Steward|Prime|Coordinator|Gatekeeper|Crisis Chair|Relay Chief|Concord Lead|Vault Keeper|Mission Clerk|Signal Regent) \w+$/,
+    );
+    expect(worker.name).not.toMatch(
+      /^(Prime|Vault|Relay|Frontier|Crisis|Archive|Vector|Civic|Concord|Gate|Ledger|Beacon|Orbit|Accord|Catalog|Signal|Reserve|Horizon|Twelvefold|Long-Range) \w+ (Analyst|Envoy|Relay|Surveyor|Ratifier|Indexer|Archivist|Scout|Observer|Clerk|Mapper|Operator|Witness|Courier|Auditor|Signalist|Custodian|Field Scribe|Verifier|Pathfinder)$/,
     );
     expect(broker.name).not.toMatch(/Broker \w+$/);
     expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
@@ -1438,74 +1438,45 @@ describe("Pinet skin helpers", () => {
     expect(broker.theme).toBe("cosmere");
     expect(worker.theme).toBe("cosmere");
     expect(broker.name).toMatch(
-      /(Warden|Cartographer|Binder|Marshal|Keeper|Oathspeaker|Gatewright|Stormcaller|Chair|Lampbearer|Regent|Sentinel|Steward|Herald|Arbiter|Captain)/,
+      /(Oath|Gate|Storm|Alloy|Ash|Mist|Forge|Copper|Silver|Bronze|Shard|Warden|Regent|Arbiter|Keeper|Oathspeaker|Spren)/,
     );
-    expect(broker.name).toMatch(
-      /(Vala|Thoren|Meris|Kaelen|Sindra|Orik|Navra|Darian|Elira|Brannic|Saira|Tovash)/,
+    expect(worker.name.split(" ").length).toBeLessThanOrEqual(3);
+    expect(broker.name).not.toMatch(
+      /^(Oathgate|Stormbound|Alloy|Ashen|Lantern|Bronze|Silver|Mistward) (Warden|Cartographer|Binder|Marshal|Keeper|Oathspeaker|Gatewright|Stormcaller|Forge Chair|Lampbearer|Alloy Regent|Ash Sentinel|Vow Steward|Mist Herald|Bronze Arbiter|Silver Captain) \w+$/,
     );
-    expect(worker.name).toMatch(
-      /(Scribe|Runner|Scout|Forger|Hand|Keeper|Pathfinder|Witness|Quill|Marker|Blade|Lamplighter|Ledger|Smith|Ward|Binder|Seeker|Courier|Emberwright|Gatehand)/,
-    );
-    expect(worker.name).toMatch(
-      /(Ren|Lyra|Brenn|Sova|Keth|Mira|Orin|Sel|Dessa|Talin|Vara|Jorek|Nemi|Cairn|Tilia|Malric|Aera|Venn|Corrin|Isla|Pavel|Runa|Senn|Halden)/,
+    expect(worker.name).not.toMatch(
+      /^(Iron|Steel|Tin|Pewter|Bronze|Copper|Zinc|Brass|Ash|Mist|Storm|Forge|Gate|Oath|Lantern|Silver|Ember|Vow|Alloy|Glass) \w+ (Scribe|Runner|Scout|Forger|Hand|Keeper|Pathfinder|Witness|Quill|Marker|Blade|Lamplighter|Ledger|Smith|Ward|Binder|Seeker|Courier|Emberwright|Gatehand)$/,
     );
     expect(broker.name).not.toMatch(/Broker \w+$/);
     expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
-    expect(["🛡️", "🌩️", "💠", "🔥", "🔮", "🌫️", "🌁", "🗺️", "🪙", "⚔️", "🏮", "🏺"]).toContain(
-      broker.emoji,
-    );
-    expect([
-      "⚒️",
-      "🗡️",
-      "🪙",
-      "🔥",
-      "💠",
-      "🌫️",
-      "🏮",
-      "📜",
-      "🧭",
-      "✅",
-      "🚪",
-      "📖",
-      "💡",
-      "📒",
-      "🔭",
-      "✒️",
-      "🔔",
-      "🗺️",
-    ]).toContain(worker.emoji);
+    expect(broker.emoji).toBeTruthy();
+    expect(worker.emoji).toBeTruthy();
     expect(broker.personality).toContain("Presentation only");
     expect(worker.personality).toContain("Presentation only");
     expect(worker.statusVocabulary).toMatchObject({
       idle: "holding oath",
-      working: "at the forge",
-      healthy: "signal bright",
+      working: "invested",
+      healthy: "stormlight bright",
     });
   });
 
-  it("provides enough built-in skin combinations for large meshes", () => {
-    const foundationWorkers = new Set<string>();
+  it("provides a large authored Cosmere identity pool without formulaic triples", () => {
     const oathgateWorkers = new Set<string>();
 
     for (let index = 0; index < 300; index += 1) {
-      foundationWorkers.add(
-        buildPinetSkinAssignment({
-          theme: "foundation",
-          role: "worker",
-          seed: `worker-${index}`,
-        }).name,
-      );
-      oathgateWorkers.add(
-        buildPinetSkinAssignment({
-          theme: "oathgate",
-          role: "worker",
-          seed: `worker-${index}`,
-        }).name,
+      const assignment = buildPinetSkinAssignment({
+        theme: "oathgate",
+        role: "worker",
+        seed: `worker-${index}`,
+      });
+      oathgateWorkers.add(assignment.name);
+      expect(assignment.name.split(" ").length).toBeLessThanOrEqual(3);
+      expect(assignment.name).not.toMatch(
+        /^(Iron|Steel|Tin|Pewter|Bronze|Copper|Zinc|Brass|Ash|Mist|Storm|Forge|Gate|Oath|Lantern|Silver|Ember|Vow|Alloy|Glass) \w+ (Scribe|Runner|Scout|Forger|Hand|Keeper|Pathfinder|Witness|Quill|Marker|Blade|Lamplighter|Ledger|Smith|Ward|Binder|Seeker|Courier|Emberwright|Gatehand)$/,
       );
     }
 
-    expect(foundationWorkers.size).toBeGreaterThan(200);
-    expect(oathgateWorkers.size).toBeGreaterThan(200);
+    expect(oathgateWorkers.size).toBeGreaterThan(100);
   });
 
   it("builds a custom free-form skin with role-aware identity and bounded voice guidance", () => {

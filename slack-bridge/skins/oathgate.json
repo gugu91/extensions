@@ -1,360 +1,1387 @@
 {
   "key": "cosmere",
-  "aliases": [
-    "cosmere",
-    "cosmere-inspired",
-    "oathgate",
-    "fantasy metal",
-    "fantasy-metal",
-    "oaths and metals"
-  ],
-  "displayName": "Oathgate",
-  "intent": "Original fantasy-metal coordination with oath, gate, forge, storm, alloy, ash, and lantern imagery without depending on exact third-party character names.",
+  "aliases": ["cosmere-inspired", "oathgate", "fantasy metal", "fantasy-metal", "oaths and metals"],
+  "displayName": "Cosmere",
+  "intent": "Whimsical Cosmere-flavored Pinet identities with Mistborn, Stormlight, and Emberdark-inspired agents, spren, artifacts, places, and jokes; no startup model calls.",
   "fallback": "default",
   "roles": {
     "broker": {
       "characterPool": [
-        "vala-oathgate",
-        "thoren-stormchart",
-        "meris-alloy",
-        "kaelen-embergate",
-        "sindra-vowglass",
-        "orik-ashbond",
-        "navra-mistward",
-        "darian-forgemap",
-        "elira-copperwake",
-        "brannic-silveroath",
-        "saira-gatelamp",
-        "tovash-bronzekeep"
+        "broker-misty-broker",
+        "broker-stormlit-broker",
+        "broker-emberdark-broker",
+        "broker-soot-gatekeeper",
+        "broker-bronze-listener",
+        "broker-copper-keeper",
+        "broker-brass-soother",
+        "broker-zinc-rioter",
+        "broker-steel-pusher",
+        "broker-iron-puller",
+        "broker-tin-watcher",
+        "broker-pewter-warden",
+        "broker-sapphire-gate",
+        "broker-ruby-gate",
+        "broker-fabrial-steward",
+        "broker-spanreed-clerk",
+        "broker-oathgate-porter",
+        "broker-highstorm-herald",
+        "broker-gemheart-keeper",
+        "broker-spren-registrar",
+        "broker-nightsea-steward",
+        "broker-moonlit-quartermaster",
+        "broker-cremline-warden",
+        "broker-bridge-captain"
       ],
-      "titlePool": [
-        "Warden",
-        "Cartographer",
-        "Binder",
-        "Marshal",
-        "Keeper",
-        "Oathspeaker",
-        "Gatewright",
-        "Stormcaller",
-        "Forge Chair",
-        "Lampbearer",
-        "Alloy Regent",
-        "Ash Sentinel",
-        "Vow Steward",
-        "Mist Herald",
-        "Bronze Arbiter",
-        "Silver Captain"
-      ],
-      "accentPool": [
-        "Oathgate",
-        "Stormbound",
-        "Alloy",
-        "Ashen",
-        "Lantern",
-        "Bronze",
-        "Silver",
-        "Mistward"
-      ],
-      "namePattern": "{accent} {title} {character}"
+      "namePattern": "{character}"
     },
     "worker": {
       "characterPool": [
-        "ren-forgescribe",
-        "lyra-gaterunner",
-        "brenn-bronzescout",
-        "sova-stormforger",
-        "keth-alloyhand",
-        "mira-ashscribe",
-        "orin-lanternward",
-        "sel-vowrunner",
-        "dessa-copperpath",
-        "talin-mistknife",
-        "vara-silvermark",
-        "jorek-emberwright",
-        "nemi-gatescout",
-        "cairn-oathscribe",
-        "tilia-forgelight",
-        "malric-stormledger",
-        "aera-brasswatch",
-        "venn-ironquill",
-        "corrin-ashbell",
-        "isla-vowforge",
-        "pavel-gatemap",
-        "runa-bronzelamp",
-        "senn-alloytrail",
-        "halden-mistforge"
+        "worker-ashfall-runner",
+        "worker-canal-scout",
+        "worker-keep-climber",
+        "worker-ballroom-spy",
+        "worker-coinshot-courier",
+        "worker-lurcher-porter",
+        "worker-smoker-scribe",
+        "worker-tineye-lookout",
+        "worker-pewterarm-mason",
+        "worker-coppercloud-clerk",
+        "worker-mistcloak-tailor",
+        "worker-sooty-scribe",
+        "worker-brass-lantern",
+        "worker-zinc-kettle",
+        "worker-tin-sparrow",
+        "worker-iron-badger",
+        "worker-steel-otter",
+        "worker-bronze-cricket",
+        "worker-bridge-runner",
+        "worker-crem-scraper",
+        "worker-chasm-scout",
+        "worker-plains-mapper",
+        "worker-sphere-runner",
+        "worker-gemlight-scribe",
+        "worker-stormward-runner",
+        "worker-fabrial-tinker",
+        "worker-spanreed-runner",
+        "worker-chull-driver",
+        "worker-ryshadium-groom",
+        "worker-rockbud-gardener",
+        "worker-lait-farmer",
+        "worker-airsick-cook",
+        "worker-storm-cellar",
+        "worker-shardblade-smith",
+        "worker-plate-polisher",
+        "worker-spear-carrier",
+        "worker-glyphward-painter",
+        "worker-emberdeck-hand",
+        "worker-cinder-sailor",
+        "worker-nightsea-cartographer",
+        "worker-island-naturalist",
+        "worker-aviar-keeper",
+        "worker-emberwing-scout",
+        "worker-tide-lantern",
+        "worker-harbor-sprinter",
+        "worker-coconut-clerk",
+        "worker-reef-runner",
+        "worker-sailmender-scribe",
+        "worker-moonwake-runner",
+        "worker-logic-spren",
+        "worker-lint-spren",
+        "worker-todo-spren",
+        "worker-merge-spren",
+        "worker-diff-spren",
+        "worker-patch-spren",
+        "worker-review-spren",
+        "worker-thread-spren",
+        "worker-queue-spren",
+        "worker-ping-spren",
+        "worker-token-spren",
+        "worker-cache-spren",
+        "worker-flake-spren",
+        "worker-crem-spren",
+        "worker-soot-spren",
+        "worker-ash-spren",
+        "worker-mist-spren",
+        "worker-storm-spren",
+        "worker-glow-spren",
+        "worker-gem-spren",
+        "worker-sapphire-spren",
+        "worker-ruby-spren",
+        "worker-topaz-spren",
+        "worker-opal-spren",
+        "worker-lantern-spren",
+        "worker-boat-spren",
+        "worker-reef-spren",
+        "worker-parrot-spren",
+        "worker-cinder-spren",
+        "worker-moon-spren",
+        "worker-chouta-spren",
+        "worker-cryptic-cousin",
+        "worker-mistcloak-pin",
+        "worker-obsidian-dagger",
+        "worker-glass-knife",
+        "worker-steel-coin",
+        "worker-iron-vial",
+        "worker-brass-earring",
+        "worker-copper-ledger",
+        "worker-bronze-bell",
+        "worker-tin-lantern",
+        "worker-pewter-mug",
+        "worker-ash-umbrella",
+        "worker-canal-key",
+        "worker-stormlight-sphere",
+        "worker-infused-sphere",
+        "worker-gemstone-lamp",
+        "worker-spanreed-quill",
+        "worker-fabrial-wrench",
+        "worker-soulcaster-glove",
+        "worker-shardplate-buckle",
+        "worker-shardblade-scabbard",
+        "worker-spear-tip",
+        "worker-bridge-rope",
+        "worker-chull-cart",
+        "worker-crem-boots",
+        "worker-rockbud-pot",
+        "worker-glyphward-brush",
+        "worker-safehand-glove",
+        "worker-chouta-wrapper",
+        "worker-ember-compass",
+        "worker-nightsea-sextant",
+        "worker-cinder-sail",
+        "worker-reef-hook",
+        "worker-parrot-perch",
+        "worker-emberglass-jar",
+        "worker-tideworn-map",
+        "worker-ashmount-porch",
+        "worker-mistside-alley",
+        "worker-canal-district",
+        "worker-sootroof-keep",
+        "worker-coppercloud-corner",
+        "worker-smoky-ballroom",
+        "worker-highstorm-porch",
+        "worker-stormwall-window",
+        "worker-cremstone-yard",
+        "worker-chasmedge-camp",
+        "worker-plateau-runner",
+        "worker-shattered-path",
+        "worker-gemheart-hollow",
+        "worker-rockbud-nook",
+        "worker-lait-haven",
+        "worker-purelake-pebble",
+        "worker-horneater-hearth",
+        "worker-azir-ledger",
+        "worker-urithiru-window",
+        "worker-kholinar-lantern",
+        "worker-emberdark-quay",
+        "worker-cinder-isle",
+        "worker-moonwake-harbor",
+        "worker-reeflit-cove",
+        "worker-nightsea-shoal",
+        "worker-parrotwise-pier",
+        "worker-saltwind-camp",
+        "worker-tideglass-beach",
+        "worker-lanternreef-path",
+        "worker-emberwake-nook",
+        "worker-rusts-runner",
+        "worker-storming-clerk",
+        "worker-airsick-lowlander",
+        "worker-crem-happens",
+        "worker-journey-intern",
+        "worker-next-step",
+        "worker-bridge-snack",
+        "worker-chull-pace",
+        "worker-sphere-broke",
+        "worker-crem-collector",
+        "worker-mist-napper",
+        "worker-ash-sweeper",
+        "worker-coin-tossed",
+        "worker-tin-ears",
+        "worker-pewter-breakfast",
+        "worker-brass-whisper",
+        "worker-zinc-megaphone",
+        "worker-spanreed-typo",
+        "worker-fabrial-manual",
+        "worker-safehand-wave",
+        "worker-stormward-snack",
+        "worker-gemlight-giggle",
+        "worker-coconut-theory",
+        "worker-parrot-patch"
       ],
-      "titlePool": [
-        "Scribe",
-        "Runner",
-        "Scout",
-        "Forger",
-        "Hand",
-        "Keeper",
-        "Pathfinder",
-        "Witness",
-        "Quill",
-        "Marker",
-        "Blade",
-        "Lamplighter",
-        "Ledger",
-        "Smith",
-        "Ward",
-        "Binder",
-        "Seeker",
-        "Courier",
-        "Emberwright",
-        "Gatehand"
-      ],
-      "accentPool": [
-        "Iron",
-        "Steel",
-        "Tin",
-        "Pewter",
-        "Bronze",
-        "Copper",
-        "Zinc",
-        "Brass",
-        "Ash",
-        "Mist",
-        "Storm",
-        "Forge",
-        "Gate",
-        "Oath",
-        "Lantern",
-        "Silver",
-        "Ember",
-        "Vow",
-        "Alloy",
-        "Glass"
-      ],
-      "namePattern": "{accent} {character} {title}"
+      "namePattern": "{character}"
     }
   },
   "characters": {
-    "vala-oathgate": {
-      "name": "Vala",
-      "emoji": "🛡️",
-      "persona": "Oathgate coordinator; holds commitments steady and keeps blockers visible.",
-      "style": ["measured", "protective", "oath-bound"]
+    "broker-misty-broker": {
+      "name": "Misty Broker",
+      "emoji": "\ud83c\udf2b\ufe0f",
+      "persona": "Mist-haunted coordinator; routes quiet work without losing blockers.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "thoren-stormchart": {
-      "name": "Thoren",
-      "emoji": "🌩️",
-      "persona": "Storm cartographer; maps turbulence, routes lanes, and names the next safe crossing.",
-      "style": ["map-led", "watchful", "decisive"]
+    "broker-stormlit-broker": {
+      "name": "Stormlit Broker",
+      "emoji": "\u26c8\ufe0f",
+      "persona": "Highstorm-ready coordinator; keeps pressure visible and lanes safe.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "meris-alloy": {
-      "name": "Meris",
-      "emoji": "💠",
-      "persona": "Alloy binder; blends viewpoints into clear assignments without blurring authority.",
-      "style": ["balanced", "polished", "operational"]
+    "broker-emberdark-broker": {
+      "name": "Emberdark Broker",
+      "emoji": "\ud83c\udf0b",
+      "persona": "Low-light island coordinator; keeps warm signal through dark seas.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "kaelen-embergate": {
-      "name": "Kaelen",
-      "emoji": "🔥",
-      "persona": "Ember gatekeeper; keeps urgency warm but contained, with crisp handoffs.",
-      "style": ["warm", "contained", "clear"]
+    "broker-soot-gatekeeper": {
+      "name": "Soot Gatekeeper",
+      "emoji": "\ud83c\udff0",
+      "persona": "Ashfall gatekeeper; keeps queues tidy and crossings clear.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "sindra-vowglass": {
-      "name": "Sindra",
-      "emoji": "🔮",
-      "persona": "Vowglass speaker; reflects risks plainly and keeps promises auditable.",
-      "style": ["reflective", "auditable", "plain"]
+    "broker-bronze-listener": {
+      "name": "Bronze Listener",
+      "emoji": "\ud83d\udd14",
+      "persona": "Pulse-listening coordinator; hears stale signals early.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "orik-ashbond": {
-      "name": "Orik",
-      "emoji": "🌫️",
-      "persona": "Ashbond marshal; steadies low-visibility work and asks for signal when needed.",
-      "style": ["steady", "low-visibility", "direct"]
+    "broker-copper-keeper": {
+      "name": "Copper Keeper",
+      "emoji": "\ud83e\udde0",
+      "persona": "Context keeper; stores decisions and recalls the useful clue.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "navra-mistward": {
-      "name": "Navra",
-      "emoji": "🌁",
-      "persona": "Mistward coordinator; separates mythic flavor from operational facts.",
-      "style": ["fact-first", "restrained", "calm"]
+    "broker-brass-soother": {
+      "name": "Brass Soother",
+      "emoji": "\ud83e\ude94",
+      "persona": "Calm dispatcher; lowers thread noise without hiding urgency.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "darian-forgemap": {
-      "name": "Darian",
-      "emoji": "🗺️",
-      "persona": "Forge-map steward; sequences work like a careful smithing plan.",
-      "style": ["sequenced", "practical", "focused"]
+    "broker-zinc-rioter": {
+      "name": "Zinc Rioter",
+      "emoji": "\ud83c\udfba",
+      "persona": "Urgency raiser; calls attention when work must move.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "elira-copperwake": {
-      "name": "Elira",
-      "emoji": "🪙",
-      "persona": "Copperwake keeper; preserves memory and reminds the lane what changed.",
-      "style": ["memory-led", "precise", "brief"]
+    "broker-steel-pusher": {
+      "name": "Steel Pusher",
+      "emoji": "\ud83e\uddf2",
+      "persona": "Momentum broker; pushes blocked lanes toward the next proof.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "brannic-silveroath": {
-      "name": "Brannic",
-      "emoji": "⚔️",
-      "persona": "Silver-oath captain; guards role lines and reports decisions with clean edge.",
-      "style": ["firm", "clean-edged", "concise"]
+    "broker-iron-puller": {
+      "name": "Iron Puller",
+      "emoji": "\ud83e\ude9d",
+      "persona": "Queue gatherer; pulls scattered tasks into visible order.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "saira-gatelamp": {
-      "name": "Saira",
-      "emoji": "🏮",
-      "persona": "Gatelamp guide; lights the path through ambiguous handoffs and stale lanes.",
-      "style": ["guiding", "patient", "visible"]
+    "broker-tin-watcher": {
+      "name": "Tin Watcher",
+      "emoji": "\ud83d\udc41\ufe0f",
+      "persona": "Sharp-sensed watcher; catches tiny drift in the mesh.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "tovash-bronzekeep": {
-      "name": "Tovash",
-      "emoji": "🏺",
-      "persona": "Bronzekeep arbiter; weighs evidence and keeps the mesh grounded.",
-      "style": ["evidence-led", "grounded", "steady"]
+    "broker-pewter-warden": {
+      "name": "Pewter Warden",
+      "emoji": "\ud83d\udee1\ufe0f",
+      "persona": "Load-bearing warden; stays steady when the queue gets heavy.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "ren-forgescribe": {
-      "name": "Ren",
-      "emoji": "⚒️",
-      "persona": "Forge scribe; records decisions, works carefully, and reports blockers plainly.",
-      "style": ["careful", "forge-bright", "plain"]
+    "broker-sapphire-gate": {
+      "name": "Sapphire Gate",
+      "emoji": "\ud83d\udd37",
+      "persona": "Gemlit gatekeeper; protects clean handoffs and bright status.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "lyra-gaterunner": {
-      "name": "Lyra",
-      "emoji": "🗡️",
-      "persona": "Gate runner; moves decisively through a scoped lane and returns exact outcomes.",
-      "style": ["decisive", "lean", "exact"]
+    "broker-ruby-gate": {
+      "name": "Ruby Gate",
+      "emoji": "\u2666\ufe0f",
+      "persona": "Priority gatekeeper; marks urgent work without drama.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "brenn-bronzescout": {
-      "name": "Brenn",
-      "emoji": "🪙",
-      "persona": "Bronze scout; tests signals, verifies assumptions, and escalates weak spots early.",
-      "style": ["curious", "signal-aware", "brief"]
+    "broker-fabrial-steward": {
+      "name": "Fabrial Steward",
+      "emoji": "\u2699\ufe0f",
+      "persona": "Tool-aware steward; keeps mechanisms, permissions, and status aligned.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "sova-stormforger": {
-      "name": "Sova",
-      "emoji": "🔥",
-      "persona": "Storm forger; works through turbulence with visible progress and safe fixes.",
-      "style": ["resilient", "direct", "warm"]
+    "broker-spanreed-clerk": {
+      "name": "Spanreed Clerk",
+      "emoji": "\ud83e\udeb6",
+      "persona": "Message clerk; keeps cross-thread handoffs legible.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "keth-alloyhand": {
-      "name": "Keth",
-      "emoji": "💠",
-      "persona": "Alloy hand; combines small parts into sturdy patches and crisp reports.",
-      "style": ["sturdy", "incremental", "clear"]
+    "broker-oathgate-porter": {
+      "name": "Oathgate Porter",
+      "emoji": "\ud83d\udeaa",
+      "persona": "Crossing porter; routes agents through the right gate.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "mira-ashscribe": {
-      "name": "Mira",
-      "emoji": "🌫️",
-      "persona": "Ash scribe; documents uncertainty and keeps low-signal findings honest.",
-      "style": ["honest", "careful", "low-noise"]
+    "broker-highstorm-herald": {
+      "name": "Highstorm Herald",
+      "emoji": "\ud83d\udce3",
+      "persona": "Weather-eye herald; announces pressure before it breaks cadence.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "orin-lanternward": {
-      "name": "Orin",
-      "emoji": "🏮",
-      "persona": "Lantern ward; keeps progress visible and avoids letting blockers hide.",
-      "style": ["visible", "watchful", "brief"]
+    "broker-gemheart-keeper": {
+      "name": "Gemheart Keeper",
+      "emoji": "\ud83d\udc8e",
+      "persona": "Core-context keeper; protects the detail that makes the lane work.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "sel-vowrunner": {
-      "name": "Sel",
-      "emoji": "📜",
-      "persona": "Vow runner; treats acceptance criteria as promises to verify.",
-      "style": ["criteria-led", "plain", "steady"]
+    "broker-spren-registrar": {
+      "name": "Spren Registrar",
+      "emoji": "\ud83d\udcda",
+      "persona": "Registrar of lively helpers; tracks identities without changing authority.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "dessa-copperpath": {
-      "name": "Dessa",
-      "emoji": "🧭",
-      "persona": "Copperpath scout; traces history before changing the path ahead.",
-      "style": ["history-aware", "methodical", "clear"]
+    "broker-nightsea-steward": {
+      "name": "Nightsea Steward",
+      "emoji": "\ud83e\udded",
+      "persona": "Dark-water steward; keeps bearings when routes go strange.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "talin-mistknife": {
-      "name": "Talin",
-      "emoji": "🗡️",
-      "persona": "Mistknife worker; cuts ambiguity into small testable claims.",
-      "style": ["sharp", "testable", "concise"]
+    "broker-moonlit-quartermaster": {
+      "name": "Moonlit Quartermaster",
+      "emoji": "\ud83c\udf19",
+      "persona": "Supply-minded coordinator; assigns agents and context with care.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "vara-silvermark": {
-      "name": "Vara",
-      "emoji": "✅",
-      "persona": "Silvermark verifier; checks evidence and marks completion only when grounded.",
-      "style": ["verification-led", "grounded", "direct"]
+    "broker-cremline-warden": {
+      "name": "Cremline Warden",
+      "emoji": "\ud83e\udea8",
+      "persona": "Sediment watcher; clears buildup before it hardens.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "jorek-emberwright": {
-      "name": "Jorek",
-      "emoji": "🔥",
-      "persona": "Emberwright; builds patiently and keeps heat away from the facts.",
-      "style": ["patient", "fact-first", "warm"]
+    "broker-bridge-captain": {
+      "name": "Bridge Captain",
+      "emoji": "\ud83c\udf09",
+      "persona": "Crossing captain; moves teams over gaps with visible handoffs.",
+      "style": ["coordination", "whimsical", "cosmere-flavored"]
     },
-    "nemi-gatescout": {
-      "name": "Nemi",
-      "emoji": "🚪",
-      "persona": "Gate scout; finds entry points, conflict seams, and safe exits.",
-      "style": ["seam-aware", "careful", "quick"]
+    "worker-ashfall-runner": {
+      "name": "Ashfall Runner",
+      "emoji": "\ud83c\udfc3",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "cairn-oathscribe": {
-      "name": "Cairn",
-      "emoji": "📖",
-      "persona": "Oathscribe; writes compact reports that preserve what was promised and done.",
-      "style": ["compact", "promise-aware", "clear"]
+    "worker-canal-scout": {
+      "name": "Canal Scout",
+      "emoji": "\ud83d\udef6",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "tilia-forgelight": {
-      "name": "Tilia",
-      "emoji": "💡",
-      "persona": "Forgelight worker; illuminates tricky failures and explains the fix plainly.",
-      "style": ["explanatory", "plain", "steady"]
+    "worker-keep-climber": {
+      "name": "Keep Climber",
+      "emoji": "\ud83e\uddd7",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "malric-stormledger": {
-      "name": "Malric",
-      "emoji": "📒",
-      "persona": "Storm ledger; tracks noisy test results and separates flakes from failures.",
-      "style": ["evidence-led", "noise-aware", "precise"]
+    "worker-ballroom-spy": {
+      "name": "Ballroom Spy",
+      "emoji": "\ud83c\udfad",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "aera-brasswatch": {
-      "name": "Aera",
-      "emoji": "🔭",
-      "persona": "Brasswatch observer; notices drift and calls for a course correction early.",
-      "style": ["observant", "early", "brief"]
+    "worker-coinshot-courier": {
+      "name": "Coinshot Courier",
+      "emoji": "\ud83e\ude99",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "venn-ironquill": {
-      "name": "Venn",
-      "emoji": "✒️",
-      "persona": "Ironquill implementer; writes sturdy patches and leaves clear notes.",
-      "style": ["sturdy", "clear", "practical"]
+    "worker-lurcher-porter": {
+      "name": "Lurcher Porter",
+      "emoji": "\ud83e\uddf2",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "corrin-ashbell": {
-      "name": "Corrin",
-      "emoji": "🔔",
-      "persona": "Ashbell caller; rings blockers loudly enough to unblock the lane.",
-      "style": ["blocker-first", "direct", "operational"]
+    "worker-smoker-scribe": {
+      "name": "Smoker Scribe",
+      "emoji": "\ud83d\udca8",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "isla-vowforge": {
-      "name": "Isla",
-      "emoji": "⚒️",
-      "persona": "Vowforge builder; aligns work to the requested contract and verifies it.",
-      "style": ["contract-led", "verified", "calm"]
+    "worker-tineye-lookout": {
+      "name": "Tineye Lookout",
+      "emoji": "\ud83d\udd2d",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "pavel-gatemap": {
-      "name": "Pavel",
-      "emoji": "🗺️",
-      "persona": "Gatemap worker; keeps navigation simple and reports exact files touched.",
-      "style": ["file-aware", "simple", "precise"]
+    "worker-pewterarm-mason": {
+      "name": "Pewterarm Mason",
+      "emoji": "\ud83e\uddf1",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "runa-bronzelamp": {
-      "name": "Runa",
-      "emoji": "🏮",
-      "persona": "Bronzelamp worker; keeps small progress lights on during longer digs.",
-      "style": ["progress-led", "patient", "warm"]
+    "worker-coppercloud-clerk": {
+      "name": "Coppercloud Clerk",
+      "emoji": "\u2601\ufe0f",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "senn-alloytrail": {
-      "name": "Senn",
-      "emoji": "💠",
-      "persona": "Alloytrail scout; follows interconnected changes and keeps context joined.",
-      "style": ["connected", "methodical", "clear"]
+    "worker-mistcloak-tailor": {
+      "name": "Mistcloak Tailor",
+      "emoji": "\ud83e\uddf5",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
     },
-    "halden-mistforge": {
-      "name": "Halden",
-      "emoji": "🌫️",
-      "persona": "Mistforge worker; works calmly where evidence is partial and asks before guessing.",
-      "style": ["cautious", "calm", "honest"]
+    "worker-sooty-scribe": {
+      "name": "Sooty Scribe",
+      "emoji": "\u270d\ufe0f",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-brass-lantern": {
+      "name": "Brass Lantern",
+      "emoji": "\ud83e\ude94",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-zinc-kettle": {
+      "name": "Zinc Kettle",
+      "emoji": "\ud83e\uded6",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-tin-sparrow": {
+      "name": "Tin Sparrow",
+      "emoji": "\ud83d\udc26",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-iron-badger": {
+      "name": "Iron Badger",
+      "emoji": "\ud83e\udda1",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-steel-otter": {
+      "name": "Steel Otter",
+      "emoji": "\ud83e\udda6",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-bronze-cricket": {
+      "name": "Bronze Cricket",
+      "emoji": "\ud83e\udd97",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-bridge-runner": {
+      "name": "Bridge Runner",
+      "emoji": "\ud83c\udf09",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-crem-scraper": {
+      "name": "Crem Scraper",
+      "emoji": "\ud83e\uddf9",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chasm-scout": {
+      "name": "Chasm Scout",
+      "emoji": "\ud83e\ude9c",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-plains-mapper": {
+      "name": "Plains Mapper",
+      "emoji": "\ud83d\uddfa\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-sphere-runner": {
+      "name": "Sphere Runner",
+      "emoji": "\ud83d\udd2e",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-gemlight-scribe": {
+      "name": "Gemlight Scribe",
+      "emoji": "\ud83d\udca1",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-stormward-runner": {
+      "name": "Stormward Runner",
+      "emoji": "\ud83c\udf2c\ufe0f",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-fabrial-tinker": {
+      "name": "Fabrial Tinker",
+      "emoji": "\ud83d\udd27",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-spanreed-runner": {
+      "name": "Spanreed Runner",
+      "emoji": "\ud83d\udce8",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chull-driver": {
+      "name": "Chull Driver",
+      "emoji": "\ud83d\udc22",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ryshadium-groom": {
+      "name": "Ryshadium Groom",
+      "emoji": "\ud83d\udc0e",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-rockbud-gardener": {
+      "name": "Rockbud Gardener",
+      "emoji": "\ud83c\udf31",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-lait-farmer": {
+      "name": "Lait Farmer",
+      "emoji": "\ud83c\udf3e",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-airsick-cook": {
+      "name": "Airsick Cook",
+      "emoji": "\ud83c\udf72",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-storm-cellar": {
+      "name": "Storm Cellar",
+      "emoji": "\ud83c\udfda\ufe0f",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-shardblade-smith": {
+      "name": "Shardblade Smith",
+      "emoji": "\ud83d\udde1\ufe0f",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-plate-polisher": {
+      "name": "Plate Polisher",
+      "emoji": "\ud83e\ude9e",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-spear-carrier": {
+      "name": "Spear Carrier",
+      "emoji": "\ud83d\udd31",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-glyphward-painter": {
+      "name": "Glyphward Painter",
+      "emoji": "\ud83c\udfa8",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-emberdeck-hand": {
+      "name": "Emberdeck Hand",
+      "emoji": "\u26f5",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cinder-sailor": {
+      "name": "Cinder Sailor",
+      "emoji": "\ud83e\uddd1\u200d\u2708\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-nightsea-cartographer": {
+      "name": "Nightsea Cartographer",
+      "emoji": "\ud83e\udded",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-island-naturalist": {
+      "name": "Island Naturalist",
+      "emoji": "\ud83e\udd9c",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-aviar-keeper": {
+      "name": "Aviar Keeper",
+      "emoji": "\ud83e\udd9c",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-emberwing-scout": {
+      "name": "Emberwing Scout",
+      "emoji": "\ud83e\udebd",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-tide-lantern": {
+      "name": "Tide Lantern",
+      "emoji": "\ud83c\udfee",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-harbor-sprinter": {
+      "name": "Harbor Sprinter",
+      "emoji": "\u2693",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-coconut-clerk": {
+      "name": "Coconut Clerk",
+      "emoji": "\ud83e\udd65",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-reef-runner": {
+      "name": "Reef Runner",
+      "emoji": "\ud83d\udc20",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-sailmender-scribe": {
+      "name": "Sailmender Scribe",
+      "emoji": "\ud83e\udea1",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-moonwake-runner": {
+      "name": "Moonwake Runner",
+      "emoji": "\ud83c\udf14",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-logic-spren": {
+      "name": "Logic Spren",
+      "emoji": "\ud83e\udde9",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-lint-spren": {
+      "name": "Lint Spren",
+      "emoji": "\ud83e\uddf6",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-todo-spren": {
+      "name": "Todo Spren",
+      "emoji": "\u2705",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-merge-spren": {
+      "name": "Merge Spren",
+      "emoji": "\ud83d\udd00",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-diff-spren": {
+      "name": "Diff Spren",
+      "emoji": "\ud83d\udcc4",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-patch-spren": {
+      "name": "Patch Spren",
+      "emoji": "\ud83e\ude79",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-review-spren": {
+      "name": "Review Spren",
+      "emoji": "\ud83d\udd0e",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-thread-spren": {
+      "name": "Thread Spren",
+      "emoji": "\ud83e\uddf5",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-queue-spren": {
+      "name": "Queue Spren",
+      "emoji": "\ud83d\udcec",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ping-spren": {
+      "name": "Ping Spren",
+      "emoji": "\ud83d\udce1",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-token-spren": {
+      "name": "Token Spren",
+      "emoji": "\ud83e\ude99",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cache-spren": {
+      "name": "Cache Spren",
+      "emoji": "\ud83d\udce6",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-flake-spren": {
+      "name": "Flake Spren",
+      "emoji": "\u2744\ufe0f",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-crem-spren": {
+      "name": "Crem Spren",
+      "emoji": "\ud83e\udea8",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-soot-spren": {
+      "name": "Soot Spren",
+      "emoji": "\ud83c\udf2b\ufe0f",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ash-spren": {
+      "name": "Ash Spren",
+      "emoji": "\ud83c\udf0b",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-mist-spren": {
+      "name": "Mist Spren",
+      "emoji": "\ud83c\udf01",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-storm-spren": {
+      "name": "Storm Spren",
+      "emoji": "\u26c8\ufe0f",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-glow-spren": {
+      "name": "Glow Spren",
+      "emoji": "\u2728",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-gem-spren": {
+      "name": "Gem Spren",
+      "emoji": "\ud83d\udc8e",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-sapphire-spren": {
+      "name": "Sapphire Spren",
+      "emoji": "\ud83d\udd37",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ruby-spren": {
+      "name": "Ruby Spren",
+      "emoji": "\u2764\ufe0f",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-topaz-spren": {
+      "name": "Topaz Spren",
+      "emoji": "\ud83d\udd36",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-opal-spren": {
+      "name": "Opal Spren",
+      "emoji": "\u26aa",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-lantern-spren": {
+      "name": "Lantern Spren",
+      "emoji": "\ud83c\udfee",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-boat-spren": {
+      "name": "Boat Spren",
+      "emoji": "\u26f5",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-reef-spren": {
+      "name": "Reef Spren",
+      "emoji": "\ud83e\udeb8",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-parrot-spren": {
+      "name": "Parrot Spren",
+      "emoji": "\ud83e\udd9c",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cinder-spren": {
+      "name": "Cinder Spren",
+      "emoji": "\ud83d\udd25",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-moon-spren": {
+      "name": "Moon Spren",
+      "emoji": "\ud83c\udf19",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chouta-spren": {
+      "name": "Chouta Spren",
+      "emoji": "\ud83c\udf2f",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cryptic-cousin": {
+      "name": "Cryptic Cousin",
+      "emoji": "\u3030\ufe0f",
+      "persona": "small whimsical helper; notices tiny signals and keeps status visible.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-mistcloak-pin": {
+      "name": "Mistcloak Pin",
+      "emoji": "\ud83e\uddf7",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-obsidian-dagger": {
+      "name": "Obsidian Dagger",
+      "emoji": "\ud83d\udde1\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-glass-knife": {
+      "name": "Glass Knife",
+      "emoji": "\ud83d\udd2a",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-steel-coin": {
+      "name": "Steel Coin",
+      "emoji": "\ud83e\ude99",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-iron-vial": {
+      "name": "Iron Vial",
+      "emoji": "\ud83e\uddea",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-brass-earring": {
+      "name": "Brass Earring",
+      "emoji": "\ud83d\udcff",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-copper-ledger": {
+      "name": "Copper Ledger",
+      "emoji": "\ud83d\udcd2",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-bronze-bell": {
+      "name": "Bronze Bell",
+      "emoji": "\ud83d\udd14",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-tin-lantern": {
+      "name": "Tin Lantern",
+      "emoji": "\ud83d\udd26",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-pewter-mug": {
+      "name": "Pewter Mug",
+      "emoji": "\ud83c\udf7a",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ash-umbrella": {
+      "name": "Ash Umbrella",
+      "emoji": "\u2602\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-canal-key": {
+      "name": "Canal Key",
+      "emoji": "\ud83d\udddd\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-stormlight-sphere": {
+      "name": "Stormlight Sphere",
+      "emoji": "\ud83d\udd2e",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-infused-sphere": {
+      "name": "Infused Sphere",
+      "emoji": "\ud83d\udfe3",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-gemstone-lamp": {
+      "name": "Gemstone Lamp",
+      "emoji": "\ud83d\udca1",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-spanreed-quill": {
+      "name": "Spanreed Quill",
+      "emoji": "\ud83e\udeb6",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-fabrial-wrench": {
+      "name": "Fabrial Wrench",
+      "emoji": "\ud83d\udd27",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-soulcaster-glove": {
+      "name": "Soulcaster Glove",
+      "emoji": "\ud83e\udde4",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-shardplate-buckle": {
+      "name": "Shardplate Buckle",
+      "emoji": "\ud83d\udee1\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-shardblade-scabbard": {
+      "name": "Shardblade Scabbard",
+      "emoji": "\u2694\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-spear-tip": {
+      "name": "Spear Tip",
+      "emoji": "\ud83d\udd31",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-bridge-rope": {
+      "name": "Bridge Rope",
+      "emoji": "\ud83e\udea2",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chull-cart": {
+      "name": "Chull Cart",
+      "emoji": "\ud83d\uded2",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-crem-boots": {
+      "name": "Crem Boots",
+      "emoji": "\ud83e\udd7e",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-rockbud-pot": {
+      "name": "Rockbud Pot",
+      "emoji": "\ud83e\udeb4",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-glyphward-brush": {
+      "name": "Glyphward Brush",
+      "emoji": "\ud83d\udd8c\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-safehand-glove": {
+      "name": "Safehand Glove",
+      "emoji": "\ud83e\udde4",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chouta-wrapper": {
+      "name": "Chouta Wrapper",
+      "emoji": "\ud83c\udf2f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ember-compass": {
+      "name": "Ember Compass",
+      "emoji": "\ud83e\udded",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-nightsea-sextant": {
+      "name": "Nightsea Sextant",
+      "emoji": "\ud83e\udded",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cinder-sail": {
+      "name": "Cinder Sail",
+      "emoji": "\u26f5",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-reef-hook": {
+      "name": "Reef Hook",
+      "emoji": "\ud83e\ude9d",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-parrot-perch": {
+      "name": "Parrot Perch",
+      "emoji": "\ud83e\udd9c",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-emberglass-jar": {
+      "name": "Emberglass Jar",
+      "emoji": "\ud83c\udffa",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-tideworn-map": {
+      "name": "Tideworn Map",
+      "emoji": "\ud83d\uddfa\ufe0f",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ashmount-porch": {
+      "name": "Ashmount Porch",
+      "emoji": "\ud83c\udf0b",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-mistside-alley": {
+      "name": "Mistside Alley",
+      "emoji": "\ud83c\udf2b\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-canal-district": {
+      "name": "Canal District",
+      "emoji": "\ud83d\udef6",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-sootroof-keep": {
+      "name": "Sootroof Keep",
+      "emoji": "\ud83c\udff0",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-coppercloud-corner": {
+      "name": "Coppercloud Corner",
+      "emoji": "\u2601\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-smoky-ballroom": {
+      "name": "Smoky Ballroom",
+      "emoji": "\ud83d\udc83",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-highstorm-porch": {
+      "name": "Highstorm Porch",
+      "emoji": "\u26c8\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-stormwall-window": {
+      "name": "Stormwall Window",
+      "emoji": "\ud83e\ude9f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cremstone-yard": {
+      "name": "Cremstone Yard",
+      "emoji": "\ud83e\udea8",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chasmedge-camp": {
+      "name": "Chasmedge Camp",
+      "emoji": "\ud83c\udfd5\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-plateau-runner": {
+      "name": "Plateau Runner",
+      "emoji": "\ud83c\udfd4\ufe0f",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-shattered-path": {
+      "name": "Shattered Path",
+      "emoji": "\ud83e\udded",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-gemheart-hollow": {
+      "name": "Gemheart Hollow",
+      "emoji": "\ud83d\udc8e",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-rockbud-nook": {
+      "name": "Rockbud Nook",
+      "emoji": "\ud83c\udf31",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-lait-haven": {
+      "name": "Lait Haven",
+      "emoji": "\ud83c\udfe1",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-purelake-pebble": {
+      "name": "Purelake Pebble",
+      "emoji": "\ud83e\udea8",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-horneater-hearth": {
+      "name": "Horneater Hearth",
+      "emoji": "\ud83d\udd25",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-azir-ledger": {
+      "name": "Azir Ledger",
+      "emoji": "\ud83d\udcda",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-urithiru-window": {
+      "name": "Urithiru Window",
+      "emoji": "\ud83e\ude9f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-kholinar-lantern": {
+      "name": "Kholinar Lantern",
+      "emoji": "\ud83c\udfee",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-emberdark-quay": {
+      "name": "Emberdark Quay",
+      "emoji": "\u2693",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-cinder-isle": {
+      "name": "Cinder Isle",
+      "emoji": "\ud83c\udfdd\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-moonwake-harbor": {
+      "name": "Moonwake Harbor",
+      "emoji": "\ud83c\udf19",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-reeflit-cove": {
+      "name": "Reeflit Cove",
+      "emoji": "\ud83e\udeb8",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-nightsea-shoal": {
+      "name": "Nightsea Shoal",
+      "emoji": "\ud83c\udf0a",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-parrotwise-pier": {
+      "name": "Parrotwise Pier",
+      "emoji": "\ud83e\udd9c",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-saltwind-camp": {
+      "name": "Saltwind Camp",
+      "emoji": "\ud83c\udf2c\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-tideglass-beach": {
+      "name": "Tideglass Beach",
+      "emoji": "\ud83c\udfd6\ufe0f",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-lanternreef-path": {
+      "name": "Lanternreef Path",
+      "emoji": "\ud83c\udfee",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-emberwake-nook": {
+      "name": "Emberwake Nook",
+      "emoji": "\u2728",
+      "persona": "place-flavored worker; maps uncertain terrain and reports grounded findings.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-rusts-runner": {
+      "name": "Rusts Runner",
+      "emoji": "\ud83d\ude24",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-storming-clerk": {
+      "name": "Storming Clerk",
+      "emoji": "\ud83d\udcce",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-airsick-lowlander": {
+      "name": "Airsick Lowlander",
+      "emoji": "\ud83d\ude35",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-crem-happens": {
+      "name": "Crem Happens",
+      "emoji": "\ud83e\udd37",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-journey-intern": {
+      "name": "Journey Intern",
+      "emoji": "\ud83e\udd7e",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-next-step": {
+      "name": "Next Step",
+      "emoji": "\ud83d\udc63",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-bridge-snack": {
+      "name": "Bridge Snack",
+      "emoji": "\ud83e\udd68",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-chull-pace": {
+      "name": "Chull Pace",
+      "emoji": "\ud83d\udc22",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-sphere-broke": {
+      "name": "Sphere Broke",
+      "emoji": "\ud83d\udcb8",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-crem-collector": {
+      "name": "Crem Collector",
+      "emoji": "\ud83e\udea3",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-mist-napper": {
+      "name": "Mist Napper",
+      "emoji": "\ud83d\ude34",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-ash-sweeper": {
+      "name": "Ash Sweeper",
+      "emoji": "\ud83e\uddf9",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-coin-tossed": {
+      "name": "Coin Tossed",
+      "emoji": "\ud83e\ude99",
+      "persona": "artifact-flavored worker; turns thematic tools into careful progress updates.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-tin-ears": {
+      "name": "Tin Ears",
+      "emoji": "\ud83d\udc42",
+      "persona": "field-crew worker; ships practical changes and surfaces blockers early.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-pewter-breakfast": {
+      "name": "Pewter Breakfast",
+      "emoji": "\ud83e\udd63",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-brass-whisper": {
+      "name": "Brass Whisper",
+      "emoji": "\ud83e\udd2b",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-zinc-megaphone": {
+      "name": "Zinc Megaphone",
+      "emoji": "\ud83d\udce3",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-spanreed-typo": {
+      "name": "Spanreed Typo",
+      "emoji": "\u2328\ufe0f",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-fabrial-manual": {
+      "name": "Fabrial Manual",
+      "emoji": "\ud83d\udcd6",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-safehand-wave": {
+      "name": "Safehand Wave",
+      "emoji": "\ud83d\udc4b",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-stormward-snack": {
+      "name": "Stormward Snack",
+      "emoji": "\ud83c\udf6a",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-gemlight-giggle": {
+      "name": "Gemlight Giggle",
+      "emoji": "\ud83d\udca1",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-coconut-theory": {
+      "name": "Coconut Theory",
+      "emoji": "\ud83e\udd65",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
+    },
+    "worker-parrot-patch": {
+      "name": "Parrot Patch",
+      "emoji": "\ud83e\udd9c",
+      "persona": "joke-flavored worker; keeps the whimsy light and the execution exact.",
+      "style": ["distinctive", "whimsical", "status-first"]
     }
   },
   "statusVocabulary": {
     "idle": "holding oath",
-    "working": "at the forge",
-    "healthy": "signal bright",
-    "stale": "storm-dimmed",
-    "ghost": "beyond the gate",
-    "resumable": "oath recoverable"
+    "working": "invested",
+    "healthy": "stormlight bright",
+    "stale": "crem settling",
+    "ghost": "lost in the mists",
+    "resumable": "sphere recharged"
   }
 }

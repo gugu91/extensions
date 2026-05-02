@@ -2774,6 +2774,7 @@ const MAX_PINET_SKIN_PROMPT_GUIDELINE_LENGTH = 460;
 interface BuiltInPinetSkinCharacter {
   id: string;
   name: string;
+  aliases?: readonly string[];
   emoji: string;
   persona: string;
   style: readonly string[];
@@ -2852,14 +2853,15 @@ function validateBuiltInPinetSkinCharacter(
   }
 
   const name = readStringProperty(value, "name");
+  const aliases = readStringArrayProperty(value, "aliases", false);
   const emoji = readStringProperty(value, "emoji");
   const persona = readStringProperty(value, "persona");
   const style = readStringArrayProperty(value, "style", false);
-  if (!name || !emoji || !persona || !style) {
+  if (!name || !aliases || !emoji || !persona || !style) {
     return null;
   }
 
-  return { id, name, emoji, persona, style };
+  return { id, name, ...(aliases.length > 0 ? { aliases } : {}), emoji, persona, style };
 }
 
 function validateBuiltInPinetSkinRoleDescriptor(
@@ -3361,10 +3363,17 @@ function buildBuiltInPinetSkinAssignment(options: {
           `built-in-${options.profile.key}-${options.role}-accent`,
         )
       : "";
+  const characterNames =
+    character.aliases && character.aliases.length > 0 ? character.aliases : [character.name];
+  const characterName = pickSkinValue(
+    characterNames,
+    options.seed,
+    `built-in-${options.profile.key}-${options.role}-name`,
+  );
   const name = formatBuiltInPinetSkinName(roleDescriptor.namePattern, {
     title,
     accent,
-    character: character.name,
+    character: characterName,
   });
   const style = character.style.length > 0 ? ` Style tags: ${character.style.join(", ")}.` : "";
   const personality = `${character.persona}${style} Presentation only: keep Pinet roles, states, guardrails, and routing authority unchanged.`;

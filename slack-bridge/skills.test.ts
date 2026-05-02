@@ -48,8 +48,6 @@ describe("bundled skills", () => {
         string,
         {
           characterPool?: string[];
-          titlePool?: string[];
-          accentPool?: string[];
           namePattern?: string;
         }
       >;
@@ -66,14 +64,12 @@ describe("bundled skills", () => {
       "worker",
     ]);
     expect(template.roles?.worker.characterPool?.length).toBeGreaterThanOrEqual(2);
-    expect(template.roles?.worker.titlePool?.length).toBeGreaterThanOrEqual(2);
-    expect(template.roles?.worker.accentPool?.length).toBeGreaterThanOrEqual(2);
-    expect(template.roles?.worker.namePattern).toContain("{character}");
-    expect(template.characters?.["example-coordinator"]).toMatchObject({
-      name: "Example Coordinator",
+    expect(template.roles?.worker.namePattern).toBe("{character}");
+    expect(template.characters?.["broker-signal-warden"]).toMatchObject({
+      name: "Signal Warden",
       emoji: "🧭",
     });
-    expect(template.characters?.["example-coordinator"].persona).toContain("coordinator");
+    expect(template.characters?.["broker-signal-warden"].persona).toContain("coordinator");
     expect(template.statusVocabulary?.healthy).toBe("signal clear");
   });
 });

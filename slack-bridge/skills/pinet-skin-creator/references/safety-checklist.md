@@ -22,8 +22,8 @@ Run this checklist before committing a new or edited Pinet skin descriptor.
 - [ ] Non-default skin selection has deterministic fallback behavior.
 - [ ] Runtime skin data is external JSON descriptor content, not mostly hardcoded
       TypeScript structures.
-- [ ] Descriptor pools/combinators provide enough variety for hundreds of agents
-      without obvious repetition.
+- [ ] Major themed descriptors provide about 100–200 authored/prebaked display
+      identities without obvious repetition or bland formulaic triples.
 - [ ] Resolved concrete assignments can be persisted when runtime supports it.
 - [ ] Offline or model-unavailable paths still produce usable identities.
 
@@ -35,10 +35,17 @@ Run this checklist before committing a new or edited Pinet skin descriptor.
       high-level inspiration when allowed by project policy.
 - [ ] Exact third-party character/place names are avoided unless the maintainer
       explicitly accepts the naming risk.
+- [ ] Source-material references are constrained to maintainer-approved works;
+      research sources such as Coppermind are used for verification, not copied
+      wholesale.
 - [ ] No impersonation of real people or protected-class stereotypes.
 - [ ] Persona snippets are short, clear, and subordinate to system/developer/user
       instructions.
-- [ ] Emojis render in common Slack/macOS environments.
+- [ ] Display names are authored, distinctive in text alone, and usually 1–3
+      words; static emoji adds flavor but is not required to disambiguate
+      identities.
+- [ ] Emojis render in common Slack/macOS environments and use a broad palette
+      where the theme supports it.
 
 ## Review and tests
 
