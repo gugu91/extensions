@@ -1354,7 +1354,7 @@ describe("Pinet skin helpers", () => {
     expect(broker.name).toBe(`The Broker ${worker.name.split(" ").at(-1)}`);
     expect(broker.emoji).toBe(worker.emoji);
     expect(broker.personality).toContain("Default whimsical broker skin");
-    expect(broker.statusVocabulary).toMatchObject({ idle: "perched", working: "building" });
+    expect(broker.statusVocabulary).toBeUndefined();
   });
 
   it("builds the foundation skin from aliases with skin-owned names, emoji, voice, and status vocabulary", () => {

@@ -2757,7 +2757,7 @@ export interface PinetSkinAssignment {
   name: string;
   emoji: string;
   personality: string;
-  statusVocabulary: PinetSkinStatusVocabulary;
+  statusVocabulary?: PinetSkinStatusVocabulary;
 }
 
 export const DEFAULT_PINET_SKIN_THEME = "default";
@@ -2781,15 +2781,6 @@ interface BuiltInPinetSkinProfile {
   brokerPersonality: string;
   workerPersonality: string;
 }
-
-const DEFAULT_PINET_SKIN_STATUS_VOCABULARY: PinetSkinStatusVocabulary = {
-  idle: "perched",
-  working: "building",
-  healthy: "bright-eyed",
-  stale: "sniffing the wind",
-  ghost: "vanished into the brush",
-  resumable: "burrow marked",
-};
 
 const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
   {
@@ -3258,7 +3249,6 @@ export function buildPinetSkinAssignment(options: {
       name: generated.name,
       emoji: generated.emoji,
       personality,
-      statusVocabulary: DEFAULT_PINET_SKIN_STATUS_VOCABULARY,
     };
   }
 

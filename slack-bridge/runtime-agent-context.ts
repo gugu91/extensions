@@ -96,7 +96,7 @@ export interface RuntimeAgentContext {
     name: string;
     emoji: string;
     personality: string;
-    statusVocabulary: PinetSkinStatusVocabulary;
+    statusVocabulary?: PinetSkinStatusVocabulary;
   } | null;
   applyLocalAgentIdentity: (
     nextName: string,
@@ -214,7 +214,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     name: string;
     emoji: string;
     personality: string;
-    statusVocabulary: PinetSkinStatusVocabulary;
+    statusVocabulary?: PinetSkinStatusVocabulary;
   } | null {
     const activeSkinTheme = deps.getActiveSkinTheme();
     if (!activeSkinTheme) {
@@ -395,7 +395,9 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       scope,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       ...(deps.getAgentPersonality() ? { personality: deps.getAgentPersonality() } : {}),
-      ...(skinAssignment ? { skinStatusVocabulary: skinAssignment.statusVocabulary } : {}),
+      ...(skinAssignment?.statusVocabulary
+        ? { skinStatusVocabulary: skinAssignment.statusVocabulary }
+        : {}),
       capabilities: {
         repo,
         repoRoot,
