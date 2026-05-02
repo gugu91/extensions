@@ -653,19 +653,39 @@ function getMaybeString(params: Record<string, unknown>, key: string): string | 
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function getMaybeNumber(params: Record<string, unknown>, key: string): number | undefined {
-  const value = params[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function getMaybeBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
   const value = params[key];
   return typeof value === "boolean" ? value : undefined;
 }
 
+function hasParam(params: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(params, key);
+}
+
+function getNullableStringUpdate(
+  params: Record<string, unknown>,
+  key: string,
+): string | null | undefined {
+  if (!hasParam(params, key)) return undefined;
+  const value = params[key];
+  if (value === null) return null;
+  return typeof value === "string" ? value : undefined;
+}
+
+function getNullableNumberUpdate(
+  params: Record<string, unknown>,
+  key: string,
+): number | null | undefined {
+  if (!hasParam(params, key)) return undefined;
+  const value = params[key];
+  if (value === null) return null;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function getMaybeMetadata(
   params: Record<string, unknown>,
 ): Record<string, unknown> | null | undefined {
+  if (!hasParam(params, "metadata")) return undefined;
   const value = params.metadata;
   if (value === null) return null;
   return isRecord(value) ? value : undefined;
@@ -710,22 +730,26 @@ function runPinetLanesAction(
       if (!laneId) throw new Error("lanes op=upsert requires lane_id");
       const lane = await deps.upsertPinetLane({
         laneId,
-        ...(getMaybeString(params, "name") ? { name: getMaybeString(params, "name") } : {}),
-        ...(getMaybeString(params, "task") ? { task: getMaybeString(params, "task") } : {}),
-        ...(getMaybeNumber(params, "issue_number") !== undefined
-          ? { issueNumber: getMaybeNumber(params, "issue_number") }
+        ...(getNullableStringUpdate(params, "name") !== undefined
+          ? { name: getNullableStringUpdate(params, "name") }
           : {}),
-        ...(getMaybeNumber(params, "pr_number") !== undefined
-          ? { prNumber: getMaybeNumber(params, "pr_number") }
+        ...(getNullableStringUpdate(params, "task") !== undefined
+          ? { task: getNullableStringUpdate(params, "task") }
           : {}),
-        ...(getMaybeString(params, "thread_id")
-          ? { threadId: getMaybeString(params, "thread_id") }
+        ...(getNullableNumberUpdate(params, "issue_number") !== undefined
+          ? { issueNumber: getNullableNumberUpdate(params, "issue_number") }
           : {}),
-        ...(getMaybeString(params, "owner_agent")
-          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
+        ...(getNullableNumberUpdate(params, "pr_number") !== undefined
+          ? { prNumber: getNullableNumberUpdate(params, "pr_number") }
           : {}),
-        ...(getMaybeString(params, "implementation_lead")
-          ? { implementationLeadAgentId: getMaybeString(params, "implementation_lead") }
+        ...(getNullableStringUpdate(params, "thread_id") !== undefined
+          ? { threadId: getNullableStringUpdate(params, "thread_id") }
+          : {}),
+        ...(getNullableStringUpdate(params, "owner_agent") !== undefined
+          ? { ownerAgentId: getNullableStringUpdate(params, "owner_agent") }
+          : {}),
+        ...(getNullableStringUpdate(params, "implementation_lead") !== undefined
+          ? { implementationLeadAgentId: getNullableStringUpdate(params, "implementation_lead") }
           : {}),
         ...(getMaybeBoolean(params, "pm_mode") !== undefined
           ? { pmMode: getMaybeBoolean(params, "pm_mode") }
@@ -733,8 +757,8 @@ function runPinetLanesAction(
         ...(getMaybeString(params, "state")
           ? { state: getMaybeString(params, "state") as PinetLaneState }
           : {}),
-        ...(getMaybeString(params, "summary")
-          ? { summary: getMaybeString(params, "summary") }
+        ...(getNullableStringUpdate(params, "summary") !== undefined
+          ? { summary: getNullableStringUpdate(params, "summary") }
           : {}),
         ...(getMaybeMetadata(params) !== undefined ? { metadata: getMaybeMetadata(params) } : {}),
       });
@@ -757,9 +781,11 @@ function runPinetLanesAction(
         laneId,
         agentId,
         role,
-        ...(getMaybeString(params, "status") ? { status: getMaybeString(params, "status") } : {}),
-        ...(getMaybeString(params, "summary")
-          ? { summary: getMaybeString(params, "summary") }
+        ...(getNullableStringUpdate(params, "status") !== undefined
+          ? { status: getNullableStringUpdate(params, "status") }
+          : {}),
+        ...(getNullableStringUpdate(params, "summary") !== undefined
+          ? { summary: getNullableStringUpdate(params, "summary") }
           : {}),
         ...(getMaybeMetadata(params) !== undefined ? { metadata: getMaybeMetadata(params) } : {}),
       });
@@ -957,31 +983,74 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     parameters: Type.Object({
       op: Type.Optional(Type.String({ description: "Operation: list, upsert, or participant" })),
       lane_id: Type.Optional(Type.String({ description: "Stable lane id, e.g. issue-688" })),
-      name: Type.Optional(Type.String({ description: "Human-readable lane name" })),
-      task: Type.Optional(Type.String({ description: "Short lane task description" })),
-      issue_number: Type.Optional(Type.Number({ description: "Linked GitHub issue number" })),
-      pr_number: Type.Optional(Type.Number({ description: "Linked GitHub PR number" })),
-      thread_id: Type.Optional(Type.String({ description: "Owning Pinet/Slack thread id" })),
-      owner_agent: Type.Optional(Type.String({ description: "Accountable follower/PM agent id" })),
+      name: Type.Optional(
+        Type.Union([Type.String(), Type.Null()], { description: "Human-readable lane name" }),
+      ),
+      task: Type.Optional(
+        Type.Union([Type.String(), Type.Null()], { description: "Short lane task description" }),
+      ),
+      issue_number: Type.Optional(
+        Type.Union([Type.Number(), Type.Null()], { description: "Linked GitHub issue number" }),
+      ),
+      pr_number: Type.Optional(
+        Type.Union([Type.Number(), Type.Null()], { description: "Linked GitHub PR number" }),
+      ),
+      thread_id: Type.Optional(
+        Type.Union([Type.String(), Type.Null()], { description: "Owning Pinet/Slack thread id" }),
+      ),
+      owner_agent: Type.Optional(
+        Type.Union([Type.String(), Type.Null()], {
+          description: "Accountable follower/PM agent id",
+        }),
+      ),
       implementation_lead: Type.Optional(
-        Type.String({ description: "Implementation lead agent id" }),
+        Type.Union([Type.String(), Type.Null()], { description: "Implementation lead agent id" }),
       ),
       agent_id: Type.Optional(
         Type.String({ description: "Participant agent id for op=participant" }),
       ),
       lane_role: Type.Optional(
-        Type.String({ description: "Participant role, e.g. pm, lead, reviewer" }),
+        Type.Union(
+          [
+            Type.Literal("broker"),
+            Type.Literal("coordinator"),
+            Type.Literal("pm"),
+            Type.Literal("lead"),
+            Type.Literal("implementer"),
+            Type.Literal("reviewer"),
+            Type.Literal("second_pass_reviewer"),
+            Type.Literal("observer"),
+          ],
+          { description: "Participant role" },
+        ),
       ),
       pm_mode: Type.Optional(Type.Boolean({ description: "Whether PM mode is enabled" })),
       state: Type.Optional(
-        Type.String({
-          description:
-            "Lane state: planned, active, blocked, review, ready, done, cancelled, detached",
+        Type.Union(
+          [
+            Type.Literal("planned"),
+            Type.Literal("active"),
+            Type.Literal("blocked"),
+            Type.Literal("review"),
+            Type.Literal("ready"),
+            Type.Literal("done"),
+            Type.Literal("cancelled"),
+            Type.Literal("detached"),
+          ],
+          { description: "Lane state" },
+        ),
+      ),
+      status: Type.Optional(
+        Type.Union([Type.String(), Type.Null()], { description: "Participant status" }),
+      ),
+      summary: Type.Optional(
+        Type.Union([Type.String(), Type.Null()], {
+          description: "Short lane or participant summary",
         }),
       ),
-      status: Type.Optional(Type.String({ description: "Participant status" })),
-      summary: Type.Optional(Type.String({ description: "Short lane or participant summary" })),
-      metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      metadata: Type.Optional(
+        Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()]),
+      ),
       include_done: Type.Optional(
         Type.Boolean({ description: "Include done/cancelled/detached lanes in list output" }),
       ),

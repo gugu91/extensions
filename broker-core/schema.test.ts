@@ -512,6 +512,92 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("clears nullable lane and participant fields explicitly", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+
+    try {
+      db.upsertPinetLane({
+        laneId: "issue-clear",
+        issueNumber: 688,
+        prNumber: 689,
+        threadId: "a2a:broker:pm",
+        ownerAgentId: "worker-pm",
+        implementationLeadAgentId: "worker-lead",
+        summary: "stale summary",
+        metadata: { stale: true },
+      });
+      db.setPinetLaneParticipant({
+        laneId: "issue-clear",
+        agentId: "worker-pm",
+        role: "pm",
+        status: "coordinating",
+        summary: "stale participant summary",
+        metadata: { stale: true },
+      });
+
+      const cleared = db.upsertPinetLane({
+        laneId: "issue-clear",
+        prNumber: null,
+        threadId: null,
+        ownerAgentId: null,
+        implementationLeadAgentId: null,
+        summary: null,
+        metadata: null,
+      });
+      const clearedParticipant = db.setPinetLaneParticipant({
+        laneId: "issue-clear",
+        agentId: "worker-pm",
+        role: "observer",
+        status: null,
+        summary: null,
+        metadata: null,
+      });
+
+      expect(cleared).toMatchObject({
+        issueNumber: 688,
+        prNumber: null,
+        threadId: null,
+        ownerAgentId: null,
+        implementationLeadAgentId: null,
+        summary: null,
+        metadata: null,
+      });
+      expect(clearedParticipant).toMatchObject({
+        role: "observer",
+        status: null,
+        summary: null,
+        metadata: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects invalid lane states and participant roles on writes", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+
+    try {
+      expect(() =>
+        db.upsertPinetLane({
+          laneId: "issue-invalid",
+          state: "bogus" as never,
+        }),
+      ).toThrow("Invalid Pinet lane state");
+      db.upsertPinetLane({ laneId: "issue-invalid" });
+      expect(() =>
+        db.setPinetLaneParticipant({
+          laneId: "issue-invalid",
+          agentId: "worker-1",
+          role: "helper" as never,
+        }),
+      ).toThrow("Invalid Pinet lane role");
+    } finally {
+      db.close();
+    }
+  });
+
   it("deduplicates Slack messages by channel timestamp while preserving inbox recipients", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

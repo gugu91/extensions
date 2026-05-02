@@ -1013,7 +1013,12 @@ export class BrokerSocketServer {
       ...(typeof params.ownerAgentId === "string" ? { ownerAgentId: params.ownerAgentId } : {}),
       ...(typeof params.includeDone === "boolean" ? { includeDone: params.includeDone } : {}),
     };
-    return rpcOk(req.id, this.db.listPinetLanes(options));
+    try {
+      return rpcOk(req.id, this.db.listPinetLanes(options));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
   }
 
   private handleLaneUpsert(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {

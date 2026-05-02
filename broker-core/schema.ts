@@ -429,6 +429,13 @@ function normalizePinetLaneState(
     : fallback;
 }
 
+function requirePinetLaneState(value: unknown): PinetLaneState {
+  if (typeof value === "string" && PINET_LANE_STATES.has(value as PinetLaneState)) {
+    return value as PinetLaneState;
+  }
+  throw new Error(`Invalid Pinet lane state: ${String(value)}`);
+}
+
 function normalizePinetLaneRole(
   value: unknown,
   fallback: PinetLaneRole = "observer",
@@ -436,6 +443,13 @@ function normalizePinetLaneRole(
   return typeof value === "string" && PINET_LANE_ROLES.has(value as PinetLaneRole)
     ? (value as PinetLaneRole)
     : fallback;
+}
+
+function requirePinetLaneRole(value: unknown): PinetLaneRole {
+  if (typeof value === "string" && PINET_LANE_ROLES.has(value as PinetLaneRole)) {
+    return value as PinetLaneRole;
+  }
+  throw new Error(`Invalid Pinet lane role: ${String(value)}`);
 }
 
 function normalizeLaneId(value: string): string {
@@ -2173,10 +2187,12 @@ export class BrokerDB implements BrokerDBInterface {
     const existing = db.prepare("SELECT * FROM pinet_lanes WHERE lane_id = ?").get(laneId) as
       | PinetLaneRow
       | undefined;
-    const nextState = normalizePinetLaneState(
-      input.state,
-      existing ? rowToPinetLane(existing).state : "active",
-    );
+    const nextState =
+      input.state === undefined
+        ? existing
+          ? rowToPinetLane(existing).state
+          : "active"
+        : requirePinetLaneState(input.state);
 
     if (!existing) {
       db.prepare(
@@ -2222,18 +2238,31 @@ export class BrokerDB implements BrokerDBInterface {
            last_activity_at = ?
        WHERE lane_id = ?`,
     ).run(
-      normalizeOptionalText(input.name) ?? existing.name,
-      normalizeOptionalText(input.task) ?? existing.task,
-      normalizeOptionalInteger(input.issueNumber) ?? existing.issue_number,
-      normalizeOptionalInteger(input.prNumber) ?? existing.pr_number,
-      normalizeOptionalText(input.threadId) ?? existing.thread_id,
-      normalizeOptionalText(input.ownerAgentId) ?? existing.owner_agent_id,
-      normalizeOptionalText(input.implementationLeadAgentId) ??
-        existing.implementation_lead_agent_id,
+      input.name === undefined ? existing.name : (normalizeOptionalText(input.name) ?? null),
+      input.task === undefined ? existing.task : (normalizeOptionalText(input.task) ?? null),
+      input.issueNumber === undefined
+        ? existing.issue_number
+        : (normalizeOptionalInteger(input.issueNumber) ?? null),
+      input.prNumber === undefined
+        ? existing.pr_number
+        : (normalizeOptionalInteger(input.prNumber) ?? null),
+      input.threadId === undefined
+        ? existing.thread_id
+        : (normalizeOptionalText(input.threadId) ?? null),
+      input.ownerAgentId === undefined
+        ? existing.owner_agent_id
+        : (normalizeOptionalText(input.ownerAgentId) ?? null),
+      input.implementationLeadAgentId === undefined
+        ? existing.implementation_lead_agent_id
+        : (normalizeOptionalText(input.implementationLeadAgentId) ?? null),
       input.pmMode === undefined ? existing.pm_mode : input.pmMode ? 1 : 0,
       nextState,
-      normalizeOptionalText(input.summary) ?? existing.summary,
-      serializeOptionalMetadata(input.metadata) ?? existing.metadata,
+      input.summary === undefined
+        ? existing.summary
+        : (normalizeOptionalText(input.summary) ?? null),
+      input.metadata === undefined
+        ? existing.metadata
+        : (serializeOptionalMetadata(input.metadata) ?? null),
       now,
       now,
       laneId,
@@ -2246,7 +2275,7 @@ export class BrokerDB implements BrokerDBInterface {
     const db = this.getDb();
     const laneId = normalizeLaneId(input.laneId);
     const agentId = normalizeLaneId(input.agentId);
-    const role = normalizePinetLaneRole(input.role);
+    const role = requirePinetLaneRole(input.role);
     if (!this.getPinetLane(laneId)) {
       throw new Error(`Pinet lane not found: ${laneId}`);
     }
@@ -2285,9 +2314,15 @@ export class BrokerDB implements BrokerDBInterface {
          WHERE lane_id = ? AND agent_id = ?`,
       ).run(
         role,
-        normalizeOptionalText(input.status) ?? existing.status,
-        normalizeOptionalText(input.summary) ?? existing.summary,
-        serializeOptionalMetadata(input.metadata) ?? existing.metadata,
+        input.status === undefined
+          ? existing.status
+          : (normalizeOptionalText(input.status) ?? null),
+        input.summary === undefined
+          ? existing.summary
+          : (normalizeOptionalText(input.summary) ?? null),
+        input.metadata === undefined
+          ? existing.metadata
+          : (serializeOptionalMetadata(input.metadata) ?? null),
         now,
         now,
         laneId,
@@ -2329,7 +2364,7 @@ export class BrokerDB implements BrokerDBInterface {
     const values: string[] = [];
     if (options.state) {
       clauses.push("state = ?");
-      values.push(normalizePinetLaneState(options.state));
+      values.push(requirePinetLaneState(options.state));
     } else if (!options.includeDone) {
       clauses.push("state NOT IN ('done', 'cancelled', 'detached')");
     }
