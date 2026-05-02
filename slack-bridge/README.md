@@ -251,7 +251,9 @@ migration.
   `slack_send` or `post_channel`; keep `text` as the notification/fallback.
   Block Kit builder tools are not registered by this package. Load the bundled
   `slack-bridge` skill for copyable status-report, button, code, and diff
-  templates.
+  templates. The package also bundles `pinet-skin-creator` for safely drafting
+  or reviewing curated Pinet skin descriptors and character/status-vocabulary
+  pools before changing runtime skin wiring.
 - **Modal helpers are patterns, not hot tools.** Use dispatcher actions
   `modal_open`, `modal_push`, and `modal_update` with Slack view JSON. Open or
   push immediately after receiving a fresh `trigger_id`; Slack trigger IDs
