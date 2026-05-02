@@ -237,6 +237,17 @@ export function renderBrokerControlPlaneHomeTabView(
       snapshot.recentOutcomes.map((task) => `• ${task}`),
       "No merged or closed PR outcomes tracked yet.",
     ),
+    headerBlock("Lane metadata"),
+    headerBlock("Active/managed lanes"),
+    ...buildLineSections(
+      snapshot.activeLanes.map((lane) => `• ${lane}`),
+      "No active managed lanes tracked.",
+    ),
+    headerBlock("Detached/manual-supervision lanes"),
+    ...buildLineSections(
+      snapshot.detachedLanes.map((lane) => `• ${lane}`),
+      "No detached lanes tracked.",
+    ),
     headerBlock("Recent RALPH cycles"),
     ...buildLineSections(cycleLines, "No recorded RALPH cycles yet."),
     dividerBlock(),

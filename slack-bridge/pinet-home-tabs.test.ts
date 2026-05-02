@@ -149,6 +149,12 @@ describe("createPinetHomeTabs", () => {
       "xoxb-test",
       expect.objectContaining({ user_id: "U456" }),
     );
+    const firstPublishBody = (slack.mock.calls[0] as unknown[] | undefined)?.[2] as
+      | Record<string, unknown>
+      | undefined;
+    expect(JSON.stringify(firstPublishBody)).toContain("Lane metadata");
+    expect(JSON.stringify(firstPublishBody)).toContain("issue-688 [active]");
+    expect(JSON.stringify(firstPublishBody)).toContain("issue-123 [detached]");
     expect(notify).not.toHaveBeenCalled();
   });
 
