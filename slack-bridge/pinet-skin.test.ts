@@ -50,10 +50,11 @@ function createDeps(overrides: Partial<PinetMeshSkinDeps> = {}) {
     },
     getMeshRoleFromMetadata: (metadata, fallback) =>
       metadata?.role === "broker" ? "broker" : fallback,
-    buildSkinMetadata: (metadata, personality) => ({
+    buildSkinMetadata: (metadata, personality, statusVocabulary) => ({
       ...(metadata ?? {}),
       ...(activeSkinTheme ? { skinTheme: activeSkinTheme } : {}),
       personality,
+      ...(statusVocabulary ? { skinStatusVocabulary: statusVocabulary } : {}),
     }),
     applyLocalAgentIdentity,
     getAgentName: () => "Broker Crane",
@@ -133,6 +134,10 @@ describe("createPinetMeshSkin", () => {
           existing: "broker-meta",
           skinTheme: "cyberpunk neon",
           personality: expect.any(String),
+          skinStatusVocabulary: expect.objectContaining({
+            idle: expect.any(String),
+            working: expect.any(String),
+          }),
         }),
       }),
     );
@@ -147,6 +152,10 @@ describe("createPinetMeshSkin", () => {
           existing: "worker-meta",
           skinTheme: "cyberpunk neon",
           personality: expect.any(String),
+          skinStatusVocabulary: expect.objectContaining({
+            idle: expect.any(String),
+            working: expect.any(String),
+          }),
         }),
       }),
     );
@@ -167,6 +176,10 @@ describe("createPinetMeshSkin", () => {
           name: result.updatedAgents[1],
           emoji: expect.any(String),
           personality: expect.any(String),
+          skinStatusVocabulary: expect.objectContaining({
+            idle: expect.any(String),
+            working: expect.any(String),
+          }),
         }),
       }),
     );

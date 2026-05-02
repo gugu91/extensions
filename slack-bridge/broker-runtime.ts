@@ -3,6 +3,7 @@ import {
   type InboxMessage,
   type PinetControlCommand,
   type PinetRemoteControlRequestResult,
+  type PinetSkinStatusVocabulary,
   type PinetSkinUpdate,
   type SlackBridgeSettings,
   buildPinetOwnerToken,
@@ -70,6 +71,7 @@ export interface BrokerRuntimeDeps {
   buildSkinMetadata: (
     metadata: Record<string, unknown> | undefined,
     personality: string,
+    statusVocabulary?: PinetSkinStatusVocabulary,
   ) => Record<string, unknown>;
   getMeshRoleFromMetadata: (
     metadata: Record<string, unknown> | undefined,
@@ -609,7 +611,11 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           return {
             name: assignment.name,
             emoji: assignment.emoji,
-            metadata: deps.buildSkinMetadata(registration.metadata, assignment.personality),
+            metadata: deps.buildSkinMetadata(
+              registration.metadata,
+              assignment.personality,
+              assignment.statusVocabulary,
+            ),
           };
         });
 
@@ -623,7 +629,11 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           selfAssignment.name,
           selfAssignment.emoji,
           process.pid,
-          deps.buildSkinMetadata(await deps.getAgentMetadata("broker"), selfAssignment.personality),
+          deps.buildSkinMetadata(
+            await deps.getAgentMetadata("broker"),
+            selfAssignment.personality,
+            selfAssignment.statusVocabulary,
+          ),
           brokerStableId,
         );
         selfId = selfAgent.id;

@@ -662,11 +662,31 @@ export function normalizeOutgoingPinetControlMessage(
   };
 }
 
+export type PinetSkinStatusKey = "idle" | "working" | "healthy" | "stale" | "ghost" | "resumable";
+
+export type PinetSkinStatusVocabulary = Partial<Record<PinetSkinStatusKey, string>>;
+
 export interface PinetSkinUpdate {
   theme: string;
   name: string;
   emoji: string;
   personality: string;
+  statusVocabulary?: PinetSkinStatusVocabulary;
+}
+
+function extractPinetSkinStatusVocabulary(value: unknown): PinetSkinStatusVocabulary | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  const vocabulary: PinetSkinStatusVocabulary = {};
+  for (const key of ["idle", "working", "healthy", "stale", "ghost", "resumable"] as const) {
+    const label = record[key];
+    if (typeof label === "string" && label.trim().length > 0) {
+      vocabulary[key] = label.trim();
+    }
+  }
+
+  return Object.keys(vocabulary).length > 0 ? vocabulary : undefined;
 }
 
 export function buildPinetSkinMetadata(update: PinetSkinUpdate): Record<string, unknown> {
@@ -676,6 +696,7 @@ export function buildPinetSkinMetadata(update: PinetSkinUpdate): Record<string, 
     name: update.name,
     emoji: update.emoji,
     personality: update.personality,
+    ...(update.statusVocabulary ? { skinStatusVocabulary: update.statusVocabulary } : {}),
   };
 }
 
@@ -696,7 +717,9 @@ export function extractPinetSkinUpdate(message: {
   const personality = typeof metadata.personality === "string" ? metadata.personality.trim() : "";
   if (!theme || !name || !emoji || !personality) return null;
 
-  return { theme, name, emoji, personality };
+  const statusVocabulary = extractPinetSkinStatusVocabulary(metadata.skinStatusVocabulary);
+
+  return { theme, name, emoji, personality, ...(statusVocabulary ? { statusVocabulary } : {}) };
 }
 
 export function extractPinetControlCommand(message: {
@@ -901,6 +924,7 @@ export interface AgentDisplayInfo {
     worktreeKind?: "main" | "linked";
     skinTheme?: string;
     personality?: string;
+    skinStatusVocabulary?: PinetSkinStatusVocabulary;
     capabilities?: AgentCapabilities | null;
     scope?: RuntimeScopeCarrier | null;
   } | null;
@@ -1220,6 +1244,13 @@ export function buildAgentDisplayInfo(
           role: asString(metadata.role) ?? capabilities.role,
           skinTheme: asString(metadata.skinTheme),
           personality: asString(metadata.personality),
+          ...(extractPinetSkinStatusVocabulary(metadata.skinStatusVocabulary)
+            ? {
+                skinStatusVocabulary: extractPinetSkinStatusVocabulary(
+                  metadata.skinStatusVocabulary,
+                ),
+              }
+            : {}),
           ...(capabilities.scope ? { scope: capabilities.scope } : {}),
           capabilities,
         }
@@ -2430,10 +2461,14 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
 
   return agents
     .map((a) => {
-      const health = a.health ? ` [${a.health}]` : "";
+      const vocabulary = a.metadata?.skinStatusVocabulary;
+      const statusFlavor = vocabulary?.[a.status] ? ` (${vocabulary[a.status]})` : "";
+      const health = a.health
+        ? ` [${a.health}${vocabulary?.[a.health] ? `: ${vocabulary[a.health]}` : ""}]`
+        : "";
       const stuckTag = a.stuck ? " [stuck]" : "";
       const pid = a.pid != null ? ` pid:${a.pid}` : "";
-      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}${stuckTag}${pid}`;
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${statusFlavor}${health}${stuckTag}${pid}`;
 
       const meta = a.metadata;
       if (meta && (meta.cwd || meta.branch || meta.host)) {
@@ -2722,13 +2757,86 @@ export interface PinetSkinAssignment {
   name: string;
   emoji: string;
   personality: string;
+  statusVocabulary: PinetSkinStatusVocabulary;
 }
 
 export const DEFAULT_PINET_SKIN_THEME = "default";
+export const FOUNDATION_PINET_SKIN_THEME = "foundation";
+export const COSMERE_PINET_SKIN_THEME = "cosmere";
 
 const MAX_PINET_SKIN_THEME_LABEL_LENGTH = 60;
 const MAX_PINET_SKIN_PERSONALITY_LENGTH = 260;
 const MAX_PINET_SKIN_PROMPT_GUIDELINE_LENGTH = 460;
+
+interface BuiltInPinetSkinProfile {
+  theme: typeof FOUNDATION_PINET_SKIN_THEME | typeof COSMERE_PINET_SKIN_THEME;
+  aliases: readonly string[];
+  brokerTitles: readonly string[];
+  workerTitles: readonly string[];
+  modifiers: readonly string[];
+  nouns: readonly string[];
+  brokerEmojis: readonly string[];
+  workerEmojis: readonly string[];
+  statusVocabulary: PinetSkinStatusVocabulary;
+  brokerPersonality: string;
+  workerPersonality: string;
+}
+
+const DEFAULT_PINET_SKIN_STATUS_VOCABULARY: PinetSkinStatusVocabulary = {
+  idle: "perched",
+  working: "building",
+  healthy: "bright-eyed",
+  stale: "sniffing the wind",
+  ghost: "vanished into the brush",
+  resumable: "burrow marked",
+};
+
+const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
+  {
+    theme: FOUNDATION_PINET_SKIN_THEME,
+    aliases: ["foundation", "foundation/space", "space", "archive", "institutional sci-fi"],
+    brokerTitles: ["Director", "Archivist", "Warden", "Marshal", "Gatekeeper", "Speaker"],
+    workerTitles: ["Analyst", "Envoy", "Relay", "Archivist", "Surveyor", "Ratifier"],
+    modifiers: ["Prime", "Vault", "Relay", "Frontier", "Crisis", "Archive", "Vector", "Civic"],
+    nouns: ["Foundation", "Archive", "Relay", "Frontier", "Gate", "Vault", "Crisis", "Concord"],
+    brokerEmojis: ["🏛️", "🛰️", "📜", "🗄️", "🌌", "🛡️"],
+    workerEmojis: ["📡", "🛰️", "📚", "🧭", "🔭", "🗂️", "⚖️"],
+    statusVocabulary: {
+      idle: "standing by",
+      working: "on relay",
+      healthy: "signal green",
+      stale: "signal lagging",
+      ghost: "off grid",
+      resumable: "recoverable relay",
+    },
+    brokerPersonality:
+      "Foundation/space broker skin. Coordinate like a calm archive director: measured, civic, and relay-clear. Use institutional sci-fi diction sparingly; keep hard guardrails and role lines untouched.",
+    workerPersonality:
+      "Foundation/space worker skin. Report like a field relay from the frontier: precise, archival, and steady under crisis. Keep execution plain, blockers visible, and sci-fi color light.",
+  },
+  {
+    theme: COSMERE_PINET_SKIN_THEME,
+    aliases: ["cosmere", "cosmere-inspired", "fantasy metal", "fantasy-metal", "oaths and metals"],
+    brokerTitles: ["Oathkeeper", "High Forger", "Gatewarden", "Bondwarden", "Storm Marshal"],
+    workerTitles: ["Forger", "Gatewalker", "Oathscribe", "Alloy Scout", "Storm Runner"],
+    modifiers: ["Iron", "Steel", "Tin", "Pewter", "Bronze", "Copper", "Zinc", "Brass"],
+    nouns: ["Oath", "Gate", "Forge", "Storm", "Mist", "Ash", "Light", "Bond"],
+    brokerEmojis: ["⚔️", "🛡️", "💎", "🌩️", "🔥", "🪐"],
+    workerEmojis: ["⚒️", "🗡️", "🪙", "🔮", "💠", "🌫️", "🔥"],
+    statusVocabulary: {
+      idle: "holding oath",
+      working: "at the forge",
+      healthy: "invested",
+      stale: "storm-dimmed",
+      ghost: "beyond the gate",
+      resumable: "oath recoverable",
+    },
+    brokerPersonality:
+      "Cosmere-inspired broker skin. Sound like a steady oathkeeper between worlds: metal, forge, gate, and storm imagery used lightly. Coordinate cleanly; hard behavior and guardrails remain outside the skin.",
+    workerPersonality:
+      "Cosmere-inspired worker skin. Work like a careful forgehand between worlds: crisp reports, visible blockers, and light oath/metal imagery. Flavor the cadence, never the facts or safety boundaries.",
+  },
+];
 
 const PINET_SKIN_STOP_WORDS = new Set([
   "a",
@@ -3037,10 +3145,21 @@ function getPinetSkinTokens(theme: string): string[] {
   return tokens.length > 0 ? tokens : ["Signal"];
 }
 
+function getBuiltInPinetSkinProfile(theme: string): BuiltInPinetSkinProfile | null {
+  const normalized = theme.trim().toLowerCase();
+  return (
+    PINET_BUILT_IN_SKINS.find(
+      (profile) => profile.theme === normalized || profile.aliases.includes(normalized),
+    ) ?? null
+  );
+}
+
 export function normalizePinetSkinTheme(theme: string | undefined): string | null {
   const trimmed = theme?.trim();
   if (!trimmed) return null;
-  return trimmed.toLowerCase() === DEFAULT_PINET_SKIN_THEME ? DEFAULT_PINET_SKIN_THEME : trimmed;
+  const lower = trimmed.toLowerCase();
+  if (lower === DEFAULT_PINET_SKIN_THEME || lower === "classic") return DEFAULT_PINET_SKIN_THEME;
+  return getBuiltInPinetSkinProfile(trimmed)?.theme ?? trimmed;
 }
 
 function mergeUniqueSkinValues(...lists: ReadonlyArray<readonly string[]>): string[] {
@@ -3081,6 +3200,38 @@ function fillPinetSkinTemplate(template: string, values: Record<string, string>)
   );
 }
 
+function buildBuiltInPinetSkinAssignment(options: {
+  profile: BuiltInPinetSkinProfile;
+  role: PinetSkinRole;
+  seed: string;
+}): PinetSkinAssignment {
+  const title =
+    options.role === "broker"
+      ? pickSkinValue(options.profile.brokerTitles, options.seed, "built-in-broker-title")
+      : pickSkinValue(options.profile.workerTitles, options.seed, "built-in-worker-title");
+  const modifier = pickSkinValue(options.profile.modifiers, options.seed, "built-in-modifier");
+  const noun = pickSkinValue(options.profile.nouns, options.seed, "built-in-noun");
+  const emoji =
+    options.role === "broker"
+      ? pickSkinValue(options.profile.brokerEmojis, options.seed, "built-in-broker-emoji")
+      : pickSkinValue(options.profile.workerEmojis, options.seed, "built-in-worker-emoji");
+  const name =
+    options.role === "broker" ? `The ${title} of ${noun}` : `${modifier} ${noun} ${title}`;
+  const personality =
+    options.role === "broker"
+      ? options.profile.brokerPersonality
+      : options.profile.workerPersonality;
+
+  return {
+    theme: options.profile.theme,
+    role: options.role,
+    name,
+    emoji,
+    personality: clampPinetSkinText(personality, MAX_PINET_SKIN_PERSONALITY_LENGTH),
+    statusVocabulary: options.profile.statusVocabulary,
+  };
+}
+
 export function buildPinetSkinAssignment(options: {
   theme: string;
   role: PinetSkinRole;
@@ -3100,7 +3251,17 @@ export function buildPinetSkinAssignment(options: {
       name: generated.name,
       emoji: generated.emoji,
       personality,
+      statusVocabulary: DEFAULT_PINET_SKIN_STATUS_VOCABULARY,
     };
+  }
+
+  const builtInProfile = getBuiltInPinetSkinProfile(normalizedTheme);
+  if (builtInProfile) {
+    return buildBuiltInPinetSkinAssignment({
+      profile: builtInProfile,
+      role: options.role,
+      seed: options.seed,
+    });
   }
 
   const themeLabel = formatPinetSkinThemeLabel(normalizedTheme);
@@ -3167,9 +3328,7 @@ export function buildPinetSkinAssignment(options: {
   const roleFocus = pickSkinValue(PINET_SKIN_ROLE_FOCUS[options.role], options.seed, "role-focus");
   const workerCore = secondary === modifier ? primary : secondary;
   const name =
-    options.role === "broker"
-      ? generateAgentName(options.seed, "broker").name
-      : `${modifier} ${workerCore} ${title}`;
+    options.role === "broker" ? `The ${title} of ${primary}` : `${modifier} ${workerCore} ${title}`;
 
   return {
     theme: normalizedTheme,
@@ -3180,6 +3339,14 @@ export function buildPinetSkinAssignment(options: {
       `${opener} ${style} ${roleFocus}`,
       MAX_PINET_SKIN_PERSONALITY_LENGTH,
     ),
+    statusVocabulary: {
+      idle: "standing by",
+      working: "in motion",
+      healthy: "signal clear",
+      stale: "signal fading",
+      ghost: "off signal",
+      resumable: "recoverable",
+    },
   };
 }
 

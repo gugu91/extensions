@@ -1354,6 +1354,65 @@ describe("Pinet skin helpers", () => {
     expect(broker.name).toBe(`The Broker ${worker.name.split(" ").at(-1)}`);
     expect(broker.emoji).toBe(worker.emoji);
     expect(broker.personality).toContain("Default whimsical broker skin");
+    expect(broker.statusVocabulary).toMatchObject({ idle: "perched", working: "building" });
+  });
+
+  it("builds the foundation skin from aliases with skin-owned names, emoji, voice, and status vocabulary", () => {
+    const broker = buildPinetSkinAssignment({
+      theme: "foundation/space",
+      role: "broker",
+      seed: "broker-a",
+    });
+    const worker = buildPinetSkinAssignment({
+      theme: "foundation/space",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(broker.theme).toBe("foundation");
+    expect(worker.theme).toBe("foundation");
+    expect(broker.name).toMatch(/^The .+ of .+$/);
+    expect(broker.name).not.toMatch(/Broker \w+$/);
+    expect(worker.name).toMatch(/(Foundation|Archive|Relay|Frontier|Gate|Vault|Crisis|Concord)/);
+    expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
+    expect(["🏛️", "🛰️", "📜", "🗄️", "🌌", "🛡️"]).toContain(broker.emoji);
+    expect(["📡", "🛰️", "📚", "🧭", "🔭", "🗂️", "⚖️"]).toContain(worker.emoji);
+    expect(broker.personality).toContain("Foundation/space broker skin");
+    expect(worker.personality).toContain("Foundation/space worker skin");
+    expect(worker.statusVocabulary).toMatchObject({
+      idle: "standing by",
+      working: "on relay",
+      ghost: "off grid",
+    });
+  });
+
+  it("builds the cosmere-inspired skin with fantasy-metal contrast and no animal fallback", () => {
+    const broker = buildPinetSkinAssignment({
+      theme: "cosmere-inspired",
+      role: "broker",
+      seed: "broker-a",
+    });
+    const worker = buildPinetSkinAssignment({
+      theme: "cosmere-inspired",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(broker.theme).toBe("cosmere");
+    expect(worker.theme).toBe("cosmere");
+    expect(broker.name).toMatch(/^The .+ of .+$/);
+    expect(broker.name).not.toMatch(/Broker \w+$/);
+    expect(worker.name).toMatch(/(Iron|Steel|Tin|Pewter|Bronze|Copper|Zinc|Brass)/);
+    expect(worker.name).toMatch(/(Oath|Gate|Forge|Storm|Mist|Ash|Light|Bond)/);
+    expect(["⚔️", "🛡️", "💎", "🌩️", "🔥", "🪐"]).toContain(broker.emoji);
+    expect(["⚒️", "🗡️", "🪙", "🔮", "💠", "🌫️", "🔥"]).toContain(worker.emoji);
+    expect(broker.personality).toContain("Cosmere-inspired broker skin");
+    expect(worker.personality).toContain("Cosmere-inspired worker skin");
+    expect(worker.statusVocabulary).toMatchObject({
+      idle: "holding oath",
+      working: "at the forge",
+      healthy: "invested",
+    });
   });
 
   it("builds a custom free-form skin with role-aware identity and bounded voice guidance", () => {
@@ -1369,8 +1428,8 @@ describe("Pinet skin helpers", () => {
     });
 
     expect(broker.theme).toBe("night's watch from ASOIAF");
-    expect(broker.name).toBe(generateAgentName("broker-a", "broker").name);
-    expect(broker.name).toMatch(/^The Broker \w+$/);
+    expect(broker.name).toMatch(/^The .+ of .+$/);
+    expect(broker.name).not.toMatch(/Broker \w+$/);
     expect(broker.name).not.toBe(worker.name);
     expect(broker.personality).toContain("night's watch from ASOIAF");
     expect(worker.personality).toContain("night's watch from ASOIAF");
@@ -1424,6 +1483,7 @@ describe("Pinet skin helpers", () => {
       name: "Chrome Hacker Cipher",
       emoji: "🕶️",
       personality: "Lean into the vibe of cyberpunk hackers.",
+      statusVocabulary: { idle: "in the shadows", working: "on the wire" },
     });
 
     expect(
@@ -1436,6 +1496,7 @@ describe("Pinet skin helpers", () => {
       name: "Chrome Hacker Cipher",
       emoji: "🕶️",
       personality: "Lean into the vibe of cyberpunk hackers.",
+      statusVocabulary: { idle: "in the shadows", working: "on the wire" },
     });
   });
 
@@ -1968,6 +2029,36 @@ describe("formatAgentList", () => {
     ];
     const result = formatAgentList(agents, homedir);
     expect(result).toContain("~/work (dev) @ srv");
+  });
+
+  it("keeps core status neutral while adding optional skin status vocabulary", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🏛️",
+        name: "The Director of Archive",
+        id: "agent-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        metadata: {
+          skinTheme: "foundation",
+          skinStatusVocabulary: {
+            idle: "standing by",
+            ghost: "off grid",
+          },
+        },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    const result = formatAgentList([agent], homedir);
+    expect(result).toContain(
+      "The Director of Archive (agent-1) — idle (standing by) [ghost: off grid]",
+    );
+    expect(result).toContain("skin: foundation");
   });
 
   it("formats health, lease, and capability tags", () => {

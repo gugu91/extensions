@@ -5,6 +5,7 @@ import {
   type InboxMessage,
   type PinetControlCommand,
   type PinetRemoteControlRequestResult,
+  type PinetSkinUpdate,
   type SlackBridgeSettings,
   buildFollowerRuntimeDiagnostic,
   buildPinetOwnerToken,
@@ -59,12 +60,7 @@ export interface FollowerRuntimeDeps {
     emoji: string;
     metadata?: Record<string, unknown> | null;
   }) => void;
-  applySkinUpdate: (update: {
-    theme: string;
-    name: string;
-    emoji: string;
-    personality: string;
-  }) => void;
+  applySkinUpdate: (update: PinetSkinUpdate) => void;
   persistState: () => void;
   updateBadge: () => void;
   maybeDrainInboxIfIdle: (ctx: ExtensionContext) => boolean;

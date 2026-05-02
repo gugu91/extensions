@@ -454,15 +454,27 @@ Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are per
 
 ### Broker commands
 
-| Command                 | Description                                |
-| ----------------------- | ------------------------------------------ |
-| `/pinet-start`          | Start as the mesh broker                   |
-| `/pinet-follow`         | Connect as a follower worker               |
-| `/pinet-unfollow`       | Disconnect from the broker                 |
-| `/pinet-reload <agent>` | Ask another agent to reload                |
-| `/pinet-exit <agent>`   | Ask another agent to exit                  |
-| `/pinet-free`           | Mark this agent as idle                    |
-| `/pinet-skin <theme>`   | Change the mesh naming theme (broker only) |
+| Command                 | Description                                     |
+| ----------------------- | ----------------------------------------------- |
+| `/pinet-start`          | Start as the mesh broker                        |
+| `/pinet-follow`         | Connect as a follower worker                    |
+| `/pinet-unfollow`       | Disconnect from the broker                      |
+| `/pinet-reload <agent>` | Ask another agent to reload                     |
+| `/pinet-exit <agent>`   | Ask another agent to exit                       |
+| `/pinet-free`           | Mark this agent as idle                         |
+| `/pinet-skin <theme>`   | Change the mesh presentation skin (broker only) |
+
+### Pinet skins
+
+`/pinet-skin <theme>` updates mesh presentation only: generated names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
+
+Built-in skins:
+
+- `default` / `classic` — preserves the current whimsical animal names, animal emoji palette, and playful-but-focused persona.
+- `foundation` / `foundation/space` / `space` — institutional sci-fi style with archive, relay, crisis, frontier, gate, and ratify vocabulary.
+- `cosmere` / `cosmere-inspired` — multi-world fantasy-metal style with light oath, forge, gate, storm, and metal imagery while avoiding hard coupling to specific copyrighted names.
+
+Free-form themes are still accepted; built-ins provide curated palettes and vocabulary to avoid split metaphors.
 
 ### How it works
 

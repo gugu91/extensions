@@ -15,6 +15,7 @@ import {
   normalizeOwnedThreads,
   resolveRuntimeAgentIdentity,
   shortenPath,
+  type PinetSkinStatusVocabulary,
   type SlackBridgeSettings,
 } from "./helpers.js";
 import {
@@ -91,7 +92,12 @@ export interface RuntimeAgentContext {
   resolveSkinAssignment: (
     role: RuntimeAgentRole,
     seed?: string,
-  ) => { name: string; emoji: string; personality: string } | null;
+  ) => {
+    name: string;
+    emoji: string;
+    personality: string;
+    statusVocabulary: PinetSkinStatusVocabulary;
+  } | null;
   applyLocalAgentIdentity: (
     nextName: string,
     nextEmoji: string,
@@ -110,6 +116,7 @@ export interface RuntimeAgentContext {
   buildSkinMetadata: (
     metadata: Record<string, unknown> | undefined,
     personality: string,
+    statusVocabulary?: PinetSkinStatusVocabulary,
   ) => Record<string, unknown>;
   getIdentityGuidelines: () => [string, string, string];
   applyRegistrationIdentity: (registration: {
@@ -203,7 +210,12 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
   function resolveSkinAssignment(
     role: RuntimeAgentRole,
     seed = getSkinSeed(),
-  ): { name: string; emoji: string; personality: string } | null {
+  ): {
+    name: string;
+    emoji: string;
+    personality: string;
+    statusVocabulary: PinetSkinStatusVocabulary;
+  } | null {
     const activeSkinTheme = deps.getActiveSkinTheme();
     if (!activeSkinTheme) {
       return null;
@@ -214,6 +226,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       name: assignment.name,
       emoji: assignment.emoji,
       personality: assignment.personality,
+      statusVocabulary: assignment.statusVocabulary,
     };
   }
 
@@ -370,6 +383,8 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       ...tools.map((tool) => `tool:${tool}`),
     ];
 
+    const skinAssignment = resolveSkinAssignment(role, getIdentitySeedForRole(role));
+
     return {
       cwd,
       branch,
@@ -380,6 +395,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       scope,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       ...(deps.getAgentPersonality() ? { personality: deps.getAgentPersonality() } : {}),
+      ...(skinAssignment ? { skinStatusVocabulary: skinAssignment.statusVocabulary } : {}),
       capabilities: {
         repo,
         repoRoot,
@@ -406,11 +422,13 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
   function buildSkinMetadata(
     metadata: Record<string, unknown> | undefined,
     personality: string,
+    statusVocabulary?: PinetSkinStatusVocabulary,
   ): Record<string, unknown> {
     return {
       ...(metadata ?? {}),
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       personality,
+      ...(statusVocabulary ? { skinStatusVocabulary: statusVocabulary } : {}),
     };
   }
 

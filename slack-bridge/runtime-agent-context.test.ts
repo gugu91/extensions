@@ -469,6 +469,14 @@ describe("createRuntimeAgentContext", () => {
       role: "broker",
       skinTheme: "midnight",
       personality: "observant",
+      skinStatusVocabulary: {
+        idle: "standing by",
+        working: "in motion",
+        healthy: "signal clear",
+        stale: "signal fading",
+        ghost: "off signal",
+        resumable: "recoverable",
+      },
       scope: {
         workspace: {
           provider: "slack",
@@ -532,10 +540,19 @@ describe("createRuntimeAgentContext", () => {
       "broker",
     );
     expect(runtimeAgentContext.getMeshRoleFromMetadata(undefined, "worker")).toBe("worker");
-    expect(runtimeAgentContext.buildSkinMetadata({ role: "worker" }, "careful")).toEqual({
+    expect(
+      runtimeAgentContext.buildSkinMetadata({ role: "worker" }, "careful", {
+        idle: "standing by",
+        working: "in motion",
+      }),
+    ).toEqual({
       role: "worker",
       skinTheme: "dawn",
       personality: "careful",
+      skinStatusVocabulary: {
+        idle: "standing by",
+        working: "in motion",
+      },
     });
 
     runtimeAgentContext.applyRegistrationIdentity({
