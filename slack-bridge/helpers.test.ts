@@ -1386,9 +1386,9 @@ describe("Pinet skin helpers", () => {
     });
   });
 
-  it("builds the cosmere-inspired skin with fantasy-metal contrast and no animal fallback", () => {
+  it("builds the Oathgate/Cosmere-inspired skin with fantasy-metal contrast and no animal fallback", () => {
     const broker = buildPinetSkinAssignment({
-      theme: "cosmere-inspired",
+      theme: "oathgate",
       role: "broker",
       seed: "broker-a",
     });

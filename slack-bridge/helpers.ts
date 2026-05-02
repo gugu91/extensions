@@ -2816,7 +2816,14 @@ const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
   },
   {
     theme: COSMERE_PINET_SKIN_THEME,
-    aliases: ["cosmere", "cosmere-inspired", "fantasy metal", "fantasy-metal", "oaths and metals"],
+    aliases: [
+      "cosmere",
+      "cosmere-inspired",
+      "oathgate",
+      "fantasy metal",
+      "fantasy-metal",
+      "oaths and metals",
+    ],
     brokerTitles: ["Oathkeeper", "High Forger", "Gatewarden", "Bondwarden", "Storm Marshal"],
     workerTitles: ["Forger", "Gatewalker", "Oathscribe", "Alloy Scout", "Storm Runner"],
     modifiers: ["Iron", "Steel", "Tin", "Pewter", "Bronze", "Copper", "Zinc", "Brass"],

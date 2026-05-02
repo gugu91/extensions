@@ -472,7 +472,7 @@ Built-in skins:
 
 - `default` / `classic` — preserves the current whimsical animal names, animal emoji palette, and playful-but-focused persona.
 - `foundation` / `foundation/space` / `space` — institutional sci-fi style with archive, relay, crisis, frontier, gate, and ratify vocabulary.
-- `cosmere` / `cosmere-inspired` — multi-world fantasy-metal style with light oath, forge, gate, storm, and metal imagery while avoiding hard coupling to specific copyrighted names.
+- `oathgate` / `cosmere` / `cosmere-inspired` — multi-world fantasy-metal style with light oath, forge, gate, storm, and metal imagery while avoiding hard coupling to specific copyrighted names.
 
 Free-form themes are still accepted; built-ins provide curated palettes and vocabulary to avoid split metaphors.
 
