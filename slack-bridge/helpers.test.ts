@@ -1371,14 +1371,49 @@ describe("Pinet skin helpers", () => {
 
     expect(broker.theme).toBe("foundation");
     expect(worker.theme).toBe("foundation");
-    expect(["Archive Director", "Relay Warden", "Crisis Speaker"]).toContain(broker.name);
-    expect(["Frontier Relay", "Vault Analyst", "Gate Surveyor", "Civic Envoy"]).toContain(
-      worker.name,
+    expect(broker.name).toMatch(
+      /(Director|Warden|Speaker|Marshal|Archivist|Provost|Steward|Prime|Coordinator|Gatekeeper|Chair|Chief|Lead|Keeper|Clerk|Regent)/,
+    );
+    expect(broker.name).toMatch(
+      /(Seldan|Vara|Orren|Maelin|Tovan|Irysa|Calder|Serin|Navo|Halix|Renna|Oskar)/,
+    );
+    expect(worker.name).toMatch(
+      /(Analyst|Envoy|Relay|Surveyor|Ratifier|Indexer|Archivist|Scout|Observer|Clerk|Mapper|Operator|Witness|Courier|Auditor|Signalist|Custodian|Scribe|Verifier|Pathfinder)/,
+    );
+    expect(worker.name).toMatch(
+      /(Pax|Mira|Solan|Tess|Orli|Juno|Kael|Nara|Dalen|Cira|Voss|Lena|Arno|Siva|Maren|Tali|Eamon|Nyx|Selka|Roven|Adri|Mica|Elin|Bram)/,
     );
     expect(broker.name).not.toMatch(/Broker \w+$/);
     expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
-    expect(["🏛️", "🛰️", "📜"]).toContain(broker.emoji);
-    expect(["📡", "🗄️", "🧭", "⚖️"]).toContain(worker.emoji);
+    expect(["🏛️", "🛰️", "⚖️", "🗄️", "🧭", "📜", "🌌", "🔭", "📡", "📶", "📚", "🛡️"]).toContain(
+      broker.emoji,
+    );
+    expect([
+      "📡",
+      "📚",
+      "🔭",
+      "🗂️",
+      "🧭",
+      "⚖️",
+      "🛰️",
+      "📍",
+      "🏛️",
+      "🌌",
+      "📒",
+      "🏙️",
+      "🚨",
+      "🔆",
+      "🪐",
+      "🤝",
+      "🗃️",
+      "📻",
+      "🏕️",
+      "🚪",
+      "🔐",
+      "📶",
+      "➡️",
+      "🕊️",
+    ]).toContain(worker.emoji);
     expect(broker.personality).toContain("Presentation only");
     expect(worker.personality).toContain("Presentation only");
     expect(worker.statusVocabulary).toMatchObject({
@@ -1402,12 +1437,43 @@ describe("Pinet skin helpers", () => {
 
     expect(broker.theme).toBe("cosmere");
     expect(worker.theme).toBe("cosmere");
-    expect(["Oathgate Warden", "Storm Cartographer", "Alloy Binder"]).toContain(broker.name);
-    expect(["Forge Scribe", "Gate Runner", "Bronze Scout", "Storm Forger"]).toContain(worker.name);
+    expect(broker.name).toMatch(
+      /(Warden|Cartographer|Binder|Marshal|Keeper|Oathspeaker|Gatewright|Stormcaller|Chair|Lampbearer|Regent|Sentinel|Steward|Herald|Arbiter|Captain)/,
+    );
+    expect(broker.name).toMatch(
+      /(Vala|Thoren|Meris|Kaelen|Sindra|Orik|Navra|Darian|Elira|Brannic|Saira|Tovash)/,
+    );
+    expect(worker.name).toMatch(
+      /(Scribe|Runner|Scout|Forger|Hand|Keeper|Pathfinder|Witness|Quill|Marker|Blade|Lamplighter|Ledger|Smith|Ward|Binder|Seeker|Courier|Emberwright|Gatehand)/,
+    );
+    expect(worker.name).toMatch(
+      /(Ren|Lyra|Brenn|Sova|Keth|Mira|Orin|Sel|Dessa|Talin|Vara|Jorek|Nemi|Cairn|Tilia|Malric|Aera|Venn|Corrin|Isla|Pavel|Runa|Senn|Halden)/,
+    );
     expect(broker.name).not.toMatch(/Broker \w+$/);
     expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
-    expect(["🛡️", "🌩️", "💠"]).toContain(broker.emoji);
-    expect(["⚒️", "🗡️", "🪙", "🔥"]).toContain(worker.emoji);
+    expect(["🛡️", "🌩️", "💠", "🔥", "🔮", "🌫️", "🌁", "🗺️", "🪙", "⚔️", "🏮", "🏺"]).toContain(
+      broker.emoji,
+    );
+    expect([
+      "⚒️",
+      "🗡️",
+      "🪙",
+      "🔥",
+      "💠",
+      "🌫️",
+      "🏮",
+      "📜",
+      "🧭",
+      "✅",
+      "🚪",
+      "📖",
+      "💡",
+      "📒",
+      "🔭",
+      "✒️",
+      "🔔",
+      "🗺️",
+    ]).toContain(worker.emoji);
     expect(broker.personality).toContain("Presentation only");
     expect(worker.personality).toContain("Presentation only");
     expect(worker.statusVocabulary).toMatchObject({
@@ -1415,6 +1481,31 @@ describe("Pinet skin helpers", () => {
       working: "at the forge",
       healthy: "signal bright",
     });
+  });
+
+  it("provides enough built-in skin combinations for large meshes", () => {
+    const foundationWorkers = new Set<string>();
+    const oathgateWorkers = new Set<string>();
+
+    for (let index = 0; index < 300; index += 1) {
+      foundationWorkers.add(
+        buildPinetSkinAssignment({
+          theme: "foundation",
+          role: "worker",
+          seed: `worker-${index}`,
+        }).name,
+      );
+      oathgateWorkers.add(
+        buildPinetSkinAssignment({
+          theme: "oathgate",
+          role: "worker",
+          seed: `worker-${index}`,
+        }).name,
+      );
+    }
+
+    expect(foundationWorkers.size).toBeGreaterThan(200);
+    expect(oathgateWorkers.size).toBeGreaterThan(200);
   });
 
   it("builds a custom free-form skin with role-aware identity and bounded voice guidance", () => {

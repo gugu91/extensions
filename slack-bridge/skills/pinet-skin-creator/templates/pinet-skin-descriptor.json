@@ -5,10 +5,30 @@
   "intent": "One sentence describing the operational tone and theme.",
   "fallback": "default",
   "roles": {
-    "broker": { "characterPool": ["example-coordinator"] },
-    "worker": { "characterPool": ["example-builder", "example-scout"] },
-    "reviewer": { "characterPool": ["example-reviewer"] },
-    "pm": { "characterPool": ["example-planner"] }
+    "broker": {
+      "characterPool": ["example-coordinator", "example-warden"],
+      "titlePool": ["Coordinator", "Warden", "Marshal", "Steward"],
+      "accentPool": ["North", "Signal", "Archive", "Frontier"],
+      "namePattern": "{accent} {title} {character}"
+    },
+    "worker": {
+      "characterPool": ["example-builder", "example-scout", "example-runner"],
+      "titlePool": ["Builder", "Scout", "Runner", "Reviewer"],
+      "accentPool": ["Amber", "Cobalt", "Relay", "Forge"],
+      "namePattern": "{accent} {character} {title}"
+    },
+    "reviewer": {
+      "characterPool": ["example-reviewer"],
+      "titlePool": ["Reviewer", "Verifier"],
+      "accentPool": ["Clear", "Bright"],
+      "namePattern": "{accent} {character} {title}"
+    },
+    "pm": {
+      "characterPool": ["example-planner"],
+      "titlePool": ["Planner", "Coordinator"],
+      "accentPool": ["Map", "North"],
+      "namePattern": "{accent} {character} {title}"
+    }
   },
   "characters": {
     "example-coordinator": {
@@ -16,6 +36,12 @@
       "emoji": "🧭",
       "persona": "Steady coordinator; clear routing, visible blockers, and concise status.",
       "style": ["steady", "concise", "operational"]
+    },
+    "example-warden": {
+      "name": "Example Warden",
+      "emoji": "🛡️",
+      "persona": "Protective coordinator; keeps role lines and handoffs clear.",
+      "style": ["protective", "clear", "calm"]
     },
     "example-builder": {
       "name": "Example Builder",
@@ -28,6 +54,12 @@
       "emoji": "🔎",
       "persona": "Curious investigator; compact findings and grounded recommendations.",
       "style": ["curious", "analytical", "brief"]
+    },
+    "example-runner": {
+      "name": "Example Runner",
+      "emoji": "🏃",
+      "persona": "Fast worker; moves through scoped tasks and reports exact outcomes.",
+      "style": ["fast", "scoped", "exact"]
     },
     "example-reviewer": {
       "name": "Example Reviewer",
@@ -45,8 +77,9 @@
   "statusVocabulary": {
     "idle": "at the ready",
     "working": "in motion",
-    "blocked": "blocked",
-    "reviewing": "under review",
-    "done": "complete"
+    "healthy": "signal clear",
+    "stale": "signal fading",
+    "ghost": "off signal",
+    "resumable": "recoverable"
   }
 }

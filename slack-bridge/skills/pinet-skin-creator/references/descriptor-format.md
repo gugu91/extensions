@@ -1,72 +1,81 @@
 # Pinet Skin Descriptor Format
 
-This reference describes the recommended shape for curated Pinet skins. Treat it
-as a portable authoring contract; implementation details may adapt field names,
-but the semantics should remain stable.
+This reference describes the JSON descriptor shape for curated Pinet skins. Runtime skin selection must remain deterministic and local: descriptors are loaded from package assets, validated, and selected without model/API calls.
 
 ## Descriptor shape
 
 ```json
 {
   "key": "oathgate",
-  "aliases": ["cosmere-inspired"],
+  "aliases": ["cosmere-inspired", "oaths-and-metals"],
   "displayName": "Oathgate",
-  "intent": "High-trust operators with crisp, oath-bound coordination language.",
+  "intent": "Original fantasy-metal operators with oath, gate, forge, storm, and alloy imagery.",
   "fallback": "default",
   "roles": {
-    "broker": { "characterPool": ["storm-warden"] },
-    "worker": { "characterPool": ["spanreed-runner", "bridge-scout"] },
-    "reviewer": { "characterPool": ["truthwatcher"] },
-    "pm": { "characterPool": ["bondsmith"] }
+    "broker": {
+      "characterPool": ["oathgate-warden", "storm-cartographer"],
+      "titlePool": ["Warden", "Cartographer", "Binder"],
+      "accentPool": ["Oathgate", "Stormbound", "Alloy"],
+      "namePattern": "{accent} {title} {character}"
+    },
+    "worker": {
+      "characterPool": ["forge-scribe", "gate-runner", "bronze-scout"],
+      "titlePool": ["Scribe", "Runner", "Scout", "Forger"],
+      "accentPool": ["Iron", "Bronze", "Storm", "Gate"],
+      "namePattern": "{accent} {character} {title}"
+    }
   },
   "characters": {
-    "storm-warden": {
-      "name": "Storm Warden",
-      "emoji": "⛈️",
-      "persona": "Calm, duty-bound coordination; precise handoffs and visible blockers.",
+    "oathgate-warden": {
+      "name": "Vala",
+      "emoji": "🛡️",
+      "persona": "Oathgate coordinator; holds commitments steady and keeps blockers visible.",
       "style": ["measured", "protective", "clear"]
     }
   },
   "statusVocabulary": {
-    "idle": "watching the spanreed",
-    "working": "binding the lane",
-    "blocked": "storm-stalled",
-    "reviewing": "checking the oathmark",
-    "done": "oath fulfilled"
+    "idle": "holding oath",
+    "working": "at the forge",
+    "healthy": "signal bright",
+    "stale": "storm-dimmed",
+    "ghost": "beyond the gate",
+    "resumable": "oath recoverable"
   }
 }
 ```
 
 ## Required semantics
 
-- `key`: stable lowercase identifier. Prefer lowercase letters, numbers, and
-  hyphens. Avoid spaces.
-- `aliases`: optional alternate user-facing names. Keep backward compatibility
-  aliases when renaming skins.
+- `key`: stable lowercase identifier. Runtime built-ins currently accept the configured built-in keys.
+- `aliases`: alternate user-facing names. Keep backward-compatible aliases when renaming skins.
 - `displayName`: short human-readable name.
-- `intent`: one sentence describing the skin's operational feel.
+- `intent`: one sentence describing the operational feel.
 - `fallback`: deterministic fallback skin, normally `default`.
-- `roles`: maps Pinet roles to character pool IDs. Every supported role should
-  have at least one suitable character; workers should usually have several.
-- `characters`: curated character definitions keyed by ID.
-- `statusVocabulary`: optional display vocabulary for canonical statuses. This
-  is presentation metadata only.
+- `roles`: maps Pinet roles to selection pools. `broker` and `worker` are required for runtime built-ins.
+- `roles.*.characterPool`: IDs from `characters` suitable for the role.
+- `roles.*.titlePool` and `roles.*.accentPool`: optional deterministic combinators for large meshes.
+- `roles.*.namePattern`: display-name template using `{character}`, `{title}`, and `{accent}`.
+- `characters`: curated character/persona definitions keyed by ID.
+- `statusVocabulary`: display vocabulary for canonical statuses only. It must not change stored states or control flow.
+
+## Pool-size guidance
+
+Curated skins should not be tiny. Aim for enough variation that hundreds of agents remain readable:
+
+- Broker pool: about 8–16 characters plus 12+ titles/accent values.
+- Worker pool: about 16–32 characters plus 16+ titles/accent values.
+- Prefer deterministic combinatorics (`character × title × accent`) over enormous flat generated lists.
+- Keep every name short enough for Slack rosters.
+- Use original/inspired names unless the maintainer explicitly accepts third-party naming risk.
 
 ## Character guidance
 
 Each character should include:
 
-- `name`: concise roster name. Avoid long titles that wrap badly in Slack.
+- `name`: concise roster base name.
 - `emoji`: one emoji that renders reliably.
-- `persona`: one short sentence. It may influence tone, but must not grant or
-  revoke authority.
+- `persona`: one short sentence. It may influence tone, but must not grant or revoke authority.
 - `style`: optional compact tags for cadence/diction.
-
-Good persona snippets:
-
-- "Steady coordinator; asks early for blockers and summarizes decisions."
-- "Focused reviewer; concise risk calls and actionable findings."
-- "Curious implementer; resilient debugging with crisp status updates."
 
 Avoid persona snippets that:
 
@@ -75,36 +84,9 @@ Avoid persona snippets that:
 - Encode secrets, private workspace names, local paths, or private URLs.
 - Make public claims about real people or protected groups.
 
-## Status vocabulary guidance
-
-Status vocabulary maps **canonical state → display phrase**. It must not change
-stored states or control-flow decisions.
-
-Recommended properties:
-
-- Short enough for rosters and dashboards.
-- Flavorful but unambiguous.
-- Has a neutral fallback when omitted.
-- Includes `blocked` wording that stays operationally obvious.
-
-Example:
-
-```json
-{
-  "idle": "at the ready",
-  "working": "in the forge",
-  "blocked": "forge-stalled",
-  "reviewing": "tempering the edge",
-  "done": "blade cooled"
-}
-```
-
 ## Selection behavior
 
 - Default/classic should continue using existing random whimsical generation.
-- Curated skins should select from pre-created pools deterministically using a
-  stable seed when possible.
-- Persist the resolved character/skin assignment so reconnects and restarts do
-  not drift unexpectedly.
-- Future `auto` selection should run only after runtime is live and must have a
-  deterministic fallback.
+- Curated skins should select deterministically from JSON descriptor pools using a stable seed.
+- Persist the resolved character/skin assignment so reconnects and restarts do not drift unexpectedly.
+- Future `auto` selection should run only after runtime is live and must have a deterministic fallback.

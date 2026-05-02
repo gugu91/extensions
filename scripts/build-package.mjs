@@ -42,7 +42,7 @@ const packageConfigs = {
     excludeFiles: new Set(["vitest.config.ts"]),
     excludePrefixes: [],
     vendorDirs: [],
-    assetDirs: ["prompts"],
+    assetDirs: ["prompts", "skins"],
     importRewrites: [],
   },
   "nvim-bridge": {

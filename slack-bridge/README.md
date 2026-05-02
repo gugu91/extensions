@@ -471,10 +471,10 @@ Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are per
 Built-in skins:
 
 - `default` / `classic` — preserves the current whimsical animal names, animal emoji palette, and playful-but-focused persona.
-- `foundation` / `foundation/space` / `space` — curated institutional sci-fi character pool with archive, relay, frontier, and crisis-room operators.
-- `oathgate` / `cosmere` / `cosmere-inspired` — curated fantasy-metal character pool with light oath, forge, gate, storm, and alloy imagery while avoiding hard coupling to specific copyrighted names.
+- `foundation` / `foundation/space` / `space` — JSON descriptor with curated institutional sci-fi character pools and archive, relay, frontier, and crisis-room combinators.
+- `oathgate` / `cosmere` / `cosmere-inspired` — JSON descriptor with curated fantasy-metal character pools and light oath, forge, gate, storm, and alloy combinators while avoiding hard coupling to specific copyrighted names.
 
-Free-form themes are still accepted as deterministic legacy/custom presentation themes. For shipped non-default skins, use the bundled `pinet-skin-creator` skill to author and review curated character/name/persona/status-vocabulary pools before adding runtime descriptors.
+Free-form themes are still accepted as deterministic legacy/custom presentation themes. Shipped non-default skins live in `skins/*.json`; use the bundled `pinet-skin-creator` skill to author and review curated character/name/persona/status-vocabulary pools before adding runtime descriptors.
 
 ### How it works
 

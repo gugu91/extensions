@@ -20,6 +20,10 @@ Run this checklist before committing a new or edited Pinet skin descriptor.
       registration, or follower join.
 - [ ] Default/classic random whimsical generation remains intact.
 - [ ] Non-default skin selection has deterministic fallback behavior.
+- [ ] Runtime skin data is external JSON descriptor content, not mostly hardcoded
+      TypeScript structures.
+- [ ] Descriptor pools/combinators provide enough variety for hundreds of agents
+      without obvious repetition.
 - [ ] Resolved concrete assignments can be persisted when runtime supports it.
 - [ ] Offline or model-unavailable paths still produce usable identities.
 
@@ -29,6 +33,8 @@ Run this checklist before committing a new or edited Pinet skin descriptor.
       names, private URLs, screenshots, logs, or user-specific config.
 - [ ] No copyrighted setting text or trademark-heavy material beyond brief,
       high-level inspiration when allowed by project policy.
+- [ ] Exact third-party character/place names are avoided unless the maintainer
+      explicitly accepts the naming risk.
 - [ ] No impersonation of real people or protected-class stereotypes.
 - [ ] Persona snippets are short, clear, and subordinate to system/developer/user
       instructions.

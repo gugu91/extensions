@@ -2779,183 +2779,179 @@ interface BuiltInPinetSkinCharacter {
   style: readonly string[];
 }
 
-interface BuiltInPinetSkinProfile {
-  theme: typeof FOUNDATION_PINET_SKIN_THEME | typeof COSMERE_PINET_SKIN_THEME;
+interface BuiltInPinetSkinRoleDescriptor {
+  characterPool: readonly string[];
+  titlePool?: readonly string[];
+  accentPool?: readonly string[];
+  namePattern?: string;
+}
+
+interface BuiltInPinetSkinDescriptor {
+  key: typeof FOUNDATION_PINET_SKIN_THEME | typeof COSMERE_PINET_SKIN_THEME;
   aliases: readonly string[];
   displayName: string;
   intent: string;
-  roles: Readonly<Record<PinetSkinRole, { characterPool: readonly string[] }>>;
+  roles: Readonly<Record<PinetSkinRole, BuiltInPinetSkinRoleDescriptor>>;
   characters: Readonly<Record<string, BuiltInPinetSkinCharacter>>;
   statusVocabulary: PinetSkinStatusVocabulary;
 }
 
-const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
-  {
-    theme: FOUNDATION_PINET_SKIN_THEME,
-    aliases: ["foundation", "foundation/space", "space", "archive", "institutional sci-fi"],
-    displayName: "Foundation",
-    intent:
-      "Institutional sci-fi coordination with calm archive, relay, frontier, and crisis-room operators.",
-    roles: {
-      broker: { characterPool: ["archive-director", "relay-warden", "crisis-speaker"] },
-      worker: {
-        characterPool: ["frontier-relay", "vault-analyst", "gate-surveyor", "civic-envoy"],
-      },
-    },
-    characters: {
-      "archive-director": {
-        id: "archive-director",
-        name: "Archive Director",
-        emoji: "🏛️",
-        persona:
-          "Calm archive coordinator; measured routing, crisp handoffs, and visible risk calls.",
-        style: ["measured", "civic", "clear"],
-      },
-      "relay-warden": {
-        id: "relay-warden",
-        name: "Relay Warden",
-        emoji: "🛰️",
-        persona:
-          "Steady signal keeper; watches mesh health and keeps worker lanes cleanly connected.",
-        style: ["steady", "signal-first", "concise"],
-      },
-      "crisis-speaker": {
-        id: "crisis-speaker",
-        name: "Crisis Speaker",
-        emoji: "📜",
-        persona:
-          "Civic coordinator; direct status language, early blocker escalation, and careful closure.",
-        style: ["direct", "accountable", "calm"],
-      },
-      "frontier-relay": {
-        id: "frontier-relay",
-        name: "Frontier Relay",
-        emoji: "📡",
-        persona:
-          "Field relay; practical implementation updates, compact blockers, and clean outcomes.",
-        style: ["practical", "frontier", "brief"],
-      },
-      "vault-analyst": {
-        id: "vault-analyst",
-        name: "Vault Analyst",
-        emoji: "🗄️",
-        persona:
-          "Archive-minded worker; checks evidence, preserves context, and reports precisely.",
-        style: ["precise", "archival", "grounded"],
-      },
-      "gate-surveyor": {
-        id: "gate-surveyor",
-        name: "Gate Surveyor",
-        emoji: "🧭",
-        persona:
-          "Careful scout; maps the change surface, tests paths, and flags uncertainty early.",
-        style: ["curious", "methodical", "clear"],
-      },
-      "civic-envoy": {
-        id: "civic-envoy",
-        name: "Civic Envoy",
-        emoji: "⚖️",
-        persona:
-          "Reliable envoy; collaborative tone, exact acceptance checks, and concise handoffs.",
-        style: ["collaborative", "balanced", "crisp"],
-      },
-    },
-    statusVocabulary: {
-      idle: "standing by",
-      working: "on relay",
-      healthy: "signal green",
-      stale: "signal lagging",
-      ghost: "off grid",
-      resumable: "recoverable relay",
-    },
-  },
-  {
-    theme: COSMERE_PINET_SKIN_THEME,
-    aliases: [
-      "cosmere",
-      "cosmere-inspired",
-      "oathgate",
-      "fantasy metal",
-      "fantasy-metal",
-      "oaths and metals",
-    ],
-    displayName: "Oathgate",
-    intent:
-      "Fantasy-metal operators with light oath, gate, forge, storm, and alloy imagery without copyrighted lore dependency.",
-    roles: {
-      broker: { characterPool: ["oathgate-warden", "storm-cartographer", "alloy-binder"] },
-      worker: {
-        characterPool: ["forge-scribe", "gate-runner", "bronze-scout", "storm-forger"],
-      },
-    },
-    characters: {
-      "oathgate-warden": {
-        id: "oathgate-warden",
-        name: "Oathgate Warden",
-        emoji: "🛡️",
-        persona:
-          "Steady oath-bound coordinator; precise routing, visible blockers, and grounded closure.",
-        style: ["measured", "protective", "clear"],
-      },
-      "storm-cartographer": {
-        id: "storm-cartographer",
-        name: "Storm Cartographer",
-        emoji: "🌩️",
-        persona:
-          "Map-minded broker; tracks lanes through turbulence and keeps commitments explicit.",
-        style: ["watchful", "map-led", "concise"],
-      },
-      "alloy-binder": {
-        id: "alloy-binder",
-        name: "Alloy Binder",
-        emoji: "💠",
-        persona:
-          "Balanced coordinator; binds handoffs cleanly and keeps tone polished but operational.",
-        style: ["balanced", "polished", "operational"],
-      },
-      "forge-scribe": {
-        id: "forge-scribe",
-        name: "Forge Scribe",
-        emoji: "⚒️",
-        persona:
-          "Careful implementer; records decisions, works steadily, and reports blockers plainly.",
-        style: ["careful", "forge-bright", "plain"],
-      },
-      "gate-runner": {
-        id: "gate-runner",
-        name: "Gate Runner",
-        emoji: "🗡️",
-        persona:
-          "Fast lane runner; moves decisively, keeps facts exact, and returns crisp outcomes.",
-        style: ["decisive", "lean", "exact"],
-      },
-      "bronze-scout": {
-        id: "bronze-scout",
-        name: "Bronze Scout",
-        emoji: "🪙",
-        persona:
-          "Curious scout; tests signals, verifies assumptions, and escalates weak spots early.",
-        style: ["curious", "signal-aware", "brief"],
-      },
-      "storm-forger": {
-        id: "storm-forger",
-        name: "Storm Forger",
-        emoji: "🔥",
-        persona:
-          "Resilient builder; works through turbulence with visible progress and safety-first fixes.",
-        style: ["resilient", "direct", "warm"],
-      },
-    },
-    statusVocabulary: {
-      idle: "holding oath",
-      working: "at the forge",
-      healthy: "signal bright",
-      stale: "storm-dimmed",
-      ghost: "beyond the gate",
-      resumable: "oath recoverable",
-    },
-  },
-];
+const PINET_BUILT_IN_SKIN_FILES = ["foundation", "oathgate"] as const;
+
+let cachedBuiltInPinetSkinDescriptors: readonly BuiltInPinetSkinDescriptor[] | null = null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStringProperty(value: Record<string, unknown>, key: string): string | null {
+  const property = value[key];
+  return typeof property === "string" && property.trim().length > 0 ? property.trim() : null;
+}
+
+function readStringArrayProperty(
+  value: Record<string, unknown>,
+  key: string,
+  required = true,
+): string[] | null {
+  const property = value[key];
+  if (property === undefined && !required) {
+    return [];
+  }
+  if (!Array.isArray(property)) {
+    return null;
+  }
+
+  const strings = property.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+  return strings.length === property.length ? strings.map((entry) => entry.trim()) : null;
+}
+
+function validatePinetSkinTheme(value: string): BuiltInPinetSkinDescriptor["key"] | null {
+  if (value === FOUNDATION_PINET_SKIN_THEME || value === COSMERE_PINET_SKIN_THEME) {
+    return value;
+  }
+  return null;
+}
+
+function validatePinetSkinStatusVocabulary(value: unknown): PinetSkinStatusVocabulary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return extractPinetSkinStatusVocabulary(value) ?? {};
+}
+
+function validateBuiltInPinetSkinCharacter(
+  id: string,
+  value: unknown,
+): BuiltInPinetSkinCharacter | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readStringProperty(value, "name");
+  const emoji = readStringProperty(value, "emoji");
+  const persona = readStringProperty(value, "persona");
+  const style = readStringArrayProperty(value, "style", false);
+  if (!name || !emoji || !persona || !style) {
+    return null;
+  }
+
+  return { id, name, emoji, persona, style };
+}
+
+function validateBuiltInPinetSkinRoleDescriptor(
+  value: unknown,
+): BuiltInPinetSkinRoleDescriptor | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const characterPool = readStringArrayProperty(value, "characterPool");
+  const titlePool = readStringArrayProperty(value, "titlePool", false);
+  const accentPool = readStringArrayProperty(value, "accentPool", false);
+  const namePattern = readStringProperty(value, "namePattern") ?? undefined;
+  if (!characterPool || characterPool.length === 0 || !titlePool || !accentPool) {
+    return null;
+  }
+
+  return {
+    characterPool,
+    ...(titlePool.length > 0 ? { titlePool } : {}),
+    ...(accentPool.length > 0 ? { accentPool } : {}),
+    ...(namePattern ? { namePattern } : {}),
+  };
+}
+
+function validateBuiltInPinetSkinDescriptor(value: unknown): BuiltInPinetSkinDescriptor {
+  if (!isRecord(value)) {
+    throw new Error("Pinet skin descriptor must be an object.");
+  }
+
+  const keyValue = readStringProperty(value, "key");
+  const key = keyValue ? validatePinetSkinTheme(keyValue) : null;
+  const aliases = readStringArrayProperty(value, "aliases", false);
+  const displayName = readStringProperty(value, "displayName");
+  const intent = readStringProperty(value, "intent");
+  const statusVocabulary = validatePinetSkinStatusVocabulary(value.statusVocabulary);
+  if (!key || !aliases || !displayName || !intent || !statusVocabulary) {
+    throw new Error("Pinet skin descriptor is missing required top-level fields.");
+  }
+
+  if (!isRecord(value.roles)) {
+    throw new Error(`Pinet skin descriptor ${key} must define roles.`);
+  }
+  const brokerRole = validateBuiltInPinetSkinRoleDescriptor(value.roles.broker);
+  const workerRole = validateBuiltInPinetSkinRoleDescriptor(value.roles.worker);
+  if (!brokerRole || !workerRole) {
+    throw new Error(`Pinet skin descriptor ${key} must define broker and worker roles.`);
+  }
+
+  if (!isRecord(value.characters)) {
+    throw new Error(`Pinet skin descriptor ${key} must define characters.`);
+  }
+  const characters: Record<string, BuiltInPinetSkinCharacter> = {};
+  for (const [characterId, characterValue] of Object.entries(value.characters)) {
+    const character = validateBuiltInPinetSkinCharacter(characterId, characterValue);
+    if (!character) {
+      throw new Error(`Pinet skin descriptor ${key} has invalid character ${characterId}.`);
+    }
+    characters[characterId] = character;
+  }
+
+  for (const role of [brokerRole, workerRole]) {
+    for (const characterId of role.characterPool) {
+      if (!characters[characterId]) {
+        throw new Error(`Pinet skin descriptor ${key} references unknown ${characterId}.`);
+      }
+    }
+  }
+
+  return {
+    key,
+    aliases,
+    displayName,
+    intent,
+    roles: { broker: brokerRole, worker: workerRole },
+    characters,
+    statusVocabulary,
+  };
+}
+
+function loadBuiltInPinetSkinDescriptors(): readonly BuiltInPinetSkinDescriptor[] {
+  if (cachedBuiltInPinetSkinDescriptors) {
+    return cachedBuiltInPinetSkinDescriptors;
+  }
+
+  cachedBuiltInPinetSkinDescriptors = PINET_BUILT_IN_SKIN_FILES.map((fileName) => {
+    const descriptorUrl = new URL(`./skins/${fileName}.json`, import.meta.url);
+    const raw = fs.readFileSync(descriptorUrl, "utf8");
+    return validateBuiltInPinetSkinDescriptor(JSON.parse(raw) as unknown);
+  });
+  return cachedBuiltInPinetSkinDescriptors;
+}
 
 const PINET_SKIN_STOP_WORDS = new Set([
   "a",
@@ -3264,11 +3260,11 @@ function getPinetSkinTokens(theme: string): string[] {
   return tokens.length > 0 ? tokens : ["Signal"];
 }
 
-function getBuiltInPinetSkinProfile(theme: string): BuiltInPinetSkinProfile | null {
+function getBuiltInPinetSkinProfile(theme: string): BuiltInPinetSkinDescriptor | null {
   const normalized = theme.trim().toLowerCase();
   return (
-    PINET_BUILT_IN_SKINS.find(
-      (profile) => profile.theme === normalized || profile.aliases.includes(normalized),
+    loadBuiltInPinetSkinDescriptors().find(
+      (profile) => profile.key === normalized || profile.aliases.includes(normalized),
     ) ?? null
   );
 }
@@ -3278,7 +3274,7 @@ export function normalizePinetSkinTheme(theme: string | undefined): string | nul
   if (!trimmed) return null;
   const lower = trimmed.toLowerCase();
   if (lower === DEFAULT_PINET_SKIN_THEME || lower === "classic") return DEFAULT_PINET_SKIN_THEME;
-  return getBuiltInPinetSkinProfile(trimmed)?.theme ?? trimmed;
+  return getBuiltInPinetSkinProfile(trimmed)?.key ?? trimmed;
 }
 
 function mergeUniqueSkinValues(...lists: ReadonlyArray<readonly string[]>): string[] {
@@ -3319,32 +3315,64 @@ function fillPinetSkinTemplate(template: string, values: Record<string, string>)
   );
 }
 
+function formatBuiltInPinetSkinName(
+  pattern: string | undefined,
+  values: Record<string, string>,
+): string {
+  return fillPinetSkinTemplate(pattern ?? "{character}", values)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildBuiltInPinetSkinAssignment(options: {
-  profile: BuiltInPinetSkinProfile;
+  profile: BuiltInPinetSkinDescriptor;
   role: PinetSkinRole;
   seed: string;
 }): PinetSkinAssignment {
-  const rolePool = options.profile.roles[options.role].characterPool;
+  const roleDescriptor = options.profile.roles[options.role];
+  const rolePool = roleDescriptor.characterPool;
   const fallbackCharacterId = rolePool[0] ?? Object.keys(options.profile.characters)[0];
   if (!fallbackCharacterId) {
-    throw new Error(`Built-in Pinet skin ${options.profile.theme} has no characters.`);
+    throw new Error(`Built-in Pinet skin ${options.profile.key} has no characters.`);
   }
   const characterId = pickSkinValue(
     rolePool.length > 0 ? rolePool : [fallbackCharacterId],
     options.seed,
-    `built-in-${options.profile.theme}-${options.role}-character`,
+    `built-in-${options.profile.key}-${options.role}-character`,
   );
   const character =
     options.profile.characters[characterId] ?? options.profile.characters[fallbackCharacterId];
   if (!character) {
-    throw new Error(`Built-in Pinet skin ${options.profile.theme} references ${characterId}.`);
+    throw new Error(`Built-in Pinet skin ${options.profile.key} references ${characterId}.`);
   }
-  const personality = `${character.persona} Presentation only: keep Pinet roles, states, guardrails, and routing authority unchanged.`;
+  const title =
+    roleDescriptor.titlePool && roleDescriptor.titlePool.length > 0
+      ? pickSkinValue(
+          roleDescriptor.titlePool,
+          options.seed,
+          `built-in-${options.profile.key}-${options.role}-title`,
+        )
+      : "";
+  const accent =
+    roleDescriptor.accentPool && roleDescriptor.accentPool.length > 0
+      ? pickSkinValue(
+          roleDescriptor.accentPool,
+          options.seed,
+          `built-in-${options.profile.key}-${options.role}-accent`,
+        )
+      : "";
+  const name = formatBuiltInPinetSkinName(roleDescriptor.namePattern, {
+    title,
+    accent,
+    character: character.name,
+  });
+  const style = character.style.length > 0 ? ` Style tags: ${character.style.join(", ")}.` : "";
+  const personality = `${character.persona}${style} Presentation only: keep Pinet roles, states, guardrails, and routing authority unchanged.`;
 
   return {
-    theme: options.profile.theme,
+    theme: options.profile.key,
     role: options.role,
-    name: character.name,
+    name,
     emoji: character.emoji,
     personality: clampPinetSkinText(personality, MAX_PINET_SKIN_PERSONALITY_LENGTH),
     statusVocabulary: options.profile.statusVocabulary,

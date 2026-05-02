@@ -44,7 +44,15 @@ describe("bundled skills", () => {
     const template = JSON.parse(readSkillFile("templates/pinet-skin-descriptor.json")) as {
       key?: string;
       fallback?: string;
-      roles?: Record<string, { characterPool?: string[] }>;
+      roles?: Record<
+        string,
+        {
+          characterPool?: string[];
+          titlePool?: string[];
+          accentPool?: string[];
+          namePattern?: string;
+        }
+      >;
       characters?: Record<string, { name?: string; emoji?: string; persona?: string }>;
       statusVocabulary?: Record<string, string>;
     };
@@ -58,11 +66,14 @@ describe("bundled skills", () => {
       "worker",
     ]);
     expect(template.roles?.worker.characterPool?.length).toBeGreaterThanOrEqual(2);
+    expect(template.roles?.worker.titlePool?.length).toBeGreaterThanOrEqual(2);
+    expect(template.roles?.worker.accentPool?.length).toBeGreaterThanOrEqual(2);
+    expect(template.roles?.worker.namePattern).toContain("{character}");
     expect(template.characters?.["example-coordinator"]).toMatchObject({
       name: "Example Coordinator",
       emoji: "🧭",
     });
     expect(template.characters?.["example-coordinator"].persona).toContain("coordinator");
-    expect(template.statusVocabulary?.blocked).toBe("blocked");
+    expect(template.statusVocabulary?.healthy).toBe("signal clear");
   });
 });
