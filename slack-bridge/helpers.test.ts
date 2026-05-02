@@ -244,10 +244,11 @@ describe("loadSettings", () => {
     expect(result.meshSecretPath).toBe("/tmp/pinet.secret");
   });
 
-  it("returns control plane canvas settings", () => {
+  it("loads settings files that still contain legacy control-plane canvas keys", () => {
     const p = path.join(tmpDir, "settings.json");
     const settings = {
       "slack-bridge": {
+        defaultChannel: "ops-control",
         controlPlaneCanvasEnabled: true,
         controlPlaneCanvasId: "F123",
         controlPlaneCanvasChannel: "ops-control",
@@ -256,10 +257,7 @@ describe("loadSettings", () => {
     };
     fs.writeFileSync(p, JSON.stringify(settings));
     const result = loadSettings(p);
-    expect(result.controlPlaneCanvasEnabled).toBe(true);
-    expect(result.controlPlaneCanvasId).toBe("F123");
-    expect(result.controlPlaneCanvasChannel).toBe("ops-control");
-    expect(result.controlPlaneCanvasTitle).toBe("Mesh Status");
+    expect(result.defaultChannel).toBe("ops-control");
   });
 });
 

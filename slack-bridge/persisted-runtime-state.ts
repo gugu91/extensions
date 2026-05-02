@@ -21,8 +21,6 @@ export interface PersistedState {
   activeSkinTheme?: string | null;
   agentPersonality?: string | null;
   agentAliases?: string[];
-  brokerControlPlaneCanvasId?: string | null;
-  brokerControlPlaneCanvasChannelId?: string | null;
 }
 
 export interface PersistedRuntimeStateStringCache {
@@ -53,12 +51,6 @@ export interface PersistedRuntimeStateDeps {
   agentAliases: Set<string>;
   setAgentOwnerToken: (ownerToken: string) => void;
   getSettings: () => SlackBridgeSettings;
-  getControlPlaneCanvasRuntimeId: () => string | null;
-  getControlPlaneCanvasRuntimeChannelId: () => string | null;
-  restoreControlPlaneCanvasRuntimeState: (input: {
-    canvasId: string | null;
-    channelId: string | null;
-  }) => void;
   formatError: (error: unknown) => string;
 }
 
@@ -67,11 +59,6 @@ export interface PersistedRuntimeStateManager {
   persistState: () => void;
   flushPersist: () => void;
   restorePersistedRuntimeState: (ctx: ExtensionContext) => void;
-}
-
-function normalizeOptionalSetting(value?: string | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 export function createPersistedRuntimeState(
@@ -94,8 +81,6 @@ export function createPersistedRuntimeState(
         activeSkinTheme: deps.getActiveSkinTheme(),
         agentPersonality: deps.getAgentPersonality(),
         agentAliases: [...deps.agentAliases],
-        brokerControlPlaneCanvasId: deps.getControlPlaneCanvasRuntimeId(),
-        brokerControlPlaneCanvasChannelId: deps.getControlPlaneCanvasRuntimeChannelId(),
       } satisfies PersistedState);
     } catch (error) {
       console.error(`[slack-bridge] persistState failed: ${deps.formatError(error)}`);
@@ -185,14 +170,6 @@ export function createPersistedRuntimeState(
             }
           }
         }
-        deps.restoreControlPlaneCanvasRuntimeState({
-          canvasId:
-            normalizeOptionalSetting(savedState.brokerControlPlaneCanvasId) ??
-            deps.getControlPlaneCanvasRuntimeId(),
-          channelId:
-            normalizeOptionalSetting(savedState.brokerControlPlaneCanvasChannelId) ??
-            deps.getControlPlaneCanvasRuntimeChannelId(),
-        });
       }
 
       persistStateNow();
