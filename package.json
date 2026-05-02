@@ -10,6 +10,7 @@
       "./slack-bridge/index.ts",
       "./nvim-bridge/index.ts",
       "./neon-psql/index.ts",
+      "./pm2-processes/index.ts",
       "./browser-playwright/index.ts"
     ]
   },

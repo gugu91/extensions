@@ -78,6 +78,12 @@ importers:
         specifier: ^0.34.49
         version: 0.34.49
 
+  pm2-processes:
+    devDependencies:
+      "@sinclair/typebox":
+        specifier: ^0.34.49
+        version: 0.34.49
+
   nvim-bridge:
     devDependencies:
       "@sinclair/typebox":

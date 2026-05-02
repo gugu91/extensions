@@ -59,6 +59,13 @@ const packageConfigs = {
     vendorDirs: [],
     importRewrites: [],
   },
+  "pm2-processes": {
+    excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
+    excludeFiles: new Set(["vitest.config.ts"]),
+    excludePrefixes: [],
+    vendorDirs: [],
+    importRewrites: [],
+  },
   "slack-api": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
     excludeFiles: new Set(),

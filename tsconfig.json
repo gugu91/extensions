@@ -27,6 +27,7 @@
     "pinet-core/**/*.ts",
     "nvim-bridge/**/*.ts",
     "neon-psql/**/*.ts",
+    "pm2-processes/**/*.ts",
     "slack-api/**/*.ts",
     "slack-bridge/**/*.ts",
     "types/**/*.d.ts",

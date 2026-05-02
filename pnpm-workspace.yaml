@@ -8,4 +8,5 @@ packages:
   - imessage-bridge
   - nvim-bridge
   - neon-psql
+  - pm2-processes
   - openai-execution-shaping

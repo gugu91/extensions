@@ -1,0 +1,199 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+
+export const SETTINGS_KEY = "pm2-processes";
+
+const DEFAULT_CONFIG_CANDIDATES = [
+  join(".pi", "pm2", "ecosystem.config.cjs"),
+  "ecosystem.config.js",
+  "ecosystem.config.cjs",
+  "ecosystem.config.json",
+] as const;
+
+export interface FileConfig {
+  enabled?: boolean;
+  configPath?: string;
+  metadataPath?: string;
+  pm2Bin?: string;
+  defaultLines?: number;
+  maxLines?: number;
+  maxBytes?: number;
+  commandTimeoutMs?: number;
+  readinessTimeoutMs?: number;
+}
+
+export interface ResolvedSettings {
+  enabled: boolean;
+  configPath?: string;
+  configSource?: string;
+  metadataPath?: string;
+  metadataSource?: string;
+  pm2Bin: string;
+  defaultLines: number;
+  maxLines: number;
+  maxBytes: number;
+  commandTimeoutMs: number;
+  readinessTimeoutMs: number;
+  settingsSources: string[];
+  searchedConfigPaths: string[];
+  diagnostics: string[];
+}
+
+export interface LoadSettingsOptions {
+  cwd?: string;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+interface RawSettingsSource {
+  pathLabel: string;
+  raw: FileConfig;
+}
+
+function readJsonFile(filePath: string): unknown | null {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { __pm2ProcessesParseError: `Failed to parse ${filePath}: ${message}` };
+  }
+}
+
+function readSettingsConfig(settingsPath: string): RawSettingsSource | null {
+  if (!fs.existsSync(settingsPath)) return null;
+  const parsed = readJsonFile(settingsPath);
+  if (!parsed || typeof parsed !== "object") return null;
+  if ("__pm2ProcessesParseError" in parsed) {
+    return {
+      pathLabel: settingsPath,
+      raw: {},
+    };
+  }
+
+  const raw = (parsed as Record<string, unknown>)[SETTINGS_KEY];
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    pathLabel: `${settingsPath}#${SETTINGS_KEY}`,
+    raw: raw as FileConfig,
+  };
+}
+
+function resolvePath(cwd: string, input: string): string {
+  return isAbsolute(input) ? input : resolve(cwd, input);
+}
+
+function cleanString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function cleanPositiveInt(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (!Number.isFinite(value) || value === undefined) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function collectSettings(cwd: string, agentDir: string): RawSettingsSource[] {
+  const globalSettings = readSettingsConfig(join(agentDir, "settings.json"));
+  const projectSettings = readSettingsConfig(join(cwd, ".pi", "settings.json"));
+  return [globalSettings, projectSettings].filter(
+    (source): source is RawSettingsSource => source !== null,
+  );
+}
+
+function mergeSettings(sources: RawSettingsSource[]): FileConfig {
+  return sources.reduce<FileConfig>((merged, source) => ({ ...merged, ...source.raw }), {});
+}
+
+function resolveExistingFile(
+  cwd: string,
+  candidates: Array<{ path: string; source: string }>,
+): {
+  configPath?: string;
+  configSource?: string;
+  searched: string[];
+  diagnostics: string[];
+} {
+  const searched: string[] = [];
+  const diagnostics: string[] = [];
+
+  for (const candidate of candidates) {
+    const absolutePath = resolvePath(cwd, candidate.path);
+    searched.push(absolutePath);
+    if (fs.existsSync(absolutePath)) {
+      return { configPath: absolutePath, configSource: candidate.source, searched, diagnostics };
+    }
+    diagnostics.push(`PM2 config candidate not found: ${absolutePath} (${candidate.source})`);
+  }
+
+  return { searched, diagnostics };
+}
+
+export function loadSettings(options: LoadSettingsOptions = {}): ResolvedSettings {
+  const cwd = options.cwd ?? process.cwd();
+  const agentDir = options.agentDir ?? join(os.homedir(), ".pi", "agent");
+  const env = options.env ?? process.env;
+  const sources = collectSettings(cwd, agentDir);
+  const merged = mergeSettings(sources);
+  const diagnostics: string[] = [];
+
+  const explicitEnvConfig = cleanString(env.PI_PM2_CONFIG);
+  const settingsConfig = cleanString(merged.configPath);
+  const candidates: Array<{ path: string; source: string }> = [];
+  if (explicitEnvConfig) candidates.push({ path: explicitEnvConfig, source: "env:PI_PM2_CONFIG" });
+  else if (settingsConfig) candidates.push({ path: settingsConfig, source: "settings:configPath" });
+  else {
+    for (const candidate of DEFAULT_CONFIG_CANDIDATES) {
+      candidates.push({ path: candidate, source: `default:${candidate}` });
+    }
+  }
+
+  const discovered = resolveExistingFile(cwd, candidates);
+  diagnostics.push(...discovered.diagnostics);
+
+  const metadataEnv = cleanString(env.PI_PM2_METADATA);
+  const metadataSetting = cleanString(merged.metadataPath);
+  const defaultMetadata = join(cwd, ".pi", "pm2", "metadata.json");
+  let metadataPath: string | undefined;
+  let metadataSource: string | undefined;
+  if (metadataEnv) {
+    metadataPath = resolvePath(cwd, metadataEnv);
+    metadataSource = "env:PI_PM2_METADATA";
+  } else if (metadataSetting) {
+    metadataPath = resolvePath(cwd, metadataSetting);
+    metadataSource = "settings:metadataPath";
+  } else if (fs.existsSync(defaultMetadata)) {
+    metadataPath = defaultMetadata;
+    metadataSource = "default:.pi/pm2/metadata.json";
+  }
+
+  if (metadataPath && !fs.existsSync(metadataPath)) {
+    diagnostics.push(
+      `PM2 metadata file not found: ${metadataPath} (${metadataSource ?? "unknown"})`,
+    );
+    metadataPath = undefined;
+    metadataSource = undefined;
+  }
+
+  return {
+    enabled: merged.enabled ?? true,
+    configPath: discovered.configPath,
+    configSource: discovered.configSource,
+    metadataPath,
+    metadataSource,
+    pm2Bin: cleanString(env.PI_PM2_BIN) ?? cleanString(merged.pm2Bin) ?? "pm2",
+    defaultLines: cleanPositiveInt(merged.defaultLines, 80, 1, 2000),
+    maxLines: cleanPositiveInt(merged.maxLines, 300, 1, 5000),
+    maxBytes: cleanPositiveInt(merged.maxBytes, 50_000, 1_000, 500_000),
+    commandTimeoutMs: cleanPositiveInt(merged.commandTimeoutMs, 15_000, 1_000, 120_000),
+    readinessTimeoutMs: cleanPositiveInt(merged.readinessTimeoutMs, 1_500, 100, 30_000),
+    settingsSources: sources.map((source) => source.pathLabel),
+    searchedConfigPaths: discovered.searched,
+    diagnostics,
+  };
+}
