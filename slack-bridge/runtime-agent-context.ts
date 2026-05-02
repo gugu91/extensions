@@ -426,8 +426,10 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     personality: string,
     statusVocabulary?: PinetSkinStatusVocabulary,
   ): Record<string, unknown> {
+    const baseMetadata = { ...(metadata ?? {}) };
+    delete baseMetadata.skinStatusVocabulary;
     return {
-      ...(metadata ?? {}),
+      ...baseMetadata,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       personality,
       ...(statusVocabulary ? { skinStatusVocabulary: statusVocabulary } : {}),

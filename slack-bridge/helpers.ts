@@ -2461,7 +2461,10 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
 
   return agents
     .map((a) => {
-      const vocabulary = a.metadata?.skinStatusVocabulary;
+      const vocabulary =
+        a.metadata?.skinTheme === DEFAULT_PINET_SKIN_THEME
+          ? undefined
+          : a.metadata?.skinStatusVocabulary;
       const statusFlavor = vocabulary?.[a.status] ? ` (${vocabulary[a.status]})` : "";
       const health = a.health
         ? ` [${a.health}${vocabulary?.[a.health] ? `: ${vocabulary[a.health]}` : ""}]`

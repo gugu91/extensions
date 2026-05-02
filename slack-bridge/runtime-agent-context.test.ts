@@ -555,6 +555,21 @@ describe("createRuntimeAgentContext", () => {
       },
     });
 
+    state.activeSkinTheme = "default";
+    expect(
+      runtimeAgentContext.buildSkinMetadata(
+        {
+          role: "worker",
+          skinStatusVocabulary: { idle: "standing by", working: "in motion" },
+        },
+        "classic",
+      ),
+    ).toEqual({
+      role: "worker",
+      skinTheme: "default",
+      personality: "classic",
+    });
+
     runtimeAgentContext.applyRegistrationIdentity({
       name: "Obsidian Coral Goose",
       emoji: "🪿",

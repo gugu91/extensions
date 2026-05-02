@@ -2061,6 +2061,35 @@ describe("formatAgentList", () => {
     expect(result).toContain("skin: foundation");
   });
 
+  it("keeps default skin status display neutral even if old metadata carries vocabulary", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🦫",
+        name: "Prism Bronze Beaver",
+        id: "agent-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        metadata: {
+          skinTheme: "default",
+          skinStatusVocabulary: {
+            idle: "standing by",
+            ghost: "off grid",
+          },
+        },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    const result = formatAgentList([agent], homedir);
+    expect(result).toContain("Prism Bronze Beaver (agent-1) — idle [ghost]");
+    expect(result).not.toContain("standing by");
+    expect(result).not.toContain("off grid");
+  });
+
   it("formats health, lease, and capability tags", () => {
     const agent = buildAgentDisplayInfo(
       {
