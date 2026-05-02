@@ -48,7 +48,7 @@ import {
 import { createBrokerRuntime } from "./broker-runtime.js";
 import { SlackActivityLogger } from "./activity-log.js";
 import { createBrokerDeliveryState, queueBrokerInboxIds } from "./broker-delivery.js";
-import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
 import { createPinetMeshSkin } from "./pinet-skin.js";
@@ -56,7 +56,7 @@ import { createBrokerThreadOwnerHints } from "./broker-thread-owner-hints.js";
 import { createPersistedRuntimeState } from "./persisted-runtime-state.js";
 import { createRuntimeAgentContext } from "./runtime-agent-context.js";
 import { createPinetActivityFormatting } from "./pinet-activity-formatting.js";
-import { createPinetControlPlaneCanvas } from "./pinet-control-plane-canvas.js";
+import { createPinetControlPlaneDashboard } from "./pinet-control-plane-dashboard.js";
 import { createPinetMaintenanceDelivery } from "./pinet-maintenance-delivery.js";
 import { createPinetRemoteControlAcks } from "./pinet-remote-control-acks.js";
 import { createPinetRemoteControl } from "./pinet-remote-control.js";
@@ -182,12 +182,6 @@ export default function (pi: ExtensionAPI) {
       agentOwnerToken = ownerToken;
     },
     getSettings: () => settings,
-    getControlPlaneCanvasRuntimeId: () => brokerRuntime.getControlPlaneCanvasRuntimeId(),
-    getControlPlaneCanvasRuntimeChannelId: () =>
-      brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
-    restoreControlPlaneCanvasRuntimeState: (input) => {
-      brokerRuntime.restoreControlPlaneCanvasRuntimeState(input);
-    },
     formatError: msg,
   });
   const { persistState, flushPersist, restorePersistedRuntimeState } = persistedRuntimeState;
@@ -539,36 +533,14 @@ export default function (pi: ExtensionAPI) {
     getActiveBrokerDb,
   });
   const { formatTrackedAgent, summarizeTrackedAssignmentStatus } = pinetActivityFormatting;
-  const pinetControlPlaneCanvas = createPinetControlPlaneCanvas({
-    getSettings: () => settings,
-    getBotToken: () => botToken,
-    slack,
-    resolveChannel,
-    persistState,
+  const pinetControlPlaneDashboard = createPinetControlPlaneDashboard({
     getActiveBrokerDb,
     getActiveBrokerSelfId,
     heartbeatTimerActive: () => brokerRuntime.heartbeatTimerActive(),
     maintenanceTimerActive: () => brokerRuntime.maintenanceTimerActive(),
     getLastMaintenance: () => brokerRuntime.getLastMaintenance(),
-    isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
-    getControlPlaneCanvasRuntimeId: () => brokerRuntime.getControlPlaneCanvasRuntimeId(),
-    getControlPlaneCanvasRuntimeChannelId: () =>
-      brokerRuntime.getControlPlaneCanvasRuntimeChannelId(),
-    restoreControlPlaneCanvasRuntimeState: (input) => {
-      brokerRuntime.restoreControlPlaneCanvasRuntimeState(input);
-    },
-    setLastControlPlaneCanvasRefreshAt: (value) => {
-      brokerRuntime.setLastControlPlaneCanvasRefreshAt(value);
-    },
-    getLastControlPlaneCanvasError: () => brokerRuntime.getLastControlPlaneCanvasError(),
-    setLastControlPlaneCanvasError: (value) => {
-      brokerRuntime.setLastControlPlaneCanvasError(value);
-    },
   });
-  const {
-    buildCurrentBrokerControlPlaneDashboardSnapshot,
-    refreshBrokerControlPlaneCanvasDashboard,
-  } = pinetControlPlaneCanvas;
+  const { buildCurrentBrokerControlPlaneDashboardSnapshot } = pinetControlPlaneDashboard;
 
   // ─── Socket Mode (native WebSocket) ─────────────────
 
@@ -766,12 +738,6 @@ export default function (pi: ExtensionAPI) {
     },
     trySendFollowUp: (body, onDelivered) => {
       trySendBrokerFollowUp(body, onDelivered);
-    },
-    refreshCanvasDashboard: async (ctx, input) => {
-      await refreshBrokerControlPlaneCanvasDashboard(
-        ctx,
-        input as Parameters<typeof refreshBrokerControlPlaneCanvasDashboard>[1],
-      );
     },
     refreshHomeTabs: async (ctx, snapshot, refreshedAt, userIds) => {
       await pinetHomeTabs.refreshBrokerControlPlaneHomeTabs(ctx, snapshot, refreshedAt, userIds);
@@ -1353,14 +1319,6 @@ export default function (pi: ExtensionAPI) {
       slackScopeDiagnostics: () => slackScopeDiagnostics,
       settings: () => settings,
       lastBrokerMaintenance: () => brokerRuntime.getLastMaintenance(),
-      isBrokerControlPlaneCanvasEnabled: () => brokerRuntime.isBrokerControlPlaneCanvasEnabled(),
-      getConfiguredBrokerControlPlaneCanvasId: () =>
-        brokerRuntime.getConfiguredBrokerControlPlaneCanvasId(),
-      getConfiguredBrokerControlPlaneCanvasChannel: () =>
-        brokerRuntime.getConfiguredBrokerControlPlaneCanvasChannel(),
-      lastBrokerControlPlaneCanvasRefreshAt: () =>
-        brokerRuntime.getLastControlPlaneCanvasRefreshAt(),
-      lastBrokerControlPlaneCanvasError: () => brokerRuntime.getLastControlPlaneCanvasError(),
       getBrokerControlPlaneHomeTabViewerIds,
       lastBrokerControlPlaneHomeTabRefreshAt: () => brokerRuntime.getLastHomeTabRefreshAt(),
       lastBrokerControlPlaneHomeTabError: () => brokerRuntime.getLastHomeTabError(),

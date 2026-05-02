@@ -36,10 +36,6 @@ export interface SlackBridgeSettings {
   agentEmoji?: string;
   meshSecret?: string;
   meshSecretPath?: string;
-  controlPlaneCanvasEnabled?: boolean;
-  controlPlaneCanvasId?: string;
-  controlPlaneCanvasChannel?: string;
-  controlPlaneCanvasTitle?: string;
   imessage?: {
     enabled?: boolean;
   };

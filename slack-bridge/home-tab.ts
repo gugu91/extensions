@@ -1,4 +1,4 @@
-import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
 
 export type SlackBlock = Record<string, unknown>;
@@ -245,7 +245,6 @@ export function renderBrokerControlPlaneHomeTabView(
       text: [
         "• Open a DM with Pinet in the *Messages* tab to assign or follow up on work.",
         "• Mention Pinet in a channel thread to route a task into the broker mesh.",
-        "• Use the control-plane canvas for a long-form markdown view of the same dashboard.",
       ].join("\n"),
     }),
   ];

@@ -47,11 +47,6 @@ export interface PinetCommandsDeps {
     repairedThreadClaims: number;
     anomalies: string[];
   } | null;
-  isBrokerControlPlaneCanvasEnabled: () => boolean;
-  getConfiguredBrokerControlPlaneCanvasId: () => string | null;
-  getConfiguredBrokerControlPlaneCanvasChannel: () => string | null;
-  lastBrokerControlPlaneCanvasRefreshAt: () => string | null;
-  lastBrokerControlPlaneCanvasError: () => string | null;
   getBrokerControlPlaneHomeTabViewerIds: () => string[];
   lastBrokerControlPlaneHomeTabRefreshAt: () => string | null;
   lastBrokerControlPlaneHomeTabError: () => string | null;
@@ -303,21 +298,9 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
               ...(lbm.anomalies.length > 0 ? [`Health: ${lbm.anomalies.join("; ")}`] : []),
             ]
           : [];
-      const brokerCanvasInfo =
+      const brokerHomeTabInfo =
         mode === "broker"
           ? [
-              `Control plane canvas: ${
-                deps.isBrokerControlPlaneCanvasEnabled()
-                  ? (deps.getConfiguredBrokerControlPlaneCanvasId() ??
-                    `pending (${deps.getConfiguredBrokerControlPlaneCanvasChannel() ?? "no target"})`)
-                  : "disabled"
-              }`,
-              ...(deps.lastBrokerControlPlaneCanvasRefreshAt()
-                ? [`Canvas refreshed: ${deps.lastBrokerControlPlaneCanvasRefreshAt()}`]
-                : []),
-              ...(deps.lastBrokerControlPlaneCanvasError()
-                ? [`Canvas status: ${deps.lastBrokerControlPlaneCanvasError()}`]
-                : []),
               `Home tab viewers: ${deps.getBrokerControlPlaneHomeTabViewerIds().length}`,
               ...(deps.lastBrokerControlPlaneHomeTabRefreshAt()
                 ? [`Home tab refreshed: ${deps.lastBrokerControlPlaneHomeTabRefreshAt()}`]
@@ -345,7 +328,7 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
           activityLogInfo,
           slackToolHealthInfo,
           ...brokerHealthInfo,
-          ...brokerCanvasInfo,
+          ...brokerHomeTabInfo,
         ].join("\n"),
         "info",
       );

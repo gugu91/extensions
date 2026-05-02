@@ -5,11 +5,6 @@ import type {
   RalphLoopEvaluationResult,
 } from "../helpers.js";
 import { buildAgentDisplayInfo, shortenPath } from "../helpers.js";
-import {
-  buildSlackCanvasCreateRequest,
-  buildSlackCanvasEditRequest,
-  extractSlackChannelCanvasId,
-} from "../canvases.js";
 import type { ResolvedTaskAssignment } from "../task-assignments.js";
 import type { BrokerMaintenanceResult } from "./maintenance.js";
 
@@ -98,32 +93,6 @@ export interface BuildBrokerControlPlaneDashboardSnapshotInput {
   homedir?: string;
 }
 
-export interface RefreshBrokerControlPlaneCanvasInput {
-  slack: (
-    method: string,
-    token: string,
-    body?: Record<string, unknown>,
-  ) => Promise<{
-    [key: string]: unknown;
-  }>;
-  token: string;
-  markdown: string;
-  canvasId?: string | null;
-  channelId?: string | null;
-  title?: string;
-}
-
-export interface RefreshBrokerControlPlaneCanvasResult {
-  canvasId: string;
-  created: boolean;
-  reusedExistingChannelCanvas: boolean;
-  updated: boolean;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function formatDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms)) return "n/a";
   if (ms < 1_000) return `${Math.round(ms)}ms`;
@@ -149,10 +118,6 @@ function formatTimestamp(value: string): string {
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
-function escapeTableCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\n/g, "<br/>");
 }
 
 function getAgentRole(agent: Pick<AgentDisplayInfo, "metadata">): string {
@@ -207,14 +172,6 @@ function summarizeAgentTasks(
 function summarizeCycleAnomalies(anomalies: string[]): string {
   if (anomalies.length === 0) return "healthy";
   return truncateText(anomalies.join("; "), 72);
-}
-
-function isSlackMethodError(err: unknown, method: string, ...codes: string[]): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-
-  return codes.some((code) => err.message.includes(`Slack ${method}: ${code}`));
 }
 
 export function buildBrokerControlPlaneDashboardSnapshot(
@@ -349,197 +306,4 @@ export function buildBrokerControlPlaneDashboardSnapshot(
       followUpDelivered: cycle.followUpDelivered,
     })),
   };
-}
-
-export function renderBrokerControlPlaneCanvasMarkdown(
-  snapshot: BrokerControlPlaneDashboardSnapshot,
-): string {
-  const lines = [
-    "# Pinet Broker Control Plane",
-    "",
-    `_Updated ${formatTimestamp(snapshot.cycleStartedAt)} · cycle ${formatDuration(snapshot.cycleDurationMs)}._`,
-    "",
-    "## Mesh summary",
-    `- Main checkout: \`${snapshot.currentBranch ?? "unknown"}\``,
-    `- Agents: ${snapshot.liveAgents} live / ${snapshot.totalAgents} total (${snapshot.brokerCount} broker, ${snapshot.workerCount} workers)`,
-    `- Workers: ${snapshot.workingWorkers} working, ${snapshot.idleWorkers} idle, ${snapshot.ghostAgents} ghost, ${snapshot.stuckAgents} stuck`,
-    `- Backlog: ${snapshot.pendingBacklogCount} pending · nudges ${snapshot.nudgesThisCycle} · idle drains ${snapshot.idleDrainCandidates}`,
-    `- Maintenance: assigned ${snapshot.assignedBacklogCount} · reaped ${snapshot.reapedAgents} · repaired claims ${snapshot.repairedThreadClaims}`,
-    "",
-    "## Active anomalies",
-    ...(snapshot.anomalies.length > 0
-      ? snapshot.anomalies.map((anomaly) => `- ${anomaly}`)
-      : ["- Healthy ✅"]),
-    ...(snapshot.maintenanceAnomalies.length > 0
-      ? [
-          "",
-          "### Maintenance anomalies",
-          ...snapshot.maintenanceAnomalies.map((anomaly) => `- ${anomaly}`),
-        ]
-      : []),
-    "",
-    "## Agent roster",
-    "| Agent | Role | Health | Status | Workload | Current task | Heartbeat | Branch | Worktree |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...snapshot.roster.map((row) =>
-      [
-        row.label,
-        row.role,
-        row.health,
-        row.status,
-        row.workload,
-        truncateText(row.taskSummary, 72),
-        row.heartbeat,
-        row.branch,
-        row.worktree,
-      ]
-        .map((cell) => escapeTableCell(cell))
-        .join(" | ")
-        .replace(/^/, "|")
-        .concat(" |"),
-    ),
-    "",
-    "## Task / PR status",
-    `- Assigned: ${snapshot.taskCounts.assigned}`,
-    `- Branch pushed: ${snapshot.taskCounts.branchPushed}`,
-    `- Open PRs: ${snapshot.taskCounts.openPrs}`,
-    `- Merged PRs: ${snapshot.taskCounts.mergedPrs}`,
-    `- Closed PRs: ${snapshot.taskCounts.closedPrs}`,
-    "",
-    "### Active tasks",
-    ...(snapshot.activeTasks.length > 0
-      ? snapshot.activeTasks.map((task) => `- ${task}`)
-      : ["- No active tracked tasks."]),
-    "",
-    "### Recent outcomes",
-    ...(snapshot.recentOutcomes.length > 0
-      ? snapshot.recentOutcomes.map((task) => `- ${task}`)
-      : ["- No merged or closed PR outcomes tracked yet."]),
-    "",
-    "## Recent RALPH cycles",
-    "| Started | Duration | Agents | Backlog | Ghosts | Stuck | Follow-up | Anomalies |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...(snapshot.recentCycles.length > 0
-      ? snapshot.recentCycles.map((cycle) =>
-          [
-            cycle.startedAt,
-            cycle.duration,
-            String(cycle.agentCount),
-            String(cycle.backlogCount),
-            String(cycle.ghostCount),
-            String(cycle.stuckCount),
-            cycle.followUpDelivered ? "yes" : "no",
-            cycle.anomalySummary,
-          ]
-            .map((cell) => escapeTableCell(cell))
-            .join(" | ")
-            .replace(/^/, "|")
-            .concat(" |"),
-        )
-      : ["| none yet | n/a | 0 | 0 | 0 | 0 | no | awaiting first recorded cycle |"]),
-  ];
-
-  return `${lines.join("\n").trim()}\n`;
-}
-
-async function createOrRecoverChannelCanvas(
-  input: RefreshBrokerControlPlaneCanvasInput,
-  channelId: string,
-): Promise<RefreshBrokerControlPlaneCanvasResult> {
-  const createRequest = buildSlackCanvasCreateRequest({
-    kind: "channel",
-    channelId,
-    title: input.title ?? "Pinet Broker Control Plane",
-    markdown: input.markdown,
-  });
-
-  try {
-    const response = await input.slack(createRequest.method, input.token, createRequest.body);
-    const createdCanvasId = asString(response.canvas_id);
-    if (!createdCanvasId) {
-      throw new Error("Slack did not return a canvas_id for the control plane canvas.");
-    }
-    return {
-      canvasId: createdCanvasId,
-      created: true,
-      reusedExistingChannelCanvas: false,
-      updated: false,
-    };
-  } catch (err) {
-    if (
-      !isSlackMethodError(
-        err,
-        "conversations.canvases.create",
-        "channel_canvas_already_exists",
-        "free_team_canvas_tab_already_exists",
-      )
-    ) {
-      throw err;
-    }
-
-    const info = await input.slack("conversations.info", input.token, { channel: channelId });
-    const existingCanvasId = extractSlackChannelCanvasId(info);
-    if (!existingCanvasId) {
-      throw new Error(
-        `Slack reported an existing channel canvas for ${channelId}, but conversations.info did not expose its canvas id.`,
-      );
-    }
-
-    await input.slack(
-      "canvases.edit",
-      input.token,
-      buildSlackCanvasEditRequest({
-        canvasId: existingCanvasId,
-        markdown: input.markdown,
-        mode: "replace",
-      }) as unknown as Record<string, unknown>,
-    );
-
-    return {
-      canvasId: existingCanvasId,
-      created: false,
-      reusedExistingChannelCanvas: true,
-      updated: true,
-    };
-  }
-}
-
-export async function refreshBrokerControlPlaneCanvas(
-  input: RefreshBrokerControlPlaneCanvasInput,
-): Promise<RefreshBrokerControlPlaneCanvasResult> {
-  const canvasId = asString(input.canvasId);
-  const channelId = asString(input.channelId);
-
-  if (canvasId) {
-    try {
-      await input.slack(
-        "canvases.edit",
-        input.token,
-        buildSlackCanvasEditRequest({
-          canvasId,
-          markdown: input.markdown,
-          mode: "replace",
-        }) as unknown as Record<string, unknown>,
-      );
-      return {
-        canvasId,
-        created: false,
-        reusedExistingChannelCanvas: false,
-        updated: true,
-      };
-    } catch (err) {
-      if (
-        !channelId ||
-        !isSlackMethodError(err, "canvases.edit", "canvas_not_found", "invalid_arguments")
-      ) {
-        throw err;
-      }
-    }
-  }
-
-  if (!channelId) {
-    throw new Error("Control plane canvas refresh requires either a canvas ID or channel ID.");
-  }
-
-  return createOrRecoverChannelCanvas(input, channelId);
 }

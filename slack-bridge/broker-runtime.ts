@@ -38,7 +38,7 @@ import {
   type LoggedActivityLogEntry,
   type SlackActivityLogger,
 } from "./activity-log.js";
-import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import {
   type RalphLoopDeps,
   createRalphLoopState,
@@ -119,7 +119,6 @@ export interface BrokerRuntimeDeps {
   ) => { summary: string; tone: ActivityLogTone };
   sendMaintenanceMessage: (targetAgentId: string, body: string) => void;
   trySendFollowUp: (body: string, onDelivered: () => void) => void;
-  refreshCanvasDashboard: (ctx: ExtensionContext, input: Record<string, unknown>) => Promise<void>;
   refreshHomeTabs: (
     ctx: ExtensionContext,
     snapshot: BrokerControlPlaneDashboardSnapshot,
@@ -132,6 +131,11 @@ export interface BrokerRuntimeDeps {
   buildCurrentDashboardSnapshot: (
     openedAt?: string,
   ) => Promise<BrokerControlPlaneDashboardSnapshot | null>;
+}
+
+function normalizeOptionalSetting(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 export interface BrokerRuntime {
@@ -150,19 +154,6 @@ export interface BrokerRuntime {
   heartbeatTimerActive: () => boolean;
   maintenanceTimerActive: () => boolean;
   isConnected: () => boolean;
-  isBrokerControlPlaneCanvasEnabled: () => boolean;
-  getConfiguredBrokerControlPlaneCanvasId: () => string | null;
-  getConfiguredBrokerControlPlaneCanvasChannel: () => string | null;
-  getControlPlaneCanvasRuntimeId: () => string | null;
-  getControlPlaneCanvasRuntimeChannelId: () => string | null;
-  restoreControlPlaneCanvasRuntimeState: (input: {
-    canvasId: string | null;
-    channelId: string | null;
-  }) => void;
-  getLastControlPlaneCanvasRefreshAt: () => string | null;
-  setLastControlPlaneCanvasRefreshAt: (value: string | null) => void;
-  getLastControlPlaneCanvasError: () => string | null;
-  setLastControlPlaneCanvasError: (value: string | null) => void;
   getHomeTabViewerIds: () => string[];
   getLastHomeTabSnapshot: () => BrokerControlPlaneDashboardSnapshot | null;
   setLastHomeTabSnapshot: (snapshot: BrokerControlPlaneDashboardSnapshot | null) => void;
@@ -175,11 +166,6 @@ export interface BrokerRuntime {
     ctx: ExtensionContext,
     openedAt?: string,
   ) => Promise<boolean>;
-}
-
-function normalizeOptionalSetting(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 export function readStoredSlackThreadContext(
@@ -225,10 +211,6 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   let activityLogger: SlackActivityLogger | null = null;
   let activityLogContext: ExtensionContext | null = null;
   let lastActivityLogFailureAt = 0;
-  let brokerControlPlaneCanvasRuntimeId: string | null = null;
-  let brokerControlPlaneCanvasRuntimeChannelId: string | null = null;
-  let lastBrokerControlPlaneCanvasRefreshAt: string | null = null;
-  let lastBrokerControlPlaneCanvasError: string | null = null;
   const brokerControlPlaneHomeTabViewers = new TtlCache<string, { openedAt: string }>({
     maxSize: 100,
     ttlMs: 12 * 60 * 60 * 1000,
@@ -237,25 +219,6 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   let lastBrokerControlPlaneHomeTabRefreshAt: string | null = null;
   let lastBrokerControlPlaneHomeTabError: string | null = null;
   const ralphLoopState = createRalphLoopState();
-
-  function isBrokerControlPlaneCanvasEnabled(): boolean {
-    return deps.getSettings().controlPlaneCanvasEnabled ?? true;
-  }
-
-  function getExplicitBrokerControlPlaneCanvasId(): string | null {
-    return normalizeOptionalSetting(deps.getSettings().controlPlaneCanvasId);
-  }
-
-  function getConfiguredBrokerControlPlaneCanvasId(): string | null {
-    return getExplicitBrokerControlPlaneCanvasId() ?? brokerControlPlaneCanvasRuntimeId;
-  }
-
-  function getConfiguredBrokerControlPlaneCanvasChannel(): string | null {
-    return (
-      normalizeOptionalSetting(deps.getSettings().controlPlaneCanvasChannel) ??
-      normalizeOptionalSetting(deps.getSettings().defaultChannel)
-    );
-  }
 
   function ensureActivityLogger(): SlackActivityLogger {
     if (activityLogger) {
@@ -463,17 +426,12 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           prNumber,
           branch,
         ),
-      refreshCanvasDashboard: (ctx, input) => deps.refreshCanvasDashboard(ctx, input),
       refreshHomeTabs: (ctx, snapshot, refreshedAt) =>
         deps.refreshHomeTabs(ctx, snapshot, refreshedAt),
       getLastMaintenance: () => lastBrokerMaintenance,
       buildControlPlaneDashboardSnapshot: (input) => deps.buildControlPlaneDashboardSnapshot(input),
       setLastHomeTabSnapshot: (snapshot) => {
         lastBrokerControlPlaneHomeTabSnapshot = snapshot;
-      },
-      getLastCanvasError: () => lastBrokerControlPlaneCanvasError,
-      setLastCanvasError: (error) => {
-        lastBrokerControlPlaneCanvasError = error;
       },
       getLastHomeTabError: () => lastBrokerControlPlaneHomeTabError,
       setLastHomeTabError: (error) => {
@@ -492,8 +450,6 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
 
   function stopObservability(): void {
     stopRalphLoop(ralphLoopState);
-    lastBrokerControlPlaneCanvasRefreshAt = null;
-    lastBrokerControlPlaneCanvasError = null;
     brokerControlPlaneHomeTabViewers.clear();
     lastBrokerControlPlaneHomeTabSnapshot = null;
     lastBrokerControlPlaneHomeTabRefreshAt = null;
@@ -805,50 +761,6 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
 
     isConnected(): boolean {
       return activeBroker != null;
-    },
-
-    isBrokerControlPlaneCanvasEnabled(): boolean {
-      return isBrokerControlPlaneCanvasEnabled();
-    },
-
-    getConfiguredBrokerControlPlaneCanvasId(): string | null {
-      return getConfiguredBrokerControlPlaneCanvasId();
-    },
-
-    getConfiguredBrokerControlPlaneCanvasChannel(): string | null {
-      return getConfiguredBrokerControlPlaneCanvasChannel();
-    },
-
-    getControlPlaneCanvasRuntimeId(): string | null {
-      return brokerControlPlaneCanvasRuntimeId;
-    },
-
-    getControlPlaneCanvasRuntimeChannelId(): string | null {
-      return brokerControlPlaneCanvasRuntimeChannelId;
-    },
-
-    restoreControlPlaneCanvasRuntimeState(input: {
-      canvasId: string | null;
-      channelId: string | null;
-    }): void {
-      brokerControlPlaneCanvasRuntimeId = normalizeOptionalSetting(input.canvasId);
-      brokerControlPlaneCanvasRuntimeChannelId = normalizeOptionalSetting(input.channelId);
-    },
-
-    getLastControlPlaneCanvasRefreshAt(): string | null {
-      return lastBrokerControlPlaneCanvasRefreshAt;
-    },
-
-    setLastControlPlaneCanvasRefreshAt(value: string | null): void {
-      lastBrokerControlPlaneCanvasRefreshAt = value;
-    },
-
-    getLastControlPlaneCanvasError(): string | null {
-      return lastBrokerControlPlaneCanvasError;
-    },
-
-    setLastControlPlaneCanvasError(value: string | null): void {
-      lastBrokerControlPlaneCanvasError = value;
     },
 
     getHomeTabViewerIds(): string[] {

@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import {
   createPinetHomeTabs,
   type PinetHomeTabsBrokerPort,

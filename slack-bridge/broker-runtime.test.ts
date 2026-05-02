@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import {
   createBrokerRuntime,
   shouldRouteKnownSlackThread,
@@ -65,7 +65,6 @@ function createDeps(overrides: Partial<BrokerRuntimeDeps> = {}): BrokerRuntimeDe
     })),
     sendMaintenanceMessage: vi.fn(),
     trySendFollowUp: vi.fn(),
-    refreshCanvasDashboard: vi.fn(async () => undefined),
     refreshHomeTabs: vi.fn(async () => undefined),
     buildControlPlaneDashboardSnapshot: vi.fn(
       (input) => input as unknown as BrokerControlPlaneDashboardSnapshot,
@@ -121,15 +120,9 @@ describe("broker-runtime known Slack thread routing", () => {
 });
 
 describe("broker-runtime", () => {
-  it("keeps reusable control-plane canvas ids while clearing transient observability state", async () => {
+  it("clears transient Home tab observability state on disconnect", async () => {
     const runtime = createBrokerRuntime(createDeps());
 
-    runtime.restoreControlPlaneCanvasRuntimeState({
-      canvasId: "F123CANVAS",
-      channelId: "C123CHANNEL",
-    });
-    runtime.setLastControlPlaneCanvasRefreshAt("2026-04-14T18:00:00.000Z");
-    runtime.setLastControlPlaneCanvasError("canvas failed once");
     runtime.setLastHomeTabSnapshot({
       roster: [],
     } as unknown as BrokerControlPlaneDashboardSnapshot);
@@ -138,29 +131,9 @@ describe("broker-runtime", () => {
 
     await runtime.disconnect();
 
-    expect(runtime.getControlPlaneCanvasRuntimeId()).toBe("F123CANVAS");
-    expect(runtime.getControlPlaneCanvasRuntimeChannelId()).toBe("C123CHANNEL");
-    expect(runtime.getConfiguredBrokerControlPlaneCanvasId()).toBe("F123CANVAS");
-    expect(runtime.getLastControlPlaneCanvasRefreshAt()).toBeNull();
-    expect(runtime.getLastControlPlaneCanvasError()).toBeNull();
     expect(runtime.getHomeTabViewerIds()).toEqual([]);
     expect(runtime.getLastHomeTabSnapshot()).toBeNull();
     expect(runtime.getLastHomeTabRefreshAt()).toBeNull();
     expect(runtime.getLastHomeTabError()).toBeNull();
-  });
-
-  it("prefers explicit control-plane canvas ids over persisted runtime ids", () => {
-    const runtime = createBrokerRuntime(
-      createDeps({
-        getSettings: () => ({ controlPlaneCanvasId: "FEXPLICIT" }),
-      }),
-    );
-
-    runtime.restoreControlPlaneCanvasRuntimeState({
-      canvasId: "FRUNTIME",
-      channelId: "CRUNTIME",
-    });
-
-    expect(runtime.getConfiguredBrokerControlPlaneCanvasId()).toBe("FEXPLICIT");
   });
 });

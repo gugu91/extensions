@@ -18,8 +18,6 @@ interface MutableRuntimeState {
   activeSkinTheme: string | null;
   agentPersonality: string | null;
   agentOwnerToken: string;
-  controlPlaneCanvasId: string | null;
-  controlPlaneCanvasChannelId: string | null;
 }
 
 function createDeps(
@@ -42,8 +40,6 @@ function createDeps(
     activeSkinTheme: "cobalt",
     agentPersonality: "steady",
     agentOwnerToken: "owner:current",
-    controlPlaneCanvasId: "CANVAS_CURRENT",
-    controlPlaneCanvasChannelId: "C_CURRENT",
     ...overrides.state,
   };
   const threads =
@@ -62,13 +58,6 @@ function createDeps(
   const userNames = overrides.userNames ?? new Map<string, string>([["U_CURRENT", "Current User"]]);
   const agentAliases = overrides.agentAliases ?? new Set<string>(["Current Alias"]);
   const appendEntry = vi.fn<(customType: string, data?: unknown) => void>();
-  const restoreControlPlaneCanvasRuntimeState = vi.fn(
-    ({ canvasId, channelId }: { canvasId: string | null; channelId: string | null }) => {
-      state.controlPlaneCanvasId = canvasId;
-      state.controlPlaneCanvasChannelId = channelId;
-    },
-  );
-
   const deps: PersistedRuntimeStateDeps = {
     pi: {
       appendEntry: (customType, data) => {
@@ -111,9 +100,6 @@ function createDeps(
       state.agentOwnerToken = ownerToken;
     },
     getSettings: overrides.settings ?? (() => ({})),
-    getControlPlaneCanvasRuntimeId: () => state.controlPlaneCanvasId,
-    getControlPlaneCanvasRuntimeChannelId: () => state.controlPlaneCanvasChannelId,
-    restoreControlPlaneCanvasRuntimeState,
     formatError:
       overrides.formatError ??
       ((error) => (error instanceof Error ? error.message : String(error))),
@@ -126,7 +112,6 @@ function createDeps(
     userNames,
     agentAliases,
     appendEntry,
-    restoreControlPlaneCanvasRuntimeState,
   };
 }
 
@@ -165,8 +150,6 @@ describe("createPersistedRuntimeState", () => {
         brokerRole: "broker",
         activeSkinTheme: "oceanic",
         agentPersonality: "calm",
-        controlPlaneCanvasId: "CANVAS_RUNTIME",
-        controlPlaneCanvasChannelId: "C_RUNTIME",
       },
       threads: new Map([
         [
@@ -209,8 +192,6 @@ describe("createPersistedRuntimeState", () => {
       activeSkinTheme: "oceanic",
       agentPersonality: "calm",
       agentAliases: ["Cobalt", "Crane"],
-      brokerControlPlaneCanvasId: "CANVAS_RUNTIME",
-      brokerControlPlaneCanvasChannelId: "C_RUNTIME",
     });
   });
 
@@ -243,15 +224,7 @@ describe("createPersistedRuntimeState", () => {
   });
 
   it("restores persisted runtime state, preserves existing live data, and re-persists normalized state", () => {
-    const {
-      deps,
-      state,
-      threads,
-      userNames,
-      agentAliases,
-      appendEntry,
-      restoreControlPlaneCanvasRuntimeState,
-    } = createDeps({
+    const { deps, state, threads, userNames, agentAliases, appendEntry } = createDeps({
       state: {
         lastDmChannel: "D_EXISTING",
         agentName: "Current Crane",
@@ -261,8 +234,6 @@ describe("createPersistedRuntimeState", () => {
         agentOwnerToken: "owner:live",
         activeSkinTheme: null,
         agentPersonality: null,
-        controlPlaneCanvasId: "CANVAS_FALLBACK",
-        controlPlaneCanvasChannelId: "C_FALLBACK",
       },
     });
     const persistedRuntimeState = createPersistedRuntimeState(deps);
@@ -300,8 +271,6 @@ describe("createPersistedRuntimeState", () => {
       activeSkinTheme: "midnight",
       agentPersonality: "observant",
       agentAliases: ["Saved Alias", "Night Crane"],
-      brokerControlPlaneCanvasId: "  CANVAS_SAVED  ",
-      brokerControlPlaneCanvasChannelId: "   ",
     };
 
     persistedRuntimeState.restorePersistedRuntimeState(
@@ -330,13 +299,6 @@ describe("createPersistedRuntimeState", () => {
     expect(state.lastDmChannel).toBe("D_EXISTING");
     expect(userNames.get("U_CURRENT")).toBe("Current User");
     expect(userNames.get("U_200")).toBe("Saved User");
-
-    expect(restoreControlPlaneCanvasRuntimeState).toHaveBeenCalledWith({
-      canvasId: "CANVAS_SAVED",
-      channelId: "C_FALLBACK",
-    });
-    expect(state.controlPlaneCanvasId).toBe("CANVAS_SAVED");
-    expect(state.controlPlaneCanvasChannelId).toBe("C_FALLBACK");
 
     expect(appendEntry).toHaveBeenCalledTimes(1);
     expect(appendEntry).toHaveBeenLastCalledWith("slack-bridge-state", {
@@ -373,8 +335,6 @@ describe("createPersistedRuntimeState", () => {
       activeSkinTheme: "midnight",
       agentPersonality: "observant",
       agentAliases: ["Saved Alias", "Night Crane"],
-      brokerControlPlaneCanvasId: "CANVAS_SAVED",
-      brokerControlPlaneCanvasChannelId: "C_FALLBACK",
     });
   });
 });

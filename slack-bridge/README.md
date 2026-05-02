@@ -464,7 +464,7 @@ Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are per
 
 ### How it works
 
-- The **broker** runs Slack Socket Mode, routes messages to agents, monitors health via the RALPH loop, and maintains a control plane canvas
+- The **broker** runs Slack Socket Mode, routes messages to agents, and monitors health via the RALPH loop
 - **Followers** connect to the broker over a local Unix socket, poll for work, and report results
 - Agents can optionally authenticate using a shared local secret (`meshSecret` or `meshSecretPath`); when both are unset, mesh auth is disabled
 - Thread ownership is first-responder-wins — the first agent to reply claims the thread

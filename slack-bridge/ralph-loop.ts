@@ -29,7 +29,7 @@ import {
 } from "./task-assignments.js";
 import type { ActivityLogEntry, ActivityLogTone } from "./activity-log.js";
 import { probeGitBranch } from "./git-metadata.js";
-import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-canvas.js";
+import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import type { BrokerMaintenanceResult } from "./broker/maintenance.js";
 import type { BrokerDB, TaskAssignmentAwaitingReplyInfo } from "./broker/schema.js";
 import type { TaskAssignmentInfo } from "./broker/types.js";
@@ -196,7 +196,6 @@ export interface RalphLoopDeps {
     prNumber: number | null,
     branch: string | null,
   ) => { summary: string; tone?: string };
-  refreshCanvasDashboard: (ctx: ExtensionContext, input: Record<string, unknown>) => Promise<void>;
   refreshHomeTabs: (
     ctx: ExtensionContext,
     snapshot: BrokerControlPlaneDashboardSnapshot,
@@ -211,8 +210,6 @@ export interface RalphLoopDeps {
 
   // State setters for control plane tracking
   setLastHomeTabSnapshot: (snapshot: BrokerControlPlaneDashboardSnapshot) => void;
-  getLastCanvasError: () => string | null;
-  setLastCanvasError: (err: string | null) => void;
   getLastHomeTabError: () => string | null;
   setLastHomeTabError: (err: string | null) => void;
 }
@@ -568,16 +565,6 @@ export async function runRalphLoopCycle(
     };
     const controlPlaneSnapshot = deps.buildControlPlaneDashboardSnapshot(controlPlaneInput);
     deps.setLastHomeTabSnapshot(controlPlaneSnapshot);
-
-    try {
-      await deps.refreshCanvasDashboard(ctx, controlPlaneInput);
-    } catch (canvasErr) {
-      const canvasMessage = `Pinet broker control plane canvas refresh failed: ${errorMsg(canvasErr)}`;
-      if (canvasMessage !== deps.getLastCanvasError()) {
-        ctx.ui.notify(canvasMessage, "warning");
-      }
-      deps.setLastCanvasError(canvasMessage);
-    }
 
     try {
       await deps.refreshHomeTabs(ctx, controlPlaneSnapshot, cycleStartedAt);
