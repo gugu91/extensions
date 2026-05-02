@@ -440,17 +440,19 @@ Only broker prompt content is replaceable. Broker runtime/tool restrictions rema
 
 ### Multi-agent tools
 
-| Tool    | Description                                                                                                         |
-| ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`) |
+| Tool    | Description                                                                                                                  |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`, `lanes`) |
 
-Use the dispatcher for all Pinet actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, and `pinet action=agents`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
+Use the dispatcher for all Pinet actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, `pinet action=agents`, and `pinet action=lanes`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
 
 Dispatcher content defaults to terse CLI-style confirmations/summaries for noisy reads, sends, and agent lists. In default CLI mode, bulky read/agent payloads are also compacted in `data.details` so tool renderers do not surface full message bodies or agent metadata by accident. Pass `args.format="json"` (or `args.f` / `args["-f"]`) for the dispatcher envelope in content with full structured `data.details`, or `args.full=true` / `args["--full"]=true` for verbose text with full structured `data.details`.
 
 Durable Pinet inbox notifications are classified as `steering`, `fwup`, or `maintenance/context` from explicit metadata or message cues. Follower prompts receive compact pointers such as `pinet action=read args.thread_id=...` instead of the full durable message body; agents use `pinet action=read` to retrieve the actual context. Delivery, read/ack state, and mail classification remain separate.
 
 Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are persisted/stamped as Pinet follow-up mail and surfaced through compact `pinet action=read` pointers rather than direct reminder-body prompts. Wake-up bodies and metadata are treated as mail content only; they do not trigger Pinet remote-control commands such as `/exit`, `/reload`, or structured `pinet:control` JSON.
+
+Durable lane metadata is stored in SQLite and can be inspected/updated with `pinet action=lanes`. PM-mode lanes can record the accountable follower/PM, implementation lead, participant roles (`pm`, `lead`, `implementer`, `reviewer`, `second_pass_reviewer`, etc.), linked issue/PR, state, and summary. The `detached` lane state means a lane is manually supervised by a human; broker/RALPH/status surfaces keep it visible but should not treat it as normal auto-reassignment work without explicit human/broker action.
 
 ### Broker commands
 

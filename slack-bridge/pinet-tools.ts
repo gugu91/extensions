@@ -23,6 +23,15 @@ import {
 import { isBroadcastChannelTarget } from "./broker/agent-messaging.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
+import type {
+  PinetLaneInfo,
+  PinetLaneListOptions,
+  PinetLaneParticipantInfo,
+  PinetLaneParticipantUpsertInput,
+  PinetLaneRole,
+  PinetLaneState,
+  PinetLaneUpsertInput,
+} from "./broker/types.js";
 
 export interface PinetToolsAgentRecord {
   emoji: string;
@@ -69,6 +78,11 @@ export interface RegisterPinetToolsDeps {
   readPinetInbox: (options: PinetReadOptions) => Promise<PinetReadResult>;
   listBrokerAgents: () => PinetToolsAgentRecord[];
   listFollowerAgents: (includeGhosts: boolean) => Promise<PinetToolsAgentRecord[]>;
+  listPinetLanes: (options: PinetLaneListOptions) => Promise<PinetLaneInfo[]>;
+  upsertPinetLane: (input: PinetLaneUpsertInput) => Promise<PinetLaneInfo>;
+  setPinetLaneParticipant: (
+    input: PinetLaneParticipantUpsertInput,
+  ) => Promise<PinetLaneParticipantInfo>;
 }
 
 interface PinetAgentsRoutingHint {
@@ -79,7 +93,7 @@ interface PinetAgentsRoutingHint {
   task?: string;
 }
 
-type PinetDispatcherAction = "send" | "read" | "free" | "schedule" | "agents" | "help";
+type PinetDispatcherAction = "send" | "read" | "free" | "schedule" | "agents" | "lanes" | "help";
 type PinetDispatcherErrorClass = "input" | "state" | "runtime" | "network";
 
 type PinetDispatcherStatus = "succeeded" | "failed";
@@ -125,6 +139,19 @@ const PINET_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
   free: [{ action: "free", args: { note: "Wrapped up <issue>" } }],
   schedule: [{ action: "schedule", args: { delay: "30m", message: "Check queue state" } }],
   agents: [{ action: "agents", args: { repo: "<repo>", role: "worker", full: true } }],
+  lanes: [
+    { action: "lanes", args: { op: "list", full: true } },
+    {
+      action: "lanes",
+      args: {
+        op: "upsert",
+        lane_id: "issue-688",
+        issue_number: 688,
+        pm_mode: true,
+        state: "active",
+      },
+    },
+  ],
 };
 
 const PINET_OUTPUT_OPTION_PARAMETERS = {
@@ -165,7 +192,15 @@ function normalizeDispatcherAction(value: unknown): PinetDispatcherAction {
     throw new Error("action is required");
   }
 
-  const allowed: PinetDispatcherAction[] = ["help", "send", "read", "free", "schedule", "agents"];
+  const allowed: PinetDispatcherAction[] = [
+    "help",
+    "send",
+    "read",
+    "free",
+    "schedule",
+    "agents",
+    "lanes",
+  ];
   if (!allowed.includes(normalized)) {
     throw new Error(`Unknown Pinet action: ${normalized}`);
   }
@@ -587,6 +622,168 @@ function formatCompactAgentList(agents: AgentDisplayInfo[], hint: PinetAgentsRou
   return `Pinet agents: ${agents.length} visible${hintSuffix}.`;
 }
 
+function formatPinetLaneSummary(lane: PinetLaneInfo): string {
+  const refs = [
+    lane.issueNumber != null ? `#${lane.issueNumber}` : null,
+    lane.prNumber != null ? `PR #${lane.prNumber}` : null,
+    lane.pmMode ? "PM" : null,
+  ].filter((item): item is string => Boolean(item));
+  const participants = lane.participants
+    .slice(0, 4)
+    .map((participant) => `${participant.agentId}:${participant.role}`)
+    .join(", ");
+  return [
+    `- ${lane.laneId} [${lane.state}]${refs.length > 0 ? ` (${refs.join(" · ")})` : ""}`,
+    lane.name ? ` — ${lane.name}` : "",
+    lane.ownerAgentId ? ` owner=${lane.ownerAgentId}` : "",
+    lane.implementationLeadAgentId ? ` lead=${lane.implementationLeadAgentId}` : "",
+    participants ? ` participants=${participants}` : "",
+    lane.summary ? ` — ${lane.summary}` : "",
+  ].join("");
+}
+
+function formatPinetLanes(lanes: PinetLaneInfo[], full: boolean): string {
+  if (lanes.length === 0) return "Pinet lanes: none tracked.";
+  if (!full) return `Pinet lanes: ${lanes.length} tracked.`;
+  return ["Pinet lanes:", ...lanes.map(formatPinetLaneSummary)].join("\n");
+}
+
+function getMaybeString(params: Record<string, unknown>, key: string): string | undefined {
+  const value = params[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function getMaybeNumber(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getMaybeBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function getMaybeMetadata(
+  params: Record<string, unknown>,
+): Record<string, unknown> | null | undefined {
+  const value = params.metadata;
+  if (value === null) return null;
+  return isRecord(value) ? value : undefined;
+}
+
+function runPinetLanesAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+  output: PinetOutputOptions,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const op = getMaybeString(params, "op")?.toLowerCase() ?? "list";
+    deps.requireToolPolicy(toolName, undefined, `op=${op} | format=${output.format}`);
+    if (!deps.pinetEnabled()) {
+      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+    }
+
+    if (op === "list") {
+      const options: PinetLaneListOptions = {
+        ...(getMaybeString(params, "state")
+          ? { state: getMaybeString(params, "state") as PinetLaneState }
+          : {}),
+        ...(getMaybeString(params, "owner_agent")
+          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
+          : {}),
+        ...(getMaybeBoolean(params, "include_done") !== undefined
+          ? { includeDone: getMaybeBoolean(params, "include_done") }
+          : {}),
+      };
+      const lanes = await deps.listPinetLanes(options);
+      return {
+        content: [{ type: "text", text: formatPinetLanes(lanes, output.full) }],
+        details: { lanes },
+        compactDetails: { laneCount: lanes.length, lanes: lanes.slice(0, 10) },
+        fullDetails: { lanes },
+      };
+    }
+
+    if (op === "upsert") {
+      const laneId = getMaybeString(params, "lane_id");
+      if (!laneId) throw new Error("lanes op=upsert requires lane_id");
+      const lane = await deps.upsertPinetLane({
+        laneId,
+        ...(getMaybeString(params, "name") ? { name: getMaybeString(params, "name") } : {}),
+        ...(getMaybeString(params, "task") ? { task: getMaybeString(params, "task") } : {}),
+        ...(getMaybeNumber(params, "issue_number") !== undefined
+          ? { issueNumber: getMaybeNumber(params, "issue_number") }
+          : {}),
+        ...(getMaybeNumber(params, "pr_number") !== undefined
+          ? { prNumber: getMaybeNumber(params, "pr_number") }
+          : {}),
+        ...(getMaybeString(params, "thread_id")
+          ? { threadId: getMaybeString(params, "thread_id") }
+          : {}),
+        ...(getMaybeString(params, "owner_agent")
+          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
+          : {}),
+        ...(getMaybeString(params, "implementation_lead")
+          ? { implementationLeadAgentId: getMaybeString(params, "implementation_lead") }
+          : {}),
+        ...(getMaybeBoolean(params, "pm_mode") !== undefined
+          ? { pmMode: getMaybeBoolean(params, "pm_mode") }
+          : {}),
+        ...(getMaybeString(params, "state")
+          ? { state: getMaybeString(params, "state") as PinetLaneState }
+          : {}),
+        ...(getMaybeString(params, "summary")
+          ? { summary: getMaybeString(params, "summary") }
+          : {}),
+        ...(getMaybeMetadata(params) !== undefined ? { metadata: getMaybeMetadata(params) } : {}),
+      });
+      return {
+        content: [{ type: "text", text: `Pinet lane ${lane.laneId} saved (${lane.state}).` }],
+        details: { lane },
+        compactDetails: { laneId: lane.laneId, state: lane.state, pmMode: lane.pmMode },
+        fullDetails: { lane },
+      };
+    }
+
+    if (op === "participant") {
+      const laneId = getMaybeString(params, "lane_id");
+      if (!laneId) throw new Error("lanes op=participant requires lane_id");
+      const agentId = getMaybeString(params, "agent_id") ?? "";
+      const role = (getMaybeString(params, "lane_role") ??
+        getMaybeString(params, "role") ??
+        "observer") as PinetLaneRole;
+      const participant = await deps.setPinetLaneParticipant({
+        laneId,
+        agentId,
+        role,
+        ...(getMaybeString(params, "status") ? { status: getMaybeString(params, "status") } : {}),
+        ...(getMaybeString(params, "summary")
+          ? { summary: getMaybeString(params, "summary") }
+          : {}),
+        ...(getMaybeMetadata(params) !== undefined ? { metadata: getMaybeMetadata(params) } : {}),
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Pinet lane ${participant.laneId} participant ${participant.agentId} saved as ${participant.role}.`,
+          },
+        ],
+        details: { participant },
+        compactDetails: {
+          laneId: participant.laneId,
+          agentId: participant.agentId,
+          role: participant.role,
+        },
+        fullDetails: { participant },
+      };
+    }
+
+    throw new Error("lanes op must be list, upsert, or participant");
+  })();
+}
+
 function runPinetAgentsAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
@@ -753,16 +950,56 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     execute: (_id, params, output) => runPinetAgentsAction(params, deps, "pinet:agents", output),
   });
 
+  registerAction({
+    name: "lanes",
+    description:
+      "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility.",
+    parameters: Type.Object({
+      op: Type.Optional(Type.String({ description: "Operation: list, upsert, or participant" })),
+      lane_id: Type.Optional(Type.String({ description: "Stable lane id, e.g. issue-688" })),
+      name: Type.Optional(Type.String({ description: "Human-readable lane name" })),
+      task: Type.Optional(Type.String({ description: "Short lane task description" })),
+      issue_number: Type.Optional(Type.Number({ description: "Linked GitHub issue number" })),
+      pr_number: Type.Optional(Type.Number({ description: "Linked GitHub PR number" })),
+      thread_id: Type.Optional(Type.String({ description: "Owning Pinet/Slack thread id" })),
+      owner_agent: Type.Optional(Type.String({ description: "Accountable follower/PM agent id" })),
+      implementation_lead: Type.Optional(
+        Type.String({ description: "Implementation lead agent id" }),
+      ),
+      agent_id: Type.Optional(
+        Type.String({ description: "Participant agent id for op=participant" }),
+      ),
+      lane_role: Type.Optional(
+        Type.String({ description: "Participant role, e.g. pm, lead, reviewer" }),
+      ),
+      pm_mode: Type.Optional(Type.Boolean({ description: "Whether PM mode is enabled" })),
+      state: Type.Optional(
+        Type.String({
+          description:
+            "Lane state: planned, active, blocked, review, ready, done, cancelled, detached",
+        }),
+      ),
+      status: Type.Optional(Type.String({ description: "Participant status" })),
+      summary: Type.Optional(Type.String({ description: "Short lane or participant summary" })),
+      metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      include_done: Type.Optional(
+        Type.Boolean({ description: "Include done/cancelled/detached lanes in list output" }),
+      ),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
+    }),
+    execute: (_id, params, output) => runPinetLanesAction(params, deps, "pinet:lanes", output),
+  });
+
   pi.registerTool({
     name: "pinet",
     label: "Pinet Dispatcher",
     description:
       "Dispatch Pinet worker operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, and help. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
+      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, and help. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
     parameters: Type.Object({
       action: Type.String({
-        description: "Action name: help, send, read, free, schedule, or agents.",
+        description: "Action name: help, send, read, free, schedule, agents, lanes, or help.",
       }),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {

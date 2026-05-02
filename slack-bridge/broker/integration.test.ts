@@ -59,6 +59,37 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     cleanup(dir);
   });
 
+  it("persists lane metadata through follower RPC", async () => {
+    const reg = await client.register("pm-agent", "🧭");
+
+    const lane = await client.upsertLane({
+      laneId: "issue-688",
+      name: "Issue #688 PM lane",
+      issueNumber: 688,
+      ownerAgentId: reg.agentId,
+      pmMode: true,
+      state: "active",
+      summary: "Maintainer-consented PM coordination.",
+    });
+    const participant = await client.setLaneParticipant({
+      laneId: lane.laneId,
+      agentId: reg.agentId,
+      role: "pm",
+      status: "coordinating",
+    });
+
+    expect(participant.agentId).toBe(reg.agentId);
+    expect(participant.role).toBe("pm");
+    await expect(client.listLanes({ ownerAgentId: reg.agentId })).resolves.toEqual([
+      expect.objectContaining({
+        laneId: "issue-688",
+        ownerAgentId: reg.agentId,
+        pmMode: true,
+        participants: [expect.objectContaining({ agentId: reg.agentId, role: "pm" })],
+      }),
+    ]);
+  });
+
   it("register → send → pollInbox → ack (full path)", async () => {
     // Register two agents
     const reg1 = await client.register("sender-agent", "📤");

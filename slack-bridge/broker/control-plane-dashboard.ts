@@ -7,6 +7,7 @@ import type {
 import { buildAgentDisplayInfo, shortenPath } from "../helpers.js";
 import type { ResolvedTaskAssignment } from "../task-assignments.js";
 import type { BrokerMaintenanceResult } from "./maintenance.js";
+import type { PinetLaneInfo } from "./types.js";
 
 export type BrokerControlPlaneRecentCycle = {
   startedAt: string;
@@ -62,6 +63,8 @@ export interface BrokerControlPlaneDashboardSnapshot {
   };
   activeTasks: string[];
   recentOutcomes: string[];
+  activeLanes: string[];
+  detachedLanes: string[];
   roster: BrokerControlPlaneAgentRow[];
   recentCycles: Array<{
     startedAt: string;
@@ -86,6 +89,7 @@ export interface BuildBrokerControlPlaneDashboardSnapshotInput {
       "agentId" | "issueNumber" | "branch" | "status" | "prNumber" | "updatedAt" | "issueState"
     >
   >;
+  lanes?: PinetLaneInfo[];
   recentCycles: BrokerControlPlaneRecentCycle[];
   cycleStartedAt: string;
   cycleDurationMs: number;
@@ -152,6 +156,17 @@ function formatTaskStatusShort(
     default:
       return `#${assignment.issueNumber} assigned`;
   }
+}
+
+function formatLaneStatusShort(lane: PinetLaneInfo): string {
+  const refs = [
+    lane.issueNumber != null ? `#${lane.issueNumber}` : null,
+    lane.prNumber != null ? `PR #${lane.prNumber}` : null,
+    lane.pmMode ? "PM" : null,
+  ].filter((ref): ref is string => Boolean(ref));
+  const owner = lane.ownerAgentId ? ` owner ${lane.ownerAgentId}` : "";
+  const lead = lane.implementationLeadAgentId ? ` lead ${lane.implementationLeadAgentId}` : "";
+  return `${lane.laneId} [${lane.state}]${refs.length > 0 ? ` (${refs.join(" · ")})` : ""}${owner}${lead}${lane.summary ? ` — ${lane.summary}` : ""}`;
 }
 
 function summarizeAgentTasks(
@@ -248,6 +263,9 @@ export function buildBrokerControlPlaneDashboardSnapshot(
   const sortedAssignments = [...visibleAssignments].sort(
     (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
   );
+  const sortedLanes = [...(input.lanes ?? [])].sort(
+    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+  );
   const activeTasks = sortedAssignments
     .filter(
       (assignment) =>
@@ -294,6 +312,16 @@ export function buildBrokerControlPlaneDashboardSnapshot(
     },
     activeTasks,
     recentOutcomes,
+    activeLanes: sortedLanes
+      .filter(
+        (lane) => lane.state !== "done" && lane.state !== "cancelled" && lane.state !== "detached",
+      )
+      .map(formatLaneStatusShort)
+      .slice(0, 8),
+    detachedLanes: sortedLanes
+      .filter((lane) => lane.state === "detached")
+      .map(formatLaneStatusShort)
+      .slice(0, 8),
     roster,
     recentCycles: input.recentCycles.slice(0, 5).map((cycle) => ({
       startedAt: formatTimestamp(cycle.startedAt),

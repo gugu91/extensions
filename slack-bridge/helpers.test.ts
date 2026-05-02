@@ -1545,16 +1545,17 @@ describe("buildWorkerPromptGuidelines", () => {
   it("includes Pinet delegation guidance for connected workers", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
-    expect(joined).toContain("PINET DELEGATION RULES");
+    expect(joined).toContain("HELPER / DELEGATION RULES");
     expect(joined).toContain("pinet action=agents");
     expect(joined).toContain("pinet action=send");
   });
 
-  it("tells workers not to use the Agent tool for mesh delegation", () => {
+  it("tells workers to prefer local subagents before connected-worker delegation", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
-    expect(joined).toContain("do NOT use the Agent tool");
-    expect(joined).toContain("local subagent");
+    expect(joined).toContain("prefer configured local subagents/code-reviewer first");
+    expect(joined).toContain("Do NOT bounce review ownership");
+    expect(joined).toContain("no suitable local subagent is available");
   });
 
   it("requires delegated work to report status back through the thread", () => {
@@ -1571,6 +1572,8 @@ describe("buildWorkerPromptGuidelines", () => {
     expect(joined).toContain("same repo/worktree");
     expect(joined).toContain("maintainer priority/approval");
     expect(joined).toContain("maintainer approval");
+    expect(joined).toContain("PM mode");
+    expect(joined).toContain("pinet action=lanes");
     expect(joined).not.toContain("@gugu91");
   });
 

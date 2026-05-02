@@ -37,6 +37,8 @@ describe("renderBrokerControlPlaneHomeTabView", () => {
       },
       activeTasks: ["#217 PR #225 open"],
       recentOutcomes: ["#205 PR #205 merged"],
+      activeLanes: ["issue-688 [active] (#688 · PM) owner worker-pm"],
+      detachedLanes: ["issue-123 [detached] (#123) — manual"],
       roster: [
         {
           id: "broker-1",

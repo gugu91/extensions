@@ -19,6 +19,11 @@ import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
+import type {
+  PinetLaneListOptions,
+  PinetLaneParticipantUpsertInput,
+  PinetLaneUpsertInput,
+} from "./broker/types.js";
 import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { createCommandRegistrationRuntime } from "./command-registration-runtime.js";
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
@@ -855,6 +860,46 @@ export default function (pi: ExtensionAPI) {
     listFollowerAgents,
   } = pinetMeshOps;
 
+  async function listPinetLanes(options: PinetLaneListOptions) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.listPinetLanes(options);
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.listLanes(options);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function upsertPinetLane(input: PinetLaneUpsertInput) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.upsertPinetLane(input);
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.upsertLane(input);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function setPinetLaneParticipant(input: PinetLaneParticipantUpsertInput) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.setPinetLaneParticipant({
+        ...input,
+        agentId: input.agentId.trim().length > 0 ? input.agentId : (selfId ?? input.agentId),
+      });
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.setLaneParticipant(input);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
   async function readPinetInbox(options: {
     threadId?: string;
     limit?: number;
@@ -1097,6 +1142,9 @@ export default function (pi: ExtensionAPI) {
       readPinetInbox,
       listBrokerAgents,
       listFollowerAgents,
+      listPinetLanes,
+      upsertPinetLane,
+      setPinetLaneParticipant,
     },
     iMessageTools: {
       pinetEnabled: () => pinetEnabled,
