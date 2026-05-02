@@ -466,15 +466,15 @@ Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are per
 
 ### Pinet skins
 
-`/pinet-skin <theme>` updates mesh presentation only: generated names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
+`/pinet-skin <theme>` updates mesh presentation only: names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
 
 Built-in skins:
 
 - `default` / `classic` — preserves the current whimsical animal names, animal emoji palette, and playful-but-focused persona.
-- `foundation` / `foundation/space` / `space` — institutional sci-fi style with archive, relay, crisis, frontier, gate, and ratify vocabulary.
-- `oathgate` / `cosmere` / `cosmere-inspired` — multi-world fantasy-metal style with light oath, forge, gate, storm, and metal imagery while avoiding hard coupling to specific copyrighted names.
+- `foundation` / `foundation/space` / `space` — curated institutional sci-fi character pool with archive, relay, frontier, and crisis-room operators.
+- `oathgate` / `cosmere` / `cosmere-inspired` — curated fantasy-metal character pool with light oath, forge, gate, storm, and alloy imagery while avoiding hard coupling to specific copyrighted names.
 
-Free-form themes are still accepted; built-ins provide curated palettes and vocabulary to avoid split metaphors.
+Free-form themes are still accepted as deterministic legacy/custom presentation themes. For shipped non-default skins, use the bundled `pinet-skin-creator` skill to author and review curated character/name/persona/status-vocabulary pools before adding runtime descriptors.
 
 ### How it works
 

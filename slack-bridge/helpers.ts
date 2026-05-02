@@ -2771,30 +2771,95 @@ const MAX_PINET_SKIN_THEME_LABEL_LENGTH = 60;
 const MAX_PINET_SKIN_PERSONALITY_LENGTH = 260;
 const MAX_PINET_SKIN_PROMPT_GUIDELINE_LENGTH = 460;
 
+interface BuiltInPinetSkinCharacter {
+  id: string;
+  name: string;
+  emoji: string;
+  persona: string;
+  style: readonly string[];
+}
+
 interface BuiltInPinetSkinProfile {
   theme: typeof FOUNDATION_PINET_SKIN_THEME | typeof COSMERE_PINET_SKIN_THEME;
   aliases: readonly string[];
-  brokerTitles: readonly string[];
-  workerTitles: readonly string[];
-  modifiers: readonly string[];
-  nouns: readonly string[];
-  brokerEmojis: readonly string[];
-  workerEmojis: readonly string[];
+  displayName: string;
+  intent: string;
+  roles: Readonly<Record<PinetSkinRole, { characterPool: readonly string[] }>>;
+  characters: Readonly<Record<string, BuiltInPinetSkinCharacter>>;
   statusVocabulary: PinetSkinStatusVocabulary;
-  brokerPersonality: string;
-  workerPersonality: string;
 }
 
 const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
   {
     theme: FOUNDATION_PINET_SKIN_THEME,
     aliases: ["foundation", "foundation/space", "space", "archive", "institutional sci-fi"],
-    brokerTitles: ["Director", "Archivist", "Warden", "Marshal", "Gatekeeper", "Speaker"],
-    workerTitles: ["Analyst", "Envoy", "Relay", "Archivist", "Surveyor", "Ratifier"],
-    modifiers: ["Prime", "Vault", "Relay", "Frontier", "Crisis", "Archive", "Vector", "Civic"],
-    nouns: ["Foundation", "Archive", "Relay", "Frontier", "Gate", "Vault", "Crisis", "Concord"],
-    brokerEmojis: ["🏛️", "🛰️", "📜", "🗄️", "🌌", "🛡️"],
-    workerEmojis: ["📡", "🛰️", "📚", "🧭", "🔭", "🗂️", "⚖️"],
+    displayName: "Foundation",
+    intent:
+      "Institutional sci-fi coordination with calm archive, relay, frontier, and crisis-room operators.",
+    roles: {
+      broker: { characterPool: ["archive-director", "relay-warden", "crisis-speaker"] },
+      worker: {
+        characterPool: ["frontier-relay", "vault-analyst", "gate-surveyor", "civic-envoy"],
+      },
+    },
+    characters: {
+      "archive-director": {
+        id: "archive-director",
+        name: "Archive Director",
+        emoji: "🏛️",
+        persona:
+          "Calm archive coordinator; measured routing, crisp handoffs, and visible risk calls.",
+        style: ["measured", "civic", "clear"],
+      },
+      "relay-warden": {
+        id: "relay-warden",
+        name: "Relay Warden",
+        emoji: "🛰️",
+        persona:
+          "Steady signal keeper; watches mesh health and keeps worker lanes cleanly connected.",
+        style: ["steady", "signal-first", "concise"],
+      },
+      "crisis-speaker": {
+        id: "crisis-speaker",
+        name: "Crisis Speaker",
+        emoji: "📜",
+        persona:
+          "Civic coordinator; direct status language, early blocker escalation, and careful closure.",
+        style: ["direct", "accountable", "calm"],
+      },
+      "frontier-relay": {
+        id: "frontier-relay",
+        name: "Frontier Relay",
+        emoji: "📡",
+        persona:
+          "Field relay; practical implementation updates, compact blockers, and clean outcomes.",
+        style: ["practical", "frontier", "brief"],
+      },
+      "vault-analyst": {
+        id: "vault-analyst",
+        name: "Vault Analyst",
+        emoji: "🗄️",
+        persona:
+          "Archive-minded worker; checks evidence, preserves context, and reports precisely.",
+        style: ["precise", "archival", "grounded"],
+      },
+      "gate-surveyor": {
+        id: "gate-surveyor",
+        name: "Gate Surveyor",
+        emoji: "🧭",
+        persona:
+          "Careful scout; maps the change surface, tests paths, and flags uncertainty early.",
+        style: ["curious", "methodical", "clear"],
+      },
+      "civic-envoy": {
+        id: "civic-envoy",
+        name: "Civic Envoy",
+        emoji: "⚖️",
+        persona:
+          "Reliable envoy; collaborative tone, exact acceptance checks, and concise handoffs.",
+        style: ["collaborative", "balanced", "crisp"],
+      },
+    },
     statusVocabulary: {
       idle: "standing by",
       working: "on relay",
@@ -2803,10 +2868,6 @@ const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
       ghost: "off grid",
       resumable: "recoverable relay",
     },
-    brokerPersonality:
-      "Foundation/space broker skin. Coordinate like a calm archive director: measured, civic, and relay-clear. Use institutional sci-fi diction sparingly; keep hard guardrails and role lines untouched.",
-    workerPersonality:
-      "Foundation/space worker skin. Report like a field relay from the frontier: precise, archival, and steady under crisis. Keep execution plain, blockers visible, and sci-fi color light.",
   },
   {
     theme: COSMERE_PINET_SKIN_THEME,
@@ -2818,24 +2879,81 @@ const PINET_BUILT_IN_SKINS: readonly BuiltInPinetSkinProfile[] = [
       "fantasy-metal",
       "oaths and metals",
     ],
-    brokerTitles: ["Oathkeeper", "High Forger", "Gatewarden", "Bondwarden", "Storm Marshal"],
-    workerTitles: ["Forger", "Gatewalker", "Oathscribe", "Alloy Scout", "Storm Runner"],
-    modifiers: ["Iron", "Steel", "Tin", "Pewter", "Bronze", "Copper", "Zinc", "Brass"],
-    nouns: ["Oath", "Gate", "Forge", "Storm", "Mist", "Ash", "Light", "Bond"],
-    brokerEmojis: ["⚔️", "🛡️", "💎", "🌩️", "🔥", "🪐"],
-    workerEmojis: ["⚒️", "🗡️", "🪙", "🔮", "💠", "🌫️", "🔥"],
+    displayName: "Oathgate",
+    intent:
+      "Fantasy-metal operators with light oath, gate, forge, storm, and alloy imagery without copyrighted lore dependency.",
+    roles: {
+      broker: { characterPool: ["oathgate-warden", "storm-cartographer", "alloy-binder"] },
+      worker: {
+        characterPool: ["forge-scribe", "gate-runner", "bronze-scout", "storm-forger"],
+      },
+    },
+    characters: {
+      "oathgate-warden": {
+        id: "oathgate-warden",
+        name: "Oathgate Warden",
+        emoji: "🛡️",
+        persona:
+          "Steady oath-bound coordinator; precise routing, visible blockers, and grounded closure.",
+        style: ["measured", "protective", "clear"],
+      },
+      "storm-cartographer": {
+        id: "storm-cartographer",
+        name: "Storm Cartographer",
+        emoji: "🌩️",
+        persona:
+          "Map-minded broker; tracks lanes through turbulence and keeps commitments explicit.",
+        style: ["watchful", "map-led", "concise"],
+      },
+      "alloy-binder": {
+        id: "alloy-binder",
+        name: "Alloy Binder",
+        emoji: "💠",
+        persona:
+          "Balanced coordinator; binds handoffs cleanly and keeps tone polished but operational.",
+        style: ["balanced", "polished", "operational"],
+      },
+      "forge-scribe": {
+        id: "forge-scribe",
+        name: "Forge Scribe",
+        emoji: "⚒️",
+        persona:
+          "Careful implementer; records decisions, works steadily, and reports blockers plainly.",
+        style: ["careful", "forge-bright", "plain"],
+      },
+      "gate-runner": {
+        id: "gate-runner",
+        name: "Gate Runner",
+        emoji: "🗡️",
+        persona:
+          "Fast lane runner; moves decisively, keeps facts exact, and returns crisp outcomes.",
+        style: ["decisive", "lean", "exact"],
+      },
+      "bronze-scout": {
+        id: "bronze-scout",
+        name: "Bronze Scout",
+        emoji: "🪙",
+        persona:
+          "Curious scout; tests signals, verifies assumptions, and escalates weak spots early.",
+        style: ["curious", "signal-aware", "brief"],
+      },
+      "storm-forger": {
+        id: "storm-forger",
+        name: "Storm Forger",
+        emoji: "🔥",
+        persona:
+          "Resilient builder; works through turbulence with visible progress and safety-first fixes.",
+        style: ["resilient", "direct", "warm"],
+      },
+    },
     statusVocabulary: {
       idle: "holding oath",
       working: "at the forge",
-      healthy: "invested",
+      healthy: "signal bright",
       stale: "storm-dimmed",
       ghost: "beyond the gate",
       resumable: "oath recoverable",
     },
-    brokerPersonality:
-      "Cosmere-inspired broker skin. Sound like a steady oathkeeper between worlds: metal, forge, gate, and storm imagery used lightly. Coordinate cleanly; hard behavior and guardrails remain outside the skin.",
-    workerPersonality:
-      "Cosmere-inspired worker skin. Work like a careful forgehand between worlds: crisp reports, visible blockers, and light oath/metal imagery. Flavor the cadence, never the facts or safety boundaries.",
   },
 ];
 
@@ -3206,28 +3324,28 @@ function buildBuiltInPinetSkinAssignment(options: {
   role: PinetSkinRole;
   seed: string;
 }): PinetSkinAssignment {
-  const title =
-    options.role === "broker"
-      ? pickSkinValue(options.profile.brokerTitles, options.seed, "built-in-broker-title")
-      : pickSkinValue(options.profile.workerTitles, options.seed, "built-in-worker-title");
-  const modifier = pickSkinValue(options.profile.modifiers, options.seed, "built-in-modifier");
-  const noun = pickSkinValue(options.profile.nouns, options.seed, "built-in-noun");
-  const emoji =
-    options.role === "broker"
-      ? pickSkinValue(options.profile.brokerEmojis, options.seed, "built-in-broker-emoji")
-      : pickSkinValue(options.profile.workerEmojis, options.seed, "built-in-worker-emoji");
-  const name =
-    options.role === "broker" ? `The ${title} of ${noun}` : `${modifier} ${noun} ${title}`;
-  const personality =
-    options.role === "broker"
-      ? options.profile.brokerPersonality
-      : options.profile.workerPersonality;
+  const rolePool = options.profile.roles[options.role].characterPool;
+  const fallbackCharacterId = rolePool[0] ?? Object.keys(options.profile.characters)[0];
+  if (!fallbackCharacterId) {
+    throw new Error(`Built-in Pinet skin ${options.profile.theme} has no characters.`);
+  }
+  const characterId = pickSkinValue(
+    rolePool.length > 0 ? rolePool : [fallbackCharacterId],
+    options.seed,
+    `built-in-${options.profile.theme}-${options.role}-character`,
+  );
+  const character =
+    options.profile.characters[characterId] ?? options.profile.characters[fallbackCharacterId];
+  if (!character) {
+    throw new Error(`Built-in Pinet skin ${options.profile.theme} references ${characterId}.`);
+  }
+  const personality = `${character.persona} Presentation only: keep Pinet roles, states, guardrails, and routing authority unchanged.`;
 
   return {
     theme: options.profile.theme,
     role: options.role,
-    name,
-    emoji,
+    name: character.name,
+    emoji: character.emoji,
     personality: clampPinetSkinText(personality, MAX_PINET_SKIN_PERSONALITY_LENGTH),
     statusVocabulary: options.profile.statusVocabulary,
   };

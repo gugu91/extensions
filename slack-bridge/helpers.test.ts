@@ -1357,7 +1357,7 @@ describe("Pinet skin helpers", () => {
     expect(broker.statusVocabulary).toBeUndefined();
   });
 
-  it("builds the foundation skin from aliases with skin-owned names, emoji, voice, and status vocabulary", () => {
+  it("builds the foundation skin from curated role-specific characters and status vocabulary", () => {
     const broker = buildPinetSkinAssignment({
       theme: "foundation/space",
       role: "broker",
@@ -1371,14 +1371,16 @@ describe("Pinet skin helpers", () => {
 
     expect(broker.theme).toBe("foundation");
     expect(worker.theme).toBe("foundation");
-    expect(broker.name).toMatch(/^The .+ of .+$/);
+    expect(["Archive Director", "Relay Warden", "Crisis Speaker"]).toContain(broker.name);
+    expect(["Frontier Relay", "Vault Analyst", "Gate Surveyor", "Civic Envoy"]).toContain(
+      worker.name,
+    );
     expect(broker.name).not.toMatch(/Broker \w+$/);
-    expect(worker.name).toMatch(/(Foundation|Archive|Relay|Frontier|Gate|Vault|Crisis|Concord)/);
     expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
-    expect(["🏛️", "🛰️", "📜", "🗄️", "🌌", "🛡️"]).toContain(broker.emoji);
-    expect(["📡", "🛰️", "📚", "🧭", "🔭", "🗂️", "⚖️"]).toContain(worker.emoji);
-    expect(broker.personality).toContain("Foundation/space broker skin");
-    expect(worker.personality).toContain("Foundation/space worker skin");
+    expect(["🏛️", "🛰️", "📜"]).toContain(broker.emoji);
+    expect(["📡", "🗄️", "🧭", "⚖️"]).toContain(worker.emoji);
+    expect(broker.personality).toContain("Presentation only");
+    expect(worker.personality).toContain("Presentation only");
     expect(worker.statusVocabulary).toMatchObject({
       idle: "standing by",
       working: "on relay",
@@ -1386,7 +1388,7 @@ describe("Pinet skin helpers", () => {
     });
   });
 
-  it("builds the Oathgate/Cosmere-inspired skin with fantasy-metal contrast and no animal fallback", () => {
+  it("builds the Oathgate/Cosmere-inspired skin from curated fantasy-metal characters", () => {
     const broker = buildPinetSkinAssignment({
       theme: "oathgate",
       role: "broker",
@@ -1400,18 +1402,18 @@ describe("Pinet skin helpers", () => {
 
     expect(broker.theme).toBe("cosmere");
     expect(worker.theme).toBe("cosmere");
-    expect(broker.name).toMatch(/^The .+ of .+$/);
+    expect(["Oathgate Warden", "Storm Cartographer", "Alloy Binder"]).toContain(broker.name);
+    expect(["Forge Scribe", "Gate Runner", "Bronze Scout", "Storm Forger"]).toContain(worker.name);
     expect(broker.name).not.toMatch(/Broker \w+$/);
-    expect(worker.name).toMatch(/(Iron|Steel|Tin|Pewter|Bronze|Copper|Zinc|Brass)/);
-    expect(worker.name).toMatch(/(Oath|Gate|Forge|Storm|Mist|Ash|Light|Bond)/);
-    expect(["⚔️", "🛡️", "💎", "🌩️", "🔥", "🪐"]).toContain(broker.emoji);
-    expect(["⚒️", "🗡️", "🪙", "🔮", "💠", "🌫️", "🔥"]).toContain(worker.emoji);
-    expect(broker.personality).toContain("Cosmere-inspired broker skin");
-    expect(worker.personality).toContain("Cosmere-inspired worker skin");
+    expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
+    expect(["🛡️", "🌩️", "💠"]).toContain(broker.emoji);
+    expect(["⚒️", "🗡️", "🪙", "🔥"]).toContain(worker.emoji);
+    expect(broker.personality).toContain("Presentation only");
+    expect(worker.personality).toContain("Presentation only");
     expect(worker.statusVocabulary).toMatchObject({
       idle: "holding oath",
       working: "at the forge",
-      healthy: "invested",
+      healthy: "signal bright",
     });
   });
 
