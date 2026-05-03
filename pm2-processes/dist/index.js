@@ -55,21 +55,38 @@ function formatWarnings(warnings) {
         ? `\n\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`
         : "";
 }
-async function prepare(cwd) {
+async function prepare(cwd, options) {
     const settings = loadSettings({ cwd, agentDir: getAgentDir() });
-    if (!settings.configPath) {
-        return { settings, apps: [], runner: new CliPm2Runner(settings.pm2Bin) };
+    const runner = new CliPm2Runner(settings.pm2Bin);
+    if (!settings.configPath)
+        return { settings, apps: [], runner };
+    try {
+        const apps = await loadDeclaredApps(settings.configPath, settings.metadataPath);
+        return { settings, apps, runner };
     }
-    const apps = await loadDeclaredApps(settings.configPath, settings.metadataPath);
-    return { settings, apps, runner: new CliPm2Runner(settings.pm2Bin) };
+    catch (error) {
+        if (!options.tolerateAppDiscoveryErrors)
+            throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+            settings: {
+                ...settings,
+                diagnostics: [...settings.diagnostics, `PM2 app discovery skipped: ${message}`],
+            },
+            apps: [],
+            runner,
+        };
+    }
 }
 async function runPm2(input, ctx, signal) {
-    const { settings, apps, runner } = await prepare(ctx.cwd);
+    const { settings, apps, runner } = await prepare(ctx.cwd, {
+        tolerateAppDiscoveryErrors: input.action === "config",
+    });
     const result = await executePm2Action(input, apps, settings, runner, signal);
     return `${result.text}${formatWarnings(result.warnings)}`;
 }
 async function showPm2Menu(ctx) {
-    const { settings } = await prepare(ctx.cwd);
+    const settings = loadSettings({ cwd: ctx.cwd, agentDir: getAgentDir() });
     return settings.configPath ? { action: "status", target: "all" } : { action: "config" };
 }
 export default function pm2ProcessesExtension(pi) {

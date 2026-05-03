@@ -1,8 +1,17 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { buildPlainTable, formatBytes, formatUptime, normalizeLines, normalizeTarget, summarizeCommandOutput, truncateTail, } from "./helpers.js";
+import { buildPlainTable, formatBytes, formatUptime, normalizeLines, normalizeTarget, redactSensitiveText, summarizeCommandOutput, truncateTail, } from "./helpers.js";
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function appendBoundedTail(current, chunk, maxBytes) {
+    const combined = Buffer.concat([Buffer.from(current, "utf8"), Buffer.from(chunk, "utf8")]);
+    if (combined.byteLength <= maxBytes)
+        return { text: current + chunk, truncated: false };
+    return {
+        text: combined.subarray(combined.byteLength - maxBytes).toString("utf8"),
+        truncated: true,
+    };
 }
 export class CliPm2Runner {
     pm2Bin;
@@ -14,8 +23,11 @@ export class CliPm2Runner {
             const child = spawn(this.pm2Bin, args, { stdio: ["ignore", "pipe", "pipe"] });
             let stdout = "";
             let stderr = "";
+            let stdoutTruncated = false;
+            let stderrTruncated = false;
             let settled = false;
             let timedOut = false;
+            const maxBytes = options.maxBytes ?? 50_000;
             const timeout = options.timeoutMs
                 ? setTimeout(() => {
                     timedOut = true;
@@ -31,10 +43,14 @@ export class CliPm2Runner {
             child.stdout?.setEncoding("utf8");
             child.stderr?.setEncoding("utf8");
             child.stdout?.on("data", (chunk) => {
-                stdout += chunk;
+                const next = appendBoundedTail(stdout, chunk, maxBytes);
+                stdout = next.text;
+                stdoutTruncated = stdoutTruncated || next.truncated;
             });
             child.stderr?.on("data", (chunk) => {
-                stderr += chunk;
+                const next = appendBoundedTail(stderr, chunk, maxBytes);
+                stderr = next.text;
+                stderrTruncated = stderrTruncated || next.truncated;
             });
             child.once("error", (error) => {
                 if (settled)
@@ -52,7 +68,7 @@ export class CliPm2Runner {
                 if (timeout)
                     clearTimeout(timeout);
                 options.signal?.removeEventListener("abort", abort);
-                resolve({ stdout, stderr, code, timedOut });
+                resolve({ stdout, stderr, code, timedOut, stdoutTruncated, stderrTruncated });
             });
         });
     }
@@ -84,7 +100,11 @@ function parsePm2List(stdout) {
     });
 }
 async function getDeclaredStatuses(apps, runner, settings, signal) {
-    const result = await runner.run(["jlist"], { signal, timeoutMs: settings.commandTimeoutMs });
+    const result = await runner.run(["jlist"], {
+        signal,
+        timeoutMs: settings.commandTimeoutMs,
+        maxBytes: settings.maxBytes,
+    });
     if (result.timedOut)
         throw new Error(`pm2 jlist timed out after ${settings.commandTimeoutMs}ms`);
     if (result.code !== 0) {
@@ -126,7 +146,11 @@ async function runMutation(action, names, settings, runner, signal) {
         throw new Error("No PM2 config file is active");
     for (const name of names) {
         const args = action === "stop" ? ["stop", name] : [action, settings.configPath, "--only", name];
-        const result = await runner.run(args, { signal, timeoutMs: settings.commandTimeoutMs });
+        const result = await runner.run(args, {
+            signal,
+            timeoutMs: settings.commandTimeoutMs,
+            maxBytes: settings.maxBytes,
+        });
         if (result.timedOut)
             throw new Error(`pm2 ${action} ${name} timed out after ${settings.commandTimeoutMs}ms`);
         if (result.code !== 0) {
@@ -228,14 +252,16 @@ export async function executePm2Action(input, apps, settings, runner, signal) {
         const result = await runner.run(["logs", target.names[0] ?? "", "--lines", String(lines), "--nostream", "--raw"], {
             signal,
             timeoutMs: settings.commandTimeoutMs,
+            maxBytes: settings.maxBytes,
         });
         if (result.timedOut)
             throw new Error(`pm2 logs ${target.targetLabel} timed out after ${settings.commandTimeoutMs}ms`);
         if (result.code !== 0) {
             throw new Error(`pm2 logs ${target.targetLabel} failed: ${summarizeCommandOutput(result.stdout, result.stderr, settings.maxBytes)}`);
         }
-        const truncated = truncateTail([result.stdout, result.stderr].filter(Boolean).join("\n"), settings.maxBytes, lines);
-        const suffix = truncated.truncated
+        const truncated = truncateTail(redactSensitiveText([result.stdout, result.stderr].filter(Boolean).join("\n")), settings.maxBytes, lines);
+        const wasCapturedTruncated = result.stdoutTruncated === true || result.stderrTruncated === true;
+        const suffix = truncated.truncated || wasCapturedTruncated
             ? `\n\n[logs truncated to ${lines} lines / ${settings.maxBytes} bytes]`
             : "";
         return {
@@ -244,7 +270,7 @@ export async function executePm2Action(input, apps, settings, runner, signal) {
                 action: input.action,
                 target: target.targetLabel,
                 lines,
-                truncated: truncated.truncated,
+                truncated: truncated.truncated || wasCapturedTruncated,
             },
             warnings: [],
         };

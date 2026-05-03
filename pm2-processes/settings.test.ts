@@ -69,4 +69,17 @@ describe("loadSettings", () => {
     expect(settings.maxLines).toBe(42);
     expect(settings.settingsSources).toHaveLength(2);
   });
+
+  it("surfaces malformed settings files in diagnostics", () => {
+    const cwd = makeTmp();
+    const agentDir = makeTmp();
+    mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+    writeFileSync(path.join(cwd, ".pi", "settings.json"), "{ not json");
+
+    const settings = loadSettings({ cwd, agentDir, env: {} });
+
+    expect(settings.diagnostics.some((diagnostic) => diagnostic.includes("Failed to parse"))).toBe(
+      true,
+    );
+  });
 });

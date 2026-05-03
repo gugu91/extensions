@@ -8,6 +8,7 @@ import {
   formatUptime,
   normalizeLines,
   normalizeTarget,
+  redactSensitiveText,
   summarizeCommandOutput,
   truncateTail,
   type Pm2Action,
@@ -19,12 +20,14 @@ export interface CommandResult {
   stderr: string;
   code: number | null;
   timedOut: boolean;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
 }
 
 export interface Pm2Runner {
   run(
     args: string[],
-    options?: { signal?: AbortSignal; timeoutMs?: number },
+    options?: { signal?: AbortSignal; timeoutMs?: number; maxBytes?: number },
   ): Promise<CommandResult>;
 }
 
@@ -56,19 +59,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function appendBoundedTail(
+  current: string,
+  chunk: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
+  const combined = Buffer.concat([Buffer.from(current, "utf8"), Buffer.from(chunk, "utf8")]);
+  if (combined.byteLength <= maxBytes) return { text: current + chunk, truncated: false };
+  return {
+    text: combined.subarray(combined.byteLength - maxBytes).toString("utf8"),
+    truncated: true,
+  };
+}
+
 export class CliPm2Runner implements Pm2Runner {
   constructor(private readonly pm2Bin: string) {}
 
   run(
     args: string[],
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+    options: { signal?: AbortSignal; timeoutMs?: number; maxBytes?: number } = {},
   ): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.pm2Bin, args, { stdio: ["ignore", "pipe", "pipe"] });
       let stdout = "";
       let stderr = "";
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
       let settled = false;
       let timedOut = false;
+      const maxBytes = options.maxBytes ?? 50_000;
       const timeout = options.timeoutMs
         ? setTimeout(() => {
             timedOut = true;
@@ -86,10 +105,14 @@ export class CliPm2Runner implements Pm2Runner {
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
-        stdout += chunk;
+        const next = appendBoundedTail(stdout, chunk, maxBytes);
+        stdout = next.text;
+        stdoutTruncated = stdoutTruncated || next.truncated;
       });
       child.stderr?.on("data", (chunk: string) => {
-        stderr += chunk;
+        const next = appendBoundedTail(stderr, chunk, maxBytes);
+        stderr = next.text;
+        stderrTruncated = stderrTruncated || next.truncated;
       });
       child.once("error", (error) => {
         if (settled) return;
@@ -103,7 +126,7 @@ export class CliPm2Runner implements Pm2Runner {
         settled = true;
         if (timeout) clearTimeout(timeout);
         options.signal?.removeEventListener("abort", abort);
-        resolve({ stdout, stderr, code, timedOut });
+        resolve({ stdout, stderr, code, timedOut, stdoutTruncated, stderrTruncated });
       });
     });
   }
@@ -139,7 +162,11 @@ async function getDeclaredStatuses(
   settings: ResolvedSettings,
   signal?: AbortSignal,
 ): Promise<Pm2ProcessStatus[]> {
-  const result = await runner.run(["jlist"], { signal, timeoutMs: settings.commandTimeoutMs });
+  const result = await runner.run(["jlist"], {
+    signal,
+    timeoutMs: settings.commandTimeoutMs,
+    maxBytes: settings.maxBytes,
+  });
   if (result.timedOut) throw new Error(`pm2 jlist timed out after ${settings.commandTimeoutMs}ms`);
   if (result.code !== 0) {
     throw new Error(
@@ -191,7 +218,11 @@ async function runMutation(
   if (!settings.configPath) throw new Error("No PM2 config file is active");
   for (const name of names) {
     const args = action === "stop" ? ["stop", name] : [action, settings.configPath, "--only", name];
-    const result = await runner.run(args, { signal, timeoutMs: settings.commandTimeoutMs });
+    const result = await runner.run(args, {
+      signal,
+      timeoutMs: settings.commandTimeoutMs,
+      maxBytes: settings.maxBytes,
+    });
     if (result.timedOut)
       throw new Error(`pm2 ${action} ${name} timed out after ${settings.commandTimeoutMs}ms`);
     if (result.code !== 0) {
@@ -317,6 +348,7 @@ export async function executePm2Action(
       {
         signal,
         timeoutMs: settings.commandTimeoutMs,
+        maxBytes: settings.maxBytes,
       },
     );
     if (result.timedOut)
@@ -329,20 +361,22 @@ export async function executePm2Action(
       );
     }
     const truncated = truncateTail(
-      [result.stdout, result.stderr].filter(Boolean).join("\n"),
+      redactSensitiveText([result.stdout, result.stderr].filter(Boolean).join("\n")),
       settings.maxBytes,
       lines,
     );
-    const suffix = truncated.truncated
-      ? `\n\n[logs truncated to ${lines} lines / ${settings.maxBytes} bytes]`
-      : "";
+    const wasCapturedTruncated = result.stdoutTruncated === true || result.stderrTruncated === true;
+    const suffix =
+      truncated.truncated || wasCapturedTruncated
+        ? `\n\n[logs truncated to ${lines} lines / ${settings.maxBytes} bytes]`
+        : "";
     return {
       text: `Logs for ${target.targetLabel}:\n${truncated.text || "(no log output)"}${suffix}`,
       details: {
         action: input.action,
         target: target.targetLabel,
         lines,
-        truncated: truncated.truncated,
+        truncated: truncated.truncated || wasCapturedTruncated,
       },
       warnings: [],
     };

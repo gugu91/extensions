@@ -49,33 +49,36 @@ export interface LoadSettingsOptions {
 interface RawSettingsSource {
   pathLabel: string;
   raw: FileConfig;
+  diagnostics: string[];
 }
 
-function readJsonFile(filePath: string): unknown | null {
+function readJsonFile(filePath: string): { value?: unknown; diagnostic?: string } {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    return { value: JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { __pm2ProcessesParseError: `Failed to parse ${filePath}: ${message}` };
+    return { diagnostic: `Failed to parse ${filePath}: ${message}` };
   }
 }
 
 function readSettingsConfig(settingsPath: string): RawSettingsSource | null {
   if (!fs.existsSync(settingsPath)) return null;
   const parsed = readJsonFile(settingsPath);
-  if (!parsed || typeof parsed !== "object") return null;
-  if ("__pm2ProcessesParseError" in parsed) {
+  if (parsed.diagnostic) {
     return {
       pathLabel: settingsPath,
       raw: {},
+      diagnostics: [parsed.diagnostic],
     };
   }
+  if (!parsed.value || typeof parsed.value !== "object") return null;
 
-  const raw = (parsed as Record<string, unknown>)[SETTINGS_KEY];
+  const raw = (parsed.value as Record<string, unknown>)[SETTINGS_KEY];
   if (!raw || typeof raw !== "object") return null;
   return {
     pathLabel: `${settingsPath}#${SETTINGS_KEY}`,
     raw: raw as FileConfig,
+    diagnostics: [],
   };
 }
 
@@ -140,7 +143,7 @@ export function loadSettings(options: LoadSettingsOptions = {}): ResolvedSetting
   const env = options.env ?? process.env;
   const sources = collectSettings(cwd, agentDir);
   const merged = mergeSettings(sources);
-  const diagnostics: string[] = [];
+  const diagnostics = sources.flatMap((source) => source.diagnostics);
 
   const explicitEnvConfig = cleanString(env.PI_PM2_CONFIG);
   const settingsConfig = cleanString(merged.configPath);

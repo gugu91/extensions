@@ -10,31 +10,33 @@ const DEFAULT_CONFIG_CANDIDATES = [
 ];
 function readJsonFile(filePath) {
     try {
-        return JSON.parse(fs.readFileSync(filePath, "utf8"));
+        return { value: JSON.parse(fs.readFileSync(filePath, "utf8")) };
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { __pm2ProcessesParseError: `Failed to parse ${filePath}: ${message}` };
+        return { diagnostic: `Failed to parse ${filePath}: ${message}` };
     }
 }
 function readSettingsConfig(settingsPath) {
     if (!fs.existsSync(settingsPath))
         return null;
     const parsed = readJsonFile(settingsPath);
-    if (!parsed || typeof parsed !== "object")
-        return null;
-    if ("__pm2ProcessesParseError" in parsed) {
+    if (parsed.diagnostic) {
         return {
             pathLabel: settingsPath,
             raw: {},
+            diagnostics: [parsed.diagnostic],
         };
     }
-    const raw = parsed[SETTINGS_KEY];
+    if (!parsed.value || typeof parsed.value !== "object")
+        return null;
+    const raw = parsed.value[SETTINGS_KEY];
     if (!raw || typeof raw !== "object")
         return null;
     return {
         pathLabel: `${settingsPath}#${SETTINGS_KEY}`,
         raw: raw,
+        diagnostics: [],
     };
 }
 function resolvePath(cwd, input) {
@@ -76,7 +78,7 @@ export function loadSettings(options = {}) {
     const env = options.env ?? process.env;
     const sources = collectSettings(cwd, agentDir);
     const merged = mergeSettings(sources);
-    const diagnostics = [];
+    const diagnostics = sources.flatMap((source) => source.diagnostics);
     const explicitEnvConfig = cleanString(env.PI_PM2_CONFIG);
     const settingsConfig = cleanString(merged.configPath);
     const candidates = [];

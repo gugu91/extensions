@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DeclaredPm2App } from "./ecosystem.js";
-import { executePm2Action, type CommandResult, type Pm2Runner } from "./pm2.js";
+import { CliPm2Runner, executePm2Action, type CommandResult, type Pm2Runner } from "./pm2.js";
 import type { ResolvedSettings } from "./settings.js";
 
 class FakeRunner implements Pm2Runner {
@@ -26,7 +26,12 @@ class FakeRunner implements Pm2Runner {
       };
     }
     if (args[0] === "logs") {
-      return { stdout: "line1\nline2\nline3", stderr: "", code: 0, timedOut: false };
+      return {
+        stdout: "line1\nTOKEN=abc123\nline3",
+        stderr: "",
+        code: 0,
+        timedOut: false,
+      };
     }
     return { stdout: "ok", stderr: "", code: 0, timedOut: false };
   }
@@ -87,6 +92,30 @@ describe("executePm2Action", () => {
     await expect(
       executePm2Action({ action: "logs", target: "all" }, apps, settings, runner),
     ).rejects.toThrow("Target 'all' is not supported");
+  });
+
+  it("redacts PM2 log output before returning it", async () => {
+    const runner = new FakeRunner();
+    const result = await executePm2Action(
+      { action: "logs", target: "api" },
+      apps,
+      settings,
+      runner,
+    );
+
+    expect(result.text).toContain("TOKEN=[REDACTED]");
+    expect(result.text).not.toContain("abc123");
+  });
+
+  it("bounds CLI output capture while preserving the tail", async () => {
+    const runner = new CliPm2Runner(process.execPath);
+    const result = await runner.run(["-e", "process.stdout.write('a'.repeat(2000) + 'TAIL')"], {
+      maxBytes: 16,
+      timeoutMs: 1_000,
+    });
+
+    expect(result.stdout).toBe("aaaaaaaaaaaaTAIL");
+    expect(result.stdoutTruncated).toBe(true);
   });
 
   it("shows config diagnostics before a PM2 config has been created", async () => {

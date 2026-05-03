@@ -1,8 +1,6 @@
 import * as fs from "node:fs";
-import { createRequire } from "node:module";
 import { extname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -11,27 +9,10 @@ function unwrapDefault(value) {
         return value.default;
     return value;
 }
-async function importEcosystem(configPath) {
-    const absolutePath = resolve(configPath);
-    const extension = extname(absolutePath).toLowerCase();
-    if (extension === ".json") {
-        return JSON.parse(await readFile(absolutePath, "utf8"));
-    }
-    const require = createRequire(import.meta.url);
-    try {
-        const resolved = require.resolve(absolutePath);
-        delete require.cache[resolved];
-        return require(resolved);
-    }
-    catch (error) {
-        const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
-        if (code !== "ERR_REQUIRE_ESM")
-            throw error;
-        const stats = await stat(absolutePath);
-        return import(`${pathToFileURL(absolutePath).href}?mtime=${stats.mtimeMs}`);
-    }
+async function readJsonEcosystem(configPath) {
+    return JSON.parse(await readFile(configPath, "utf8"));
 }
-function extractAppArray(raw) {
+function extractJsonAppArray(raw) {
     const value = unwrapDefault(raw);
     if (Array.isArray(value))
         return value;
@@ -40,7 +21,7 @@ function extractAppArray(raw) {
         if (Array.isArray(ecosystem.apps))
             return ecosystem.apps;
     }
-    throw new Error("PM2 ecosystem config must export an apps array or { apps: [...] }");
+    throw new Error("PM2 ecosystem config must declare an apps array or { apps: [...] }");
 }
 function validateAppName(name, index) {
     if (typeof name !== "string" || name.trim().length === 0) {
@@ -51,6 +32,275 @@ function validateAppName(name, index) {
         throw new Error(`PM2 app name '${trimmed}' is not allowed; use exact non-wildcard names`);
     }
     return trimmed;
+}
+function isIdentifierStart(char) {
+    return char !== undefined && /[A-Za-z_$]/.test(char);
+}
+function isIdentifierPart(char) {
+    return char !== undefined && /[A-Za-z0-9_$-]/.test(char);
+}
+function isBoundary(source, index) {
+    return !isIdentifierPart(source[index]);
+}
+function skipWhitespace(source, index) {
+    let cursor = index;
+    while (cursor < source.length && /\s/.test(source[cursor] ?? ""))
+        cursor += 1;
+    return cursor;
+}
+function skipLineComment(source, index) {
+    const newline = source.indexOf("\n", index + 2);
+    return newline === -1 ? source.length : newline + 1;
+}
+function skipBlockComment(source, index) {
+    const end = source.indexOf("*/", index + 2);
+    return end === -1 ? source.length : end + 2;
+}
+function readQuotedString(source, start) {
+    const quote = source[start];
+    let cursor = start + 1;
+    let value = "";
+    while (cursor < source.length) {
+        const char = source[cursor];
+        if (char === quote)
+            return { value, end: cursor + 1 };
+        if (char === "\\") {
+            const next = source[cursor + 1];
+            if (next === undefined)
+                break;
+            if (next === "n")
+                value += "\n";
+            else if (next === "r")
+                value += "\r";
+            else if (next === "t")
+                value += "\t";
+            else if (next === "b")
+                value += "\b";
+            else if (next === "f")
+                value += "\f";
+            else if (next === "v")
+                value += "\v";
+            else if (next === "0")
+                value += "\0";
+            else if (next === "x" && /^[0-9a-fA-F]{2}$/.test(source.slice(cursor + 2, cursor + 4))) {
+                value += String.fromCharCode(Number.parseInt(source.slice(cursor + 2, cursor + 4), 16));
+                cursor += 2;
+            }
+            else if (next === "u" && /^[0-9a-fA-F]{4}$/.test(source.slice(cursor + 2, cursor + 6))) {
+                value += String.fromCharCode(Number.parseInt(source.slice(cursor + 2, cursor + 6), 16));
+                cursor += 4;
+            }
+            else {
+                value += next;
+            }
+            cursor += 2;
+            continue;
+        }
+        if (quote === "`" && char === "$" && source[cursor + 1] === "{") {
+            throw new Error("dynamic template expressions are not supported for PM2 app names");
+        }
+        value += char;
+        cursor += 1;
+    }
+    throw new Error("unterminated string literal while reading PM2 ecosystem config");
+}
+function skipQuotedString(source, start) {
+    const quote = source[start];
+    let cursor = start + 1;
+    while (cursor < source.length) {
+        const char = source[cursor];
+        if (char === "\\") {
+            cursor += 2;
+            continue;
+        }
+        if (char === quote)
+            return cursor + 1;
+        cursor += 1;
+    }
+    throw new Error("unterminated string literal while reading PM2 ecosystem config");
+}
+function findAppsArraySource(source) {
+    let cursor = 0;
+    while (cursor < source.length) {
+        const char = source[cursor];
+        const next = source[cursor + 1];
+        if (char === "/" && next === "/") {
+            cursor = skipLineComment(source, cursor);
+            continue;
+        }
+        if (char === "/" && next === "*") {
+            cursor = skipBlockComment(source, cursor);
+            continue;
+        }
+        if (char === "'" || char === '"' || char === "`") {
+            cursor = skipQuotedString(source, cursor);
+            continue;
+        }
+        if (source.startsWith("apps", cursor) &&
+            isBoundary(source, cursor - 1) &&
+            isBoundary(source, cursor + "apps".length)) {
+            let afterName = skipWhitespace(source, cursor + "apps".length);
+            if (source[afterName] === ":" || source[afterName] === "=") {
+                afterName = skipWhitespace(source, afterName + 1);
+                if (source[afterName] === "[")
+                    return scanArraySource(source, afterName);
+            }
+        }
+        cursor += 1;
+    }
+    throw new Error("PM2 ecosystem config apps array could not be discovered without executing JavaScript; use a static apps: [...] declaration or JSON config");
+}
+function scanArraySource(source, start) {
+    let cursor = start;
+    let depth = 0;
+    while (cursor < source.length) {
+        const char = source[cursor];
+        const next = source[cursor + 1];
+        if (char === "/" && next === "/") {
+            cursor = skipLineComment(source, cursor);
+            continue;
+        }
+        if (char === "/" && next === "*") {
+            cursor = skipBlockComment(source, cursor);
+            continue;
+        }
+        if (char === "'" || char === '"' || char === "`") {
+            cursor = skipQuotedString(source, cursor);
+            continue;
+        }
+        if (char === "[")
+            depth += 1;
+        if (char === "]") {
+            depth -= 1;
+            if (depth === 0)
+                return source.slice(start + 1, cursor);
+        }
+        cursor += 1;
+    }
+    throw new Error("unterminated apps array in PM2 ecosystem config");
+}
+function splitTopLevelObjectSources(arraySource) {
+    const objects = [];
+    let cursor = 0;
+    let objectStart;
+    let depth = 0;
+    while (cursor < arraySource.length) {
+        const char = arraySource[cursor];
+        const next = arraySource[cursor + 1];
+        if (char === "/" && next === "/") {
+            cursor = skipLineComment(arraySource, cursor);
+            continue;
+        }
+        if (char === "/" && next === "*") {
+            cursor = skipBlockComment(arraySource, cursor);
+            continue;
+        }
+        if (char === "'" || char === '"' || char === "`") {
+            cursor = skipQuotedString(arraySource, cursor);
+            continue;
+        }
+        if (char === "{") {
+            if (depth === 0)
+                objectStart = cursor;
+            depth += 1;
+        }
+        else if (char === "}") {
+            depth -= 1;
+            if (depth === 0 && objectStart !== undefined) {
+                objects.push(arraySource.slice(objectStart, cursor + 1));
+                objectStart = undefined;
+            }
+            if (depth < 0)
+                throw new Error("unbalanced object literal in PM2 apps array");
+        }
+        cursor += 1;
+    }
+    if (depth !== 0)
+        throw new Error("unterminated object literal in PM2 apps array");
+    if (objects.length === 0)
+        throw new Error("PM2 apps array must contain object literals");
+    return objects;
+}
+function readIdentifier(source, start) {
+    if (!isIdentifierStart(source[start]))
+        return null;
+    let cursor = start + 1;
+    while (isIdentifierPart(source[cursor]))
+        cursor += 1;
+    return { value: source.slice(start, cursor), end: cursor };
+}
+function skipValue(source, start) {
+    let cursor = start;
+    let depth = 0;
+    while (cursor < source.length) {
+        const char = source[cursor];
+        const next = source[cursor + 1];
+        if (char === "/" && next === "/") {
+            cursor = skipLineComment(source, cursor);
+            continue;
+        }
+        if (char === "/" && next === "*") {
+            cursor = skipBlockComment(source, cursor);
+            continue;
+        }
+        if (char === "'" || char === '"' || char === "`") {
+            cursor = skipQuotedString(source, cursor);
+            continue;
+        }
+        if (char === "{" || char === "[" || char === "(")
+            depth += 1;
+        else if (char === "}" || char === "]" || char === ")") {
+            if (depth === 0)
+                return cursor;
+            depth -= 1;
+        }
+        else if (char === "," && depth === 0)
+            return cursor + 1;
+        cursor += 1;
+    }
+    return cursor;
+}
+function extractTopLevelName(objectSource, index) {
+    let cursor = 1;
+    const end = objectSource.length - 1;
+    while (cursor < end) {
+        cursor = skipWhitespace(objectSource, cursor);
+        if (objectSource[cursor] === ",") {
+            cursor += 1;
+            continue;
+        }
+        let key = null;
+        const char = objectSource[cursor];
+        if (char === "'" || char === '"' || char === "`") {
+            key = readQuotedString(objectSource, cursor);
+        }
+        else {
+            key = readIdentifier(objectSource, cursor);
+        }
+        if (!key) {
+            cursor += 1;
+            continue;
+        }
+        const colon = skipWhitespace(objectSource, key.end);
+        if (objectSource[colon] !== ":") {
+            cursor = skipValue(objectSource, key.end);
+            continue;
+        }
+        const valueStart = skipWhitespace(objectSource, colon + 1);
+        if (key.value === "name") {
+            const quote = objectSource[valueStart];
+            if (quote !== "'" && quote !== '"' && quote !== "`") {
+                throw new Error(`PM2 app at index ${index} must declare a static string name`);
+            }
+            return validateAppName(readQuotedString(objectSource, valueStart).value, index);
+        }
+        cursor = skipValue(objectSource, valueStart);
+    }
+    throw new Error(`PM2 app at index ${index} must declare a non-empty string name`);
+}
+function extractStaticJsAppNames(source) {
+    const arraySource = findAppsArraySource(source);
+    return splitTopLevelObjectSources(arraySource).map((objectSource, index) => extractTopLevelName(objectSource, index));
 }
 function parseMetadata(metadataPath) {
     if (!metadataPath)
@@ -81,17 +331,28 @@ function parseMetadata(metadataPath) {
         return {};
     }
 }
+async function loadAppNames(configPath) {
+    const absolutePath = resolve(configPath);
+    const extension = extname(absolutePath).toLowerCase();
+    if (extension === ".json") {
+        return extractJsonAppArray(await readJsonEcosystem(absolutePath)).map((rawApp, index) => {
+            if (!isRecord(rawApp)) {
+                throw new Error(`PM2 app at index ${index} must be an object`);
+            }
+            return validateAppName(rawApp.name, index);
+        });
+    }
+    if (![".js", ".cjs", ".mjs"].includes(extension)) {
+        throw new Error(`Unsupported PM2 ecosystem config extension '${extension || "none"}'`);
+    }
+    return extractStaticJsAppNames(await readFile(absolutePath, "utf8"));
+}
 export async function loadDeclaredApps(configPath, metadataPath) {
-    const raw = await importEcosystem(configPath);
-    const appArray = extractAppArray(raw);
+    const appNames = await loadAppNames(configPath);
     const metadata = parseMetadata(metadataPath);
     const seen = new Set();
     const apps = [];
-    appArray.forEach((rawApp, index) => {
-        if (!isRecord(rawApp)) {
-            throw new Error(`PM2 app at index ${index} must be an object`);
-        }
-        const name = validateAppName(rawApp.name, index);
+    appNames.forEach((name) => {
         if (seen.has(name))
             throw new Error(`Duplicate PM2 app name in ecosystem config: ${name}`);
         seen.add(name);

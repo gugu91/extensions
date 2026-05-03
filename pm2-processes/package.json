@@ -38,7 +38,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "devDependencies": {
+  "dependencies": {
     "@sinclair/typebox": "^0.34.49"
   }
 }

@@ -20,6 +20,14 @@ export function normalizeLines(lines, defaultLines, maxLines) {
         return defaultLines;
     return Math.min(maxLines, Math.max(1, Math.floor(lines)));
 }
+export function redactSensitiveText(text) {
+    return text
+        .replace(/(\bAuthorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]")
+        .replace(/(\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth|client[_-]?secret)\b\s*[:=]\s*)([^\s"'`]+)/gi, "$1[REDACTED]")
+        .replace(/(\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH)[A-Z0-9_]*\s*=\s*)([^\s"'`]+)/g, "$1[REDACTED]")
+        .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]")
+        .replace(/([?&](?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth|client[_-]?secret)=)([^&\s]+)/gi, "$1[REDACTED]");
+}
 export function truncateTail(text, maxBytes, maxLines) {
     const normalized = text.replace(/\r\n/g, "\n");
     const lines = normalized.split("\n");
@@ -74,5 +82,5 @@ export function summarizeCommandOutput(stdout, stderr, maxBytes) {
     const combined = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
     if (!combined)
         return "(no output)";
-    return truncateTail(combined, maxBytes, 200).text;
+    return truncateTail(redactSensitiveText(combined), maxBytes, 200).text;
 }

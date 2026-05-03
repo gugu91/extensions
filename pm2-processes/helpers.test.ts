@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeLines, normalizeTarget, truncateTail } from "./helpers.js";
+import { normalizeLines, normalizeTarget, redactSensitiveText, truncateTail } from "./helpers.js";
 
 const apps = [{ name: "api" }, { name: "web" }];
 
@@ -33,5 +33,15 @@ describe("pm2 helpers", () => {
   it("truncates tail by lines", () => {
     const result = truncateTail("one\ntwo\nthree", 1_000, 2);
     expect(result).toEqual({ text: "two\nthree", truncated: true });
+  });
+
+  it("redacts secret-looking output", () => {
+    expect(
+      redactSensitiveText(
+        "TOKEN=abc123 password: hunter2 Authorization: Bearer secret https://x.test?a=1&token=leak",
+      ),
+    ).toBe(
+      "TOKEN=[REDACTED] password: [REDACTED] Authorization: Bearer [REDACTED] https://x.test?a=1&token=[REDACTED]",
+    );
   });
 });

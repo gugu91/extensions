@@ -77,17 +77,33 @@ function formatWarnings(warnings: string[]): string {
     : "";
 }
 
-async function prepare(cwd: string): Promise<{
+async function prepare(
+  cwd: string,
+  options: { tolerateAppDiscoveryErrors: boolean },
+): Promise<{
   settings: ResolvedSettings;
   apps: DeclaredPm2App[];
   runner: Pm2Runner;
 }> {
   const settings = loadSettings({ cwd, agentDir: getAgentDir() });
-  if (!settings.configPath) {
-    return { settings, apps: [], runner: new CliPm2Runner(settings.pm2Bin) };
+  const runner = new CliPm2Runner(settings.pm2Bin);
+  if (!settings.configPath) return { settings, apps: [], runner };
+
+  try {
+    const apps = await loadDeclaredApps(settings.configPath, settings.metadataPath);
+    return { settings, apps, runner };
+  } catch (error) {
+    if (!options.tolerateAppDiscoveryErrors) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      settings: {
+        ...settings,
+        diagnostics: [...settings.diagnostics, `PM2 app discovery skipped: ${message}`],
+      },
+      apps: [],
+      runner,
+    };
   }
-  const apps = await loadDeclaredApps(settings.configPath, settings.metadataPath);
-  return { settings, apps, runner: new CliPm2Runner(settings.pm2Bin) };
 }
 
 async function runPm2(
@@ -95,13 +111,15 @@ async function runPm2(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<string> {
-  const { settings, apps, runner } = await prepare(ctx.cwd);
+  const { settings, apps, runner } = await prepare(ctx.cwd, {
+    tolerateAppDiscoveryErrors: input.action === "config",
+  });
   const result = await executePm2Action(input, apps, settings, runner, signal);
   return `${result.text}${formatWarnings(result.warnings)}`;
 }
 
 async function showPm2Menu(ctx: ExtensionContext): Promise<Pm2ProcessInput> {
-  const { settings } = await prepare(ctx.cwd);
+  const settings = loadSettings({ cwd: ctx.cwd, agentDir: getAgentDir() });
   return settings.configPath ? { action: "status", target: "all" } : { action: "config" };
 }
 
