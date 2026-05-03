@@ -1346,7 +1346,7 @@ export function rankAgentsForRouting(
   return ranked.sort(compareRouting);
 }
 
-export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 30_000;
+export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 2 * 60_000;
 export const DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS = 60_000;
 export const DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS = 5 * 60_000;
 export const DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS = 60_000;

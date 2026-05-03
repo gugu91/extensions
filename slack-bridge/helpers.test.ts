@@ -45,6 +45,7 @@ import {
   buildRalphLoopFollowUpMessage,
   buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
+  DEFAULT_RALPH_LOOP_INTERVAL_MS,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   isRalphNudgeEntry,
@@ -2345,6 +2346,12 @@ describe("rankAgentsForRouting", () => {
 });
 
 // ─── Ralph loop helpers ────────────────────────────────
+
+describe("RALPH loop defaults", () => {
+  it("runs the broker maintenance loop every two minutes by default", () => {
+    expect(DEFAULT_RALPH_LOOP_INTERVAL_MS).toBe(2 * 60_000);
+  });
+});
 
 describe("evaluateRalphLoopCycle", () => {
   it("flags ghost agents, nudges idle agents with work, and reports self-repair anomalies", () => {
