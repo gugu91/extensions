@@ -1279,6 +1279,26 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("acquires an explicit requested port outside the default allocation range", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      const lease = db.acquirePortLease({ purpose: "vite", ttlMs: 600_000, port: 3000 });
+      expect(lease).toMatchObject({ host: "127.0.0.1", port: 3000, status: "active" });
+      expect(() =>
+        db.acquirePortLease({
+          purpose: "range-mismatch",
+          ttlMs: 600_000,
+          port: 3000,
+          minPort: 52000,
+          maxPort: 52010,
+        }),
+      ).toThrow(/port must be within minPort and maxPort/);
+    } finally {
+      db.close();
+    }
+  });
+
   it("renews, releases, and reuses port leases", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

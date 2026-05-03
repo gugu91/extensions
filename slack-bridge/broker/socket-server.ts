@@ -1143,10 +1143,7 @@ export class BrokerSocketServer {
     const input: PortLeaseAcquireInput = {
       purpose: typeof params.purpose === "string" ? params.purpose : "",
       ttlMs: typeof params.ttlMs === "number" ? params.ttlMs : Number(params.ttlMs),
-      ownerAgentId:
-        typeof params.ownerAgentId === "string" || params.ownerAgentId === null
-          ? (params.ownerAgentId as string | null)
-          : state.agentId,
+      ownerAgentId: state.agentId,
       ...(typeof params.host === "string" ? { host: params.host } : {}),
       ...(typeof params.port === "number" ? { port: params.port } : {}),
       ...(typeof params.minPort === "number" ? { minPort: params.minPort } : {}),
@@ -1180,10 +1177,7 @@ export class BrokerSocketServer {
     const input: PortLeaseRenewInput = {
       leaseId: typeof params.leaseId === "string" ? params.leaseId : "",
       ttlMs: typeof params.ttlMs === "number" ? params.ttlMs : Number(params.ttlMs),
-      ownerAgentId:
-        typeof params.ownerAgentId === "string" || params.ownerAgentId === null
-          ? (params.ownerAgentId as string | null)
-          : state.agentId,
+      ownerAgentId: state.agentId,
     };
 
     try {
@@ -1204,10 +1198,7 @@ export class BrokerSocketServer {
     const params = req.params ?? {};
     const input: PortLeaseReleaseInput = {
       leaseId: typeof params.leaseId === "string" ? params.leaseId : "",
-      ownerAgentId:
-        typeof params.ownerAgentId === "string" || params.ownerAgentId === null
-          ? (params.ownerAgentId as string | null)
-          : state.agentId,
+      ownerAgentId: state.agentId,
     };
 
     try {
@@ -1228,7 +1219,8 @@ export class BrokerSocketServer {
     const params = req.params ?? {};
     const leaseId = typeof params.leaseId === "string" ? params.leaseId : "";
     try {
-      return rpcOk(req.id, this.db.getPortLease(leaseId));
+      const lease = this.db.getPortLease(leaseId);
+      return rpcOk(req.id, lease?.ownerAgentId === state.agentId ? lease : null);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return rpcError(req.id, RPC_INVALID_PARAMS, message);
@@ -1246,7 +1238,7 @@ export class BrokerSocketServer {
         ? { includeInactive: params.includeInactive }
         : {}),
       ...(typeof params.expiredOnly === "boolean" ? { expiredOnly: params.expiredOnly } : {}),
-      ...(typeof params.ownerAgentId === "string" ? { ownerAgentId: params.ownerAgentId } : {}),
+      ownerAgentId: state.agentId,
       ...(typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
       ...(typeof params.host === "string" ? { host: params.host } : {}),
     };
@@ -1263,10 +1255,10 @@ export class BrokerSocketServer {
       return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
     }
 
-    const params = req.params ?? {};
-    const nowIso = typeof params.nowIso === "string" ? params.nowIso : undefined;
     try {
-      const leases = this.db.expirePortLeases(nowIso);
+      const leases = this.db
+        .expirePortLeases()
+        .filter((lease) => lease.ownerAgentId === state.agentId);
       if (leases.length > 0) {
         this.db.touchAgentActivity(state.agentId);
       }

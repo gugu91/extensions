@@ -94,7 +94,7 @@ export interface RegisterPinetToolsDeps {
   releasePortLease: (input: PortLeaseReleaseInput) => Promise<PortLeaseInfo>;
   getPortLease: (leaseId: string) => Promise<PortLeaseInfo | null>;
   listPortLeases: (options: PortLeaseListOptions) => Promise<PortLeaseInfo[]>;
-  expirePortLeases: (nowIso?: string) => Promise<PortLeaseInfo[]>;
+  expirePortLeases: () => Promise<PortLeaseInfo[]>;
 }
 
 interface PinetAgentsRoutingHint {
@@ -833,9 +833,6 @@ function runPinetPortsAction(
       const lease = await deps.acquirePortLease({
         purpose,
         ttlMs,
-        ...(getMaybeString(params, "owner_agent")
-          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
-          : {}),
         ...(getMaybeString(params, "host") ? { host: getMaybeString(params, "host") } : {}),
         ...(getMaybeNumber(params, "port") !== undefined
           ? { port: getMaybeNumber(params, "port") }
@@ -872,9 +869,6 @@ function runPinetPortsAction(
       const lease = await deps.renewPortLease({
         leaseId,
         ttlMs: requireNumber(params, "ttl_ms"),
-        ...(getMaybeString(params, "owner_agent")
-          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
-          : {}),
       });
       return {
         content: [
@@ -891,9 +885,6 @@ function runPinetPortsAction(
       if (!leaseId) throw new Error("ports op=release requires lease_id");
       const lease = await deps.releasePortLease({
         leaseId,
-        ...(getMaybeString(params, "owner_agent")
-          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
-          : {}),
       });
       return {
         content: [
@@ -925,7 +916,7 @@ function runPinetPortsAction(
     }
 
     if (op === "expire") {
-      const leases = await deps.expirePortLeases(getMaybeString(params, "now"));
+      const leases = await deps.expirePortLeases();
       return {
         content: [{ type: "text", text: `Pinet port leases expired: ${leases.length}.` }],
         details: { leases },
@@ -941,9 +932,6 @@ function runPinetPortsAction(
           : {}),
         ...(getMaybeBoolean(params, "expired_only") !== undefined
           ? { expiredOnly: getMaybeBoolean(params, "expired_only") }
-          : {}),
-        ...(getMaybeString(params, "owner_agent")
-          ? { ownerAgentId: getMaybeString(params, "owner_agent") }
           : {}),
         ...(getMaybeString(params, "purpose")
           ? { purpose: getMaybeString(params, "purpose") }
@@ -1293,14 +1281,10 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       pid: Type.Optional(
         Type.Number({ description: "Optional process id associated with the lease" }),
       ),
-      owner_agent: Type.Optional(
-        Type.String({ description: "Owner agent id; defaults to caller" }),
-      ),
       include_inactive: Type.Optional(
         Type.Boolean({ description: "Include released/expired rows" }),
       ),
       expired_only: Type.Optional(Type.Boolean({ description: "List only expired rows" })),
-      now: Type.Optional(Type.String({ description: "ISO timestamp override for op=expire" })),
       metadata: Type.Optional(
         Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()]),
       ),

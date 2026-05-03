@@ -1521,7 +1521,12 @@ export class BrokerDB implements BrokerDBInterface {
     const ttlMs = normalizePortLeaseTtlMs(input.ttlMs);
     const host = normalizePortLeaseHost(input.host);
     const requestedPort = input.port === undefined ? undefined : normalizePortLeasePort(input.port);
-    const { minPort, maxPort } = normalizePortLeaseRange(input.minPort, input.maxPort);
+    const explicitRange = input.minPort !== undefined || input.maxPort !== undefined;
+    const { minPort, maxPort } = explicitRange
+      ? normalizePortLeaseRange(input.minPort, input.maxPort)
+      : requestedPort === undefined
+        ? normalizePortLeaseRange(input.minPort, input.maxPort)
+        : { minPort: requestedPort, maxPort: requestedPort };
     const ownerAgentId = normalizeOptionalPortLeaseOwner(input.ownerAgentId) ?? null;
     const pid = normalizePortLeasePid(input.pid);
     const metadata = serializeOptionalMetadata(input.metadata) ?? null;

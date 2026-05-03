@@ -596,11 +596,8 @@ export class BrokerClient {
     )) as PortLeaseInfo[];
   }
 
-  async expirePortLeases(nowIso?: string): Promise<PortLeaseInfo[]> {
-    return (await this.request(
-      "portLease.expire",
-      nowIso ? { nowIso } : undefined,
-    )) as PortLeaseInfo[];
+  async expirePortLeases(): Promise<PortLeaseInfo[]> {
+    return (await this.request("portLease.expire")) as PortLeaseInfo[];
   }
   // ─── Queries ─────────────────────────────────────────
 

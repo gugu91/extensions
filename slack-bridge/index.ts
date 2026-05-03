@@ -936,14 +936,14 @@ export default function (pi: ExtensionAPI) {
     throw new Error("Pinet is in an unexpected state.");
   }
 
-  async function expirePortLeases(nowIso?: string) {
+  async function expirePortLeases() {
     if (brokerRole === "broker") {
       const db = getActiveBrokerDb();
       if (!db) throw new Error("Broker database is unavailable.");
-      return db.expirePortLeases(nowIso);
+      return db.expirePortLeases();
     }
     if (brokerRole === "follower" && brokerClient?.client) {
-      return await brokerClient.client.expirePortLeases(nowIso);
+      return await brokerClient.client.expirePortLeases();
     }
     throw new Error("Pinet is in an unexpected state.");
   }
