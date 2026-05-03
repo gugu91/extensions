@@ -1521,6 +1521,90 @@ describe("registerSlackTools", () => {
     });
   });
 
+  it("falls back and bookmarks a standalone canvas when channel canvas tab creation fails", async () => {
+    const { slack, tools, setFilesInfoResponse } = setup();
+    setFilesInfoResponse({
+      ok: true,
+      file: {
+        id: "F_FALLBACK",
+        title: "Agent Vault setup spike review",
+        permalink: "https://example.slack.com/docs/T/F_FALLBACK",
+      },
+      comments: [],
+      response_metadata: { next_cursor: "" },
+    } as SlackResult);
+
+    const originalSlack = slack.getMockImplementation()!;
+    slack.mockImplementation(
+      async (method: string, token: string, body?: Record<string, unknown>) => {
+        if (method === "conversations.canvases.create") {
+          throw new Error("Slack conversations.canvases.create: canvas_tab_creation_failed");
+        }
+        if (method === "canvases.create") {
+          return { ok: true, token, body, canvas_id: "F_FALLBACK" } as SlackResult;
+        }
+        return originalSlack(method, token, body);
+      },
+    );
+
+    const result = await tools.get("slack_canvas_create")!.execute("tool-canvas-create-1", {
+      kind: "channel",
+      channel: "proj-alpha",
+      title: "Agent Vault setup spike review",
+      markdown: "# Review",
+    });
+
+    expect(slack).toHaveBeenCalledWith(
+      "conversations.canvases.create",
+      "xoxb-initial",
+      expect.objectContaining({ channel_id: "resolved:proj-alpha" }),
+    );
+    expect(slack).toHaveBeenCalledWith(
+      "canvases.create",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel_id: "resolved:proj-alpha",
+        title: "Agent Vault setup spike review",
+      }),
+    );
+    expect(slack).toHaveBeenCalledWith("files.info", "xoxb-initial", { file: "F_FALLBACK" });
+    expect(slack).toHaveBeenCalledWith(
+      "bookmarks.add",
+      "xoxb-initial",
+      expect.objectContaining({
+        channel_id: "resolved:proj-alpha",
+        title: "Agent Vault setup spike review",
+        link: "https://example.slack.com/docs/T/F_FALLBACK",
+      }),
+    );
+    expect(result.content?.[0]?.text).toContain("Created standalone fallback canvas F_FALLBACK");
+    expect(result.content?.[0]?.text).toContain("canvas_id=F_FALLBACK");
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        canvas_id: "F_FALLBACK",
+        kind: "standalone",
+        requested_kind: "channel",
+        channel: "resolved:proj-alpha",
+        fallback: true,
+        fallback_reason: "canvas_tab_creation_failed",
+        bookmark_status: "added",
+        bookmark_id: "Bk123",
+        permalink: "https://example.slack.com/docs/T/F_FALLBACK",
+      }),
+    );
+  });
+
+  it("guides channel canvas updates toward fallback canvas IDs when Slack exposes no channel canvas", async () => {
+    const { tools } = setup();
+
+    await expect(
+      tools.get("slack_canvas_update")!.execute("tool-canvas-update-missing-1", {
+        channel: "proj-alpha",
+        markdown: "## Update",
+      }),
+    ).rejects.toThrow("use the standalone fallback canvas_id returned by canvas_create");
+  });
+
   it("validates a direct canvas id before reading its comments", async () => {
     const { slack, tools, setFilesInfoResponse, setResolveUser } = setup();
     setResolveUser(async (userId) => (userId === "U123" ? "Alice" : userId));

@@ -273,9 +273,12 @@ migration.
   when Slack returns `invalid_arguments`, preserving syntax highlighting for
   supported types while avoiding hard failures on unsupported snippet types.
 - **Canvases are long-lived docs.** `canvas_create` creates standalone or
-  channel canvases; `canvas_update` can append, prepend, replace the whole
-  canvas, or replace a matched section; `canvas_comments_read` is read-only and
-  limited to verified canvas targets.
+  channel canvases. If Slack rejects channel tab creation with
+  `canvas_tab_creation_failed`, it falls back to a standalone canvas attached to
+  the channel, attempts to bookmark the canvas URL, and returns the fallback
+  `canvas_id` for future `canvas_update` calls. `canvas_update` can append,
+  prepend, replace the whole canvas, or replace a matched section;
+  `canvas_comments_read` is read-only and limited to verified canvas targets.
 - **Scheduling, pins, and bookmarks are durable affordances.** Use `schedule`
   for delayed reminders instead of waiting; use `pin` for important thread
   messages; use `bookmark` for persistent channel-header links to repos,

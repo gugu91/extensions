@@ -207,6 +207,10 @@ const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
   ],
   canvas_create: [
     { action: "canvas_create", args: { title: "Launch notes", markdown: "# Launch" } },
+    {
+      action: "canvas_create",
+      args: { kind: "channel", channel: "#project", title: "Runbook", markdown: "# Runbook" },
+    },
   ],
   canvas_update: [
     {
@@ -659,6 +663,40 @@ function normalizeSlackBookmarkUrl(url: string): string {
   return parsed.toString();
 }
 
+function asSlackObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asTrimmedSlackString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractSlackCanvasPermalink(response: Record<string, unknown>): string | undefined {
+  const direct =
+    asTrimmedSlackString(response.permalink) ??
+    asTrimmedSlackString(response.url) ??
+    asTrimmedSlackString(response.link);
+  if (direct) return direct;
+
+  const canvas = asSlackObject(response.canvas);
+  const canvasLink =
+    asTrimmedSlackString(canvas?.permalink) ??
+    asTrimmedSlackString(canvas?.url) ??
+    asTrimmedSlackString(canvas?.link);
+  if (canvasLink) return canvasLink;
+
+  const file = asSlackObject(response.file);
+  return (
+    asTrimmedSlackString(file?.permalink) ??
+    asTrimmedSlackString(file?.url_private) ??
+    asTrimmedSlackString(file?.url)
+  );
+}
+
 function isPiAgentSlackMessage(
   message: Record<string, unknown>,
   botUserId: string | null,
@@ -978,7 +1016,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     const resolvedCanvasId = extractSlackChannelCanvasId(info);
     if (!resolvedCanvasId) {
       throw new Error(
-        `Slack did not expose a channel canvas ID in conversations.info for ${channelInput}. Provide canvas_id directly.`,
+        `Slack did not expose a channel canvas ID in conversations.info for ${channelInput}. Provide canvas_id directly. If channel canvas tab creation failed earlier, use the standalone fallback canvas_id returned by canvas_create; otherwise create a standalone fallback with canvas_create kind='standalone' channel='${channelInput}' and update it by canvas_id.`,
       );
     }
 
@@ -2995,9 +3033,9 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     name: "slack_canvas_create",
     label: "Slack Canvas Create",
     description:
-      "Create a Slack canvas with markdown content, either standalone or as a channel canvas.",
+      "Create a Slack canvas with markdown content, either standalone or as a channel canvas. If Slack cannot create a channel canvas tab, creates a standalone channel-attached fallback and bookmarks it when possible.",
     promptSnippet:
-      "Create a Slack canvas for long-lived documentation. Use standalone canvases for shared docs and kind='channel' for a channel's main canvas.",
+      "Create a Slack canvas for long-lived documentation. Use standalone canvases for shared docs and kind='channel' for a channel's main canvas; channel tab failures fall back to a standalone canvas plus bookmark when possible.",
     parameters: Type.Object({
       title: Type.Optional(Type.String({ description: "Canvas title" })),
       markdown: Type.Optional(
@@ -3009,7 +3047,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         Type.String({ description: "Channel name or ID to attach the canvas to" }),
       ),
       kind: Type.Optional(
-        Type.String({ description: "Canvas kind: 'standalone' (default) or 'channel'" }),
+        Type.String({
+          description:
+            "Canvas kind: 'standalone' (default) or 'channel'. Channel canvas tab failures fall back to a standalone canvas and return its canvas_id.",
+        }),
       ),
     }),
     async execute(_id, params) {
@@ -3056,7 +3097,110 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         rememberChannel(channelInput.replace(/^#/, ""), channelId);
       }
 
-      const response = await slack(request.method, getBotToken(), request.body);
+      let response: SlackResult;
+      try {
+        response = await slack(request.method, getBotToken(), request.body);
+      } catch (err) {
+        if (
+          request.kind !== "channel" ||
+          !channelId ||
+          !isSlackMethodError(err, "conversations.canvases.create", "canvas_tab_creation_failed")
+        ) {
+          throw err;
+        }
+
+        const fallbackRequest = buildSlackCanvasCreateRequest({
+          kind: "standalone",
+          title: params.title,
+          markdown: params.markdown,
+          channelId,
+        });
+        let fallbackResponse: SlackResult;
+        try {
+          fallbackResponse = await slack(
+            fallbackRequest.method,
+            getBotToken(),
+            fallbackRequest.body,
+          );
+        } catch (fallbackErr) {
+          const fallbackMessage =
+            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+          throw new Error(
+            `Slack channel canvas creation failed with canvas_tab_creation_failed, and standalone fallback creation also failed: ${fallbackMessage}. To recover manually, create a standalone canvas with channel=${channelInput ?? channelId} and update/share it by canvas_id.`,
+          );
+        }
+
+        const fallbackCanvasId = fallbackResponse.canvas_id as string;
+        let permalink = extractSlackCanvasPermalink(fallbackResponse);
+        let permalinkLookupError: string | undefined;
+        if (!permalink) {
+          try {
+            const fileInfo = await slack("files.info", getBotToken(), { file: fallbackCanvasId });
+            permalink = extractSlackCanvasPermalink(fileInfo);
+          } catch (permalinkErr) {
+            permalinkLookupError =
+              permalinkErr instanceof Error ? permalinkErr.message : String(permalinkErr);
+          }
+        }
+
+        let bookmarkId: string | undefined;
+        let bookmarkStatus: "added" | "skipped" | "failed" = "skipped";
+        let bookmarkError: string | undefined;
+        if (permalink) {
+          try {
+            const title =
+              typeof params.title === "string" && params.title.trim().length > 0
+                ? params.title.trim()
+                : `Canvas ${fallbackCanvasId}`;
+            const bookmarkResponse = await slack("bookmarks.add", getBotToken(), {
+              channel_id: channelId,
+              title,
+              type: "link",
+              link: normalizeSlackBookmarkUrl(permalink),
+              emoji: ":memo:",
+            });
+            const bookmark = asSlackObject(bookmarkResponse.bookmark);
+            bookmarkId = asTrimmedSlackString(bookmark?.id);
+            bookmarkStatus = "added";
+          } catch (bookmarkErr) {
+            bookmarkStatus = "failed";
+            bookmarkError =
+              bookmarkErr instanceof Error ? bookmarkErr.message : String(bookmarkErr);
+          }
+        }
+
+        const channelLabel = channelInput ?? channelId;
+        const bookmarkSummary =
+          bookmarkStatus === "added"
+            ? ` Bookmarked it in ${channelLabel}${bookmarkId ? ` as ${bookmarkId}` : ""}.`
+            : permalink
+              ? ` Could not bookmark it automatically${bookmarkError ? ` (${bookmarkError})` : ""}; add ${permalink} as a channel bookmark if you need a durable channel link.`
+              : ` Slack did not expose a permalink${permalinkLookupError ? ` (${permalinkLookupError})` : ""}; use canvas_id=${fallbackCanvasId} directly or add a bookmark manually once you have the canvas URL.`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Slack could not create a channel canvas tab for ${channelLabel} (canvas_tab_creation_failed). Created standalone fallback canvas ${fallbackCanvasId} attached to ${channelLabel}.${bookmarkSummary} Use canvas_update with canvas_id=${fallbackCanvasId} for future updates. Initial content: ${getSlackCanvasSummary(params.markdown)}`,
+            },
+          ],
+          details: {
+            canvas_id: fallbackCanvasId,
+            kind: "standalone",
+            requested_kind: "channel",
+            channel: channelId,
+            fallback: true,
+            fallback_reason: "canvas_tab_creation_failed",
+            bookmark_status: bookmarkStatus,
+            next_action: `canvas_update canvas_id=${fallbackCanvasId}`,
+            ...(permalink ? { permalink } : {}),
+            ...(bookmarkId ? { bookmark_id: bookmarkId } : {}),
+            ...(bookmarkError ? { bookmark_error: bookmarkError } : {}),
+            ...(permalinkLookupError ? { permalink_lookup_error: permalinkLookupError } : {}),
+          },
+        };
+      }
+
       const canvasId = response.canvas_id as string;
       const channelLabel = channelInput ?? channelId;
       const targetSummary =
@@ -3090,7 +3234,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     parameters: Type.Object({
       canvas_id: Type.Optional(Type.String({ description: "Canvas ID to update" })),
       channel: Type.Optional(
-        Type.String({ description: "Channel name or ID whose channel canvas should be updated" }),
+        Type.String({
+          description:
+            "Channel name or ID whose channel canvas should be updated. If Slack does not expose a channel canvas ID, provide the standalone fallback canvas_id returned by canvas_create.",
+        }),
       ),
       markdown: Type.String({ description: "Canvas content in markdown" }),
       mode: Type.Optional(

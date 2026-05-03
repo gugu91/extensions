@@ -239,6 +239,11 @@ Create/update a channel canvas:
 }
 ```
 
+If Slack returns `canvas_tab_creation_failed`, `canvas_create` creates a
+standalone fallback attached to the channel, attempts to add a channel bookmark,
+and returns the fallback `canvas_id`. Use that `canvas_id` for later
+`canvas_update` calls if Slack still does not expose a channel canvas ID.
+
 Append to a canvas:
 
 ```json
