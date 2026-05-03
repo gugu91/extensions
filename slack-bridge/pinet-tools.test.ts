@@ -34,7 +34,7 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
     pinetEnabled: () => true,
     brokerRole: () => "broker",
     requireToolPolicy: () => {},
-    sendPinetAgentMessage: async (target, _body) => ({ messageId: 17, target }),
+    sendPinetAgentMessage: async (target, _body, _metadata) => ({ messageId: 17, target }),
     sendPinetBroadcastMessage: (channel) => ({
       channel,
       messageIds: [11, 12],
@@ -466,6 +466,59 @@ describe("registerPinetTools", () => {
     expect(result.details.data.action).toBe("send");
     expect(result.details.data.text).toBe("Pinet message sent to alpha.");
     expect(result.content[0]?.text).toContain('"status": "succeeded"');
+  });
+
+  it("passes broker thread ownership transfers through pinet send metadata", async () => {
+    const sendPinetAgentMessage = vi.fn(async (_to: string, _message: string) => ({
+      messageId: 41,
+      target: "alpha",
+      transferredThreadId: "1777798507.674009",
+    }));
+    const deps = createDeps({ sendPinetAgentMessage });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-send-transfer", {
+      action: "send",
+      args: {
+        to: "alpha",
+        message: "dispatch now",
+        transfer_thread_id: "1777798507.674009",
+        format: "json",
+      },
+    })) as {
+      details: { status: string; data: { text: string; details: Record<string, unknown> } };
+    };
+
+    expect(sendPinetAgentMessage).toHaveBeenCalledWith("alpha", "dispatch now", {
+      threadOwnershipTransfer: { mode: "transfer", threadId: "1777798507.674009" },
+    });
+    expect(result.details.status).toBe("succeeded");
+    expect(result.details.data.text).toBe(
+      "Pinet message sent to alpha; transferred thread 1777798507.674009.",
+    );
+    expect(result.details.data.details.transferredThreadId).toBe("1777798507.674009");
+  });
+
+  it("rejects follower thread ownership transfers", async () => {
+    const sendPinetAgentMessage = vi.fn(async (_to: string, _message: string) => ({
+      messageId: 41,
+      target: "alpha",
+    }));
+    const deps = createDeps({ brokerRole: () => "follower", sendPinetAgentMessage });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-send-transfer-follower", {
+      action: "send",
+      args: {
+        to: "alpha",
+        message: "dispatch now",
+        transfer_thread_id: "1777798507.674009",
+      },
+    })) as { details: { status: string; errors: Array<{ message: string }> } };
+
+    expect(result.details.status).toBe("failed");
+    expect(result.details.errors[0]?.message).toContain("transfer_thread_id is broker-only");
+    expect(sendPinetAgentMessage).not.toHaveBeenCalled();
   });
 
   it("honors explicit full output for pinet send", async () => {

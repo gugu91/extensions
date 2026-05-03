@@ -28,8 +28,19 @@ export interface PinetMeshOpsRecordedAssignment {
   branch: string | null;
 }
 
+export interface PinetMeshOpsTransferableThread {
+  threadId: string;
+  source?: string;
+  channel?: string;
+}
+
 export interface PinetMeshOpsBrokerDbPort extends AgentMessageStorage {
   getAllAgents: () => AgentInfo[];
+  getThread: (threadId: string) => PinetMeshOpsTransferableThread | null;
+  transferThreadOwnership: (
+    threadId: string,
+    ownerAgent: string,
+  ) => { reassignedInboxCount: number; updatedMessageCount: number };
   recordTaskAssignment: (
     agentId: string,
     issueNumber: number,
@@ -74,7 +85,7 @@ export interface PinetMeshOps {
     target: string,
     body: string,
     metadata?: Record<string, unknown>,
-  ) => Promise<{ messageId: number; target: string }>;
+  ) => Promise<{ messageId: number; target: string; transferredThreadId?: string }>;
   sendPinetBroadcastMessage: (
     channel: string,
     body: string,
@@ -106,6 +117,16 @@ function prepareOutgoingPinetAgentMessage(
   return { body, metadata };
 }
 
+function getThreadOwnershipTransferId(metadata?: Record<string, unknown>): string | null {
+  const transfer = metadata?.threadOwnershipTransfer;
+  if (!transfer || typeof transfer !== "object" || Array.isArray(transfer)) {
+    return null;
+  }
+
+  const threadId = (transfer as Record<string, unknown>).threadId;
+  return typeof threadId === "string" && threadId.trim().length > 0 ? threadId.trim() : null;
+}
+
 export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
   async function sendPinetAgentMessage(
     targetRef: string,
@@ -133,6 +154,15 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
         throw new Error("Broker agent identity is unavailable.");
       }
 
+      const transferThreadId = getThreadOwnershipTransferId(finalMetadata);
+      const transferThread = transferThreadId ? db.getThread(transferThreadId) : null;
+      if (transferThreadId && !transferThread) {
+        throw new Error(`Cannot transfer unknown thread ${transferThreadId}.`);
+      }
+      if (transferThread && (transferThread.source !== "slack" || !transferThread.channel)) {
+        throw new Error(`Thread ${transferThreadId} is not a transferable Slack thread.`);
+      }
+
       const result = dispatchDirectAgentMessage(db, {
         senderAgentId: selfId,
         senderAgentName: deps.getAgentName(),
@@ -140,6 +170,23 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
         body: finalBody,
         metadata: finalMetadata,
       });
+
+      if (transferThreadId) {
+        const transfer = db.transferThreadOwnership(transferThreadId, result.target.id);
+        deps.logActivity({
+          kind: "thread_transfer",
+          level: "actions",
+          title: "Thread ownership transferred",
+          summary: `Transferred ${transferThreadId} to ${deps.formatTrackedAgent(result.target.id)}.`,
+          fields: [
+            { label: "Worker", value: deps.formatTrackedAgent(result.target.id) },
+            { label: "Thread", value: transferThreadId },
+            { label: "A2A message", value: result.messageId },
+            { label: "Reassigned inbox rows", value: transfer.reassignedInboxCount },
+          ],
+          tone: "info",
+        });
+      }
 
       const recordedAssignments: PinetMeshOpsRecordedAssignment[] = [];
       for (const assignment of extractTaskAssignmentsFromMessage(body)) {
@@ -173,7 +220,11 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
         });
       }
 
-      return { messageId: result.messageId, target: result.target.name };
+      return {
+        messageId: result.messageId,
+        target: result.target.name,
+        ...(transferThreadId ? { transferredThreadId: transferThreadId } : {}),
+      };
     }
 
     if (deps.getBrokerRole() === "follower") {

@@ -1688,6 +1688,90 @@ export class BrokerDB implements BrokerDBInterface {
     db.prepare(`UPDATE threads SET ${sets.join(", ")} WHERE thread_id = ?`).run(...values);
   }
 
+  transferThreadOwnership(
+    threadId: string,
+    ownerAgent: string,
+  ): { reassignedInboxCount: number; updatedMessageCount: number } {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const thread = this.getThread(threadId);
+    if (!thread) {
+      throw new Error(`Unknown thread ${threadId}`);
+    }
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(
+        `UPDATE threads
+         SET owner_agent = ?, owner_binding = 'explicit', updated_at = ?
+         WHERE thread_id = ?`,
+      ).run(ownerAgent, now, threadId);
+
+      const rows = db
+        .prepare(
+          `SELECT i.id AS inbox_id,
+                  i.agent_id AS agent_id,
+                  i.message_id AS message_id,
+                  m.metadata AS metadata
+           FROM inbox i
+           JOIN messages m ON m.id = i.message_id
+           WHERE m.thread_id = ?
+             AND m.source = 'slack'
+             AND m.direction = 'inbound'
+             AND i.read_at IS NULL`,
+        )
+        .all(threadId) as Array<{
+        inbox_id: number;
+        agent_id: string;
+        message_id: number;
+        metadata: string | null;
+      }>;
+
+      let reassignedInboxCount = 0;
+      const updatedMessageIds = new Set<number>();
+      const updateMessageMetadata = db.prepare("UPDATE messages SET metadata = ? WHERE id = ?");
+      const findExistingInbox = db.prepare(
+        "SELECT id FROM inbox WHERE agent_id = ? AND message_id = ?",
+      );
+      const reassignInbox = db.prepare(
+        "UPDATE inbox SET agent_id = ?, delivered = 0 WHERE id = ? AND agent_id = ?",
+      );
+      const markDuplicateRead = db.prepare(
+        "UPDATE inbox SET delivered = 1, read_at = COALESCE(read_at, ?) WHERE id = ?",
+      );
+
+      for (const row of rows) {
+        if (!updatedMessageIds.has(row.message_id)) {
+          const metadata = row.metadata ? parseJsonMetadata(row.metadata) : {};
+          metadata.threadAffinityOwnerAgentId = ownerAgent;
+          updateMessageMetadata.run(JSON.stringify(metadata), row.message_id);
+          updatedMessageIds.add(row.message_id);
+        }
+
+        if (row.agent_id === ownerAgent) {
+          continue;
+        }
+
+        const existing = findExistingInbox.get(ownerAgent, row.message_id) as
+          | { id: number }
+          | undefined;
+        if (existing) {
+          markDuplicateRead.run(now, row.inbox_id);
+          continue;
+        }
+
+        const result = reassignInbox.run(ownerAgent, row.inbox_id, row.agent_id);
+        reassignedInboxCount += Number(result.changes ?? 0);
+      }
+
+      db.exec("COMMIT");
+      return { reassignedInboxCount, updatedMessageCount: updatedMessageIds.size };
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   claimThread(threadId: string, agentId: string, source = "slack", channel = ""): boolean {
     const db = this.getDb();
     const now = new Date().toISOString();

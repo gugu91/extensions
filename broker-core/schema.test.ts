@@ -928,6 +928,41 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("transfers unread Slack inbox rows and affinity metadata with thread ownership", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      db.createThread("thread-a", "slack", "C123", "agent-a");
+      db.queueMessage("agent-a", {
+        source: "slack",
+        threadId: "thread-a",
+        channel: "C123",
+        userId: "U1",
+        text: "reply queued before transfer",
+        timestamp: "123.789",
+      });
+
+      const transfer = db.transferThreadOwnership("thread-a", "agent-b");
+
+      expect(transfer).toEqual({ reassignedInboxCount: 1, updatedMessageCount: 1 });
+      expect(db.getThread("thread-a")).toMatchObject({
+        ownerAgent: "agent-b",
+        ownerBinding: "explicit",
+      });
+      expect(db.readInbox("agent-a", { markRead: false }).messages).toEqual([]);
+
+      const read = db.readInbox("agent-b", { markRead: false });
+      expect(read.messages).toHaveLength(1);
+      expect(read.messages[0].message.body).toBe("reply queued before transfer");
+      expect(read.messages[0].message.metadata).toMatchObject({
+        threadAffinityOwnerAgentId: "agent-b",
+      });
+      expect(read.unreadCountBefore).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("revalidates stale queued Slack rows on read when the owner changes", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);
