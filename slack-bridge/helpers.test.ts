@@ -46,6 +46,7 @@ import {
   buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
   DEFAULT_RALPH_LOOP_INTERVAL_MS,
+  MAX_RALPH_LOOP_INTERVAL_MS,
   resolveRalphLoopIntervalMs,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -2366,6 +2367,9 @@ describe("RALPH loop defaults", () => {
     expect(resolveRalphLoopIntervalMs({ ralphLoopIntervalMs: Number.NaN })).toBe(
       DEFAULT_RALPH_LOOP_INTERVAL_MS,
     );
+    expect(
+      resolveRalphLoopIntervalMs({ ralphLoopIntervalMs: MAX_RALPH_LOOP_INTERVAL_MS + 1 }),
+    ).toBe(DEFAULT_RALPH_LOOP_INTERVAL_MS);
   });
 });
 

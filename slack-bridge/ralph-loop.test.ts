@@ -78,6 +78,26 @@ describe("startRalphLoop", () => {
       setIntervalSpy.mockRestore();
     }
   });
+
+  it("falls back before scheduling oversized intervals that Node would overflow", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const state = createRalphLoopState();
+
+    try {
+      startRalphLoop({} as ExtensionContext, state, {
+        ...createLoopDeps(),
+        getSettings: () => ({ ralphLoopIntervalMs: 3_000_000_000 }),
+      });
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        DEFAULT_RALPH_LOOP_INTERVAL_MS,
+      );
+    } finally {
+      stopRalphLoop(state);
+      setIntervalSpy.mockRestore();
+    }
+  });
 });
 
 describe("hydrateRalphLoopReportedGhosts", () => {
