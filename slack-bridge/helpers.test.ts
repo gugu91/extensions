@@ -1354,6 +1354,129 @@ describe("Pinet skin helpers", () => {
     expect(broker.name).toBe(`The Broker ${worker.name.split(" ").at(-1)}`);
     expect(broker.emoji).toBe(worker.emoji);
     expect(broker.personality).toContain("Default whimsical broker skin");
+    expect(broker.statusVocabulary).toBeUndefined();
+  });
+
+  it("builds the foundation skin from curated role-specific characters and status vocabulary", () => {
+    const broker = buildPinetSkinAssignment({
+      theme: "foundation/space",
+      role: "broker",
+      seed: "broker-a",
+    });
+    const worker = buildPinetSkinAssignment({
+      theme: "foundation/space",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(broker.theme).toBe("foundation");
+    expect(worker.theme).toBe("foundation");
+    expect(broker.name).toMatch(
+      /(Archive|Civic|Relay|Frontier|Vector|Prime|Concord|Vault|Signal|Ledger|Mandate|Chair|Coordinator|Keeper|Warden|Marshal|Regent|Speaker)/,
+    );
+    expect(worker.name).toMatch(
+      /(Archive|Civic|Relay|Frontier|Vector|Concord|Vault|Signal|Ledger|Beacon|Orbit|Accord|Catalog|Gate|Evidence|Scout|Runner|Worker|Clerk|Hand)/,
+    );
+    expect(broker.name).not.toMatch(
+      /^(Archive|Civic|Relay|Frontier|Vector|Prime|Concord|Vault) (Director|Warden|Speaker|Marshal|Archivist|Provost|Steward|Prime|Coordinator|Gatekeeper|Crisis Chair|Relay Chief|Concord Lead|Vault Keeper|Mission Clerk|Signal Regent) \w+$/,
+    );
+    expect(worker.name).not.toMatch(
+      /^(Prime|Vault|Relay|Frontier|Crisis|Archive|Vector|Civic|Concord|Gate|Ledger|Beacon|Orbit|Accord|Catalog|Signal|Reserve|Horizon|Twelvefold|Long-Range) \w+ (Analyst|Envoy|Relay|Surveyor|Ratifier|Indexer|Archivist|Scout|Observer|Clerk|Mapper|Operator|Witness|Courier|Auditor|Signalist|Custodian|Field Scribe|Verifier|Pathfinder)$/,
+    );
+    expect(broker.name).not.toMatch(/Broker \w+$/);
+    expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
+    expect(["🏛️", "🛰️", "⚖️", "🗄️", "🧭", "📜", "🌌", "🔭", "📡", "📶", "📚", "🛡️"]).toContain(
+      broker.emoji,
+    );
+    expect([
+      "📡",
+      "📚",
+      "🔭",
+      "🗂️",
+      "🧭",
+      "⚖️",
+      "🛰️",
+      "📍",
+      "🏛️",
+      "🌌",
+      "📒",
+      "🏙️",
+      "🚨",
+      "🔆",
+      "🪐",
+      "🤝",
+      "🗃️",
+      "📻",
+      "🏕️",
+      "🚪",
+      "🔐",
+      "📶",
+      "➡️",
+      "🕊️",
+    ]).toContain(worker.emoji);
+    expect(broker.personality).toContain("Presentation only");
+    expect(worker.personality).toContain("Presentation only");
+    expect(worker.statusVocabulary).toMatchObject({
+      idle: "standing by",
+      working: "on relay",
+      ghost: "off grid",
+    });
+  });
+
+  it("builds the Oathgate/Cosmere-inspired skin from curated fantasy-metal characters", () => {
+    const broker = buildPinetSkinAssignment({
+      theme: "oathgate",
+      role: "broker",
+      seed: "broker-a",
+    });
+    const worker = buildPinetSkinAssignment({
+      theme: "cosmere-inspired",
+      role: "worker",
+      seed: "worker-a",
+    });
+
+    expect(broker.theme).toBe("cosmere");
+    expect(worker.theme).toBe("cosmere");
+    expect(broker.name).toMatch(
+      /(Oath|Gate|Storm|Alloy|Ash|Mist|Forge|Copper|Silver|Bronze|Shard|Warden|Regent|Arbiter|Keeper|Oathspeaker|Spren)/,
+    );
+    expect(worker.name.split(" ").length).toBeLessThanOrEqual(3);
+    expect(broker.name).not.toMatch(
+      /^(Oathgate|Stormbound|Alloy|Ashen|Lantern|Bronze|Silver|Mistward) (Warden|Cartographer|Binder|Marshal|Keeper|Oathspeaker|Gatewright|Stormcaller|Forge Chair|Lampbearer|Alloy Regent|Ash Sentinel|Vow Steward|Mist Herald|Bronze Arbiter|Silver Captain) \w+$/,
+    );
+    expect(worker.name).not.toMatch(
+      /^(Iron|Steel|Tin|Pewter|Bronze|Copper|Zinc|Brass|Ash|Mist|Storm|Forge|Gate|Oath|Lantern|Silver|Ember|Vow|Alloy|Glass) \w+ (Scribe|Runner|Scout|Forger|Hand|Keeper|Pathfinder|Witness|Quill|Marker|Blade|Lamplighter|Ledger|Smith|Ward|Binder|Seeker|Courier|Emberwright|Gatehand)$/,
+    );
+    expect(broker.name).not.toMatch(/Broker \w+$/);
+    expect(worker.name).not.toMatch(/Badger|Otter|Crocodile|Beaver/);
+    expect(broker.emoji).toBeTruthy();
+    expect(worker.emoji).toBeTruthy();
+    expect(broker.personality).toContain("Presentation only");
+    expect(worker.personality).toContain("Presentation only");
+    expect(worker.statusVocabulary).toMatchObject({
+      idle: "holding oath",
+      working: "invested",
+      healthy: "stormlight bright",
+    });
+  });
+
+  it("provides a large authored Cosmere identity pool without formulaic triples", () => {
+    const oathgateWorkers = new Set<string>();
+
+    for (let index = 0; index < 300; index += 1) {
+      const assignment = buildPinetSkinAssignment({
+        theme: "oathgate",
+        role: "worker",
+        seed: `worker-${index}`,
+      });
+      oathgateWorkers.add(assignment.name);
+      expect(assignment.name.split(" ").length).toBeLessThanOrEqual(3);
+      expect(assignment.name).not.toMatch(
+        /^(Iron|Steel|Tin|Pewter|Bronze|Copper|Zinc|Brass|Ash|Mist|Storm|Forge|Gate|Oath|Lantern|Silver|Ember|Vow|Alloy|Glass) \w+ (Scribe|Runner|Scout|Forger|Hand|Keeper|Pathfinder|Witness|Quill|Marker|Blade|Lamplighter|Ledger|Smith|Ward|Binder|Seeker|Courier|Emberwright|Gatehand)$/,
+      );
+    }
+
+    expect(oathgateWorkers.size).toBeGreaterThan(100);
   });
 
   it("builds a custom free-form skin with role-aware identity and bounded voice guidance", () => {
@@ -1369,8 +1492,8 @@ describe("Pinet skin helpers", () => {
     });
 
     expect(broker.theme).toBe("night's watch from ASOIAF");
-    expect(broker.name).toBe(generateAgentName("broker-a", "broker").name);
-    expect(broker.name).toMatch(/^The Broker \w+$/);
+    expect(broker.name).toMatch(/^The .+ of .+$/);
+    expect(broker.name).not.toMatch(/Broker \w+$/);
     expect(broker.name).not.toBe(worker.name);
     expect(broker.personality).toContain("night's watch from ASOIAF");
     expect(worker.personality).toContain("night's watch from ASOIAF");
@@ -1424,6 +1547,7 @@ describe("Pinet skin helpers", () => {
       name: "Chrome Hacker Cipher",
       emoji: "🕶️",
       personality: "Lean into the vibe of cyberpunk hackers.",
+      statusVocabulary: { idle: "in the shadows", working: "on the wire" },
     });
 
     expect(
@@ -1436,6 +1560,7 @@ describe("Pinet skin helpers", () => {
       name: "Chrome Hacker Cipher",
       emoji: "🕶️",
       personality: "Lean into the vibe of cyberpunk hackers.",
+      statusVocabulary: { idle: "in the shadows", working: "on the wire" },
     });
   });
 
@@ -1968,6 +2093,65 @@ describe("formatAgentList", () => {
     ];
     const result = formatAgentList(agents, homedir);
     expect(result).toContain("~/work (dev) @ srv");
+  });
+
+  it("keeps core status neutral while adding optional skin status vocabulary", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🏛️",
+        name: "The Director of Archive",
+        id: "agent-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        metadata: {
+          skinTheme: "foundation",
+          skinStatusVocabulary: {
+            idle: "standing by",
+            ghost: "off grid",
+          },
+        },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    const result = formatAgentList([agent], homedir);
+    expect(result).toContain(
+      "The Director of Archive (agent-1) — idle (standing by) [ghost: off grid]",
+    );
+    expect(result).toContain("skin: foundation");
+  });
+
+  it("keeps default skin status display neutral even if old metadata carries vocabulary", () => {
+    const agent = buildAgentDisplayInfo(
+      {
+        emoji: "🦫",
+        name: "Prism Bronze Beaver",
+        id: "agent-1",
+        status: "idle",
+        lastHeartbeat: "2026-01-01T00:00:00.000Z",
+        metadata: {
+          skinTheme: "default",
+          skinStatusVocabulary: {
+            idle: "standing by",
+            ghost: "off grid",
+          },
+        },
+      },
+      {
+        now: Date.parse("2026-01-01T00:00:20.000Z"),
+        heartbeatTimeoutMs: 15_000,
+        heartbeatIntervalMs: 5_000,
+      },
+    );
+
+    const result = formatAgentList([agent], homedir);
+    expect(result).toContain("Prism Bronze Beaver (agent-1) — idle [ghost]");
+    expect(result).not.toContain("standing by");
+    expect(result).not.toContain("off grid");
   });
 
   it("formats health, lease, and capability tags", () => {

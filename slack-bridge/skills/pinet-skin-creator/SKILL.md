@@ -13,9 +13,10 @@ do not add model calls to broker startup or follower join paths.
 
 - **Default/classic stays random.** Preserve the existing whimsical random
   adjective/color/animal identity generation for the default/classic skin.
-- **Curated skins are pre-created.** Non-default skins may ship curated
-  character/name pools, role-specific personae, emoji/style guidance, and
-  status vocabulary.
+- **Curated skins are JSON descriptors.** Non-default skins should ship external
+  JSON descriptor assets with curated/prebaked identity pools, 1–3 word authored
+  display names, static emoji, personae, emoji/style guidance, and status
+  vocabulary.
 - **No LLM in startup/join.** Broker startup and follower join must remain
   deterministic, fast, offline-tolerant, and usable without model availability.
 - **Persist concrete assignments.** If a future `auto` mode chooses a skin or
@@ -37,15 +38,20 @@ do not add model calls to broker startup or follower join paths.
 2. **Draft the descriptor**
    - Start from `templates/pinet-skin-descriptor.json`.
    - Follow `references/descriptor-format.md` for fields and constraints.
-   - Prefer small, curated character pools with reusable role coverage over
-     large generated lists.
+   - Prefer rich curated/prebaked identity lists over random display-name
+     combinators, tiny hardcoded TypeScript lists, one-off generated names, or
+     obvious formulaic triples.
 
 3. **Create role-specific characters**
-   - Provide enough characters for likely concurrent workers.
-   - Include at least one broker/coordinator-appropriate character and several
-     worker/reviewer-friendly characters.
-   - Keep names short and readable in Slack/Pinet rosters.
-   - Pair each character with emoji and a concise persona snippet.
+   - For major themed skins, aim for 100–200 authored display identities.
+   - Display names can be 1, 2, or 3 words when they are distinctive and
+     flavorful.
+   - Include several broker/coordinator-appropriate identities and many
+     worker/reviewer-friendly identities.
+   - Keep display names distinctive in text alone; static emoji should add flavor,
+     not disambiguate identities.
+   - Use a broad emoji palette across identities/status flavor.
+   - Pair each identity with a static emoji and a concise persona snippet.
 
 4. **Write status vocabulary**
    - Map canonical states to display labels only. Canonical internal states stay
@@ -59,6 +65,11 @@ do not add model calls to broker startup or follower join paths.
    - Use `references/safety-checklist.md` before committing.
    - Remove secrets, local paths, private workspace names, private URLs, and
      copyrighted/third-party setting text that should not ship.
+   - Prefer original/inspired names over exact third-party character names unless
+     the maintainer explicitly accepts that risk.
+   - For the bundled `cosmere` skin, keep `cosmere` as the primary key, preserve
+     `oathgate` as an alias, constrain references to maintainer-approved source
+     material, and use Coppermind only as a research/verification source.
    - Ensure persona text cannot override broker/follower workflow, guardrails,
      or user/developer/system instructions.
 
@@ -75,8 +86,9 @@ do not add model calls to broker startup or follower join paths.
    - Run package `pnpm --filter @gugu910/pi-slack-bridge lint` and
      `pnpm --filter @gugu910/pi-slack-bridge typecheck` when touching
      TypeScript.
-   - For documentation-only descriptor work, run the relevant markdown/skill
-     packaging checks or a targeted test that reads the descriptor.
+   - For JSON descriptor work, run a targeted test that reads/validates the
+     descriptor and verifies the authored identity pool is large enough without
+     formulaic display names.
 
 ## Output format for a new skin proposal
 

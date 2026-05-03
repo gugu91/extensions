@@ -454,15 +454,27 @@ Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are per
 
 ### Broker commands
 
-| Command                 | Description                                |
-| ----------------------- | ------------------------------------------ |
-| `/pinet-start`          | Start as the mesh broker                   |
-| `/pinet-follow`         | Connect as a follower worker               |
-| `/pinet-unfollow`       | Disconnect from the broker                 |
-| `/pinet-reload <agent>` | Ask another agent to reload                |
-| `/pinet-exit <agent>`   | Ask another agent to exit                  |
-| `/pinet-free`           | Mark this agent as idle                    |
-| `/pinet-skin <theme>`   | Change the mesh naming theme (broker only) |
+| Command                 | Description                                     |
+| ----------------------- | ----------------------------------------------- |
+| `/pinet-start`          | Start as the mesh broker                        |
+| `/pinet-follow`         | Connect as a follower worker                    |
+| `/pinet-unfollow`       | Disconnect from the broker                      |
+| `/pinet-reload <agent>` | Ask another agent to reload                     |
+| `/pinet-exit <agent>`   | Ask another agent to exit                       |
+| `/pinet-free`           | Mark this agent as idle                         |
+| `/pinet-skin <theme>`   | Change the mesh presentation skin (broker only) |
+
+### Pinet skins
+
+`/pinet-skin <theme>` updates mesh presentation only: names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
+
+Built-in skins:
+
+- `default` / `classic` — preserves the current whimsical animal names, animal emoji palette, and playful-but-focused persona.
+- `foundation` / `foundation/space` / `space` — JSON descriptor with curated institutional sci-fi characters, full-name aliases, and archive, relay, frontier, and crisis-room flavor.
+- `cosmere` / `cosmere-inspired` / `oathgate` — JSON descriptor with curated/prebaked 1–3 word identities, static emoji, and whimsical Mistborn/Stormlight/Emberdark-inspired agents, spren, artifacts, places, and jokes while avoiding exact third-party character names.
+
+Free-form themes are still accepted as deterministic legacy/custom presentation themes. Shipped non-default skins live in `skins/*.json`; use the bundled `pinet-skin-creator` skill to author and review curated character/name/persona/status-vocabulary pools before adding runtime descriptors.
 
 ### How it works
 

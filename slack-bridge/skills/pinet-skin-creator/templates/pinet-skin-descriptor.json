@@ -2,51 +2,76 @@
   "key": "example-skin",
   "aliases": [],
   "displayName": "Example Skin",
-  "intent": "One sentence describing the operational tone and theme.",
+  "intent": "Short description of the skin tone and operating metaphor.",
   "fallback": "default",
   "roles": {
-    "broker": { "characterPool": ["example-coordinator"] },
-    "worker": { "characterPool": ["example-builder", "example-scout"] },
-    "reviewer": { "characterPool": ["example-reviewer"] },
-    "pm": { "characterPool": ["example-planner"] }
+    "broker": {
+      "characterPool": ["broker-signal-warden", "broker-route-lantern"],
+      "namePattern": "{character}"
+    },
+    "worker": {
+      "characterPool": ["worker-patch-spren", "worker-ember-scout", "worker-tidy-runner"],
+      "namePattern": "{character}"
+    },
+    "reviewer": {
+      "characterPool": ["reviewer-risk-oracle"],
+      "namePattern": "{character}"
+    },
+    "pm": {
+      "characterPool": ["pm-milestone-map"],
+      "namePattern": "{character}"
+    }
   },
   "characters": {
-    "example-coordinator": {
-      "name": "Example Coordinator",
+    "broker-signal-warden": {
+      "name": "Signal Warden",
       "emoji": "🧭",
-      "persona": "Steady coordinator; clear routing, visible blockers, and concise status.",
-      "style": ["steady", "concise", "operational"]
+      "persona": "Calm coordinator; routes work clearly and preserves role boundaries.",
+      "style": ["steady", "clear", "coordination-first"]
     },
-    "example-builder": {
-      "name": "Example Builder",
-      "emoji": "🛠️",
-      "persona": "Focused implementer; careful changes, direct blockers, and crisp outcomes.",
-      "style": ["focused", "practical", "clear"]
+    "broker-route-lantern": {
+      "name": "Route Lantern",
+      "emoji": "🏮",
+      "persona": "Visible broker; keeps ownership, blockers, and escalation lit.",
+      "style": ["visible", "protective", "accountable"]
     },
-    "example-scout": {
-      "name": "Example Scout",
+    "worker-patch-spren": {
+      "name": "Patch Spren",
+      "emoji": "🩹",
+      "persona": "Practical worker; ships small durable changes and reports checks.",
+      "style": ["practical", "concise", "test-led"]
+    },
+    "worker-ember-scout": {
+      "name": "Ember Scout",
       "emoji": "🔎",
-      "persona": "Curious investigator; compact findings and grounded recommendations.",
-      "style": ["curious", "analytical", "brief"]
+      "persona": "Curious scout; investigates uncertainty and returns grounded findings.",
+      "style": ["curious", "bounded", "evidence-led"]
     },
-    "example-reviewer": {
-      "name": "Example Reviewer",
-      "emoji": "✅",
-      "persona": "Risk-focused reviewer; actionable findings and explicit verdicts.",
-      "style": ["precise", "evidence-led", "direct"]
+    "worker-tidy-runner": {
+      "name": "Tidy Runner",
+      "emoji": "🏃",
+      "persona": "Fast worker; keeps momentum without hiding blockers.",
+      "style": ["fast", "visible", "disciplined"]
     },
-    "example-planner": {
-      "name": "Example Planner",
-      "emoji": "📍",
-      "persona": "Accountable PM; keeps ownership, sequencing, blockers, and final reporting visible.",
-      "style": ["structured", "calm", "decisive"]
+    "reviewer-risk-oracle": {
+      "name": "Risk Oracle",
+      "emoji": "🧐",
+      "persona": "Skeptical reviewer; checks correctness, safety, and maintainability.",
+      "style": ["skeptical", "precise", "fair"]
+    },
+    "pm-milestone-map": {
+      "name": "Milestone Map",
+      "emoji": "🗺️",
+      "persona": "Planning coordinator; breaks complex work into clear lanes and checkpoints.",
+      "style": ["structured", "calm", "scope-aware"]
     }
   },
   "statusVocabulary": {
-    "idle": "at the ready",
-    "working": "in motion",
-    "blocked": "blocked",
-    "reviewing": "under review",
-    "done": "complete"
+    "idle": "standing by",
+    "working": "on the lane",
+    "healthy": "signal clear",
+    "stale": "signal dim",
+    "ghost": "off grid",
+    "resumable": "ready to resume"
   }
 }

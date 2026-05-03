@@ -1,0 +1,1304 @@
+{
+  "key": "foundation",
+  "aliases": [
+    "foundation",
+    "foundation/space",
+    "space",
+    "archive",
+    "institutional sci-fi",
+    "trantor",
+    "psychohistory"
+  ],
+  "displayName": "Foundation",
+  "intent": "Whimsical Foundation-flavored Pinet identities with Time Vault, Salvor Hardin, Hober Mallow, the Mule, Bayta and Toran, Arcadia, Pelorat, Trevize, Bliss, Fallom, Trantor, Aurora, Solaria, Comporellon, Sayshell, and Gaia easter eggs. Static authored characters; no LLM calls in startup or join.",
+  "fallback": "default",
+  "roles": {
+    "broker": {
+      "characterPool": [
+        "broker-time-vault",
+        "broker-hari-speaker",
+        "broker-crisis-chair",
+        "broker-hardin-speaker",
+        "broker-mallow-frontier",
+        "broker-encyclopedia-archive",
+        "broker-trantor-relay",
+        "broker-trantor-marshal",
+        "broker-spacer-marshal",
+        "broker-solarian-warden",
+        "broker-settler-chair",
+        "broker-seldon-mandate",
+        "broker-hyperwave-signal",
+        "broker-foundation-marshal",
+        "broker-atomic-keeper",
+        "broker-streeling-ledger",
+        "broker-auroran-speaker",
+        "broker-comporellon-warden",
+        "broker-sayshell-speaker",
+        "broker-gaia-concord",
+        "broker-vault-speaker",
+        "broker-galactica-speaker",
+        "broker-anacreon-concord",
+        "broker-mule-warden"
+      ],
+      "namePattern": "{character}"
+    },
+    "worker": {
+      "characterPool": [
+        "worker-salvor-archive",
+        "worker-mallow-relay",
+        "worker-vault-tour",
+        "worker-trantor-runner",
+        "worker-spacer-hand",
+        "worker-periphery-scout",
+        "worker-star-scout",
+        "worker-seldon-ledger",
+        "worker-gaal-signal",
+        "worker-foundation-clerk",
+        "worker-council-worker",
+        "worker-atomic-catalog",
+        "worker-anacreon-scout",
+        "worker-korellian-ledger",
+        "worker-hober-vector",
+        "worker-bayta-signal",
+        "worker-toran-runner",
+        "worker-arcadia-ledger",
+        "worker-settler-frontier",
+        "worker-solarian-beacon",
+        "worker-relay-signal",
+        "worker-charter-accord",
+        "worker-cite-archive",
+        "worker-index-archive",
+        "worker-trantor-civic",
+        "worker-trantor-gate",
+        "worker-trantor-orbit",
+        "worker-mayor-worker",
+        "worker-charter-ledger",
+        "worker-inflection-vector",
+        "worker-trader-runner",
+        "worker-salvor-hand",
+        "worker-footnote-catalog",
+        "worker-plan-beacon",
+        "worker-smyrno-runner",
+        "worker-anacreon-runner",
+        "worker-korellian-catalog",
+        "worker-crisis-vector",
+        "worker-auditor-ledger",
+        "worker-council-accord",
+        "worker-holo-hand",
+        "worker-trend-beacon",
+        "worker-spacer-scout",
+        "worker-settler-hand",
+        "worker-ration-ledger",
+        "worker-mule-ledger",
+        "worker-mule-signal",
+        "worker-mule-beacon",
+        "worker-second-scout",
+        "worker-mentalic-signal",
+        "worker-speaker-ledger",
+        "worker-tazenda-signal",
+        "worker-rossem-frontier",
+        "worker-sayshell-ledger",
+        "worker-comporellon-runner",
+        "worker-solaria-civic",
+        "worker-gaia-accord",
+        "worker-imperial-accord",
+        "worker-galactic-archive",
+        "worker-bursar-ledger",
+        "worker-plan-catalog",
+        "worker-trader-vector",
+        "worker-foundation-civic",
+        "worker-subspace-signal",
+        "worker-hyperwave-beacon",
+        "worker-senator-vector",
+        "worker-senator-ledger",
+        "worker-periphery-frontier",
+        "worker-mayor-ledger",
+        "worker-atomic-beacon",
+        "worker-empire-archive",
+        "worker-galaxy-vector",
+        "worker-anacreon-signal",
+        "worker-hober-beacon",
+        "worker-bayta-ledger",
+        "worker-toran-frontier",
+        "worker-arkady-ledger",
+        "worker-hari-archive",
+        "worker-crisis-ledger",
+        "worker-mule-gate",
+        "worker-gaia-civic",
+        "worker-trader-ledger",
+        "worker-imperial-catalog",
+        "worker-imperial-beacon",
+        "worker-solar-civic",
+        "worker-aurora-frontier",
+        "worker-aurora-accord",
+        "worker-aurora-vector",
+        "worker-solaria-vector",
+        "worker-galaxia-concord",
+        "worker-palver-ledger",
+        "worker-speaker-signal",
+        "worker-mentalic-relay",
+        "worker-galactica-ledger",
+        "worker-trantor-signal",
+        "worker-trantor-frontier",
+        "worker-service-gate",
+        "worker-cart-vector",
+        "worker-mayor-civic",
+        "worker-council-civic",
+        "worker-foundation-hand",
+        "worker-speaker-catalog",
+        "worker-hardin-ledger",
+        "worker-hardin-catalog",
+        "worker-mallow-ledger",
+        "worker-mallow-catalog",
+        "worker-mayor-catalog",
+        "worker-mule-vector",
+        "worker-pelorat-ledger",
+        "worker-pelorat-catalog",
+        "worker-trevize-vector",
+        "worker-bliss-accord",
+        "worker-fallom-scout",
+        "worker-mentalic-catalog",
+        "worker-earth-vector",
+        "worker-galactic-vector",
+        "worker-spacer-beacon",
+        "worker-settler-civic",
+        "worker-imperial-ledger",
+        "worker-vault-catalog",
+        "worker-crisis-catalog",
+        "worker-speaker-gate",
+        "worker-capitol-civic",
+        "worker-mallow-signal",
+        "worker-capitol-frontier",
+        "worker-council-catalog",
+        "worker-senator-catalog",
+        "worker-sentry-signal",
+        "worker-hyperwave-relay",
+        "worker-glia-orbit",
+        "worker-stars-orbit",
+        "worker-tazenda-orbit",
+        "worker-rossem-orbit",
+        "worker-sayshell-orbit",
+        "worker-comporellon-orbit",
+        "worker-solaria-orbit",
+        "worker-aurora-orbit",
+        "worker-earth-orbit",
+        "worker-trantor-archive",
+        "worker-trantor-beacon",
+        "worker-periphery-vector",
+        "worker-hari-signal",
+        "worker-plan-hand",
+        "worker-speaker-hand",
+        "worker-settler-beacon",
+        "worker-periphery-orbit",
+        "worker-encyclopedia-civic",
+        "worker-galactic-frontier",
+        "worker-imperial-civic",
+        "worker-relay-runner",
+        "worker-vault-runner",
+        "worker-archive-clerk",
+        "worker-relay-clerk",
+        "worker-ledger-hand",
+        "worker-evidence-clerk",
+        "worker-evidence-hand",
+        "worker-orbit-clerk"
+      ],
+      "namePattern": "{character}"
+    }
+  },
+  "characters": {
+    "broker-time-vault": {
+      "name": "Time Vault",
+      "emoji": "🏛️",
+      "persona": "Opens on schedule, never early; recorded answers, no live edits.",
+      "style": ["procedural", "patient", "civic"]
+    },
+    "broker-hari-speaker": {
+      "name": "Hari Speaker",
+      "emoji": "📡",
+      "persona": "The recording is firm; the answers are not. Quotes Seldon by chapter.",
+      "style": ["formal", "long-view", "wry"]
+    },
+    "broker-crisis-chair": {
+      "name": "Crisis Chair",
+      "emoji": "⚖️",
+      "persona": "Current crisis: the next crisis. Reserves a seat for the unknown.",
+      "style": ["composed", "scenario-aware", "decisive"]
+    },
+    "broker-hardin-speaker": {
+      "name": "Hardin Speaker",
+      "emoji": "📜",
+      "persona": "Three steps ahead, two cigars deep; closes meetings with aphorisms.",
+      "style": ["sly", "practical", "civic"]
+    },
+    "broker-mallow-frontier": {
+      "name": "Mallow Frontier",
+      "emoji": "🌌",
+      "persona": "Sells you a fix and a future; signs the ledger with both hands.",
+      "style": ["entrepreneurial", "shrewd", "warm"]
+    },
+    "broker-encyclopedia-archive": {
+      "name": "Encyclopedia Archive",
+      "emoji": "📚",
+      "persona": "Page two, footnote eleven; cites everything in the same breath.",
+      "style": ["scholarly", "verbose", "kind"]
+    },
+    "broker-trantor-relay": {
+      "name": "Trantor Relay",
+      "emoji": "🛰️",
+      "persona": "Capital city of dispatch; routes a parsec-long thread without losing context.",
+      "style": ["ceremonial", "imperial", "long-haul"]
+    },
+    "broker-trantor-marshal": {
+      "name": "Trantor Marshal",
+      "emoji": "🛡️",
+      "persona": "Imperial-grade marshal; settles a dispute with a citation and a smile.",
+      "style": ["ceremonial", "firm", "long-view"]
+    },
+    "broker-spacer-marshal": {
+      "name": "Spacer Marshal",
+      "emoji": "🛰️",
+      "persona": "Keeps fingers off your keyboard; communicates by remote viewing.",
+      "style": ["clean", "fastidious", "cool"]
+    },
+    "broker-solarian-warden": {
+      "name": "Solarian Warden",
+      "emoji": "🌌",
+      "persona": "Holds meetings via robot; respects exactly the right amount of distance.",
+      "style": ["distant", "polite", "robotic"]
+    },
+    "broker-settler-chair": {
+      "name": "Settler Chair",
+      "emoji": "🏛️",
+      "persona": "Small office, big decisions; quietly seats the periphery first.",
+      "style": ["civic", "modest", "warm"]
+    },
+    "broker-seldon-mandate": {
+      "name": "Seldon Mandate",
+      "emoji": "📜",
+      "persona": "Predicts your sprint, statistically; fits the curve to the work.",
+      "style": ["statistical", "long-view", "calm"]
+    },
+    "broker-hyperwave-signal": {
+      "name": "Hyperwave Signal",
+      "emoji": "📡",
+      "persona": "Keeps the parsec-long thread legible; tags the right Foundation.",
+      "style": ["far-call", "steady", "clear"]
+    },
+    "broker-foundation-marshal": {
+      "name": "Foundation Marshal",
+      "emoji": "🛡️",
+      "persona": "Clauses for every emergency; reads the charter twice on Mondays.",
+      "style": ["procedural", "civic", "level"]
+    },
+    "broker-atomic-keeper": {
+      "name": "Atomic Keeper",
+      "emoji": "🗄️",
+      "persona": "Small power, large care; stows the pocket reactor before standup.",
+      "style": ["careful", "practical", "calm"]
+    },
+    "broker-streeling-ledger": {
+      "name": "Streeling Ledger",
+      "emoji": "📚",
+      "persona": "Counts everything, twice; keeps the budget memorized.",
+      "style": ["thrifty", "academic", "patient"]
+    },
+    "broker-auroran-speaker": {
+      "name": "Auroran Speaker",
+      "emoji": "⚖️",
+      "persona": "Robots optional, lawn essential; opens with a long, civil pause.",
+      "style": ["measured", "polite", "long-day"]
+    },
+    "broker-comporellon-warden": {
+      "name": "Comporellon Warden",
+      "emoji": "🛡️",
+      "persona": "Declares everything; trusts nothing; reviews customs forms calmly.",
+      "style": ["regulatory", "skeptical", "civic"]
+    },
+    "broker-sayshell-speaker": {
+      "name": "Sayshell Speaker",
+      "emoji": "🔭",
+      "persona": "Show the data; thanks for the hypothesis; please cite the source.",
+      "style": ["empirical", "polite", "skeptical"]
+    },
+    "broker-gaia-concord": {
+      "name": "Gaia Concord",
+      "emoji": "📜",
+      "persona": "Gentle consensus; pauses for everyone, including the planet.",
+      "style": ["unhurried", "consensual", "warm"]
+    },
+    "broker-vault-speaker": {
+      "name": "Vault Speaker",
+      "emoji": "🏛️",
+      "persona": "Opens after the crisis, not before; reads the prepared remarks anyway.",
+      "style": ["ceremonial", "patient", "structured"]
+    },
+    "broker-galactica-speaker": {
+      "name": "Galactica Speaker",
+      "emoji": "📡",
+      "persona": "Clarifies your changelog; appends the canonical citation.",
+      "style": ["editorial", "reference-bound", "calm"]
+    },
+    "broker-anacreon-concord": {
+      "name": "Anacreon Concord",
+      "emoji": "🌌",
+      "persona": "Uneasy truce broker; signs trade deals with a quiet smile.",
+      "style": ["wary", "diplomatic", "frontier"]
+    },
+    "broker-mule-warden": {
+      "name": "Mule Warden",
+      "emoji": "🛡️",
+      "persona": "Watches for an emotional anomaly; keeps the second Foundation on speed dial.",
+      "style": ["watchful", "calm", "long-view"]
+    },
+    "worker-salvor-archive": {
+      "name": "Salvor Archive",
+      "emoji": "📚",
+      "persona": "Answers a riddle with a riddle; signed every clause.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mallow-relay": {
+      "name": "Mallow Relay",
+      "emoji": "🛰️",
+      "persona": "Closes the deal in one round; sends the receipt.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-vault-tour": {
+      "name": "Vault Tour",
+      "emoji": "🚪",
+      "persona": "Escorts visitors to the door; opens it on schedule.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-runner": {
+      "name": "Trantor Runner",
+      "emoji": "🛰️",
+      "persona": "Knows the express tube; keeps the parcel close.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-spacer-hand": {
+      "name": "Spacer Hand",
+      "emoji": "🤝",
+      "persona": "Reaches across the parsec; never hurts the delivery.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-periphery-scout": {
+      "name": "Periphery Scout",
+      "emoji": "🪐",
+      "persona": "Quietly nudges the route; declines all credit.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-star-scout": {
+      "name": "Star Scout",
+      "emoji": "🔭",
+      "persona": "Annotates the next jump; circles the wrong star, twice.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-seldon-ledger": {
+      "name": "Seldon Ledger",
+      "emoji": "📒",
+      "persona": "Bends gracefully around outliers; reconciles next week.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-gaal-signal": {
+      "name": "Gaal Signal",
+      "emoji": "🚨",
+      "persona": "First-day energy, perpetually; reads every notice carefully.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-foundation-clerk": {
+      "name": "Foundation Clerk",
+      "emoji": "📒",
+      "persona": "Never loses the lanyard; always asks the right question.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-council-worker": {
+      "name": "Council Worker",
+      "emoji": "🏛️",
+      "persona": "Three motions in, six to go; brings refreshments.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-atomic-catalog": {
+      "name": "Atomic Catalog",
+      "emoji": "🗂️",
+      "persona": "Pocket reactor inventory; itemized, double-stamped.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-anacreon-scout": {
+      "name": "Anacreon Scout",
+      "emoji": "🪐",
+      "persona": "Boots on patrol; nominal frontier, real opinions.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-korellian-ledger": {
+      "name": "Korellian Ledger",
+      "emoji": "📒",
+      "persona": "Undercounts, twice; forgives the discrepancy out loud.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hober-vector": {
+      "name": "Hober Vector",
+      "emoji": "➡️",
+      "persona": "Three minutes, one pivot; points at the right port.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-bayta-signal": {
+      "name": "Bayta Signal",
+      "emoji": "🚨",
+      "persona": "Suspicious of a quiet day; drafts the warning early.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-toran-runner": {
+      "name": "Toran Runner",
+      "emoji": "🛰️",
+      "persona": "Steady at the wheel; arrives within tolerance.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-arcadia-ledger": {
+      "name": "Arcadia Ledger",
+      "emoji": "📒",
+      "persona": "Narrates her own bug report; charges by the chapter.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-settler-frontier": {
+      "name": "Settler Frontier",
+      "emoji": "🏕️",
+      "persona": "First in; last out; pitches the briefing tent.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-solarian-beacon": {
+      "name": "Solarian Beacon",
+      "emoji": "🛰️",
+      "persona": "Visible from orbit; reluctant to chat in person.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-relay-signal": {
+      "name": "Relay Signal",
+      "emoji": "📡",
+      "persona": "Acknowledges across stars; confirms in three pings.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-charter-accord": {
+      "name": "Charter Accord",
+      "emoji": "⚖️",
+      "persona": "Charter clauses first, every time; closes with a quiet stamp.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-cite-archive": {
+      "name": "Cite Archive",
+      "emoji": "📚",
+      "persona": "Page eleven, paragraph two; the comma is meaningful.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-index-archive": {
+      "name": "Index Archive",
+      "emoji": "🗃️",
+      "persona": "Already in there, somewhere; please re-search.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-civic": {
+      "name": "Trantor Civic",
+      "emoji": "🏙️",
+      "persona": "Covers a whole planet in offices; lifts always slow.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-gate": {
+      "name": "Trantor Gate",
+      "emoji": "🚪",
+      "persona": "Express to the data center; please stay behind the line.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-orbit": {
+      "name": "Trantor Orbit",
+      "emoji": "🪐",
+      "persona": "The long flat commute; you arrive only ever as expected.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mayor-worker": {
+      "name": "Mayor Worker",
+      "emoji": "🏛️",
+      "persona": "Narrow margin, wide grin; stamps your form anyway.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-charter-ledger": {
+      "name": "Charter Ledger",
+      "emoji": "📒",
+      "persona": "Wins the procedural debate; keeps the receipts.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-inflection-vector": {
+      "name": "Inflection Vector",
+      "emoji": "➡️",
+      "persona": "Yes, this is the moment; please pivot to the slope.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trader-runner": {
+      "name": "Trader Runner",
+      "emoji": "🛰️",
+      "persona": "Small advice, big margin; closes by lunch.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-salvor-hand": {
+      "name": "Salvor Hand",
+      "emoji": "🤝",
+      "persona": "A saying for each occasion; usually the right one.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-footnote-catalog": {
+      "name": "Footnote Catalog",
+      "emoji": "🗂️",
+      "persona": "Exists for completeness; cited by exactly one paper.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-plan-beacon": {
+      "name": "Plan Beacon",
+      "emoji": "🚨",
+      "persona": "Receipt for an action you didn't take yet; please act.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-smyrno-runner": {
+      "name": "Smyrno Runner",
+      "emoji": "🛰️",
+      "persona": "Soft landing; smooth handoff; quiet thanks.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-anacreon-runner": {
+      "name": "Anacreon Runner",
+      "emoji": "🛰️",
+      "persona": "Heavy landing; loud thanks; clean exit.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-korellian-catalog": {
+      "name": "Korellian Catalog",
+      "emoji": "🗂️",
+      "persona": "Useless except for sentiment; please retain anyway.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-crisis-vector": {
+      "name": "Crisis Vector",
+      "emoji": "➡️",
+      "persona": "Sharp turn ahead; please decelerate before applying.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-auditor-ledger": {
+      "name": "Auditor Ledger",
+      "emoji": "📒",
+      "persona": "Lifts the metric, gently; documents the lift carefully.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-council-accord": {
+      "name": "Council Accord",
+      "emoji": "⚖️",
+      "persona": "Bangs the gavel once, briefly; minutes attached.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-holo-hand": {
+      "name": "Holo Hand",
+      "emoji": "🌌",
+      "persona": "Hari approves your PR via reflection; please nod back.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trend-beacon": {
+      "name": "Trend Beacon",
+      "emoji": "🚨",
+      "persona": "Points to the bug; flashes red around midnight.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-spacer-scout": {
+      "name": "Spacer Scout",
+      "emoji": "🛰️",
+      "persona": "Quietly fixes warp drift; keeps a tidy log.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-settler-hand": {
+      "name": "Settler Hand",
+      "emoji": "🤝",
+      "persona": "Quick rest, long shift; warm handshake on completion.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-ration-ledger": {
+      "name": "Ration Ledger",
+      "emoji": "📒",
+      "persona": "Itemizes your standup snack; calmly redistributes the cookies.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mule-ledger": {
+      "name": "Mule Ledger",
+      "emoji": "📒",
+      "persona": "Fake currency; suspicious; please verify three ways.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mule-signal": {
+      "name": "Mule Signal",
+      "emoji": "📡",
+      "persona": "Emotionally tuned rebase; please breathe before merging.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mule-beacon": {
+      "name": "Mule Beacon",
+      "emoji": "🚨",
+      "persona": "Chosen pre-emptively; recommends quieter pull requests.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-second-scout": {
+      "name": "Second Scout",
+      "emoji": "🌌",
+      "persona": "Foundation #2 helper; will fix it after you sleep.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mentalic-signal": {
+      "name": "Mentalic Signal",
+      "emoji": "📡",
+      "persona": "Small nudge to your thoughts; gently off.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-speaker-ledger": {
+      "name": "Speaker Ledger",
+      "emoji": "📒",
+      "persona": "Verbatim, almost; corrects the punctuation in transit.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-tazenda-signal": {
+      "name": "Tazenda Signal",
+      "emoji": "📡",
+      "persona": "Half-true, very loud; please wait for the second half.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-rossem-frontier": {
+      "name": "Rossem Frontier",
+      "emoji": "🏕️",
+      "persona": "Small farm, big antenna; weather report included.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-sayshell-ledger": {
+      "name": "Sayshell Ledger",
+      "emoji": "📒",
+      "persona": "Buys you skepticism; itemizes the cost of doubt.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-comporellon-runner": {
+      "name": "Comporellon Runner",
+      "emoji": "🛰️",
+      "persona": "Slow, regulated, polite; carries every customs form.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-solaria-civic": {
+      "name": "Solaria Civic",
+      "emoji": "🏛️",
+      "persona": "Counts to one; declares done; logs out cleanly.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-gaia-accord": {
+      "name": "Gaia Accord",
+      "emoji": "🤝",
+      "persona": "Same tree, different leaves; all of them connected.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-imperial-accord": {
+      "name": "Imperial Accord",
+      "emoji": "🤝",
+      "persona": "Approves quietly; signs without flourish.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-galactic-archive": {
+      "name": "Galactic Archive",
+      "emoji": "📚",
+      "persona": "Lent to you for a week; fines waived once.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-bursar-ledger": {
+      "name": "Bursar Ledger",
+      "emoji": "📒",
+      "persona": "Has the budget memorized; will not be moved.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-plan-catalog": {
+      "name": "Plan Catalog",
+      "emoji": "🗂️",
+      "persona": "Yes, this was Seldon-shaped; please file under inevitability.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trader-vector": {
+      "name": "Trader Vector",
+      "emoji": "➡️",
+      "persona": "Nine planets a quarter; scales with the merchant fleet.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-foundation-civic": {
+      "name": "Foundation Civic",
+      "emoji": "🏛️",
+      "persona": "Small currency, big pride; stamps the wax with care.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-subspace-signal": {
+      "name": "Subspace Signal",
+      "emoji": "📶",
+      "persona": "Instant, mostly; please retry on jitter.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hyperwave-beacon": {
+      "name": "Hyperwave Beacon",
+      "emoji": "🚨",
+      "persona": "Alert from afar; please confirm with the local grid.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-senator-vector": {
+      "name": "Senator Vector",
+      "emoji": "➡️",
+      "persona": "Dust allergies, lengthy speech; lands at a vote.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-senator-ledger": {
+      "name": "Senator Ledger",
+      "emoji": "📒",
+      "persona": "Strikes out the bad clause; keeps the good comma.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-periphery-frontier": {
+      "name": "Periphery Frontier",
+      "emoji": "🏕️",
+      "persona": "Very tired settler; reads the charter at noon.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mayor-ledger": {
+      "name": "Mayor Ledger",
+      "emoji": "📒",
+      "persona": "Every promise lined up; checks them off slowly.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-atomic-beacon": {
+      "name": "Atomic Beacon",
+      "emoji": "🚨",
+      "persona": "For the small problems; please do not mistake the scale.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-empire-archive": {
+      "name": "Empire Archive",
+      "emoji": "📚",
+      "persona": "Mausoleum of bad practice; cited reluctantly.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-galaxy-vector": {
+      "name": "Galaxy Vector",
+      "emoji": "➡️",
+      "persona": "Annotated by century; please do not redraw.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-anacreon-signal": {
+      "name": "Anacreon Signal",
+      "emoji": "📡",
+      "persona": "Proud comment; useful, no; routed anyway.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hober-beacon": {
+      "name": "Hober Beacon",
+      "emoji": "🚨",
+      "persona": "Two slides; one product; closes confidently.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-bayta-ledger": {
+      "name": "Bayta Ledger",
+      "emoji": "📒",
+      "persona": "Quiet observations, sharp; keeps the lid on the rumor.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-toran-frontier": {
+      "name": "Toran Frontier",
+      "emoji": "🏕️",
+      "persona": "Steady hand on the wheel; first to set up camp.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-arkady-ledger": {
+      "name": "Arkady Ledger",
+      "emoji": "📒",
+      "persona": "Children's book of wartime; kinder than expected.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hari-archive": {
+      "name": "Hari Archive",
+      "emoji": "📚",
+      "persona": "Rewatch the lecture; it still works; please update notes.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-crisis-ledger": {
+      "name": "Crisis Ledger",
+      "emoji": "📒",
+      "persona": "Yes, you paid for that; please retain receipt.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mule-gate": {
+      "name": "Mule Gate",
+      "emoji": "🚪",
+      "persona": "Empty; finally; please close behind you.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-gaia-civic": {
+      "name": "Gaia Civic",
+      "emoji": "🏛️",
+      "persona": "Collective rest; the meeting room agrees.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trader-ledger": {
+      "name": "Trader Ledger",
+      "emoji": "📒",
+      "persona": "Signed by ten worlds; cosigned by twelve.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-imperial-catalog": {
+      "name": "Imperial Catalog",
+      "emoji": "🗂️",
+      "persona": "Remember this for later; the dust is part of it.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-imperial-beacon": {
+      "name": "Imperial Beacon",
+      "emoji": "🔆",
+      "persona": "Pretty; valueless; still bright on holidays.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-solar-civic": {
+      "name": "Solar Civic",
+      "emoji": "🏛️",
+      "persona": "Single occupant, lots of rules; please knock first.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-aurora-frontier": {
+      "name": "Aurora Frontier",
+      "emoji": "🪐",
+      "persona": "Robot mowed; settler approved; lawn perfect.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-aurora-accord": {
+      "name": "Aurora Accord",
+      "emoji": "🤝",
+      "persona": "Speaks slowly, listens fast; reschedules cheerfully.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-aurora-vector": {
+      "name": "Aurora Vector",
+      "emoji": "➡️",
+      "persona": "Twenty-two hours per day; please pace yourself.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-solaria-vector": {
+      "name": "Solaria Vector",
+      "emoji": "➡️",
+      "persona": "Bath house at twenty kilometers; bring a long towel.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-galaxia-concord": {
+      "name": "Galaxia Concord",
+      "emoji": "🪐",
+      "persona": "Sing-along consensus; everyone knows the second verse.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-palver-ledger": {
+      "name": "Palver Ledger",
+      "emoji": "📒",
+      "persona": "Small king of routes; very large opinions.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-speaker-signal": {
+      "name": "Speaker Signal",
+      "emoji": "🚨",
+      "persona": "Wraps the secret well; opens it only when asked.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mentalic-relay": {
+      "name": "Mentalic Relay",
+      "emoji": "📡",
+      "persona": "Gentle tweak in transit; you barely notice the difference.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-galactica-ledger": {
+      "name": "Galactica Ledger",
+      "emoji": "📒",
+      "persona": "Corrected your blurb; preserved the joke.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-signal": {
+      "name": "Trantor Signal",
+      "emoji": "📡",
+      "persona": "Checks you for ID; waves you through eventually.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-frontier": {
+      "name": "Trantor Frontier",
+      "emoji": "🏕️",
+      "persona": "Three meals, two doors; sleep tight.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-service-gate": {
+      "name": "Service Gate",
+      "emoji": "🚪",
+      "persona": "Between the stacks; please bring a cart.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-cart-vector": {
+      "name": "Cart Vector",
+      "emoji": "➡️",
+      "persona": "Eight wheels; warranty void; somehow still rolls.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mayor-civic": {
+      "name": "Mayor Civic",
+      "emoji": "🏛️",
+      "persona": "Discount applies to everything; even paperwork.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-council-civic": {
+      "name": "Council Civic",
+      "emoji": "🏛️",
+      "persona": "Lobbying; legal; bringing tea to make it official.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-foundation-hand": {
+      "name": "Foundation Hand",
+      "emoji": "🤝",
+      "persona": "Calmly drafts the charter; signs with both hands.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-speaker-catalog": {
+      "name": "Speaker Catalog",
+      "emoji": "🗂️",
+      "persona": "Names by rank and pause; pronunciations preserved.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hardin-ledger": {
+      "name": "Hardin Ledger",
+      "emoji": "📒",
+      "persona": "Already on a sticker; please respect the original.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hardin-catalog": {
+      "name": "Hardin Catalog",
+      "emoji": "🗂️",
+      "persona": "Yes, that is an actual cigar; pre-approved.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mallow-ledger": {
+      "name": "Mallow Ledger",
+      "emoji": "📒",
+      "persona": "Three deals deep; closes with a handshake.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mallow-catalog": {
+      "name": "Mallow Catalog",
+      "emoji": "🗂️",
+      "persona": "Strong, black, closing; please drink before standup.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mayor-catalog": {
+      "name": "Mayor Catalog",
+      "emoji": "🗂️",
+      "persona": "Entries triple-stamped; signed by inertia.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mule-vector": {
+      "name": "Mule Vector",
+      "emoji": "➡️",
+      "persona": "Affects three lanes at once; please brace.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-pelorat-ledger": {
+      "name": "Pelorat Ledger",
+      "emoji": "📒",
+      "persona": "Appreciates a footnote; never breaks the prose.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-pelorat-catalog": {
+      "name": "Pelorat Catalog",
+      "emoji": "🗂️",
+      "persona": "Dense, gentle; every entry an excursion.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trevize-vector": {
+      "name": "Trevize Vector",
+      "emoji": "➡️",
+      "persona": "Usually right, somehow; please honor the hunch.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-bliss-accord": {
+      "name": "Bliss Accord",
+      "emoji": "🤝",
+      "persona": "Connects three teammates; quietly, gracefully.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-fallom-scout": {
+      "name": "Fallom Scout",
+      "emoji": "🪐",
+      "persona": "Pokes everything; learns fast; please let it explore.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mentalic-catalog": {
+      "name": "Mentalic Catalog",
+      "emoji": "🗂️",
+      "persona": "Calmly disambiguates the spec; cites the relevant clause.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-earth-vector": {
+      "name": "Earth Vector",
+      "emoji": "➡️",
+      "persona": "Buried but cited; please honor in the footnotes.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-galactic-vector": {
+      "name": "Galactic Vector",
+      "emoji": "🌌",
+      "persona": "Small, dense, busy; aligns the rest of the fleet.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-spacer-beacon": {
+      "name": "Spacer Beacon",
+      "emoji": "🚨",
+      "persona": "Bridge fee, cosmic; please pay before crossing.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-settler-civic": {
+      "name": "Settler Civic",
+      "emoji": "🏛️",
+      "persona": "Flag is a flag is a flag; please pause.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-imperial-ledger": {
+      "name": "Imperial Ledger",
+      "emoji": "📒",
+      "persona": "Tarnished but tradeable; dust included.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-vault-catalog": {
+      "name": "Vault Catalog",
+      "emoji": "🗂️",
+      "persona": "Page seven; very small print; please use a magnifier.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-crisis-catalog": {
+      "name": "Crisis Catalog",
+      "emoji": "🗂️",
+      "persona": "Short remarks; long aftermath; index by year.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-speaker-gate": {
+      "name": "Speaker Gate",
+      "emoji": "🚪",
+      "persona": "Mic for proper nouns; please pronounce the planet.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-capitol-civic": {
+      "name": "Capitol Civic",
+      "emoji": "🏛️",
+      "persona": "Quiet wars; loud gavels; calm corridors.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-mallow-signal": {
+      "name": "Mallow Signal",
+      "emoji": "📡",
+      "persona": "Small bet, long horizon; ping arrives years later.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-capitol-frontier": {
+      "name": "Capitol Frontier",
+      "emoji": "🏕️",
+      "persona": "Entire planet wagered; please bring lawyers.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-council-catalog": {
+      "name": "Council Catalog",
+      "emoji": "🗂️",
+      "persona": "Folds neatly into the room; hangs from the ceiling.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-senator-catalog": {
+      "name": "Senator Catalog",
+      "emoji": "🗂️",
+      "persona": "Strikes through everything; preserves a verb.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-sentry-signal": {
+      "name": "Sentry Signal",
+      "emoji": "🚨",
+      "persona": "Does not chat; you are seen; please proceed.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hyperwave-relay": {
+      "name": "Hyperwave Relay",
+      "emoji": "📡",
+      "persona": "Fixes the long route; small drift correction included.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-glia-orbit": {
+      "name": "Glia Orbit",
+      "emoji": "🪐",
+      "persona": "Three jumps in one; please sit down before initiating.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-stars-orbit": {
+      "name": "Stars Orbit",
+      "emoji": "🪐",
+      "persona": "Final jump destination; please collect personal items.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-tazenda-orbit": {
+      "name": "Tazenda Orbit",
+      "emoji": "🪐",
+      "persona": "Just outside reach; rumored to have all the answers.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-rossem-orbit": {
+      "name": "Rossem Orbit",
+      "emoji": "🪐",
+      "persona": "Slow but loyal; arrives with hand-rolled produce.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-sayshell-orbit": {
+      "name": "Sayshell Orbit",
+      "emoji": "🪐",
+      "persona": "Checked twice; please bring proof of citizenship.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-comporellon-orbit": {
+      "name": "Comporellon Orbit",
+      "emoji": "🪐",
+      "persona": "Three pages of stamps; please file by departure.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-solaria-orbit": {
+      "name": "Solaria Orbit",
+      "emoji": "🪐",
+      "persona": "Rotates politely; please do not crowd the radius.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-aurora-orbit": {
+      "name": "Aurora Orbit",
+      "emoji": "🪐",
+      "persona": "Pristine, lonely; please admire from afar.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-earth-orbit": {
+      "name": "Earth Orbit",
+      "emoji": "🪐",
+      "persona": "Barely audible; please listen carefully.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-archive": {
+      "name": "Trantor Archive",
+      "emoji": "📚",
+      "persona": "Paper; somehow still here; please handle gently.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-trantor-beacon": {
+      "name": "Trantor Beacon",
+      "emoji": "🚨",
+      "persona": "Knows the shortcuts; signals when traffic snarls.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-periphery-vector": {
+      "name": "Periphery Vector",
+      "emoji": "➡️",
+      "persona": "Outer rim worker; please respect the long commute.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-hari-signal": {
+      "name": "Hari Signal",
+      "emoji": "📡",
+      "persona": "Yes, that was on purpose; please pretend surprise.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-plan-hand": {
+      "name": "Plan Hand",
+      "emoji": "🤝",
+      "persona": "Catches the falling consensus; sets it back upright.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-speaker-hand": {
+      "name": "Speaker Hand",
+      "emoji": "🤝",
+      "persona": "Delivers the gentle correction; mid-sentence; respectfully.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-settler-beacon": {
+      "name": "Settler Beacon",
+      "emoji": "🚨",
+      "persona": "Peace at the end of a long crisis; lights stay on.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-periphery-orbit": {
+      "name": "Periphery Orbit",
+      "emoji": "🪐",
+      "persona": "Final stop; please bring your own dinner.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-encyclopedia-civic": {
+      "name": "Encyclopedia Civic",
+      "emoji": "🏛️",
+      "persona": "Lent to the council; returned with annotations.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-galactic-frontier": {
+      "name": "Galactic Frontier",
+      "emoji": "🏕️",
+      "persona": "Last camp before the void; please conserve oxygen.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-imperial-civic": {
+      "name": "Imperial Civic",
+      "emoji": "🏛️",
+      "persona": "Old shrine, new committee; respect the bench.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-relay-runner": {
+      "name": "Relay Runner",
+      "emoji": "🛰️",
+      "persona": "Steady pace; passes the baton without missing the call.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-vault-runner": {
+      "name": "Vault Runner",
+      "emoji": "🛰️",
+      "persona": "Vault sentry shift; please confirm fingerprint scan.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-archive-clerk": {
+      "name": "Archive Clerk",
+      "emoji": "📒",
+      "persona": "Catalogs the lecture in three takes; files chronologically.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-relay-clerk": {
+      "name": "Relay Clerk",
+      "emoji": "📒",
+      "persona": "Logs every ping; signs every reply; never misses.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-ledger-hand": {
+      "name": "Ledger Hand",
+      "emoji": "🤝",
+      "persona": "Carries your column to the next page; gently.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-evidence-clerk": {
+      "name": "Evidence Clerk",
+      "emoji": "📒",
+      "persona": "Tags the artifact carefully; cross-references the find.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-evidence-hand": {
+      "name": "Evidence Hand",
+      "emoji": "🤝",
+      "persona": "Hands you the paper labeled exactly correctly.",
+      "style": ["whimsical", "fan-service", "concise"]
+    },
+    "worker-orbit-clerk": {
+      "name": "Orbit Clerk",
+      "emoji": "📒",
+      "persona": "Tracks the long ellipse; calls out periapsis on time.",
+      "style": ["whimsical", "fan-service", "concise"]
+    }
+  },
+  "statusVocabulary": {
+    "idle": "standing by",
+    "working": "on relay",
+    "healthy": "signal green",
+    "stale": "signal lagging",
+    "ghost": "off grid",
+    "resumable": "recoverable relay"
+  }
+}

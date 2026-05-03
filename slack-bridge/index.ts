@@ -478,8 +478,8 @@ export default function (pi: ExtensionAPI) {
     },
     getMeshRoleFromMetadata: (metadata, fallbackRole) =>
       getMeshRoleFromMetadata(metadata ?? undefined, fallbackRole),
-    buildSkinMetadata: (metadata, personality) =>
-      buildSkinMetadata(metadata ?? undefined, personality),
+    buildSkinMetadata: (metadata, personality, statusVocabulary) =>
+      buildSkinMetadata(metadata ?? undefined, personality, statusVocabulary),
     applyLocalAgentIdentity,
     getAgentName: () => agentName,
     dispatchDirectAgentMessage: (input) => {
@@ -638,8 +638,8 @@ export default function (pi: ExtensionAPI) {
     },
     getAgentMetadata,
     applyLocalAgentIdentity,
-    buildSkinMetadata: (metadata, personality) =>
-      buildSkinMetadata(metadata ?? undefined, personality),
+    buildSkinMetadata: (metadata, personality, statusVocabulary) =>
+      buildSkinMetadata(metadata ?? undefined, personality, statusVocabulary),
     getMeshRoleFromMetadata: (metadata, fallbackRole) =>
       getMeshRoleFromMetadata(metadata ?? undefined, fallbackRole),
     handleInboundMessage: async ({ message, broker, router, selfId, ctx }) => {

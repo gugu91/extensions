@@ -2,6 +2,7 @@ import {
   buildPinetSkinAssignment,
   buildPinetSkinMetadata,
   normalizePinetSkinTheme,
+  type PinetSkinStatusVocabulary,
 } from "./helpers.js";
 
 export interface PinetMeshSkinAgentRecord {
@@ -50,6 +51,7 @@ export interface PinetMeshSkinDeps {
   buildSkinMetadata: (
     metadata: Record<string, unknown> | undefined,
     personality: string,
+    statusVocabulary?: PinetSkinStatusVocabulary,
   ) => Record<string, unknown>;
   applyLocalAgentIdentity: (
     nextName: string,
@@ -99,7 +101,11 @@ export function createPinetMeshSkin(deps: PinetMeshSkinDeps): PinetMeshSkin {
       const updated = db.updateAgentIdentity(agent.id, {
         name: assignment.name,
         emoji: assignment.emoji,
-        metadata: deps.buildSkinMetadata(agent.metadata ?? undefined, assignment.personality),
+        metadata: deps.buildSkinMetadata(
+          agent.metadata ?? undefined,
+          assignment.personality,
+          assignment.statusVocabulary,
+        ),
       });
       if (!updated) {
         continue;
@@ -118,6 +124,7 @@ export function createPinetMeshSkin(deps: PinetMeshSkinDeps): PinetMeshSkin {
             name: updated.name,
             emoji: updated.emoji,
             personality: assignment.personality,
+            statusVocabulary: assignment.statusVocabulary,
           }),
         });
       }

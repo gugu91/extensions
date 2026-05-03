@@ -662,11 +662,31 @@ export function normalizeOutgoingPinetControlMessage(
   };
 }
 
+export type PinetSkinStatusKey = "idle" | "working" | "healthy" | "stale" | "ghost" | "resumable";
+
+export type PinetSkinStatusVocabulary = Partial<Record<PinetSkinStatusKey, string>>;
+
 export interface PinetSkinUpdate {
   theme: string;
   name: string;
   emoji: string;
   personality: string;
+  statusVocabulary?: PinetSkinStatusVocabulary;
+}
+
+function extractPinetSkinStatusVocabulary(value: unknown): PinetSkinStatusVocabulary | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  const vocabulary: PinetSkinStatusVocabulary = {};
+  for (const key of ["idle", "working", "healthy", "stale", "ghost", "resumable"] as const) {
+    const label = record[key];
+    if (typeof label === "string" && label.trim().length > 0) {
+      vocabulary[key] = label.trim();
+    }
+  }
+
+  return Object.keys(vocabulary).length > 0 ? vocabulary : undefined;
 }
 
 export function buildPinetSkinMetadata(update: PinetSkinUpdate): Record<string, unknown> {
@@ -676,6 +696,7 @@ export function buildPinetSkinMetadata(update: PinetSkinUpdate): Record<string, 
     name: update.name,
     emoji: update.emoji,
     personality: update.personality,
+    ...(update.statusVocabulary ? { skinStatusVocabulary: update.statusVocabulary } : {}),
   };
 }
 
@@ -696,7 +717,9 @@ export function extractPinetSkinUpdate(message: {
   const personality = typeof metadata.personality === "string" ? metadata.personality.trim() : "";
   if (!theme || !name || !emoji || !personality) return null;
 
-  return { theme, name, emoji, personality };
+  const statusVocabulary = extractPinetSkinStatusVocabulary(metadata.skinStatusVocabulary);
+
+  return { theme, name, emoji, personality, ...(statusVocabulary ? { statusVocabulary } : {}) };
 }
 
 export function extractPinetControlCommand(message: {
@@ -901,6 +924,7 @@ export interface AgentDisplayInfo {
     worktreeKind?: "main" | "linked";
     skinTheme?: string;
     personality?: string;
+    skinStatusVocabulary?: PinetSkinStatusVocabulary;
     capabilities?: AgentCapabilities | null;
     scope?: RuntimeScopeCarrier | null;
   } | null;
@@ -1220,6 +1244,13 @@ export function buildAgentDisplayInfo(
           role: asString(metadata.role) ?? capabilities.role,
           skinTheme: asString(metadata.skinTheme),
           personality: asString(metadata.personality),
+          ...(extractPinetSkinStatusVocabulary(metadata.skinStatusVocabulary)
+            ? {
+                skinStatusVocabulary: extractPinetSkinStatusVocabulary(
+                  metadata.skinStatusVocabulary,
+                ),
+              }
+            : {}),
           ...(capabilities.scope ? { scope: capabilities.scope } : {}),
           capabilities,
         }
@@ -2430,10 +2461,17 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
 
   return agents
     .map((a) => {
-      const health = a.health ? ` [${a.health}]` : "";
+      const vocabulary =
+        a.metadata?.skinTheme === DEFAULT_PINET_SKIN_THEME
+          ? undefined
+          : a.metadata?.skinStatusVocabulary;
+      const statusFlavor = vocabulary?.[a.status] ? ` (${vocabulary[a.status]})` : "";
+      const health = a.health
+        ? ` [${a.health}${vocabulary?.[a.health] ? `: ${vocabulary[a.health]}` : ""}]`
+        : "";
       const stuckTag = a.stuck ? " [stuck]" : "";
       const pid = a.pid != null ? ` pid:${a.pid}` : "";
-      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${health}${stuckTag}${pid}`;
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${statusFlavor}${health}${stuckTag}${pid}`;
 
       const meta = a.metadata;
       if (meta && (meta.cwd || meta.branch || meta.host)) {
@@ -2722,13 +2760,200 @@ export interface PinetSkinAssignment {
   name: string;
   emoji: string;
   personality: string;
+  statusVocabulary?: PinetSkinStatusVocabulary;
 }
 
 export const DEFAULT_PINET_SKIN_THEME = "default";
+export const FOUNDATION_PINET_SKIN_THEME = "foundation";
+export const COSMERE_PINET_SKIN_THEME = "cosmere";
 
 const MAX_PINET_SKIN_THEME_LABEL_LENGTH = 60;
 const MAX_PINET_SKIN_PERSONALITY_LENGTH = 260;
 const MAX_PINET_SKIN_PROMPT_GUIDELINE_LENGTH = 460;
+
+interface BuiltInPinetSkinCharacter {
+  id: string;
+  name: string;
+  aliases?: readonly string[];
+  emoji: string;
+  persona: string;
+  style: readonly string[];
+}
+
+interface BuiltInPinetSkinRoleDescriptor {
+  characterPool: readonly string[];
+  titlePool?: readonly string[];
+  accentPool?: readonly string[];
+  namePattern?: string;
+}
+
+interface BuiltInPinetSkinDescriptor {
+  key: typeof FOUNDATION_PINET_SKIN_THEME | typeof COSMERE_PINET_SKIN_THEME;
+  aliases: readonly string[];
+  displayName: string;
+  intent: string;
+  roles: Readonly<Record<PinetSkinRole, BuiltInPinetSkinRoleDescriptor>>;
+  characters: Readonly<Record<string, BuiltInPinetSkinCharacter>>;
+  statusVocabulary: PinetSkinStatusVocabulary;
+}
+
+const PINET_BUILT_IN_SKIN_FILES = ["foundation", "cosmere"] as const;
+
+let cachedBuiltInPinetSkinDescriptors: readonly BuiltInPinetSkinDescriptor[] | null = null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStringProperty(value: Record<string, unknown>, key: string): string | null {
+  const property = value[key];
+  return typeof property === "string" && property.trim().length > 0 ? property.trim() : null;
+}
+
+function readStringArrayProperty(
+  value: Record<string, unknown>,
+  key: string,
+  required = true,
+): string[] | null {
+  const property = value[key];
+  if (property === undefined && !required) {
+    return [];
+  }
+  if (!Array.isArray(property)) {
+    return null;
+  }
+
+  const strings = property.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+  return strings.length === property.length ? strings.map((entry) => entry.trim()) : null;
+}
+
+function validatePinetSkinTheme(value: string): BuiltInPinetSkinDescriptor["key"] | null {
+  if (value === FOUNDATION_PINET_SKIN_THEME || value === COSMERE_PINET_SKIN_THEME) {
+    return value;
+  }
+  return null;
+}
+
+function validatePinetSkinStatusVocabulary(value: unknown): PinetSkinStatusVocabulary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return extractPinetSkinStatusVocabulary(value) ?? {};
+}
+
+function validateBuiltInPinetSkinCharacter(
+  id: string,
+  value: unknown,
+): BuiltInPinetSkinCharacter | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const name = readStringProperty(value, "name");
+  const aliases = readStringArrayProperty(value, "aliases", false);
+  const emoji = readStringProperty(value, "emoji");
+  const persona = readStringProperty(value, "persona");
+  const style = readStringArrayProperty(value, "style", false);
+  if (!name || !aliases || !emoji || !persona || !style) {
+    return null;
+  }
+
+  return { id, name, ...(aliases.length > 0 ? { aliases } : {}), emoji, persona, style };
+}
+
+function validateBuiltInPinetSkinRoleDescriptor(
+  value: unknown,
+): BuiltInPinetSkinRoleDescriptor | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const characterPool = readStringArrayProperty(value, "characterPool");
+  const titlePool = readStringArrayProperty(value, "titlePool", false);
+  const accentPool = readStringArrayProperty(value, "accentPool", false);
+  const namePattern = readStringProperty(value, "namePattern") ?? undefined;
+  if (!characterPool || characterPool.length === 0 || !titlePool || !accentPool) {
+    return null;
+  }
+
+  return {
+    characterPool,
+    ...(titlePool.length > 0 ? { titlePool } : {}),
+    ...(accentPool.length > 0 ? { accentPool } : {}),
+    ...(namePattern ? { namePattern } : {}),
+  };
+}
+
+function validateBuiltInPinetSkinDescriptor(value: unknown): BuiltInPinetSkinDescriptor {
+  if (!isRecord(value)) {
+    throw new Error("Pinet skin descriptor must be an object.");
+  }
+
+  const keyValue = readStringProperty(value, "key");
+  const key = keyValue ? validatePinetSkinTheme(keyValue) : null;
+  const aliases = readStringArrayProperty(value, "aliases", false);
+  const displayName = readStringProperty(value, "displayName");
+  const intent = readStringProperty(value, "intent");
+  const statusVocabulary = validatePinetSkinStatusVocabulary(value.statusVocabulary);
+  if (!key || !aliases || !displayName || !intent || !statusVocabulary) {
+    throw new Error("Pinet skin descriptor is missing required top-level fields.");
+  }
+
+  if (!isRecord(value.roles)) {
+    throw new Error(`Pinet skin descriptor ${key} must define roles.`);
+  }
+  const brokerRole = validateBuiltInPinetSkinRoleDescriptor(value.roles.broker);
+  const workerRole = validateBuiltInPinetSkinRoleDescriptor(value.roles.worker);
+  if (!brokerRole || !workerRole) {
+    throw new Error(`Pinet skin descriptor ${key} must define broker and worker roles.`);
+  }
+
+  if (!isRecord(value.characters)) {
+    throw new Error(`Pinet skin descriptor ${key} must define characters.`);
+  }
+  const characters: Record<string, BuiltInPinetSkinCharacter> = {};
+  for (const [characterId, characterValue] of Object.entries(value.characters)) {
+    const character = validateBuiltInPinetSkinCharacter(characterId, characterValue);
+    if (!character) {
+      throw new Error(`Pinet skin descriptor ${key} has invalid character ${characterId}.`);
+    }
+    characters[characterId] = character;
+  }
+
+  for (const role of [brokerRole, workerRole]) {
+    for (const characterId of role.characterPool) {
+      if (!characters[characterId]) {
+        throw new Error(`Pinet skin descriptor ${key} references unknown ${characterId}.`);
+      }
+    }
+  }
+
+  return {
+    key,
+    aliases,
+    displayName,
+    intent,
+    roles: { broker: brokerRole, worker: workerRole },
+    characters,
+    statusVocabulary,
+  };
+}
+
+function loadBuiltInPinetSkinDescriptors(): readonly BuiltInPinetSkinDescriptor[] {
+  if (cachedBuiltInPinetSkinDescriptors) {
+    return cachedBuiltInPinetSkinDescriptors;
+  }
+
+  cachedBuiltInPinetSkinDescriptors = PINET_BUILT_IN_SKIN_FILES.map((fileName) => {
+    const descriptorUrl = new URL(`./skins/${fileName}.json`, import.meta.url);
+    const raw = fs.readFileSync(descriptorUrl, "utf8");
+    return validateBuiltInPinetSkinDescriptor(JSON.parse(raw) as unknown);
+  });
+  return cachedBuiltInPinetSkinDescriptors;
+}
 
 const PINET_SKIN_STOP_WORDS = new Set([
   "a",
@@ -3037,10 +3262,21 @@ function getPinetSkinTokens(theme: string): string[] {
   return tokens.length > 0 ? tokens : ["Signal"];
 }
 
+function getBuiltInPinetSkinProfile(theme: string): BuiltInPinetSkinDescriptor | null {
+  const normalized = theme.trim().toLowerCase();
+  return (
+    loadBuiltInPinetSkinDescriptors().find(
+      (profile) => profile.key === normalized || profile.aliases.includes(normalized),
+    ) ?? null
+  );
+}
+
 export function normalizePinetSkinTheme(theme: string | undefined): string | null {
   const trimmed = theme?.trim();
   if (!trimmed) return null;
-  return trimmed.toLowerCase() === DEFAULT_PINET_SKIN_THEME ? DEFAULT_PINET_SKIN_THEME : trimmed;
+  const lower = trimmed.toLowerCase();
+  if (lower === DEFAULT_PINET_SKIN_THEME || lower === "classic") return DEFAULT_PINET_SKIN_THEME;
+  return getBuiltInPinetSkinProfile(trimmed)?.key ?? trimmed;
 }
 
 function mergeUniqueSkinValues(...lists: ReadonlyArray<readonly string[]>): string[] {
@@ -3081,6 +3317,77 @@ function fillPinetSkinTemplate(template: string, values: Record<string, string>)
   );
 }
 
+function formatBuiltInPinetSkinName(
+  pattern: string | undefined,
+  values: Record<string, string>,
+): string {
+  return fillPinetSkinTemplate(pattern ?? "{character}", values)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildBuiltInPinetSkinAssignment(options: {
+  profile: BuiltInPinetSkinDescriptor;
+  role: PinetSkinRole;
+  seed: string;
+}): PinetSkinAssignment {
+  const roleDescriptor = options.profile.roles[options.role];
+  const rolePool = roleDescriptor.characterPool;
+  const fallbackCharacterId = rolePool[0] ?? Object.keys(options.profile.characters)[0];
+  if (!fallbackCharacterId) {
+    throw new Error(`Built-in Pinet skin ${options.profile.key} has no characters.`);
+  }
+  const characterId = pickSkinValue(
+    rolePool.length > 0 ? rolePool : [fallbackCharacterId],
+    options.seed,
+    `built-in-${options.profile.key}-${options.role}-character`,
+  );
+  const character =
+    options.profile.characters[characterId] ?? options.profile.characters[fallbackCharacterId];
+  if (!character) {
+    throw new Error(`Built-in Pinet skin ${options.profile.key} references ${characterId}.`);
+  }
+  const title =
+    roleDescriptor.titlePool && roleDescriptor.titlePool.length > 0
+      ? pickSkinValue(
+          roleDescriptor.titlePool,
+          options.seed,
+          `built-in-${options.profile.key}-${options.role}-title`,
+        )
+      : "";
+  const accent =
+    roleDescriptor.accentPool && roleDescriptor.accentPool.length > 0
+      ? pickSkinValue(
+          roleDescriptor.accentPool,
+          options.seed,
+          `built-in-${options.profile.key}-${options.role}-accent`,
+        )
+      : "";
+  const characterNames =
+    character.aliases && character.aliases.length > 0 ? character.aliases : [character.name];
+  const characterName = pickSkinValue(
+    characterNames,
+    options.seed,
+    `built-in-${options.profile.key}-${options.role}-name`,
+  );
+  const name = formatBuiltInPinetSkinName(roleDescriptor.namePattern, {
+    title,
+    accent,
+    character: characterName,
+  });
+  const style = character.style.length > 0 ? ` Style tags: ${character.style.join(", ")}.` : "";
+  const personality = `${character.persona}${style} Presentation only: keep Pinet roles, states, guardrails, and routing authority unchanged.`;
+
+  return {
+    theme: options.profile.key,
+    role: options.role,
+    name,
+    emoji: character.emoji,
+    personality: clampPinetSkinText(personality, MAX_PINET_SKIN_PERSONALITY_LENGTH),
+    statusVocabulary: options.profile.statusVocabulary,
+  };
+}
+
 export function buildPinetSkinAssignment(options: {
   theme: string;
   role: PinetSkinRole;
@@ -3101,6 +3408,15 @@ export function buildPinetSkinAssignment(options: {
       emoji: generated.emoji,
       personality,
     };
+  }
+
+  const builtInProfile = getBuiltInPinetSkinProfile(normalizedTheme);
+  if (builtInProfile) {
+    return buildBuiltInPinetSkinAssignment({
+      profile: builtInProfile,
+      role: options.role,
+      seed: options.seed,
+    });
   }
 
   const themeLabel = formatPinetSkinThemeLabel(normalizedTheme);
@@ -3167,9 +3483,7 @@ export function buildPinetSkinAssignment(options: {
   const roleFocus = pickSkinValue(PINET_SKIN_ROLE_FOCUS[options.role], options.seed, "role-focus");
   const workerCore = secondary === modifier ? primary : secondary;
   const name =
-    options.role === "broker"
-      ? generateAgentName(options.seed, "broker").name
-      : `${modifier} ${workerCore} ${title}`;
+    options.role === "broker" ? `The ${title} of ${primary}` : `${modifier} ${workerCore} ${title}`;
 
   return {
     theme: normalizedTheme,
@@ -3180,6 +3494,14 @@ export function buildPinetSkinAssignment(options: {
       `${opener} ${style} ${roleFocus}`,
       MAX_PINET_SKIN_PERSONALITY_LENGTH,
     ),
+    statusVocabulary: {
+      idle: "standing by",
+      working: "in motion",
+      healthy: "signal clear",
+      stale: "signal fading",
+      ghost: "off signal",
+      resumable: "recoverable",
+    },
   };
 }
 
