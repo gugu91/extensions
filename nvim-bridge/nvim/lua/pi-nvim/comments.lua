@@ -443,9 +443,11 @@ local function apply_indicators_to_buffer(bufnr)
   end
   table.sort(line_numbers)
 
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+
   for _, line in ipairs(line_numbers) do
     local count = lines[line]
-    if type(count) == 'number' and count > 0 and line >= 1 then
+    if type(count) == 'number' and count > 0 and line >= 1 and line <= line_count then
       vim.api.nvim_buf_set_extmark(bufnr, indicator_ns, line - 1, 0, {
         virt_text = { { indicator_text(count), 'PiCommsIndicator' } },
         virt_text_pos = 'eol',
