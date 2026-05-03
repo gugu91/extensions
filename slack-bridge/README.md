@@ -373,14 +373,12 @@ The `canvas_comments_read` dispatcher action is intentionally narrow:
 
 ### Slash commands
 
-| Command            | Description                                                |
-| ------------------ | ---------------------------------------------------------- |
-| `/pinet <action>`  | Unified Pinet command surface; run `/pinet help` for usage |
-| `/pinet status`    | Show connection status, threads, and agent identity        |
-| `/pinet rename`    | Change the agent's display name                            |
-| `/pinet logs`      | Show recent broker activity log entries                    |
-| `/pinet-*` aliases | Backwards-compatible aliases for legacy command names      |
-| `/slack-logs`      | Legacy alias for recent Slack bridge/Pinet activity logs   |
+| Command           | Description                                                |
+| ----------------- | ---------------------------------------------------------- |
+| `/pinet <action>` | Unified Pinet command surface; run `/pinet help` for usage |
+| `/pinet status`   | Show connection status, threads, and agent identity        |
+| `/pinet rename`   | Change the agent's display name                            |
+| `/pinet logs`     | Show recent broker activity log entries                    |
 
 ## Runtime modes
 
@@ -463,7 +461,7 @@ Durable lane metadata is stored in SQLite and can be inspected/updated with `pin
 
 ### Pinet command surface
 
-Use `/pinet <action> [args]` for mesh lifecycle and broker operations. Legacy aliases such as `/pinet-start`, `/pinet-follow`, `/pinet-free`, and `/pinet-skin` remain registered for compatibility.
+Use `/pinet <action> [args]` for mesh lifecycle and broker operations.
 
 | Command                 | Description                                     |
 | ----------------------- | ----------------------------------------------- |
@@ -498,7 +496,7 @@ Free-form themes are still accepted as deterministic legacy/custom presentation 
 
 - **User access**: Slack access is default-deny. Set `allowedUsers` for a narrow allowlist, or `allowAllWorkspaceUsers: true` only if you explicitly want workspace-wide access
 - **Tool guardrails**: `security.readOnly`, `security.requireConfirmation`, and `security.blockedTools` are runtime-enforced for Slack-triggered turns, including core tools such as `bash`, `edit`, and `write`
-- **Guardrail posture**: If Slack/Pinet access is enabled for admitted users and `security.readOnly`, `security.blockedTools`, and `security.requireConfirmation` are all effectively empty (`readOnly !== true` and both arrays are absent or empty), the bridge emits a startup/runtime warning and `/pinet-status` shows `Guardrails: empty (warn-first posture; behavior unchanged)`. This is visibility-only: it does **not** auto-enable `readOnly`, block startup, or require an acknowledgement flow.
+- **Guardrail posture**: If Slack/Pinet access is enabled for admitted users and `security.readOnly`, `security.blockedTools`, and `security.requireConfirmation` are all effectively empty (`readOnly !== true` and both arrays are absent or empty), the bridge emits a startup/runtime warning and `/pinet status` shows `Guardrails: empty (warn-first posture; behavior unchanged)`. This is visibility-only: it does **not** auto-enable `readOnly`, block startup, or require an acknowledgement flow.
 - **Mesh authentication**: Optional. Configure `meshSecret` or `meshSecretPath` (or `PINET_MESH_SECRET` / `PINET_MESH_SECRET_PATH`) to require a shared secret; leave them unset to disable shared-secret auth. Configured followers fail closed on missing secret files or older/no-auth brokers rather than silently downgrading.
 
 Find Slack user IDs: click a user's profile → **More** → **Copy member ID**.

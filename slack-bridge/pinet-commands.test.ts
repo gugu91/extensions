@@ -94,14 +94,14 @@ function registerCommands(deps: PinetCommandsDeps): Map<string, CommandDefinitio
 }
 
 describe("registerPinetCommands", () => {
-  it("registers the unified /pinet command while preserving legacy aliases", () => {
+  it("registers only the unified /pinet command", () => {
     const commands = registerCommands(createDeps());
 
     expect(commands.has("pinet")).toBe(true);
-    expect(commands.has("pinet-start")).toBe(true);
-    expect(commands.has("pinet-follow")).toBe(true);
-    expect(commands.has("pinet-free")).toBe(true);
-    expect(commands.has("pinet-skin")).toBe(true);
+    expect(commands.has("pinet-start")).toBe(false);
+    expect(commands.has("pinet-follow")).toBe(false);
+    expect(commands.has("pinet-free")).toBe(false);
+    expect(commands.has("pinet-skin")).toBe(false);
   });
 
   it("shows help for the unified command", async () => {
@@ -116,7 +116,7 @@ describe("registerPinetCommands", () => {
     );
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet start"), "info");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet skin <theme>"), "info");
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet-start"), "info");
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/pinet-start"), "info");
   });
 
   it("routes /pinet reload through the existing remote-control message path", async () => {
@@ -133,13 +133,13 @@ describe("registerPinetCommands", () => {
     expect(notify).toHaveBeenCalledWith("Sent /reload to GoldenOtter:/reload", "info");
   });
 
-  it("keeps legacy usage text on legacy aliases", async () => {
+  it("uses unified usage text for action arguments", async () => {
     const commands = registerCommands(createDeps());
     const { ctx, notify } = createContext();
 
-    await commands.get("pinet-reload")?.handler("", ctx);
+    await commands.get("pinet")?.handler("reload", ctx);
 
-    expect(notify).toHaveBeenCalledWith("Usage: /pinet-reload <agent-name-or-id>", "warning");
+    expect(notify).toHaveBeenCalledWith("Usage: /pinet reload <agent-name-or-id>", "warning");
   });
 
   it("runs free and skin from the unified command", async () => {

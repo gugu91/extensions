@@ -172,9 +172,9 @@ describe("slack-bridge top-level shutdown", () => {
     expect(tools.has("pinet_free")).toBe(false);
     expect(tools.has("pinet_schedule")).toBe(false);
     expect(tools.has("pinet_agents")).toBe(false);
-    expect(commands.has("pinet-start")).toBe(true);
-    expect(commands.has("pinet-free")).toBe(true);
-    expect(commands.has("pinet-skin")).toBe(true);
+    expect(commands.has("pinet-start")).toBe(false);
+    expect(commands.has("pinet-free")).toBe(false);
+    expect(commands.has("pinet-skin")).toBe(false);
 
     await sessionStart?.({}, ctx);
 
@@ -319,7 +319,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
     const slackDispatcher = tools.get("slack");
 
     expect(sessionStart).toBeDefined();
@@ -328,7 +328,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(slackDispatcher).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(brokerRuntimes).toHaveLength(1);
     brokerRuntimes[0]!.db.registerAgent("sender", "Sender", "📤", 202);
@@ -379,7 +379,7 @@ describe("slack-bridge top-level shutdown", () => {
     );
   });
 
-  it("reloads the active broker runtime when /pinet-start runs twice", async () => {
+  it("reloads the active broker runtime when /pinet start runs twice", async () => {
     const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
@@ -469,15 +469,15 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(startBrokerSpy).toHaveBeenCalledTimes(2);
     expect(brokerRuntimes).toHaveLength(2);
@@ -491,7 +491,7 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionShutdown?.({}, ctx);
   });
 
-  it("aborts the current turn before reloading broker runtime from /pinet-start", async () => {
+  it("aborts the current turn before reloading broker runtime from /pinet start", async () => {
     const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
@@ -583,15 +583,15 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(abort).toHaveBeenCalledTimes(1);
     expect(startBrokerSpy).toHaveBeenCalledTimes(2);
@@ -605,7 +605,7 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionShutdown?.({}, ctx);
   });
 
-  it("restores the previous broker runtime if /pinet-start reload fails", async () => {
+  it("restores the previous broker runtime if /pinet start reload fails", async () => {
     const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
@@ -701,18 +701,18 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
     notify.mockClear();
     setStatus.mockClear();
 
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(startBrokerSpy).toHaveBeenCalledTimes(3);
     expect(brokerRuntimes).toHaveLength(2);
@@ -809,7 +809,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
     const beforeAgentStart = events.get("before_agent_start") as
       | ((
           event: { systemPrompt: string },
@@ -823,7 +823,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(beforeAgentStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
     expect(startBrokerSpy).toHaveBeenCalledTimes(1);
 
     const sentinelSystemPrompt = "SENTINEL ROOT PROMPT";
@@ -973,7 +973,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
     const imessageSendTool = tools.get("imessage_send");
 
     expect(sessionStart).toBeDefined();
@@ -982,7 +982,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(imessageSendTool).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     const result = await imessageSendTool!.execute("tool-call-1", {
       to: "chat:alice",
@@ -1117,14 +1117,14 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(createAdapterSpy).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledWith(
@@ -1287,7 +1287,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(setStatus).toHaveBeenCalled();
   });
 
-  it("starts explicit single runtime mode on session start and reports it in pinet-status", async () => {
+  it("starts explicit single runtime mode on session start and reports it in /pinet status", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify({ "slack-bridge": { runtimeMode: "single" } }));
@@ -1343,7 +1343,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStatus = commands.get("pinet-status");
+    const pinetStatus = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -1358,7 +1358,7 @@ describe("slack-bridge top-level shutdown", () => {
     );
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: single"), "info");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
@@ -1372,7 +1372,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(firstSocket.close).toHaveBeenCalled();
   });
 
-  it("warns on default-deny Slack access at startup and reports it in pinet-status", async () => {
+  it("warns on default-deny Slack access at startup and reports it in /pinet status", async () => {
     const originalAllowedUsersEnv = process.env.SLACK_ALLOWED_USERS;
     const originalAllowAllEnv = process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS;
     delete process.env.SLACK_ALLOWED_USERS;
@@ -1433,7 +1433,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStatus = commands.get("pinet-status");
+    const pinetStatus = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -1461,7 +1461,7 @@ describe("slack-bridge top-level shutdown", () => {
       ),
     ).toBe(false);
 
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
 
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -1494,7 +1494,7 @@ describe("slack-bridge top-level shutdown", () => {
     }
   });
 
-  it("warns when admitted users have effectively empty guardrails and reports the posture in pinet-status", async () => {
+  it("warns when admitted users have effectively empty guardrails and reports the posture in /pinet status", async () => {
     const originalAllowedUsersEnv = process.env.SLACK_ALLOWED_USERS;
     const originalAllowAllEnv = process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS;
     delete process.env.SLACK_ALLOWED_USERS;
@@ -1563,7 +1563,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStatus = commands.get("pinet-status");
+    const pinetStatus = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -1582,7 +1582,7 @@ describe("slack-bridge top-level shutdown", () => {
       "warning",
     );
 
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
 
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Guardrails: empty (warn-first posture; behavior unchanged)"),
@@ -1722,7 +1722,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStatus = commands.get("pinet-status");
+    const pinetStatus = commands.get("pinet");
 
     await sessionStart?.({}, ctx);
     await vi.waitFor(() => {
@@ -1733,7 +1733,7 @@ describe("slack-bridge top-level shutdown", () => {
         "warning",
       );
     });
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
 
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -1843,7 +1843,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -1853,7 +1853,7 @@ describe("slack-bridge top-level shutdown", () => {
     await Promise.resolve();
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     const firstSocket = FakeWebSocket.instances[0];
     expect(firstSocket).toBeDefined();
@@ -2282,7 +2282,7 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -2297,7 +2297,7 @@ describe("slack-bridge top-level shutdown", () => {
         ),
       ).toBe(true);
 
-      await pinetStart?.handler("", ctx);
+      await pinetStart?.handler("start", ctx);
       await startup;
 
       await vi.advanceTimersByTimeAsync(5_001);
@@ -2465,8 +2465,8 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
-    const pinetStatus = commands.get("pinet-status");
+    const follow = commands.get("pinet");
+    const pinetStatus = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -2474,7 +2474,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(pinetStatus).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await follow?.handler("", ctx);
+    await follow?.handler("follow", ctx);
 
     expect(registerCalls).toHaveLength(1);
     expect(disconnectHandler).toBeTypeOf("function");
@@ -2498,7 +2498,7 @@ describe("slack-bridge Pinet reconnect", () => {
     runDisconnect();
 
     notify.mockClear();
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Connection: disconnected"),
       "info",
@@ -2528,7 +2528,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(notify).toHaveBeenCalledWith("Pinet broker reconnected", "info");
 
     notify.mockClear();
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Runtime health: healthy"), "info");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Next step: None."), "info");
@@ -2649,8 +2649,8 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
-    const pinetStatus = commands.get("pinet-status");
+    const follow = commands.get("pinet");
+    const pinetStatus = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -2658,7 +2658,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(pinetStatus).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await follow?.handler("", ctx);
+    await follow?.handler("follow", ctx);
 
     expect(registerAttempt).toBe(1);
     expect(disconnectHandler).toBeTypeOf("function");
@@ -2684,7 +2684,7 @@ describe("slack-bridge Pinet reconnect", () => {
     });
 
     notify.mockClear();
-    await pinetStatus?.handler("", ctx);
+    await pinetStatus?.handler("status", ctx);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
     expect(notify).toHaveBeenCalledWith(
@@ -2828,8 +2828,8 @@ describe("slack-bridge Pinet reconnect", () => {
 
       const sessionStart = events.get("session_start");
       const sessionShutdown = events.get("session_shutdown");
-      const follow = commands.get("pinet-follow");
-      const pinetStatus = commands.get("pinet-status");
+      const follow = commands.get("pinet");
+      const pinetStatus = commands.get("pinet");
 
       expect(sessionStart).toBeDefined();
       expect(sessionShutdown).toBeDefined();
@@ -2837,7 +2837,7 @@ describe("slack-bridge Pinet reconnect", () => {
       expect(pinetStatus).toBeDefined();
 
       await sessionStart?.({}, ctx);
-      await follow?.handler("", ctx);
+      await follow?.handler("follow", ctx);
 
       expect(registerCalls).toHaveLength(1);
       expect(registerCalls[0]?.name).toBe("Reserved Crane");
@@ -2880,7 +2880,7 @@ describe("slack-bridge Pinet reconnect", () => {
       expect(setStatus).toHaveBeenCalledWith("slack-bridge", expect.stringContaining("✗"));
 
       notify.mockClear();
-      await pinetStatus?.handler("", ctx);
+      await pinetStatus?.handler("status", ctx);
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: off"), "info");
       expect(notify).toHaveBeenCalledWith(
         expect.stringContaining("Connection: disconnected"),
@@ -2899,13 +2899,13 @@ describe("slack-bridge Pinet reconnect", () => {
         "info",
       );
 
-      await follow?.handler("", ctx);
+      await follow?.handler("follow", ctx);
       expect(connect).toHaveBeenCalledTimes(2);
       expect(registerCalls).toHaveLength(2);
       expect(registerCalls[1]?.name).toBe("Reserved Crane");
 
       notify.mockClear();
-      await pinetStatus?.handler("", ctx);
+      await pinetStatus?.handler("status", ctx);
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
       expect(notify).toHaveBeenCalledWith(
@@ -2923,7 +2923,7 @@ describe("slack-bridge Pinet reconnect", () => {
     }
   });
 
-  it("surfaces follower poll failures in pinet-status and clears them after recovery", async () => {
+  it("surfaces follower poll failures in /pinet status and clears them after recovery", async () => {
     vi.useFakeTimers();
 
     const commands = new Map<string, CommandDefinition>();
@@ -3000,8 +3000,8 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
-    const pinetStatus = commands.get("pinet-status");
+    const follow = commands.get("pinet");
+    const pinetStatus = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -3010,13 +3010,13 @@ describe("slack-bridge Pinet reconnect", () => {
 
     try {
       await sessionStart?.({}, ctx);
-      await follow?.handler("", ctx);
+      await follow?.handler("follow", ctx);
 
       await vi.advanceTimersByTimeAsync(2_000);
       expect(pollAttempt).toBe(1);
 
       notify.mockClear();
-      await pinetStatus?.handler("", ctx);
+      await pinetStatus?.handler("status", ctx);
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Mode: follower"), "info");
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("Connection: connected"), "info");
       expect(notify).toHaveBeenCalledWith(
@@ -3036,7 +3036,7 @@ describe("slack-bridge Pinet reconnect", () => {
       expect(pollAttempt).toBe(2);
 
       notify.mockClear();
-      await pinetStatus?.handler("", ctx);
+      await pinetStatus?.handler("status", ctx);
       expect(notify).toHaveBeenCalledWith(
         expect.stringContaining("Runtime health: healthy"),
         "info",
@@ -3124,7 +3124,7 @@ describe("slack-bridge Pinet reconnect", () => {
         ctx,
         sessionStart: events.get("session_start"),
         sessionShutdown: events.get("session_shutdown"),
-        follow: commands.get("pinet-follow"),
+        follow: commands.get("pinet"),
       };
     }
 
@@ -3133,7 +3133,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(first.sessionShutdown).toBeDefined();
     expect(first.follow).toBeDefined();
     await first.sessionStart?.({}, first.ctx);
-    await first.follow?.handler("", first.ctx);
+    await first.follow?.handler("follow", first.ctx);
     await first.sessionShutdown?.({}, first.ctx);
 
     const second = buildFollowerRuntime("/tmp/slack-bridge-worker-b.json", "worker-leaf-b");
@@ -3141,7 +3141,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(second.sessionShutdown).toBeDefined();
     expect(second.follow).toBeDefined();
     await second.sessionStart?.({}, second.ctx);
-    await second.follow?.handler("", second.ctx);
+    await second.follow?.handler("follow", second.ctx);
     await second.sessionShutdown?.({}, second.ctx);
 
     expect(registerCalls).toHaveLength(2);
@@ -3254,7 +3254,7 @@ describe("slack-bridge Pinet reconnect", () => {
         ctx,
         sessionStart: events.get("session_start"),
         sessionShutdown: events.get("session_shutdown"),
-        pinetStart: commands.get("pinet-start"),
+        pinetStart: commands.get("pinet"),
         getPersistedState: () => persistedState,
       };
     }
@@ -3264,7 +3264,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(first.sessionShutdown).toBeDefined();
     expect(first.pinetStart).toBeDefined();
     await first.sessionStart?.({}, first.ctx);
-    await first.pinetStart?.handler("", first.ctx);
+    await first.pinetStart?.handler("start", first.ctx);
     const initialBrokerIdentity = readBrokerIdentity(startedDbs[0]!);
     await first.sessionShutdown?.({}, first.ctx);
 
@@ -3279,7 +3279,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(second.sessionShutdown).toBeDefined();
     expect(second.pinetStart).toBeDefined();
     await second.sessionStart?.({}, second.ctx);
-    await second.pinetStart?.handler("", second.ctx);
+    await second.pinetStart?.handler("start", second.ctx);
     const reloadedBrokerIdentity = readBrokerIdentity(startedDbs[1]!);
 
     expect(reloadedBrokerIdentity).toEqual(initialBrokerIdentity);
@@ -3381,7 +3381,7 @@ describe("slack-bridge Pinet reconnect", () => {
         ctx,
         sessionStart: events.get("session_start"),
         sessionShutdown: events.get("session_shutdown"),
-        pinetStart: commands.get("pinet-start"),
+        pinetStart: commands.get("pinet"),
       };
     }
 
@@ -3393,7 +3393,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(first.sessionShutdown).toBeDefined();
     expect(first.pinetStart).toBeDefined();
     await first.sessionStart?.({}, first.ctx);
-    await first.pinetStart?.handler("", first.ctx);
+    await first.pinetStart?.handler("start", first.ctx);
     const initialBrokerIdentity = readBrokerIdentity(startedDbs[0]!);
     await first.sessionShutdown?.({}, first.ctx);
 
@@ -3405,7 +3405,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(second.sessionShutdown).toBeDefined();
     expect(second.pinetStart).toBeDefined();
     await second.sessionStart?.({}, second.ctx);
-    await second.pinetStart?.handler("", second.ctx);
+    await second.pinetStart?.handler("start", second.ctx);
     const restartedBrokerIdentity = readBrokerIdentity(startedDbs[1]!);
 
     expect(restartedBrokerIdentity).toEqual(initialBrokerIdentity);
@@ -3502,14 +3502,14 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
+    const follow = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(follow).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await follow?.handler("", ctx);
+    await follow?.handler("follow", ctx);
 
     expect(claimThread).not.toHaveBeenCalled();
     expect(reconnectHandler).toBeTypeOf("function");
@@ -3635,7 +3635,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
+    const follow = commands.get("pinet");
     const pinet = tools.get("pinet");
 
     expect(sessionStart).toBeDefined();
@@ -3645,7 +3645,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     try {
       await sessionStart?.({}, ctx);
-      await follow?.handler("", ctx);
+      await follow?.handler("follow", ctx);
 
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => {
@@ -3784,7 +3784,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
+    const follow = commands.get("pinet");
     const agentEnd = events.get("agent_end");
 
     expect(sessionStart).toBeDefined();
@@ -3794,7 +3794,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     try {
       await sessionStart?.({}, ctx);
-      await follow?.handler("", ctx);
+      await follow?.handler("follow", ctx);
 
       await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => {
@@ -3935,7 +3935,7 @@ describe("slack-bridge Pinet reconnect", () => {
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
     const agentEnd = events.get("agent_end");
-    const follow = commands.get("pinet-follow");
+    const follow = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
@@ -3944,7 +3944,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     try {
       await sessionStart?.({}, ctx);
-      await follow?.handler("", ctx);
+      await follow?.handler("follow", ctx);
 
       await vi.advanceTimersByTimeAsync(2_000);
       expect(sendUserMessage).not.toHaveBeenCalled();
@@ -4040,7 +4040,7 @@ describe("slack-bridge Pinet reconnect", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const follow = commands.get("pinet-follow");
+    const follow = commands.get("pinet");
     const pinet = tools.get("pinet");
 
     expect(sessionStart).toBeDefined();
@@ -4049,7 +4049,7 @@ describe("slack-bridge Pinet reconnect", () => {
     expect(pinet).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await follow?.handler("", ctx);
+    await follow?.handler("follow", ctx);
     await pinet?.execute("tool-call-1", {
       action: "send",
       args: {
@@ -4218,14 +4218,14 @@ describe("slack-bridge broker startup backlog recovery", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     const inspectDb = new DatabaseSync(dbPath);
     const backlog = inspectDb
@@ -4363,14 +4363,14 @@ describe("slack-bridge broker startup backlog recovery", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     restartedDb.registerAgent("sender", "Sender", "📤", 202);
     restartedDb.createThread("a2a:sender:broker-prev", "agent", "", "sender");
@@ -4625,19 +4625,19 @@ describe("slack-bridge broker startup backlog recovery", () => {
 
     const sessionStart = events.get("session_start");
     const sessionShutdown = events.get("session_shutdown");
-    const pinetStart = commands.get("pinet-start");
+    const pinetStart = commands.get("pinet");
 
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(startBrokerSpy).toHaveBeenCalledTimes(1);
     inspectHealthyBrokerState();
 
-    await pinetStart?.handler("", ctx);
+    await pinetStart?.handler("start", ctx);
 
     expect(startBrokerSpy).toHaveBeenCalledTimes(2);
     expect(brokerRuntimes).toHaveLength(2);

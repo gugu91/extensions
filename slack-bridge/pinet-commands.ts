@@ -112,53 +112,6 @@ const PINET_SECONDARY_COMMANDS: Array<{
   { action: "rename", args: "[name]", description: "Rename this Pinet agent" },
 ];
 
-const PINET_LEGACY_COMMANDS: Array<{
-  name: string;
-  action: PinetCommandAction;
-  description: string;
-}> = [
-  {
-    name: "pinet-start",
-    action: "start",
-    description:
-      "Start Pinet as the broker (Slack connection + message routing, or reload the active broker)",
-  },
-  {
-    name: "pinet-follow",
-    action: "follow",
-    description: "Connect to an existing Pinet broker as a follower",
-  },
-  {
-    name: "pinet-unfollow",
-    action: "unfollow",
-    description: "Disconnect from the Pinet broker and keep working locally",
-  },
-  {
-    name: "pinet-reload",
-    action: "reload",
-    description: "Tell a connected Pinet agent to reload itself",
-  },
-  {
-    name: "pinet-exit",
-    action: "exit",
-    description: "Tell a connected Pinet agent to exit gracefully",
-  },
-  {
-    name: "pinet-free",
-    action: "free",
-    description: "Mark this Pinet agent idle/free for new work",
-  },
-  {
-    name: "pinet-skin",
-    action: "skin",
-    description: "Regenerate the mesh naming/personality skin from a theme",
-  },
-  { name: "pinet-status", action: "status", description: "Show Pinet status" },
-  { name: "pinet-logs", action: "logs", description: "Show recent broker activity log entries" },
-  { name: "slack-logs", action: "logs", description: "Show recent broker activity log entries" },
-  { name: "pinet-rename", action: "rename", description: "Rename this Pinet agent" },
-];
-
 // ─── Registration ────────────────────────────────────────
 
 function abortCurrentTurnBeforeBrokerReload(ctx: ExtensionContext): void {
@@ -186,8 +139,6 @@ export function formatPinetCommandHelp(): string {
     ...PINET_SECONDARY_COMMANDS.map((command) =>
       formatPinetCommandHelpLine(command.action, command.args, command.description),
     ),
-    "",
-    "Legacy aliases such as /pinet-start, /pinet-follow, /pinet-free, and /pinet-skin remain supported.",
   ];
 
   return lines.join("\n");
@@ -221,11 +172,7 @@ function parsePinetCommandAction(args: string): ParsedPinetCommandAction | null 
 }
 
 function normalizePinetCommandAction(rawAction: string): PinetCommandAction | null {
-  const normalized = rawAction
-    .trim()
-    .replace(/^\//, "")
-    .replace(/^pinet[:-]/, "")
-    .toLowerCase();
+  const normalized = rawAction.trim().replace(/^\//, "").toLowerCase();
 
   switch (normalized) {
     case "start":
@@ -321,15 +268,6 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
       await runPinetCommandAction(deps, parsed.action, parsed.args, ctx);
     },
   });
-
-  for (const command of PINET_LEGACY_COMMANDS) {
-    pi.registerCommand(command.name, {
-      description: `${command.description} (alias for /pinet ${command.action})`,
-      handler: async (args, ctx) => {
-        await runPinetCommandAction(deps, command.action, args, ctx, `/${command.name}`);
-      },
-    });
-  }
 }
 
 async function runPinetStart(deps: PinetCommandsDeps, ctx: ExtensionContext): Promise<void> {
