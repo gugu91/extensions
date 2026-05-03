@@ -32,6 +32,7 @@ export interface SlackBridgeSettings {
   runtimeMode?: "off" | "single" | "broker" | "follower";
   autoConnect?: boolean;
   autoFollow?: boolean;
+  skinTheme?: string;
   agentName?: string;
   agentEmoji?: string;
   meshSecret?: string;
@@ -666,14 +667,6 @@ export type PinetSkinStatusKey = "idle" | "working" | "healthy" | "stale" | "gho
 
 export type PinetSkinStatusVocabulary = Partial<Record<PinetSkinStatusKey, string>>;
 
-export interface PinetSkinUpdate {
-  theme: string;
-  name: string;
-  emoji: string;
-  personality: string;
-  statusVocabulary?: PinetSkinStatusVocabulary;
-}
-
 function extractPinetSkinStatusVocabulary(value: unknown): PinetSkinStatusVocabulary | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
@@ -687,39 +680,6 @@ function extractPinetSkinStatusVocabulary(value: unknown): PinetSkinStatusVocabu
   }
 
   return Object.keys(vocabulary).length > 0 ? vocabulary : undefined;
-}
-
-export function buildPinetSkinMetadata(update: PinetSkinUpdate): Record<string, unknown> {
-  return {
-    kind: "pinet_skin",
-    theme: update.theme,
-    name: update.name,
-    emoji: update.emoji,
-    personality: update.personality,
-    ...(update.statusVocabulary ? { skinStatusVocabulary: update.statusVocabulary } : {}),
-  };
-}
-
-export function extractPinetSkinUpdate(message: {
-  threadId?: string;
-  body?: string;
-  metadata?: Record<string, unknown> | null;
-}): PinetSkinUpdate | null {
-  const metadata = message.metadata ?? {};
-  const isAgentToAgent =
-    metadata.a2a === true ||
-    (typeof message.threadId === "string" && message.threadId.startsWith("a2a:"));
-  if (!isAgentToAgent || metadata.kind !== "pinet_skin") return null;
-
-  const theme = typeof metadata.theme === "string" ? metadata.theme.trim() : "";
-  const name = typeof metadata.name === "string" ? metadata.name.trim() : "";
-  const emoji = typeof metadata.emoji === "string" ? metadata.emoji.trim() : "";
-  const personality = typeof metadata.personality === "string" ? metadata.personality.trim() : "";
-  if (!theme || !name || !emoji || !personality) return null;
-
-  const statusVocabulary = extractPinetSkinStatusVocabulary(metadata.skinStatusVocabulary);
-
-  return { theme, name, emoji, personality, ...(statusVocabulary ? { statusVocabulary } : {}) };
 }
 
 export function extractPinetControlCommand(message: {
@@ -2055,14 +2015,8 @@ export interface BrokerInboxControlEntry {
   command: PinetControlCommand;
 }
 
-export interface BrokerInboxSkinEntry {
-  inboxId: number;
-  update: { theme: string; name: string; emoji: string; personality: string };
-}
-
 export interface BrokerInboxSyncResult {
   controlEntries: BrokerInboxControlEntry[];
-  skinEntries: BrokerInboxSkinEntry[];
   inboxMessages: InboxMessage[];
 }
 
@@ -2141,7 +2095,6 @@ export function syncFollowerInboxEntries(
 
 export function syncBrokerInboxEntries(entries: FollowerInboxEntry[]): BrokerInboxSyncResult {
   const controlEntries: BrokerInboxControlEntry[] = [];
-  const skinEntries: BrokerInboxSkinEntry[] = [];
   const inboxMessages: InboxMessage[] = [];
 
   for (const entry of entries) {
@@ -2162,16 +2115,6 @@ export function syncBrokerInboxEntries(entries: FollowerInboxEntry[]): BrokerInb
       continue;
     }
 
-    const skinUpdate = extractPinetSkinUpdate({
-      threadId: threadTs,
-      body,
-      metadata: meta,
-    });
-    if (skinUpdate && inboxId != null) {
-      skinEntries.push({ inboxId, update: skinUpdate });
-      continue;
-    }
-
     const scope = extractRuntimeScopeCarrier(meta.scope);
     inboxMessages.push({
       channel: "",
@@ -2187,7 +2130,6 @@ export function syncBrokerInboxEntries(entries: FollowerInboxEntry[]): BrokerInb
 
   return {
     controlEntries,
-    skinEntries,
     inboxMessages,
   };
 }

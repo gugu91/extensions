@@ -174,7 +174,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(tools.has("pinet_agents")).toBe(false);
     expect(commands.has("pinet-start")).toBe(true);
     expect(commands.has("pinet-free")).toBe(true);
-    expect(commands.has("pinet-skin")).toBe(true);
+    expect(commands.has("pinet-skin")).toBe(false);
 
     await sessionStart?.({}, ctx);
 

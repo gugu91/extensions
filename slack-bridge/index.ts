@@ -24,7 +24,6 @@ import type {
   PinetLaneParticipantUpsertInput,
   PinetLaneUpsertInput,
 } from "./broker/types.js";
-import { dispatchDirectAgentMessage } from "./broker/agent-messaging.js";
 import { createCommandRegistrationRuntime } from "./command-registration-runtime.js";
 import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
 import { createSlackRuntimeAccess } from "./slack-runtime-access.js";
@@ -56,7 +55,6 @@ import { createBrokerDeliveryState, queueBrokerInboxIds } from "./broker-deliver
 import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import { createPinetHomeTabs } from "./pinet-home-tabs.js";
 import { createPinetAgentStatus } from "./pinet-agent-status.js";
-import { createPinetMeshSkin } from "./pinet-skin.js";
 import { createBrokerThreadOwnerHints } from "./broker-thread-owner-hints.js";
 import { createPersistedRuntimeState } from "./persisted-runtime-state.js";
 import { createRuntimeAgentContext } from "./runtime-agent-context.js";
@@ -116,8 +114,6 @@ export default function (pi: ExtensionAPI) {
   let activeSkinTheme: string | null = null;
   let agentPersonality: string | null = null;
   const agentAliases = new Set<string>();
-  const PINET_SKIN_SETTING_KEY = "pinet.skinTheme";
-
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
   let securityPrompt = buildSecurityPrompt(guardrails);
@@ -473,30 +469,6 @@ export default function (pi: ExtensionAPI) {
       deliverTrackedSlackFollowUpMessage = deliver;
     },
   });
-  const pinetMeshSkin = createPinetMeshSkin({
-    getBrokerRole: () => brokerRole,
-    getActiveBrokerDb,
-    getActiveBrokerSelfId,
-    pinetSkinSettingKey: PINET_SKIN_SETTING_KEY,
-    setActiveSkinTheme: (theme) => {
-      activeSkinTheme = theme;
-    },
-    getMeshRoleFromMetadata: (metadata, fallbackRole) =>
-      getMeshRoleFromMetadata(metadata ?? undefined, fallbackRole),
-    buildSkinMetadata: (metadata, personality, statusVocabulary) =>
-      buildSkinMetadata(metadata ?? undefined, personality, statusVocabulary),
-    applyLocalAgentIdentity,
-    getAgentName: () => agentName,
-    dispatchDirectAgentMessage: (input) => {
-      const db = getActiveBrokerDb();
-      if (!db) {
-        return;
-      }
-      dispatchDirectAgentMessage(db, input);
-    },
-    persistState,
-  });
-  const { applyMeshSkin } = pinetMeshSkin;
   const pinetMaintenanceDelivery = createPinetMaintenanceDelivery({
     getActiveBrokerDb,
     getActiveBrokerSelfId,
@@ -719,10 +691,6 @@ export default function (pi: ExtensionAPI) {
     requestRemoteControl,
     deferControlAck: deferBrokerControlAck,
     runRemoteControl,
-    applySkinUpdate: (update) => {
-      activeSkinTheme = update.theme;
-      applyLocalAgentIdentity(update.name, update.emoji, update.personality);
-    },
     formatError: msg,
     deliveryState: brokerDeliveryState,
     createActivityLogger: (onError) =>
@@ -1145,7 +1113,6 @@ export default function (pi: ExtensionAPI) {
       listPinetLanes,
       upsertPinetLane,
       setPinetLaneParticipant,
-      applyMeshSkin,
     },
     iMessageTools: {
       pinetEnabled: () => pinetEnabled,
@@ -1307,10 +1274,6 @@ export default function (pi: ExtensionAPI) {
     },
     getAgentMetadata,
     applyRegistrationIdentity,
-    applySkinUpdate: (update) => {
-      activeSkinTheme = update.theme;
-      applyLocalAgentIdentity(update.name, update.emoji, update.personality);
-    },
     persistState,
     updateBadge,
     maybeDrainInboxIfIdle,
@@ -1378,7 +1341,6 @@ export default function (pi: ExtensionAPI) {
       disconnectFollower,
       sendPinetAgentMessage,
       signalAgentFree,
-      applyMeshSkin,
       applyLocalAgentIdentity,
       setExtStatus,
       setExtCtx: sessionUiRuntime.setExtCtx,

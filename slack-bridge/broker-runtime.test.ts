@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
 import {
   createBrokerRuntime,
+  resolveConfiguredBrokerSkinTheme,
   shouldRouteKnownSlackThread,
   type BrokerRuntimeDeps,
 } from "./broker-runtime.js";
@@ -41,7 +42,6 @@ function createDeps(overrides: Partial<BrokerRuntimeDeps> = {}): BrokerRuntimeDe
     })),
     deferControlAck: vi.fn(),
     runRemoteControl: vi.fn(),
-    applySkinUpdate: vi.fn(),
     formatError: (error: unknown) => String(error),
     deliveryState: {
       pendingInboxIds: new Set<number>(),
@@ -120,6 +120,12 @@ describe("broker-runtime known Slack thread routing", () => {
 });
 
 describe("broker-runtime", () => {
+  it("resolves broker skin strictly from config with default fallback", () => {
+    expect(resolveConfiguredBrokerSkinTheme({ skinTheme: "foundation" })).toBe("foundation");
+    expect(resolveConfiguredBrokerSkinTheme({ skinTheme: "classic" })).toBe("default");
+    expect(resolveConfiguredBrokerSkinTheme({})).toBe("default");
+  });
+
   it("clears transient Home tab observability state on disconnect", async () => {
     const runtime = createBrokerRuntime(createDeps());
 

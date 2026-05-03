@@ -65,7 +65,6 @@ export interface PinetCommandsDeps {
     ctx: ExtensionContext,
     options: { requirePinet?: boolean },
   ) => Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }>;
-  applyMeshSkin: (themeInput: string) => { theme: string; updatedAgents: string[] };
   applyLocalAgentIdentity: (name: string, emoji: string, personality: string | null) => void;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
   setExtCtx: (ctx: ExtensionContext) => void;
@@ -78,7 +77,6 @@ export type PinetCommandAction =
   | "reload"
   | "exit"
   | "free"
-  | "skin"
   | "status"
   | "logs"
   | "rename";
@@ -99,7 +97,6 @@ const PINET_PRIMARY_COMMANDS: Array<{
   { action: "reload", args: "<agent>", description: "Ask another agent to reload" },
   { action: "exit", args: "<agent>", description: "Ask another agent to exit" },
   { action: "free", args: "", description: "Mark this agent as idle" },
-  { action: "skin", args: "<theme>", description: "Change the mesh presentation skin" },
 ];
 
 const PINET_SECONDARY_COMMANDS: Array<{
@@ -148,11 +145,6 @@ const PINET_LEGACY_COMMANDS: Array<{
     action: "free",
     description: "Mark this Pinet agent idle/free for new work",
   },
-  {
-    name: "pinet-skin",
-    action: "skin",
-    description: "Regenerate the mesh naming/personality skin from a theme",
-  },
   { name: "pinet-status", action: "status", description: "Show Pinet status" },
   { name: "pinet-logs", action: "logs", description: "Show recent broker activity log entries" },
   { name: "slack-logs", action: "logs", description: "Show recent broker activity log entries" },
@@ -187,7 +179,7 @@ export function formatPinetCommandHelp(): string {
       formatPinetCommandHelpLine(command.action, command.args, command.description),
     ),
     "",
-    "Legacy aliases such as /pinet-start, /pinet-follow, /pinet-free, and /pinet-skin remain supported.",
+    "Legacy aliases such as /pinet-start, /pinet-follow, and /pinet-free remain supported.",
   ];
 
   return lines.join("\n");
@@ -244,8 +236,6 @@ function normalizePinetCommandAction(rawAction: string): PinetCommandAction | nu
     case "free":
     case "idle":
       return "free";
-    case "skin":
-      return "skin";
     case "status":
       return "status";
     case "logs":
@@ -286,9 +276,6 @@ export async function runPinetCommandAction(
     case "free":
       await runPinetFree(deps, ctx);
       return;
-    case "skin":
-      runPinetSkin(deps, args, ctx, usageCommand);
-      return;
     case "status":
       runPinetStatus(deps, ctx);
       return;
@@ -304,7 +291,7 @@ export async function runPinetCommandAction(
 export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps): void {
   pi.registerCommand("pinet", {
     description:
-      "Unified Pinet command surface: start, follow, unfollow, reload, exit, free, skin, status, logs, rename",
+      "Unified Pinet command surface: start, follow, unfollow, reload, exit, free, status, logs, rename",
     handler: async (args, ctx) => {
       const parsed = parsePinetCommandAction(args);
       if (!parsed) {
@@ -467,36 +454,6 @@ async function runPinetFree(deps: PinetCommandsDeps, ctx: ExtensionContext): Pro
     );
   } catch (err) {
     ctx.ui.notify(`Pinet free failed: ${errorMsg(err)}`, "error");
-  }
-}
-
-function runPinetSkin(
-  deps: PinetCommandsDeps,
-  args: string,
-  ctx: ExtensionContext,
-  usageCommand: string,
-): void {
-  if (!deps.pinetEnabled() || deps.brokerRole() == null) {
-    ctx.ui.notify("Pinet mesh runtime is not active. Use /pinet start or /pinet follow.", "info");
-    return;
-  }
-  if (deps.brokerRole() !== "broker") {
-    ctx.ui.notify("/pinet skin can only run on the active broker.", "warning");
-    return;
-  }
-  if (!args.trim()) {
-    ctx.ui.notify(`Usage: ${usageCommand} <theme>`, "warning");
-    return;
-  }
-
-  try {
-    const result = deps.applyMeshSkin(args);
-    ctx.ui.notify(
-      `Applied mesh skin "${result.theme}" to ${result.updatedAgents.length} agent${result.updatedAgents.length === 1 ? "" : "s"}.`,
-      "info",
-    );
-  } catch (err) {
-    ctx.ui.notify(`Pinet skin failed: ${errorMsg(err)}`, "error");
   }
 }
 
