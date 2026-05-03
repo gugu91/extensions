@@ -147,7 +147,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("pinet:free")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:reload")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:exit")).toBe(true);
-    expect(WRITE_TOOLS.has("pinet:skin")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:skin")).toBe(false);
     expect(WRITE_TOOLS.has("pinet_message")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:read")).toBe(true);
     expect(READ_ONLY_TOOLS.has("pinet:agents")).toBe(true);
@@ -167,7 +167,7 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("pinet:send", g)).toBe(true);
     expect(isToolBlocked("pinet:reload", g)).toBe(true);
     expect(isToolBlocked("pinet:exit", g)).toBe(true);
-    expect(isToolBlocked("pinet:skin", g)).toBe(true);
+    expect(isToolBlocked("pinet:skin", g)).toBe(false);
     expect(isToolBlocked("pinet_message", g)).toBe(true);
     expect(isToolBlocked("pinet_send", g)).toBe(true);
     expect(isToolBlocked("pinet:read", g)).toBe(false);

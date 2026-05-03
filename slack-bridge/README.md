@@ -157,6 +157,7 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `runtimeMode`                  | no       | Explicit startup mode: `"off"`, `"single"`, `"broker"`, or `"follower"`                                            |
 | `autoConnect`                  | no       | Legacy compatibility alias for `runtimeMode: "single"`                                                             |
 | `autoFollow`                   | no       | Legacy compatibility alias for follower startup when a broker socket exists                                        |
+| `skinTheme`                    | no       | Pinet presentation skin selected at broker startup/reload (`default`, `foundation`, `cosmere`, or free-form)       |
 | `meshSecret`                   | no       | Optional inline Pinet shared secret; overrides `meshSecretPath` and env fallbacks                                  |
 | `meshSecretPath`               | no       | Optional path to a shared-secret file; broker creates it if missing, followers require an existing file            |
 | `suggestedPrompts`             | no       | Prompts shown when a user opens a new conversation                                                                 |
@@ -445,11 +446,11 @@ Only broker prompt content is replaceable. Broker runtime/tool restrictions rema
 
 ### Multi-agent tools
 
-| Tool    | Description                                                                                                                                            |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`, `lanes`, `reload`, `exit`, `skin`) |
+| Tool    | Description                                                                                                                                    |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`, `lanes`, `reload`, `exit`) |
 
-Use the dispatcher for Pinet tool actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, `pinet action=agents`, `pinet action=lanes`, `pinet action=reload`, `pinet action=exit`, and `pinet action=skin`. Use slash commands for UI lifecycle transitions: `/pinet start`, `/pinet follow`, and `/pinet unfollow`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
+Use the dispatcher for Pinet tool actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, `pinet action=agents`, `pinet action=lanes`, `pinet action=reload`, and `pinet action=exit`. Use slash commands for UI lifecycle transitions: `/pinet start`, `/pinet follow`, and `/pinet unfollow`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
 
 Dispatcher content defaults to terse CLI-style confirmations/summaries for noisy reads, sends, and agent lists. In default CLI mode, bulky read/agent payloads are also compacted in `data.details` so tool renderers do not surface full message bodies or agent metadata by accident. Pass `args.format="json"` (or `args.f` / `args["-f"]`) for the dispatcher envelope in content with full structured `data.details`, or `args.full=true` / `args["--full"]=true` for verbose text with full structured `data.details`.
 
@@ -463,19 +464,18 @@ Durable lane metadata is stored in SQLite and can be inspected/updated with `pin
 
 Use `/pinet <action> [args]` for mesh lifecycle and broker operations.
 
-| Command                 | Description                                     |
-| ----------------------- | ----------------------------------------------- |
-| `/pinet start`          | Start as the mesh broker                        |
-| `/pinet follow`         | Connect as a follower worker                    |
-| `/pinet unfollow`       | Disconnect from the broker                      |
-| `/pinet reload <agent>` | Ask another agent to reload                     |
-| `/pinet exit <agent>`   | Ask another agent to exit                       |
-| `/pinet free`           | Mark this agent as idle                         |
-| `/pinet skin <theme>`   | Change the mesh presentation skin (broker only) |
+| Command                 | Description                  |
+| ----------------------- | ---------------------------- |
+| `/pinet start`          | Start as the mesh broker     |
+| `/pinet follow`         | Connect as a follower worker |
+| `/pinet unfollow`       | Disconnect from the broker   |
+| `/pinet reload <agent>` | Ask another agent to reload  |
+| `/pinet exit <agent>`   | Ask another agent to exit    |
+| `/pinet free`           | Mark this agent as idle      |
 
 ### Pinet skins
 
-`/pinet skin <theme>` updates mesh presentation only: names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
+Pinet skin selection is configuration-driven. Set `skinTheme` under the `slack-bridge` settings object (for example, `"skinTheme": "foundation"`) and restart/reload the broker; broker startup applies the configured presentation to broker and follower registrations. Skin selection updates mesh presentation only: names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
 
 Built-in skins:
 

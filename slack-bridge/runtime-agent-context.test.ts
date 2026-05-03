@@ -311,7 +311,7 @@ describe("createRuntimeAgentContext", () => {
     expect(updateBadge).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes settings and prefers the active skin identity when a theme is set", () => {
+  it("refreshes settings and prefers the configured skin identity when set", () => {
     fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
     fs.writeFileSync(
       path.join(testHome, ".pi", "agent", "settings.json"),
@@ -324,6 +324,7 @@ describe("createRuntimeAgentContext", () => {
           reactionCommands: {
             "👀": { action: "inspect", prompt: "Inspect closely" },
           },
+          skinTheme: "foundation",
           agentName: "Ignored By Skin",
           agentEmoji: "❌",
         },
@@ -344,7 +345,7 @@ describe("createRuntimeAgentContext", () => {
     runtimeAgentContext.refreshSettings();
 
     const expectedSkin = buildPinetSkinAssignment({
-      theme: "cyberpunk neon",
+      theme: "foundation",
       role: "worker",
       seed: sessionFile,
     });
@@ -359,9 +360,40 @@ describe("createRuntimeAgentContext", () => {
       prompt: "Inspect closely",
     });
     expect(state.securityPrompt).toContain("bash");
+    expect(state.activeSkinTheme).toBe("foundation");
     expect(state.agentName).toBe(expectedSkin.name);
     expect(state.agentEmoji).toBe(expectedSkin.emoji);
     expect(state.agentPersonality).toBe(expectedSkin.personality);
+  });
+
+  it("clears stale active skin when skinTheme is removed from settings", () => {
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          agentName: "Config Name",
+          agentEmoji: "🧭",
+        },
+      }),
+    );
+
+    const { deps, state } = createDeps({
+      state: {
+        activeSkinTheme: "foundation",
+        agentName: "Skinned Name",
+        agentEmoji: "🪐",
+        agentPersonality: "stale persona",
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+    runtimeAgentContext.refreshSettings();
+
+    expect(state.activeSkinTheme).toBeNull();
+    expect(state.agentName).toBe("Config Name");
+    expect(state.agentEmoji).toBe("🧭");
+    expect(state.agentPersonality).toBeNull();
   });
 
   it("snapshots and restores reloadable runtime state with cloned collections and role-aware owner tokens", () => {

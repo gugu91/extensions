@@ -72,7 +72,6 @@ function createDeps(overrides: Partial<PinetCommandsDeps> = {}): PinetCommandsDe
     disconnectFollower: async () => ({ unregisterError: null }),
     sendPinetAgentMessage: async (target) => ({ messageId: 1, target }),
     signalAgentFree: async () => ({ queuedInboxCount: 0, drainedQueuedInbox: false }),
-    applyMeshSkin: (themeInput) => ({ theme: themeInput.trim(), updatedAgents: ["agent-1"] }),
     applyLocalAgentIdentity: () => {},
     setExtStatus: () => {},
     setExtCtx: () => {},
@@ -115,7 +114,7 @@ describe("registerPinetCommands", () => {
       "info",
     );
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet start"), "info");
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet skin <theme>"), "info");
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/pinet skin <theme>"), "info");
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/pinet-start"), "info");
   });
 
@@ -142,25 +141,23 @@ describe("registerPinetCommands", () => {
     expect(notify).toHaveBeenCalledWith("Usage: /pinet reload <agent-name-or-id>", "warning");
   });
 
-  it("runs free and skin from the unified command", async () => {
+  it("runs free from the unified command and rejects removed skin action", async () => {
     const signalAgentFree = vi.fn(async () => ({ queuedInboxCount: 0, drainedQueuedInbox: false }));
-    const applyMeshSkin = vi.fn((themeInput: string) => ({
-      theme: themeInput.trim(),
-      updatedAgents: ["agent-1", "agent-2"],
-    }));
-    const commands = registerCommands(createDeps({ signalAgentFree, applyMeshSkin }));
+    const commands = registerCommands(createDeps({ signalAgentFree }));
     const { ctx, notify } = createContext();
 
     await commands.get("pinet")?.handler("free", ctx);
     await commands.get("pinet")?.handler("skin slate chalk", ctx);
 
     expect(signalAgentFree).toHaveBeenCalledWith(ctx, { requirePinet: true });
-    expect(applyMeshSkin).toHaveBeenCalledWith("slate chalk");
     expect(notify).toHaveBeenCalledWith(
       "Marked 🦦 Slate Chalk Otter idle/free for new work.",
       "info",
     );
-    expect(notify).toHaveBeenCalledWith('Applied mesh skin "slate chalk" to 2 agents.', "info");
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Unknown Pinet action: skin"),
+      "warning",
+    );
   });
 });
 
@@ -173,6 +170,6 @@ describe("formatPinetCommandHelp", () => {
     expect(help).toContain("/pinet reload <agent>");
     expect(help).toContain("/pinet exit <agent>");
     expect(help).toContain("/pinet free");
-    expect(help).toContain("/pinet skin <theme>");
+    expect(help).not.toContain("/pinet skin <theme>");
   });
 });

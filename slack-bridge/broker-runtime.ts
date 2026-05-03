@@ -4,11 +4,11 @@ import {
   type PinetControlCommand,
   type PinetRemoteControlRequestResult,
   type PinetSkinStatusVocabulary,
-  type PinetSkinUpdate,
   type SlackBridgeSettings,
   buildPinetOwnerToken,
   buildPinetSkinAssignment,
   DEFAULT_PINET_SKIN_THEME,
+  normalizePinetSkinTheme,
   resolvePinetMeshAuth,
   syncBrokerInboxEntries,
 } from "./helpers.js";
@@ -94,7 +94,6 @@ export interface BrokerRuntimeDeps {
   ) => PinetRemoteControlRequestResult;
   deferControlAck: (command: PinetControlCommand, inboxId: number) => void;
   runRemoteControl: (command: PinetControlCommand, ctx: ExtensionContext) => void;
-  applySkinUpdate: (update: PinetSkinUpdate) => void;
   formatError: (error: unknown) => string;
   deliveryState: BrokerDeliveryState;
   onMaintenanceResult: (
@@ -138,6 +137,10 @@ export interface BrokerRuntimeDeps {
 function normalizeOptionalSetting(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+export function resolveConfiguredBrokerSkinTheme(settings: SlackBridgeSettings): string {
+  return normalizePinetSkinTheme(settings.skinTheme) ?? DEFAULT_PINET_SKIN_THEME;
 }
 
 export interface BrokerRuntime {
@@ -309,11 +312,6 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
       } catch (error) {
         ctx.ui.notify(`Pinet remote control failed: ${deps.formatError(error)}`, "error");
       }
-    }
-
-    for (const entry of synced.skinEntries) {
-      deps.applySkinUpdate(entry.update);
-      handledInboxIds.add(entry.inboxId);
     }
 
     if (handledInboxIds.size > 0) {
@@ -595,10 +593,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         broker.db.setSetting("pinet.brokerStableId", brokerStableId);
         deps.setAgentOwnerToken(buildPinetOwnerToken(brokerStableId));
 
-        const activeSkinTheme =
-          normalizeOptionalSetting(broker.db.getSetting<string>("pinet.skinTheme")) ??
-          deps.getActiveSkinTheme() ??
-          DEFAULT_PINET_SKIN_THEME;
+        const activeSkinTheme = resolveConfiguredBrokerSkinTheme(deps.getSettings());
         deps.setActiveSkinTheme(activeSkinTheme);
         broker.db.setSetting("pinet.skinTheme", activeSkinTheme);
         broker.server.setAgentRegistrationResolver((registration) => {

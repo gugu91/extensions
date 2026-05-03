@@ -57,7 +57,6 @@ export const WRITE_TOOLS = new Set([
   "pinet:free",
   "pinet:reload",
   "pinet:exit",
-  "pinet:skin",
 ]);
 
 /**
