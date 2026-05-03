@@ -371,6 +371,7 @@ export default function (pi: ExtensionAPI) {
     getActiveSkinTheme: () => activeSkinTheme,
     getAgentPersonality: () => agentPersonality,
     getBrokerRole: () => brokerRole,
+    getBrokerPromptSetting: () => settings.brokerPrompt,
   });
 
   let isSinglePlayerShuttingDown = () => false;
