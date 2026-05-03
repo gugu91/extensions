@@ -28,7 +28,7 @@ If a repo instruction says to use the `code-reviewer` subagent, treat that as wo
 
 When delegating, include: task, issue/PR numbers, maintainer priority/approval, repo/branch/worktree setup, and where to report back (Slack thread_ts).
 
-If no repo-matched workers are available and new capacity is needed, you may spin up a worker as broker infrastructure: create a tmux session in the target repo, launch `pi` with `PINET_BROKER_MANAGED=1 PINET_LAUNCH_SOURCE=broker-tmux PINET_TMUX_SESSION=<session>`, run `/pinet follow`, wait for the worker in `pinet action=agents`, then delegate via `pinet action=send`. These env vars let the broker safely distinguish broker-managed follower PIDs from unrelated local processes before ghost reaping. NEVER do the work yourself or cross-route to another repo as a fallback.
+If no repo-matched workers are available and new capacity is needed, you may spin up a worker as broker infrastructure: create a tmux session in the target repo, launch `pi` with `PINET_BROKER_MANAGED=1 PINET_BROKER_AGENT_ID=<current-broker-agent-id> PINET_LAUNCH_SOURCE=broker-tmux PINET_TMUX_SESSION=<session>`, run `/pinet follow`, wait for the worker in `pinet action=agents`, then delegate via `pinet action=send`. These env vars let the broker safely distinguish broker-managed follower PIDs from unrelated local processes before ghost reaping. NEVER do the work yourself or cross-route to another repo as a fallback.
 
 WORKTREE RULE: The main repo checkout must ALWAYS stay on the `main` branch. NEVER run `git checkout <branch>` or `git switch <branch>` in the main checkout.
 

@@ -40,7 +40,7 @@ export interface GhostReapResult {
 }
 
 const DEFAULT_KILL_AFTER_MS = 10_000;
-const PID_REUSE_TOLERANCE_MS = 60_000;
+const PROCESS_START_CLOCK_SKEW_MS = 1_000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -135,7 +135,13 @@ export function decideGhostReapEligibility(
     return { eligible: false, agentId: agent.id, pid, reason: "not_broker_managed" };
   }
   const managedBy = getBrokerManagedBy(metadata);
-  if (brokerAgentId && managedBy && managedBy !== brokerAgentId) {
+  if (!brokerAgentId) {
+    return { eligible: false, agentId: agent.id, pid, reason: "missing_broker_identity" };
+  }
+  if (!managedBy) {
+    return { eligible: false, agentId: agent.id, pid, reason: "missing_broker_managed_by" };
+  }
+  if (managedBy !== brokerAgentId) {
     return { eligible: false, agentId: agent.id, pid, reason: "managed_by_different_broker" };
   }
   if (!agent.disconnectedAt) {
@@ -152,15 +158,22 @@ export function decideGhostReapEligibility(
   }
   const startedAtMs = parseIso(snapshot.startedAt);
   const connectedAtMs = parseIso(agent.connectedAt);
+  const disconnectedAtMs = parseIso(agent.disconnectedAt);
+  if (
+    startedAtMs != null &&
+    disconnectedAtMs != null &&
+    startedAtMs - disconnectedAtMs > PROCESS_START_CLOCK_SKEW_MS
+  ) {
+    return { eligible: false, agentId: agent.id, pid, reason: "pid_reused_after_disconnect" };
+  }
   if (
     startedAtMs != null &&
     connectedAtMs != null &&
-    startedAtMs - connectedAtMs > PID_REUSE_TOLERANCE_MS
+    startedAtMs - connectedAtMs > PROCESS_START_CLOCK_SKEW_MS
   ) {
     return { eligible: false, agentId: agent.id, pid, reason: "pid_reused_after_registration" };
   }
-  const disconnectedAtMs = parseIso(agent.disconnectedAt);
-  if (disconnectedAtMs != null && disconnectedAtMs > now + PID_REUSE_TOLERANCE_MS) {
+  if (disconnectedAtMs != null && disconnectedAtMs > now + PROCESS_START_CLOCK_SKEW_MS) {
     return { eligible: false, agentId: agent.id, pid, reason: "disconnect_time_in_future" };
   }
 

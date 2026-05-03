@@ -71,6 +71,20 @@ describe("broker ghost reaper", () => {
     });
   });
 
+  it("requires explicit current-broker ownership before reaping", () => {
+    expect(decideGhostReapEligibility(makeAgent(), snapshot(), null)).toMatchObject({
+      eligible: false,
+      reason: "missing_broker_identity",
+    });
+    expect(
+      decideGhostReapEligibility(
+        makeAgent({ metadata: { role: "worker", brokerManaged: true } }),
+        snapshot(),
+        "broker-1",
+      ),
+    ).toMatchObject({ eligible: false, reason: "missing_broker_managed_by" });
+  });
+
   it("refuses live agents and broker-role rows", () => {
     expect(
       decideGhostReapEligibility(makeAgent({ disconnectedAt: null }), snapshot(), "broker-1"),
@@ -104,12 +118,22 @@ describe("broker ghost reaper", () => {
 
   it("refuses likely PID reuse when process start is after registration", () => {
     const decision = decideGhostReapEligibility(
-      makeAgent(),
+      makeAgent({ disconnectedAt: "2026-05-03T13:10:00.000Z" }),
       snapshot({ startedAt: "2026-05-03T13:05:00.000Z" }),
       "broker-1",
     );
 
     expect(decision).toMatchObject({ eligible: false, reason: "pid_reused_after_registration" });
+  });
+
+  it("refuses fast PID reuse when process start is after disconnect", () => {
+    const decision = decideGhostReapEligibility(
+      makeAgent({ disconnectedAt: "2026-05-03T13:00:10.000Z" }),
+      snapshot({ startedAt: "2026-05-03T13:00:20.000Z" }),
+      "broker-1",
+    );
+
+    expect(decision).toMatchObject({ eligible: false, reason: "pid_reused_after_disconnect" });
   });
 
   it("sends SIGTERM to eligible broker-managed ghosts and schedules bounded SIGKILL", () => {
