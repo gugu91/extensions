@@ -1,16 +1,19 @@
 # nvim-bridge
 
-Neovim ↔ pi bridge that sends active editor context (file, viewport, selection) into pi before each agent run, and supports persistent local PiComms comments.
+Neovim ↔ pi bridge that sends active editor context (file, viewport, selection) into pi before each agent run, and provides a thin Neovim-to-Pinet request adapter.
+
+PiComms has been removed from this environment. Durable coordination should use Pinet (`pinet action=read/send/lanes/...`) instead of a separate local comment store.
 
 ## How it works
 
-- A pi extension (`index.ts`) starts a Unix socket server.
-- A Neovim plugin (`nvim/**`) sends events to that socket.
+- A pi extension (`index.ts`) starts a same-host Unix socket server.
+- A Neovim plugin (`nvim/**`) sends editor events to that socket.
 - Before each agent run, pi injects context like:
   - current file
   - visible line range
   - cursor line
   - selection
+- `:PinetAsk` and `:PinetRead` send lightweight follow-up prompts to the active pi session; the agent can then use Pinet tools for coordination.
 
 > Important: Neovim and pi must be in the **same git repo and same branch**.
 
@@ -20,7 +23,7 @@ Neovim ↔ pi bridge that sends active editor context (file, viewport, selection
 
 - The Unix socket under `/tmp/pi-nvim/<hash>.sock` assumes local trust between Neovim and the pi process on the same machine.
 - There is **no peer authentication handshake** on that socket today; the main boundary is host-local access plus the repo/branch-derived socket name.
-- The bridge now tightens the socket directory/socket permissions on a best-effort basis, but that is intentionally narrow hardening rather than a transport redesign.
+- The bridge tightens the socket directory/socket permissions on a best-effort basis, but that is intentionally narrow hardening rather than a transport redesign.
 
 Treat the socket as local editor-control access for the current host, not as a remote-safe transport.
 
@@ -64,8 +67,7 @@ After linking/configuring, restart both so socket + autocommands are initialized
 
 ### Keymaps
 
-This plugin does **not** define global keymaps by default.
-Define mappings in your Neovim config (e.g. lazy `keys` field).
+This plugin does **not** define global keymaps by default. Define mappings in your Neovim config (e.g. lazy `keys` field).
 
 ## Usage
 
@@ -75,46 +77,27 @@ Core bridge commands:
 - `:PiNvimDisable`
 - `:PiNvimStatus`
 
-PiComms commands (stored under `.pi/a2a/comments`):
+Pinet adapter commands:
 
-- `:PiCommsOpen [thread]` — open the PiComms panel for the current context thread
-- `:PiCommsAdd [thread]` — open the same panel and focus the reply composer for the current context thread
-- `:PiCommsNext` — jump to the next PiComms thread in the current file
-- `:PiCommsClose` — close the PiComms panel
-- `:PiCommsRefresh [thread]` — refresh the open panel from pi
-- `:PiCommsRead` — trigger `/picomms:read`
-- `:PiCommsClean` — trigger `/picomms:clean`
+- `:PinetAsk [message]` — send the current buffer/cursor/range plus message to the active pi session as a Pinet-oriented request.
+- `:PinetRead` — ask the active pi session to check pending Pinet follow-ups for this repository/context.
 
-Pi slash commands:
+Examples:
 
-- `/picomms:read` — load all repository comments and queue them as guidance for the agent
-- `/picomms:clean` — wipe all repository comments
+```vim
+:PinetAsk please review this function with another agent
+:'<,'>PinetAsk coordinate this selected block via Pinet
+:PinetRead
+```
 
-Inline composer controls:
+The adapter intentionally does not store comments, draw comment indicators, or maintain a local timeline. It packages Neovim context and asks the active pi session to use Pinet for durable lanes, delegation, and follow-up tracking.
 
-- panel opens in normal mode
-- `i` → jump into the reply composer and enter insert mode
-- `Enter` → submit comment
-- `Shift-Enter` → newline
-- `q` or `<C-w>q` (normal mode) → close panel
+Removed PiComms surface:
 
-Panel notes:
-
-- `:PiCommsOpen` is the primary entrypoint and resolves the current context thread
-- `:PiCommsAdd` opens the same thread view but focuses the composer area
-- `:PiCommsNext` jumps to the next thread anchor in the current file
-- the panel shows the current thread above and the reply box at the bottom
-- advanced actions stay available as commands: `:PiCommsRefresh`, `:PiCommsClose`, `:PiCommsRead`, `:PiCommsClean`
-
-Line indicators:
-
-- File lines with comment context show a stronger speech-bubble virtual text marker with a count (e.g. `1`, `3`)
-- Range comments mark the start line only
-- Uses virtual text, not sign column, to avoid conflicts with git gutter plugins
-
-Global wipe is also available via skill:
-
-- `/skill:wipe-a2a-comments`
+- no `.pi/a2a/comments` store is initialized by `nvim-bridge`
+- no `comment_add`, `comment_list`, or `comment_wipe_all` tools are registered
+- no `/picomms:*` commands are registered
+- no `:PiComms*` Neovim commands or line indicators are registered
 
 ## Development tooling
 

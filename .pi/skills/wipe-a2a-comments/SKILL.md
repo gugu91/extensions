@@ -1,47 +1,33 @@
 ---
 name: wipe-a2a-comments
-description: Wipes all persistent PiComms comments for the current git repository. Use when the user asks to clear/reset/remove all comments.
+description: Deprecated legacy PiComms cleanup note. Use when a user asks to clear/reset/remove old PiComms comments and explain that nvim-bridge now uses Pinet instead.
 ---
 
-# Wipe PiComms Comments
+# Deprecated PiComms Cleanup
 
-Use this skill when the user wants to delete **all** stored PiComms comments in the current repository.
+PiComms has been removed from the active `nvim-bridge` environment and replaced by the thin Pinet adapter. Do **not** call `comment_wipe_all`; that tool is no longer registered by `nvim-bridge`.
 
-## Preferred flow
+## Preferred response
 
-1. Verify the user intent is destructive and explicit.
-2. Call the `comment_wipe_all` tool.
-3. Report how many comments were removed.
-
-## Fallback (if the tool is unavailable)
-
-Run this repo-local reset command:
+1. Explain that Neovim coordination now goes through Pinet (`:PinetAsk`, `:PinetRead`, and `pinet action=...`) instead of PiComms.
+2. Do not create or reinitialize `.pi/a2a/comments`.
+3. If the user explicitly wants legacy local artifacts deleted, remove only the legacy comments directory after confirming intent:
 
 ```bash
 bash -lc '
 set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 comments_dir="$repo_root/.pi/a2a/comments"
-removed=0
-if [ -d "$comments_dir/meta" ]; then
-  removed="$(find "$comments_dir/meta" -type f -name "*.json" | wc -l | tr -d " ")"
+if [ -d "$comments_dir" ]; then
+  rm -rf "$comments_dir"
+  echo "Removed legacy PiComms comments directory: $comments_dir"
+else
+  echo "No legacy PiComms comments directory found: $comments_dir"
 fi
-rm -rf "$comments_dir"
-mkdir -p "$comments_dir/items" "$comments_dir/meta"
-updated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-cat > "$comments_dir/index.json" <<EOF
-{
-  "version": 1,
-  "updatedAt": "$updated_at",
-  "comments": []
-}
-EOF
-echo "Wiped PiComms comments in repo: $repo_root"
-echo "Removed comments: $removed"
 '
 ```
 
 ## Notes
 
-- This wipe is **per git repository**.
-- This only affects `.pi/a2a/comments` in the current repo.
+- This is legacy cleanup only.
+- Do not use this as a coordination path; use Pinet lanes, inbox, and Slack/Pinet threads instead.

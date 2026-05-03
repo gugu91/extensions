@@ -7,7 +7,7 @@ Pi extensions for Slack, Neovim, and Neon Postgres.
 ```
 extensions/
 ├── slack-bridge/    # Pinet — Slack assistant integration (workspace)
-├── nvim-bridge/     # Neovim bridge + PiComms comments (workspace)
+├── nvim-bridge/     # Neovim bridge + thin Pinet adapter (workspace)
 ├── neon-psql/       # Neon Postgres CLI (workspace)
 ├── types/           # Shared type declarations (workspace)
 ├── plans/           # Architecture docs
