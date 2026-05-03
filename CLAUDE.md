@@ -7,7 +7,7 @@ Pi extensions for Slack, Neovim, and Neon Postgres.
 ```
 extensions/
 ├── slack-bridge/    # Pinet — Slack assistant integration (workspace)
-├── nvim-bridge/     # Neovim bridge + PiComms comments (workspace)
+├── nvim-bridge/     # Neovim bridge; PiComms disabled pending Pinet adapter
 ├── neon-psql/       # Neon Postgres CLI (workspace)
 ├── types/           # Shared type declarations (workspace)
 ├── plans/           # Architecture docs
@@ -130,7 +130,7 @@ export default function (pi: ExtensionAPI) {
 ## Key architecture decisions
 
 - **Pinet (slack-bridge)**: Opt-in via `/pinet` command or `autoConnect: true` in settings
-- **PiComms**: SQLite-backed (`node:sqlite`), falls back to JSON files
+- **nvim PiComms**: Disabled in `nvim-bridge`; use Pinet directly while the replacement nvim adapter is tracked in #714
 - **Socket Mode**: Single WebSocket per Slack app token — only one pi session connects
 - **Turborepo**: Per-package lint/typecheck/test with local caching
 - **pnpm workspaces**: Each extension is an independent workspace package

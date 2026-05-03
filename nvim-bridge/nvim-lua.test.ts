@@ -13,45 +13,47 @@ function hasNvim(): boolean {
 }
 
 describe("pi-nvim Lua integration", () => {
-  it.skipIf(!hasNvim())(
-    "ignores stale PiComms indicators past the end of a Markdown buffer",
-    () => {
-      const dir = mkdtempSync(path.join(tmpdir(), "pi-nvim-md-"));
-      const markdownPath = path.join(dir, "short.md");
-      writeFileSync(markdownPath, "# Short\n", "utf8");
+  it.skipIf(!hasNvim())("starts on Markdown files without registering PiComms commands", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "pi-nvim-disabled-"));
+    const markdownPath = path.join(dir, "short.md");
+    writeFileSync(markdownPath, "# Short\n", "utf8");
 
-      const pluginRoot = path.join(__dirname, "nvim");
-      const fakeSocket =
-        "package.loaded['pi-nvim.socket'] = { " +
-        "request = function() return { comments = { { context = { " +
-        "file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':.'), " +
-        "startLine = 99, endLine = 99 " +
-        "} } } }, nil end, " +
-        "on = function() return function() end end " +
-        "}";
+    const pluginRoot = path.join(__dirname, "nvim");
+    const fakeSocket = [
+      "package.loaded['pi-nvim.socket'] = {",
+      "connect = function() end,",
+      "disconnect = function() end,",
+      "invalidate_cache = function() end,",
+      "send = function() return true end,",
+      "is_connected = function() return true end,",
+      "}",
+    ].join(" ");
 
-      try {
-        const result = spawnSync(
-          "nvim",
-          [
-            "--headless",
-            "--clean",
-            "-n",
-            markdownPath,
-            `+set rtp^=${pluginRoot}`,
-            `+lua ${fakeSocket}`,
-            "+lua require('pi-nvim.comments').setup()",
-            "+sleep 300m",
-            "+qa",
-          ],
-          { encoding: "utf8" },
-        );
+    try {
+      const result = spawnSync(
+        "nvim",
+        [
+          "--headless",
+          "--clean",
+          "-n",
+          markdownPath,
+          `+set rtp^=${pluginRoot}`,
+          `+lua ${fakeSocket}`,
+          "+lua require('pi-nvim').setup()",
+          "+lua assert(vim.fn.exists(':PiCommsOpen') == 0)",
+          "+lua assert(vim.fn.exists(':PiCommsAdd') == 0)",
+          "+lua assert(vim.fn.exists(':PiCommsRead') == 0)",
+          "+lua assert(vim.fn.exists(':PiCommsClean') == 0)",
+          "+qa",
+        ],
+        { encoding: "utf8" },
+      );
 
-        expect(result.stderr).not.toContain("Invalid 'line': out of range");
-        expect(result.status).toBe(0);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  );
+      expect(result.stderr).not.toContain("Invalid 'line': out of range");
+      expect(result.stderr).not.toContain("Error");
+      expect(result.status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
