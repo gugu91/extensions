@@ -78,11 +78,44 @@ export function resolveBrokerPromptCandidates(
   const homeDir = path.resolve(options.homeDir ?? process.env.HOME ?? "");
   const userRoot = path.join(homeDir, ".pi", "agent", "slack-bridge");
   const defaultPromptPath = path.resolve(
-    options.defaultPromptPath ?? path.join(moduleDir, "prompts", "broker", "default.md"),
+    options.defaultPromptPath ?? path.join(moduleDir, "prompts", "broker", "broker.md"),
   );
+  const legacyDefaultPromptPath = path.resolve(moduleDir, "prompts", "broker", "default.md");
   const defaultRoot = path.resolve(path.dirname(path.dirname(path.dirname(defaultPromptPath))));
+  const legacyDefaultRoot = path.resolve(
+    path.dirname(path.dirname(path.dirname(legacyDefaultPromptPath))),
+  );
+  const packagedCandidates: BrokerPromptCandidate[] = options.defaultPromptPath
+    ? [
+        {
+          source: "packaged",
+          path: defaultPromptPath,
+          root: defaultRoot,
+          required: true,
+        },
+      ]
+    : [
+        {
+          source: "packaged",
+          path: defaultPromptPath,
+          root: defaultRoot,
+          required: false,
+        },
+        {
+          source: "packaged",
+          path: legacyDefaultPromptPath,
+          root: legacyDefaultRoot,
+          required: true,
+        },
+      ];
 
   return [
+    {
+      source: "workspace",
+      path: path.join(workspaceRoot, ".pi", "slack-bridge", "broker.md"),
+      root: workspaceRoot,
+      required: false,
+    },
     {
       source: "workspace",
       path: path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
@@ -91,16 +124,17 @@ export function resolveBrokerPromptCandidates(
     },
     {
       source: "user",
-      path: path.join(userRoot, "broker-prompt.md"),
+      path: path.join(userRoot, "broker.md"),
       root: userRoot,
       required: false,
     },
     {
-      source: "packaged",
-      path: defaultPromptPath,
-      root: defaultRoot,
-      required: true,
+      source: "user",
+      path: path.join(userRoot, "broker-prompt.md"),
+      root: userRoot,
+      required: false,
     },
+    ...packagedCandidates,
   ];
 }
 

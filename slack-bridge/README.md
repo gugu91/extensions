@@ -430,13 +430,15 @@ Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": tru
 
 ### Broker prompt MD
 
-Broker coordination policy is loaded from Markdown rather than a settings selector. The broker scans for the first valid prompt in this order:
+Broker coordination policy is loaded from Markdown. Configure `slack-bridge.brokerPrompt` to choose a packaged prompt preset such as `tmux` or to point at a custom Markdown file path. Relative paths resolve under the current repo/worktree root; `~/...` paths resolve under the user home directory. When no setting is present, the broker scans for the first valid prompt in this order:
 
-1. workspace override: `.pi/slack-bridge/broker-prompt.md` under the current repo/worktree root
-2. user-local override: `~/.pi/agent/slack-bridge/broker-prompt.md`
-3. packaged default: `dist/prompts/broker/default.md`
+1. workspace override: `.pi/slack-bridge/tmux.md` under the current repo/worktree root
+2. user-local override: `~/.pi/agent/slack-bridge/tmux.md`
+3. packaged default: `dist/prompts/broker/tmux.md`
 
 Invalid higher-priority files (unsafe symlink/path escape, unreadable file, oversized content, invalid UTF-8/binary-looking content, or empty file) emit a concise warning and fall through to lower-priority candidates. Warnings identify only the candidate kind and reason; prompt bodies and private paths are not echoed.
+
+The packaged `tmux.md` captures the default fully autonomous / unchained broker operating policy: the broker coordinates and never implements, delegates to repo-scoped workers, starts fresh tmux-backed workers on the Mac mini when capacity is missing, keeps completed workers available for a one-hour follow-up grace period, routes follow-up back to the same Pi instance when possible, observes RALPH loop maintenance expectations, handles Slack thread ownership/reporting caveats, and describes GitHub/secret handling without exposing secrets.
 
 Only broker prompt content is replaceable. Broker runtime/tool restrictions remain code-owned and are appended after the loaded MD prompt, including the forbidden local `Agent` path and broker `edit`/`write` blocking. Followers keep append-only worker guidance and do not load broker prompt MD. Prompt changes are picked up on `/pinet start` / runtime restart; this slice does not hot-reload per turn.
 

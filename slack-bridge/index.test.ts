@@ -834,7 +834,8 @@ describe("slack-bridge top-level shutdown", () => {
     expect(nextPrompt).toContain("First message in a new thread:");
     expect(nextPrompt).toContain("COMMUNICATION STYLE:");
     expect(nextPrompt).toContain("Reaction-triggered requests may appear");
-    expect(nextPrompt).toContain("the Pinet BROKER. Your ONLY role is coordination");
+    const brokerPolicyText = "the Pinet BROKER for a fully autonomous / unchained broker lane";
+    expect(nextPrompt).toContain(brokerPolicyText);
     expect(nextPrompt).toContain("🚫 BROKER TOOL RESTRICTION:");
     expect(nextPrompt.indexOf("First message in a new thread:")).toBeGreaterThan(
       nextPrompt.indexOf(sentinelSystemPrompt),
@@ -845,11 +846,11 @@ describe("slack-bridge top-level shutdown", () => {
     expect(nextPrompt.indexOf("Reaction-triggered requests may appear")).toBeGreaterThan(
       nextPrompt.indexOf("COMMUNICATION STYLE:"),
     );
-    expect(nextPrompt.indexOf("the Pinet BROKER. Your ONLY role is coordination")).toBeGreaterThan(
+    expect(nextPrompt.indexOf(brokerPolicyText)).toBeGreaterThan(
       nextPrompt.indexOf("Reaction-triggered requests may appear"),
     );
     expect(nextPrompt.indexOf("🚫 BROKER TOOL RESTRICTION:")).toBeGreaterThan(
-      nextPrompt.indexOf("the Pinet BROKER. Your ONLY role is coordination"),
+      nextPrompt.indexOf(brokerPolicyText),
     );
 
     await sessionShutdown?.({}, ctx);
