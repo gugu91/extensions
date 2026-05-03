@@ -443,6 +443,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
       refreshHomeTabs: (ctx, snapshot, refreshedAt) =>
         deps.refreshHomeTabs(ctx, snapshot, refreshedAt),
       getLastMaintenance: () => lastBrokerMaintenance,
+      getSettings: () => deps.getSettings(),
       buildControlPlaneDashboardSnapshot: (input) => deps.buildControlPlaneDashboardSnapshot(input),
       setLastHomeTabSnapshot: (snapshot) => {
         lastBrokerControlPlaneHomeTabSnapshot = snapshot;

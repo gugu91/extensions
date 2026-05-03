@@ -4,6 +4,7 @@ import {
   type RalphLoopAgentWorkload,
   type RalphLoopEvaluationOptions,
   type RalphLoopEvaluationResult,
+  type SlackBridgeSettings,
   evaluateRalphLoopCycle,
   rewriteRalphLoopGhostAnomalies,
   buildAgentDisplayInfo,
@@ -13,7 +14,7 @@ import {
   buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
   filterAgentsForMeshVisibility,
-  DEFAULT_RALPH_LOOP_INTERVAL_MS,
+  resolveRalphLoopIntervalMs,
   DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
@@ -202,6 +203,7 @@ export interface RalphLoopDeps {
     refreshedAt: string,
   ) => Promise<void>;
   getLastMaintenance: () => BrokerMaintenanceResult | null;
+  getSettings?: () => SlackBridgeSettings;
 
   // Snapshot builder
   buildControlPlaneDashboardSnapshot: (
@@ -599,9 +601,10 @@ export function startRalphLoop(
   deps: RalphLoopDeps,
 ): void {
   stopRalphLoop(state);
+  const intervalMs = resolveRalphLoopIntervalMs(deps.getSettings?.() ?? {});
   state.timer = setInterval(() => {
     void runRalphLoopCycle(ctx, state, deps);
-  }, DEFAULT_RALPH_LOOP_INTERVAL_MS);
+  }, intervalMs);
   state.timer.unref?.();
   void runRalphLoopCycle(ctx, state, deps);
 }

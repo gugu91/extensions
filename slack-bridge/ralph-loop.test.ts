@@ -1,11 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   applyTrackedAssignmentIdleReplyStalls,
   buildTrackedAssignmentReplyNudgeMessage,
   createRalphLoopState,
   hydrateRalphLoopReportedGhosts,
+  startRalphLoop,
+  stopRalphLoop,
+  type RalphLoopDeps,
 } from "./ralph-loop.js";
-import { rewriteRalphLoopGhostAnomalies } from "./helpers.js";
+import { DEFAULT_RALPH_LOOP_INTERVAL_MS, rewriteRalphLoopGhostAnomalies } from "./helpers.js";
+
+function createLoopDeps(overrides: Partial<RalphLoopDeps> = {}): RalphLoopDeps {
+  return {
+    getBrokerDb: () => null,
+    getBrokerAgentId: () => null,
+    heartbeatTimerActive: () => true,
+    maintenanceTimerActive: () => true,
+    runMaintenance: vi.fn(),
+    sendMaintenanceMessage: vi.fn(),
+    trySendFollowUp: vi.fn(),
+    logActivity: vi.fn(),
+    formatTrackedAgent: vi.fn((agentId: string) => agentId),
+    summarizeTrackedAssignmentStatus: vi.fn(() => ({ summary: "assigned", tone: "info" })),
+    refreshHomeTabs: vi.fn(async () => undefined),
+    getLastMaintenance: vi.fn(() => null),
+    buildControlPlaneDashboardSnapshot: vi.fn((input) => input as never),
+    setLastHomeTabSnapshot: vi.fn(),
+    getLastHomeTabError: vi.fn(() => null),
+    setLastHomeTabError: vi.fn(),
+    ...overrides,
+  };
+}
 
 function buildEvaluation(ghostAgentIds: string[]) {
   return {
@@ -17,6 +43,42 @@ function buildEvaluation(ghostAgentIds: string[]) {
       ghostAgentIds.length > 0 ? [`ghost agents detected: ${ghostAgentIds.join(", ")}`] : [],
   };
 }
+
+describe("startRalphLoop", () => {
+  it("uses the configured RALPH loop interval for the broker timer", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const state = createRalphLoopState();
+
+    try {
+      startRalphLoop({} as ExtensionContext, state, {
+        ...createLoopDeps(),
+        getSettings: () => ({ ralphLoopIntervalMs: 123_000 }),
+      });
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 123_000);
+    } finally {
+      stopRalphLoop(state);
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  it("uses the five-minute default when no interval is configured", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const state = createRalphLoopState();
+
+    try {
+      startRalphLoop({} as ExtensionContext, state, createLoopDeps());
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        DEFAULT_RALPH_LOOP_INTERVAL_MS,
+      );
+    } finally {
+      stopRalphLoop(state);
+      setIntervalSpy.mockRestore();
+    }
+  });
+});
 
 describe("hydrateRalphLoopReportedGhosts", () => {
   it("hydrates the latest persisted ghost ids into a fresh state", () => {

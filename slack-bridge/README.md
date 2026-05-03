@@ -129,6 +129,7 @@ Behavior and precedence:
     "logChannel": "#pinet-logs",
     "logLevel": "actions",
     "autoFollow": true,
+    "ralphLoopIntervalMs": 300000,
     "meshSecretPath": "/Users/alice/.config/pi/pinet.secret",
     "suggestedPrompts": [{ "title": "Status", "message": "What are you working on?" }],
     "security": {
@@ -157,6 +158,7 @@ Slack access is now **default-deny** unless you configure one of these explicitl
 | `runtimeMode`                  | no       | Explicit startup mode: `"off"`, `"single"`, `"broker"`, or `"follower"`                                            |
 | `autoConnect`                  | no       | Legacy compatibility alias for `runtimeMode: "single"`                                                             |
 | `autoFollow`                   | no       | Legacy compatibility alias for follower startup when a broker socket exists                                        |
+| `ralphLoopIntervalMs`          | no       | Broker RALPH maintenance cadence in milliseconds; defaults to `300000` (5 minutes), minimum accepted value `1000`  |
 | `skinTheme`                    | no       | Pinet presentation skin selected at broker startup/reload (`default`, `foundation`, `cosmere`, or free-form)       |
 | `meshSecret`                   | no       | Optional inline Pinet shared secret; overrides `meshSecretPath` and env fallbacks                                  |
 | `meshSecretPath`               | no       | Optional path to a shared-secret file; broker creates it if missing, followers require an existing file            |
@@ -491,7 +493,7 @@ Free-form themes are still accepted as deterministic legacy/custom presentation 
 
 ### How it works
 
-- The **broker** runs Slack Socket Mode, routes messages to agents, and monitors health via the RALPH loop
+- The **broker** runs Slack Socket Mode, routes messages to agents, and monitors health via the RALPH loop. The loop defaults to every 5 minutes and can be configured with `ralphLoopIntervalMs` under `slack-bridge` settings.
 - **Followers** connect to the broker over a local Unix socket, poll for work, and report results
 - Agents can optionally authenticate using a shared local secret (`meshSecret` or `meshSecretPath`); when both are unset, mesh auth is disabled
 - Thread ownership is first-responder-wins — the first agent to reply claims the thread
