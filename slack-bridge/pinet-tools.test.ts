@@ -85,10 +85,6 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
       updatedAt: "2026-05-01T00:00:00.000Z",
       lastActivityAt: "2026-05-01T00:00:00.000Z",
     }),
-    applyMeshSkin: (themeInput: string) => ({
-      theme: themeInput.trim(),
-      updatedAgents: ["agent-1"],
-    }),
   };
 
   return { ...defaults, ...overrides };
@@ -123,10 +119,11 @@ describe("registerPinetTools", () => {
     const pinet = tools.get("pinet");
 
     expect(pinet?.promptSnippet).toContain("Use this compact dispatcher for Pinet actions");
-    expect(pinet?.promptSnippet).toContain("reload, exit, skin");
+    expect(pinet?.promptSnippet).toContain("reload, exit, and help");
+    expect(pinet?.promptSnippet).not.toContain("action=skin");
     expect(pinet?.promptSnippet).toContain('args.format="json"');
     expect(JSON.stringify(pinet?.parameters)).toContain(
-      "help, send, read, free, schedule, agents, lanes, reload, exit, or skin",
+      "help, send, read, free, schedule, agents, lanes, reload, or exit",
     );
   });
 
@@ -159,27 +156,16 @@ describe("registerPinetTools", () => {
     });
   });
 
-  it("applies broker mesh skins through the dispatcher skin action", async () => {
-    const applyMeshSkin = vi.fn((themeInput: string) => ({
-      theme: themeInput.trim(),
-      updatedAgents: ["agent-1", "agent-2"],
-    }));
-    const deps = createDeps({ applyMeshSkin });
-    const tools = registerWithDeps(deps);
+  it("rejects the removed dispatcher skin action", async () => {
+    const tools = registerWithDeps(createDeps());
 
     const result = (await tools.get("pinet")?.execute("tool-call-1", {
       action: "skin",
       args: { theme: "foundation" },
-    })) as {
-      details: { data: { text: string; details: { theme: string; updatedAgents: string[] } } };
-    };
+    })) as { details: { status: string; errors: Array<{ message: string }> } };
 
-    expect(applyMeshSkin).toHaveBeenCalledWith("foundation");
-    expect(result.details.data.text).toBe('Applied mesh skin "foundation" to 2 agents.');
-    expect(result.details.data.details).toEqual({
-      theme: "foundation",
-      updatedAgents: ["agent-1", "agent-2"],
-    });
+    expect(result.details.status).toBe("failed");
+    expect(result.details.errors[0]?.message).toBe("Unknown Pinet action: skin");
   });
 
   it("uses the broker broadcast path for broadcast dispatcher send targets", async () => {

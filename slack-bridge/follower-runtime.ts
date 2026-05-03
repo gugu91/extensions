@@ -5,12 +5,10 @@ import {
   type InboxMessage,
   type PinetControlCommand,
   type PinetRemoteControlRequestResult,
-  type PinetSkinUpdate,
   type SlackBridgeSettings,
   buildFollowerRuntimeDiagnostic,
   buildPinetOwnerToken,
   extractPinetControlCommand,
-  extractPinetSkinUpdate,
   formatPinetInboxMessages,
   getFollowerOwnedThreadReclaims,
   getFollowerReconnectUiUpdate,
@@ -60,7 +58,6 @@ export interface FollowerRuntimeDeps {
     emoji: string;
     metadata?: Record<string, unknown> | null;
   }) => void;
-  applySkinUpdate: (update: PinetSkinUpdate) => void;
   persistState: () => void;
   updateBadge: () => void;
   maybeDrainInboxIfIdle: (ctx: ExtensionContext) => boolean;
@@ -271,10 +268,6 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
           }
 
           const controlEntries: Array<{ inboxId: number; command: PinetControlCommand }> = [];
-          const skinEntries: Array<{
-            inboxId: number;
-            update: { theme: string; name: string; emoji: string; personality: string };
-          }> = [];
           const remainingEntries: typeof newEntries = [];
           for (const entry of newEntries) {
             const command = extractPinetControlCommand({
@@ -284,16 +277,6 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
             });
             if (command) {
               controlEntries.push({ inboxId: entry.inboxId, command });
-              continue;
-            }
-
-            const skinUpdate = extractPinetSkinUpdate({
-              threadId: entry.message.threadId,
-              body: entry.message.body,
-              metadata: entry.message.metadata,
-            });
-            if (skinUpdate) {
-              skinEntries.push({ inboxId: entry.inboxId, update: skinUpdate });
               continue;
             }
 
@@ -321,13 +304,6 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
               deps.runRemoteControl(command, ctx);
             }
             return;
-          }
-
-          if (skinEntries.length > 0) {
-            for (const entry of skinEntries) {
-              deps.applySkinUpdate(entry.update);
-            }
-            await client.ackMessages(skinEntries.map((entry) => entry.inboxId));
           }
 
           const { nudges, agentMessages, regular } =

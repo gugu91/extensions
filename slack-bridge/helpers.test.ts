@@ -20,10 +20,8 @@ import {
   normalizeOutgoingPinetControlMessage,
   buildPinetSkinAssignment,
   buildPinetSkinPromptGuideline,
-  buildPinetSkinMetadata,
   buildPinetOwnerToken,
   extractPinetControlCommand,
-  extractPinetSkinUpdate,
   queuePinetRemoteControl,
   finishPinetRemoteControl,
   reloadPinetRuntimeSafely,
@@ -1541,37 +1539,7 @@ describe("Pinet skin helpers", () => {
     expect(guideline).toContain("role boundaries");
   });
 
-  it("builds and extracts structured skin update metadata for a2a messages", () => {
-    const metadata = buildPinetSkinMetadata({
-      theme: "cyberpunk hackers",
-      name: "Chrome Hacker Cipher",
-      emoji: "🕶️",
-      personality: "Lean into the vibe of cyberpunk hackers.",
-      statusVocabulary: { idle: "in the shadows", working: "on the wire" },
-    });
-
-    expect(
-      extractPinetSkinUpdate({
-        threadId: "a2a:broker:worker",
-        metadata: { a2a: true, ...metadata },
-      }),
-    ).toEqual({
-      theme: "cyberpunk hackers",
-      name: "Chrome Hacker Cipher",
-      emoji: "🕶️",
-      personality: "Lean into the vibe of cyberpunk hackers.",
-      statusVocabulary: { idle: "in the shadows", working: "on the wire" },
-    });
-  });
-
-  it("syncBrokerInboxEntries separates direct broker control, skin updates, and regular inbox messages", () => {
-    const skinMetadata = buildPinetSkinMetadata({
-      theme: "cyberpunk hackers",
-      name: "Chrome Hacker Cipher",
-      emoji: "🕶️",
-      personality: "Lean into the vibe of cyberpunk hackers.",
-    });
-
+  it("syncBrokerInboxEntries separates direct broker control from regular inbox messages", () => {
     const result = syncBrokerInboxEntries([
       {
         inboxId: 11,
@@ -1581,16 +1549,6 @@ describe("Pinet skin helpers", () => {
           body: "/reload",
           createdAt: "2026-04-01T00:00:00.000Z",
           metadata: { a2a: true, kind: "pinet_control", command: "reload" },
-        },
-      },
-      {
-        inboxId: 12,
-        message: {
-          threadId: "a2a:sender:broker",
-          sender: "sender-agent",
-          body: "skin update",
-          createdAt: "2026-04-01T00:00:01.000Z",
-          metadata: { a2a: true, ...skinMetadata },
         },
       },
       {
@@ -1606,17 +1564,7 @@ describe("Pinet skin helpers", () => {
     ]);
 
     expect(result.controlEntries).toEqual([{ inboxId: 11, command: "reload" }]);
-    expect(result.skinEntries).toEqual([
-      {
-        inboxId: 12,
-        update: {
-          theme: "cyberpunk hackers",
-          name: "Chrome Hacker Cipher",
-          emoji: "🕶️",
-          personality: "Lean into the vibe of cyberpunk hackers.",
-        },
-      },
-    ]);
+
     expect(result.inboxMessages).toEqual([
       {
         channel: "",

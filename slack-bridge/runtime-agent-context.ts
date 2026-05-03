@@ -13,6 +13,7 @@ import {
   isUserAllowed as checkUserAllowed,
   loadSettings as loadSettingsFromFile,
   normalizeOwnedThreads,
+  normalizePinetSkinTheme,
   resolveRuntimeAgentIdentity,
   shortenPath,
   type PinetSkinStatusVocabulary,
@@ -274,6 +275,8 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     deps.setGuardrails(guardrails);
     deps.setReactionCommands(resolveReactionCommands(settings.reactionCommands));
     deps.setSecurityPrompt(buildSecurityPrompt(guardrails));
+    const configuredSkinTheme = normalizePinetSkinTheme(settings.skinTheme);
+    deps.setActiveSkinTheme(configuredSkinTheme);
 
     const role = deps.getBrokerRole() === "broker" ? "broker" : "worker";
     const identitySeed = getIdentitySeedForRole(role);
