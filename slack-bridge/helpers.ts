@@ -33,6 +33,7 @@ export interface SlackBridgeSettings {
   brokerPrompt?: string;
   autoConnect?: boolean;
   autoFollow?: boolean;
+  ralphLoopIntervalMs?: number;
   skinTheme?: string;
   agentName?: string;
   agentEmoji?: string;
@@ -1346,11 +1347,27 @@ export function rankAgentsForRouting(
   return ranked.sort(compareRouting);
 }
 
-export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 30_000;
+export const DEFAULT_RALPH_LOOP_INTERVAL_MS = 5 * 60_000;
 export const DEFAULT_RALPH_LOOP_IDLE_WITH_WORK_THRESHOLD_MS = 60_000;
 export const DEFAULT_RALPH_LOOP_NUDGE_COOLDOWN_MS = 5 * 60_000;
 export const DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS = 60_000;
 export const DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS = 5 * 60_000;
+export const MIN_RALPH_LOOP_INTERVAL_MS = 1_000;
+export const MAX_RALPH_LOOP_INTERVAL_MS = 2_147_483_647;
+
+export function resolveRalphLoopIntervalMs(settings: SlackBridgeSettings = {}): number {
+  const configured = settings.ralphLoopIntervalMs;
+  if (!Number.isFinite(configured) || configured == null) {
+    return DEFAULT_RALPH_LOOP_INTERVAL_MS;
+  }
+
+  const intervalMs = Math.trunc(configured);
+  if (intervalMs < MIN_RALPH_LOOP_INTERVAL_MS || intervalMs > MAX_RALPH_LOOP_INTERVAL_MS) {
+    return DEFAULT_RALPH_LOOP_INTERVAL_MS;
+  }
+
+  return intervalMs;
+}
 
 export interface RalphLoopAgentWorkload extends AgentVisibilityInput {
   lastSeen?: string;

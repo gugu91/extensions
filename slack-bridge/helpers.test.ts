@@ -45,6 +45,9 @@ import {
   buildRalphLoopFollowUpMessage,
   buildRalphLoopStatusMessage,
   shouldDeliverRalphLoopFollowUp,
+  DEFAULT_RALPH_LOOP_INTERVAL_MS,
+  MAX_RALPH_LOOP_INTERVAL_MS,
+  resolveRalphLoopIntervalMs,
   DEFAULT_RALPH_LOOP_FOLLOW_UP_COOLDOWN_MS,
   DEFAULT_RALPH_LOOP_STUCK_WORKING_THRESHOLD_MS,
   isRalphNudgeEntry,
@@ -137,6 +140,7 @@ describe("loadSettings", () => {
         appToken: "xapp-test",
         runtimeMode: "single",
         autoConnect: true,
+        ralphLoopIntervalMs: 120000,
         allowedUsers: ["U123"],
         allowAllWorkspaceUsers: false,
         defaultChannel: "C456",
@@ -150,6 +154,7 @@ describe("loadSettings", () => {
     expect(result.appToken).toBe("xapp-test");
     expect(result.runtimeMode).toBe("single");
     expect(result.autoConnect).toBe(true);
+    expect(result.ralphLoopIntervalMs).toBe(120000);
     expect(result.allowedUsers).toEqual(["U123"]);
     expect(result.allowAllWorkspaceUsers).toBe(false);
     expect(result.defaultChannel).toBe("C456");
@@ -2345,6 +2350,28 @@ describe("rankAgentsForRouting", () => {
 });
 
 // ─── Ralph loop helpers ────────────────────────────────
+
+describe("RALPH loop defaults", () => {
+  it("runs the broker maintenance loop every five minutes by default", () => {
+    expect(DEFAULT_RALPH_LOOP_INTERVAL_MS).toBe(5 * 60_000);
+  });
+
+  it("accepts a configured broker maintenance loop interval", () => {
+    expect(resolveRalphLoopIntervalMs({ ralphLoopIntervalMs: 120_000 })).toBe(120_000);
+  });
+
+  it("falls back to the default for invalid configured intervals", () => {
+    expect(resolveRalphLoopIntervalMs({ ralphLoopIntervalMs: 0 })).toBe(
+      DEFAULT_RALPH_LOOP_INTERVAL_MS,
+    );
+    expect(resolveRalphLoopIntervalMs({ ralphLoopIntervalMs: Number.NaN })).toBe(
+      DEFAULT_RALPH_LOOP_INTERVAL_MS,
+    );
+    expect(
+      resolveRalphLoopIntervalMs({ ralphLoopIntervalMs: MAX_RALPH_LOOP_INTERVAL_MS + 1 }),
+    ).toBe(DEFAULT_RALPH_LOOP_INTERVAL_MS);
+  });
+});
 
 describe("evaluateRalphLoopCycle", () => {
   it("flags ghost agents, nudges idle agents with work, and reports self-repair anomalies", () => {
