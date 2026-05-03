@@ -224,7 +224,10 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   let lastBrokerControlPlaneHomeTabSnapshot: BrokerControlPlaneDashboardSnapshot | null = null;
   let lastBrokerControlPlaneHomeTabRefreshAt: string | null = null;
   let lastBrokerControlPlaneHomeTabError: string | null = null;
-  const ghostReaper = createBrokerGhostReaper({ brokerAgentId: () => activeSelfId });
+  const ghostReaper = createBrokerGhostReaper({
+    brokerAgentId: () => activeSelfId,
+    getAgentById: (agentId) => activeBroker?.db.getAgentById(agentId) ?? null,
+  });
   const ralphLoopState = createRalphLoopState();
 
   function ensureActivityLogger(): SlackActivityLogger {

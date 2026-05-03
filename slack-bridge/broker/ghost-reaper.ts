@@ -16,6 +16,7 @@ export interface GhostReaperDeps {
   clearTimeout?: (handle: unknown) => void;
   now?: () => number;
   brokerAgentId?: () => string | null;
+  getAgentById?: (agentId: string) => AgentInfo | null;
 }
 
 export interface BrokerGhostReaperOptions {
@@ -202,8 +203,15 @@ export function createBrokerGhostReaper(
     if (pendingKills.has(pid)) return;
     const handle = schedule(() => {
       pendingKills.delete(pid);
+      const latestAgent = deps.getAgentById?.(agent.id) ?? agent;
+      if (!latestAgent || latestAgent.pid !== pid) return;
       const snapshot = inspect(pid);
-      const decision = decideGhostReapEligibility(agent, snapshot, deps.brokerAgentId?.(), now());
+      const decision = decideGhostReapEligibility(
+        latestAgent,
+        snapshot,
+        deps.brokerAgentId?.(),
+        now(),
+      );
       if (!decision.eligible) return;
       try {
         signal(pid, "SIGKILL");

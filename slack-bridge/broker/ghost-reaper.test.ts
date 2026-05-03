@@ -166,6 +166,31 @@ describe("broker ghost reaper", () => {
     vi.useRealTimers();
   });
 
+  it("skips bounded SIGKILL when the agent reconnects before the timer fires", () => {
+    vi.useFakeTimers();
+    const signals: Array<{ pid: number; signal: string }> = [];
+    let latestAgent = makeAgent();
+    const reaper = createBrokerGhostReaper(
+      {
+        inspectProcess: () => snapshot(),
+        signalProcess: (pid, signal) => {
+          signals.push({ pid, signal });
+        },
+        brokerAgentId: () => "broker-1",
+        getAgentById: () => latestAgent,
+      },
+      { killAfterMs: 100 },
+    );
+
+    reaper.reapGhosts([latestAgent]);
+    latestAgent = makeAgent({ disconnectedAt: null });
+    vi.advanceTimersByTime(100);
+
+    expect(signals).toEqual([{ pid: 12345, signal: "SIGTERM" }]);
+    reaper.dispose();
+    vi.useRealTimers();
+  });
+
   it("does not send duplicate SIGTERM while bounded kill is pending", () => {
     vi.useFakeTimers();
     const signals: Array<{ pid: number; signal: string }> = [];
