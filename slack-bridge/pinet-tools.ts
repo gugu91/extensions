@@ -803,7 +803,7 @@ function runPinetLanesAction(
     const op = getMaybeString(params, "op")?.toLowerCase() ?? "list";
     deps.requireToolPolicy(toolName, undefined, `op=${op} | format=${output.format}`);
     if (!deps.pinetEnabled()) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
 
     if (op === "list") {

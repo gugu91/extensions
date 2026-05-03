@@ -33,7 +33,7 @@ That means outbound sends can work even when the local Messages database is unav
 
 Treat this as explicit local outbound power, not as a remote-safe transport or a generic policy-enforced messaging surface.
 
-In the current repo bring-up path, enable the adapter with `slack-bridge.imessage.enabled: true` and start the broker runtime with `/pinet-start`.
+In the current repo bring-up path, enable the adapter with `slack-bridge.imessage.enabled: true` and start the broker runtime with `/pinet start`.
 
 ## What stays in this package
 

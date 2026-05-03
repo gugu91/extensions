@@ -65,7 +65,7 @@ It directly wires:
 - agent prompt / agent event runtime
 - Pinet home tabs and control-plane canvas surfaces
 - tool registration (`slack`, `pinet`, `imessage`)
-- command registration (`/pinet-*`)
+- command registration (`/pinet <action>`)
 
 `index.ts` imports **35 local modules** today. That confirms the runtime has been modularized, but the package boundary is still tangled.
 

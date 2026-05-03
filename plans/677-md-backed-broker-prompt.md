@@ -87,7 +87,7 @@ Do not let broker prompt MD change follower behavior.
    - only the explicitly listed non-replaceable tool/protocol guardrails remain in code and append after loaded MD.
 5. Update `createAgentPromptGuidance` to load broker MD only when `getBrokerRole() === "broker"`.
 6. Leave follower path unchanged.
-7. Pick up prompt changes on `/pinet-start` / runtime reload; no per-turn hot reload is needed for the first slice.
+7. Pick up prompt changes on `/pinet start` / runtime reload; no per-turn hot reload is needed for the first slice.
 8. Document the conventional MD paths and package fallback behavior in `slack-bridge/README.md`.
 
 ## Tests
@@ -105,4 +105,4 @@ Do not let broker prompt MD change follower behavior.
 - Workspace-local override precedes user-local override for slice 1; repo/workspace intent wins before private user preference.
 - Do not add a second gitignored workspace-private filename yet.
 - Copy bundled default MD into `dist/prompts/**` and publish it; do not rely on a TS-string fallback for the normal packaged default path.
-- Reloading on `/pinet-start` / runtime restart is enough for slice 1; no per-turn hot reload is needed.
+- Reloading on `/pinet start` / runtime restart is enough for slice 1; no per-turn hot reload is needed.
