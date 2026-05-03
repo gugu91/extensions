@@ -68,7 +68,7 @@ export function registerIMessageTools(pi: ExtensionAPI, deps: RegisterIMessageTo
       );
 
       if (!deps.pinetEnabled()) {
-        throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+        throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
       }
 
       const recipient = normalizeIMessageRecipient(params.to);
@@ -99,7 +99,7 @@ export function registerIMessageTools(pi: ExtensionAPI, deps: RegisterIMessageTo
         }
         if (!broker.adapters.some((candidate) => candidate.name === "imessage")) {
           throw new Error(
-            "iMessage adapter is not enabled or not ready on the active broker. Set slack-bridge.imessage.enabled: true and restart /pinet-start.",
+            "iMessage adapter is not enabled or not ready on the active broker. Set slack-bridge.imessage.enabled: true and restart /pinet start.",
           );
         }
 

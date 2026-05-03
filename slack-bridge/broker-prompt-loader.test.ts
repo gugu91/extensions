@@ -239,7 +239,7 @@ describe("packaged default broker prompt", () => {
 
     expect(defaultPrompt).toContain("Use tmux only to launch repo-scoped Pinet follower workers");
     expect(defaultPrompt).toContain("create a tmux session in the target repo");
-    expect(defaultPrompt).toContain("/pinet-follow");
+    expect(defaultPrompt).toContain("/pinet follow");
     expect(defaultPrompt).toContain(
       "only report the capacity gap if you cannot safely start a worker",
     );

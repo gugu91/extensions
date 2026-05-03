@@ -68,7 +68,7 @@ export function createPinetAgentStatus(deps: PinetAgentStatusDeps): PinetAgentSt
   ): Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }> {
     const pinetEnabled = deps.getPinetEnabled();
     if (!pinetEnabled && options.requirePinet) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
 
     const maintenanceCtx = ctx ?? deps.getExtensionContext() ?? undefined;

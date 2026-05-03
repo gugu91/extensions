@@ -1,0 +1,178 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import {
+  formatPinetCommandHelp,
+  registerPinetCommands,
+  type PinetCommandsDeps,
+} from "./pinet-commands.js";
+import type { SlackBridgeSettings } from "./helpers.js";
+import type { SlackScopeDiagnostics } from "./slack-scope-diagnostics.js";
+import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
+
+type CommandDefinition = {
+  description?: string;
+  handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
+};
+
+function createContext(): { ctx: ExtensionContext; notify: ReturnType<typeof vi.fn> } {
+  const notify = vi.fn();
+  const ctx = {
+    hasUI: true,
+    isIdle: () => true,
+    ui: {
+      notify,
+      theme: { fg: (_color: string, text: string) => text },
+      setStatus: vi.fn(),
+    },
+  } as unknown as ExtensionContext;
+
+  return { ctx, notify };
+}
+
+function createDeps(overrides: Partial<PinetCommandsDeps> = {}): PinetCommandsDeps {
+  const settings: SlackBridgeSettings = {};
+  const slackScopeDiagnostics: SlackScopeDiagnostics = {
+    status: "not_checked",
+    checkedAt: null,
+    summary: "unchecked",
+    surfaces: [],
+    missingScopes: [],
+    results: [],
+  };
+
+  const defaults: PinetCommandsDeps = {
+    pinetEnabled: () => true,
+    pinetRegistrationBlocked: () => false,
+    runtimeMode: () => "single" as SlackBridgeRuntimeMode,
+    runtimeConnected: () => true,
+    brokerRole: () => "broker",
+    agentName: () => "Slate Chalk Otter",
+    agentEmoji: () => "🦦",
+    agentOwnerToken: () => "owner-token",
+    agentPersonality: () => null,
+    agentAliases: () => new Set<string>(),
+    botUserId: () => "U123",
+    activeSkinTheme: () => null,
+    lastDmChannel: () => null,
+    followerRuntimeDiagnostic: () => null,
+    threads: () => new Map<string, { owner?: string }>(),
+    allowedUsers: () => null,
+    inboxLength: () => 0,
+    recentActivityLogEntries: () => [],
+    slackScopeDiagnostics: () => slackScopeDiagnostics,
+    settings: () => settings,
+    lastBrokerMaintenance: () => null,
+    getBrokerControlPlaneHomeTabViewerIds: () => [],
+    lastBrokerControlPlaneHomeTabRefreshAt: () => null,
+    lastBrokerControlPlaneHomeTabError: () => null,
+    getPinetRegistrationBlockReason: () => "blocked",
+    connectAsBroker: async () => {},
+    connectAsFollower: async () => {},
+    reloadPinetRuntime: async () => {},
+    disconnectFollower: async () => ({ unregisterError: null }),
+    sendPinetAgentMessage: async (target) => ({ messageId: 1, target }),
+    signalAgentFree: async () => ({ queuedInboxCount: 0, drainedQueuedInbox: false }),
+    applyMeshSkin: (themeInput) => ({ theme: themeInput.trim(), updatedAgents: ["agent-1"] }),
+    applyLocalAgentIdentity: () => {},
+    setExtStatus: () => {},
+    setExtCtx: () => {},
+  };
+
+  return { ...defaults, ...overrides };
+}
+
+function registerCommands(deps: PinetCommandsDeps): Map<string, CommandDefinition> {
+  const commands = new Map<string, CommandDefinition>();
+  const pi = {
+    registerCommand: vi.fn((name: string, definition: CommandDefinition) => {
+      commands.set(name, definition);
+    }),
+  } as unknown as ExtensionAPI;
+
+  registerPinetCommands(pi, deps);
+  return commands;
+}
+
+describe("registerPinetCommands", () => {
+  it("registers the unified /pinet command while preserving legacy aliases", () => {
+    const commands = registerCommands(createDeps());
+
+    expect(commands.has("pinet")).toBe(true);
+    expect(commands.has("pinet-start")).toBe(true);
+    expect(commands.has("pinet-follow")).toBe(true);
+    expect(commands.has("pinet-free")).toBe(true);
+    expect(commands.has("pinet-skin")).toBe(true);
+  });
+
+  it("shows help for the unified command", async () => {
+    const commands = registerCommands(createDeps());
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Usage: /pinet <action> [args]"),
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet start"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet skin <theme>"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet-start"), "info");
+  });
+
+  it("routes /pinet reload through the existing remote-control message path", async () => {
+    const sendPinetAgentMessage = vi.fn(async (target: string, body: string) => ({
+      messageId: 42,
+      target: `${target}:${body}`,
+    }));
+    const commands = registerCommands(createDeps({ sendPinetAgentMessage }));
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("reload GoldenOtter", ctx);
+
+    expect(sendPinetAgentMessage).toHaveBeenCalledWith("GoldenOtter", "/reload");
+    expect(notify).toHaveBeenCalledWith("Sent /reload to GoldenOtter:/reload", "info");
+  });
+
+  it("keeps legacy usage text on legacy aliases", async () => {
+    const commands = registerCommands(createDeps());
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet-reload")?.handler("", ctx);
+
+    expect(notify).toHaveBeenCalledWith("Usage: /pinet-reload <agent-name-or-id>", "warning");
+  });
+
+  it("runs free and skin from the unified command", async () => {
+    const signalAgentFree = vi.fn(async () => ({ queuedInboxCount: 0, drainedQueuedInbox: false }));
+    const applyMeshSkin = vi.fn((themeInput: string) => ({
+      theme: themeInput.trim(),
+      updatedAgents: ["agent-1", "agent-2"],
+    }));
+    const commands = registerCommands(createDeps({ signalAgentFree, applyMeshSkin }));
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("free", ctx);
+    await commands.get("pinet")?.handler("skin slate chalk", ctx);
+
+    expect(signalAgentFree).toHaveBeenCalledWith(ctx, { requirePinet: true });
+    expect(applyMeshSkin).toHaveBeenCalledWith("slate chalk");
+    expect(notify).toHaveBeenCalledWith(
+      "Marked 🦦 Slate Chalk Otter idle/free for new work.",
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith('Applied mesh skin "slate chalk" to 2 agents.', "info");
+  });
+});
+
+describe("formatPinetCommandHelp", () => {
+  it("documents the consolidated primary actions", () => {
+    const help = formatPinetCommandHelp();
+
+    expect(help).toContain("/pinet start");
+    expect(help).toContain("/pinet follow");
+    expect(help).toContain("/pinet reload <agent>");
+    expect(help).toContain("/pinet exit <agent>");
+    expect(help).toContain("/pinet free");
+    expect(help).toContain("/pinet skin <theme>");
+  });
+});

@@ -125,6 +125,6 @@ describe("createPinetAgentStatus", () => {
 
     await expect(
       pinetAgentStatus.signalAgentFree(undefined, { requirePinet: true }),
-    ).rejects.toThrow("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+    ).rejects.toThrow("Pinet is not running. Use /pinet start or /pinet follow first.");
   });
 });

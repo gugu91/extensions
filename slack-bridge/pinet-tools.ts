@@ -84,6 +84,7 @@ export interface RegisterPinetToolsDeps {
   setPinetLaneParticipant: (
     input: PinetLaneParticipantUpsertInput,
   ) => Promise<PinetLaneParticipantInfo>;
+  applyMeshSkin: (themeInput: string) => { theme: string; updatedAgents: string[] };
 }
 
 interface PinetAgentsRoutingHint {
@@ -94,7 +95,17 @@ interface PinetAgentsRoutingHint {
   task?: string;
 }
 
-type PinetDispatcherAction = "send" | "read" | "free" | "schedule" | "agents" | "lanes" | "help";
+type PinetDispatcherAction =
+  | "send"
+  | "read"
+  | "free"
+  | "schedule"
+  | "agents"
+  | "lanes"
+  | "reload"
+  | "exit"
+  | "skin"
+  | "help";
 type PinetDispatcherErrorClass = "input" | "state" | "runtime" | "network";
 
 type PinetDispatcherStatus = "succeeded" | "failed";
@@ -153,6 +164,9 @@ const PINET_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
       },
     },
   ],
+  reload: [{ action: "reload", args: { target: "@worker" } }],
+  exit: [{ action: "exit", args: { target: "@worker" } }],
+  skin: [{ action: "skin", args: { theme: "foundation" } }],
 };
 
 const PINET_OUTPUT_OPTION_PARAMETERS = {
@@ -201,6 +215,9 @@ function normalizeDispatcherAction(value: unknown): PinetDispatcherAction {
     "schedule",
     "agents",
     "lanes",
+    "reload",
+    "exit",
+    "skin",
   ];
   if (!allowed.includes(normalized)) {
     throw new Error(`Unknown Pinet action: ${normalized}`);
@@ -239,7 +256,12 @@ function classifyPinetError(message: string): PinetDispatcherError {
     };
   }
 
-  if (message.includes("thread_id must be") || message.includes("message is required")) {
+  if (
+    message.includes("thread_id must be") ||
+    message.includes("message is required") ||
+    message.includes("target is required") ||
+    message.includes("theme is required")
+  ) {
     return {
       class: "input",
       message,
@@ -471,7 +493,7 @@ function runPinetReadAction(
     );
 
     if (!deps.pinetEnabled()) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
 
     const options: PinetReadOptions = {
@@ -538,6 +560,59 @@ function runPinetFreeAction(
   })();
 }
 
+function runPinetRemoteControlAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+  command: "/reload" | "/exit",
+): Promise<PinetToolResult> {
+  return (async () => {
+    const target = typeof params.target === "string" ? params.target.trim() : "";
+    if (!target) {
+      throw new Error("target is required");
+    }
+
+    deps.requireToolPolicy(toolName, undefined, `target=${target}`);
+
+    const result = await deps.sendPinetAgentMessage(target, command);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Sent ${command} to ${result.target}.`,
+        },
+      ],
+      details: { messageId: result.messageId, target: result.target, command },
+    };
+  })();
+}
+
+function runPinetSkinAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const theme = typeof params.theme === "string" ? params.theme.trim() : "";
+    if (!theme) {
+      throw new Error("theme is required");
+    }
+
+    deps.requireToolPolicy(toolName, undefined, `theme=${theme}`);
+
+    const result = deps.applyMeshSkin(theme);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Applied mesh skin "${result.theme}" to ${result.updatedAgents.length} agent${result.updatedAgents.length === 1 ? "" : "s"}.`,
+        },
+      ],
+      details: { theme: result.theme, updatedAgents: result.updatedAgents },
+    };
+  })();
+}
+
 function runPinetScheduleAction(
   params: Record<string, unknown>,
   deps: RegisterPinetToolsDeps,
@@ -556,7 +631,7 @@ function runPinetScheduleAction(
     );
 
     if (!deps.pinetEnabled()) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
     if (!message) {
       throw new Error("message is required");
@@ -865,7 +940,7 @@ function runPinetAgentsAction(
     );
 
     if (!deps.pinetEnabled()) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
 
     const includeGhosts = true;
@@ -972,6 +1047,38 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
     execute: (_id, params, output) => runPinetFreeAction(params, deps, "pinet:free", output),
+  });
+
+  registerAction({
+    name: "reload",
+    description: "Ask another connected Pinet agent to reload itself.",
+    parameters: Type.Object({
+      target: Type.String({ description: "Target agent name or ID" }),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
+    }),
+    execute: (_id, params, _output) =>
+      runPinetRemoteControlAction(params, deps, "pinet:reload", "/reload"),
+  });
+
+  registerAction({
+    name: "exit",
+    description: "Ask another connected Pinet agent to exit gracefully.",
+    parameters: Type.Object({
+      target: Type.String({ description: "Target agent name or ID" }),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
+    }),
+    execute: (_id, params, _output) =>
+      runPinetRemoteControlAction(params, deps, "pinet:exit", "/exit"),
+  });
+
+  registerAction({
+    name: "skin",
+    description: "Change the mesh presentation skin from the active broker runtime.",
+    parameters: Type.Object({
+      theme: Type.String({ description: "Skin theme, e.g. default, foundation, or cosmere" }),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
+    }),
+    execute: (_id, params, _output) => runPinetSkinAction(params, deps, "pinet:skin"),
   });
 
   registerAction({
@@ -1095,13 +1202,13 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   pi.registerTool({
     name: "pinet",
     label: "Pinet Dispatcher",
-    description:
-      "Dispatch Pinet worker operations by action with compact help and schema discovery.",
+    description: "Dispatch Pinet operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, and help. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
+      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, reload, exit, skin, and help. Use /pinet start, /pinet follow, and /pinet unfollow for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
     parameters: Type.Object({
       action: Type.String({
-        description: "Action name: help, send, read, free, schedule, agents, lanes, or help.",
+        description:
+          "Action name: help, send, read, free, schedule, agents, lanes, reload, exit, or skin.",
       }),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {

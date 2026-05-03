@@ -2508,7 +2508,7 @@ describe("slack-bridge Pinet reconnect", () => {
     );
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Next step: Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+        "Next step: Wait for automatic reconnect. If it does not recover, run /pinet follow.",
       ),
       "info",
     );
@@ -2694,7 +2694,7 @@ describe("slack-bridge Pinet reconnect", () => {
     );
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Next step: Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+        "Next step: Follower kept the last registered identity. If status or ownership looks stale, run /pinet follow.",
       ),
       "info",
     );
@@ -2893,7 +2893,7 @@ describe("slack-bridge Pinet reconnect", () => {
       );
       expect(notify).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Next step: Fix the reported error, then run /pinet-follow to retry.",
+          "Next step: Fix the reported error, then run /pinet follow to retry.",
         ),
         "info",
       );
@@ -3026,7 +3026,7 @@ describe("slack-bridge Pinet reconnect", () => {
       );
       expect(notify).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Next step: Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow.",
+          "Next step: Watch the next poll cycle. If failures continue, inspect the broker and run /pinet follow.",
         ),
         "info",
       );

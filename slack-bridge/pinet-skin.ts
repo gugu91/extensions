@@ -72,12 +72,12 @@ export function createPinetMeshSkin(deps: PinetMeshSkinDeps): PinetMeshSkin {
     const db = deps.getActiveBrokerDb();
     const selfId = deps.getActiveBrokerSelfId();
     if (deps.getBrokerRole() !== "broker" || !db) {
-      throw new Error("/pinet-skin can only run on the active broker.");
+      throw new Error("/pinet skin can only run on the active broker.");
     }
 
     const theme = normalizePinetSkinTheme(themeInput);
     if (!theme) {
-      throw new Error("Usage: /pinet-skin <theme>");
+      throw new Error("Usage: /pinet skin <theme>");
     }
 
     if (!selfId) {

@@ -85,6 +85,10 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
       updatedAt: "2026-05-01T00:00:00.000Z",
       lastActivityAt: "2026-05-01T00:00:00.000Z",
     }),
+    applyMeshSkin: (themeInput: string) => ({
+      theme: themeInput.trim(),
+      updatedAgents: ["agent-1"],
+    }),
   };
 
   return { ...defaults, ...overrides };
@@ -119,10 +123,63 @@ describe("registerPinetTools", () => {
     const pinet = tools.get("pinet");
 
     expect(pinet?.promptSnippet).toContain("Use this compact dispatcher for Pinet actions");
+    expect(pinet?.promptSnippet).toContain("reload, exit, skin");
     expect(pinet?.promptSnippet).toContain('args.format="json"');
     expect(JSON.stringify(pinet?.parameters)).toContain(
-      "help, send, read, free, schedule, agents, lanes, or help",
+      "help, send, read, free, schedule, agents, lanes, reload, exit, or skin",
     );
+  });
+
+  it("routes reload and exit through the dispatcher remote-control actions", async () => {
+    const sendPinetAgentMessage = vi.fn(async (target: string, body: string) => ({
+      messageId: body === "/reload" ? 31 : 32,
+      target,
+    }));
+    const deps = createDeps({ sendPinetAgentMessage });
+    const tools = registerWithDeps(deps);
+
+    const reload = (await tools.get("pinet")?.execute("tool-call-1", {
+      action: "reload",
+      args: { target: "Golden Chalk Rabbit" },
+    })) as { details: { data: { details: { command: string; target: string } } } };
+    const exit = (await tools.get("pinet")?.execute("tool-call-2", {
+      action: "exit",
+      args: { target: "Golden Chalk Rabbit" },
+    })) as { details: { data: { details: { command: string; target: string } } } };
+
+    expect(sendPinetAgentMessage).toHaveBeenCalledWith("Golden Chalk Rabbit", "/reload");
+    expect(sendPinetAgentMessage).toHaveBeenCalledWith("Golden Chalk Rabbit", "/exit");
+    expect(reload.details.data.details).toMatchObject({
+      command: "/reload",
+      target: "Golden Chalk Rabbit",
+    });
+    expect(exit.details.data.details).toMatchObject({
+      command: "/exit",
+      target: "Golden Chalk Rabbit",
+    });
+  });
+
+  it("applies broker mesh skins through the dispatcher skin action", async () => {
+    const applyMeshSkin = vi.fn((themeInput: string) => ({
+      theme: themeInput.trim(),
+      updatedAgents: ["agent-1", "agent-2"],
+    }));
+    const deps = createDeps({ applyMeshSkin });
+    const tools = registerWithDeps(deps);
+
+    const result = (await tools.get("pinet")?.execute("tool-call-1", {
+      action: "skin",
+      args: { theme: "foundation" },
+    })) as {
+      details: { data: { text: string; details: { theme: string; updatedAgents: string[] } } };
+    };
+
+    expect(applyMeshSkin).toHaveBeenCalledWith("foundation");
+    expect(result.details.data.text).toBe('Applied mesh skin "foundation" to 2 agents.');
+    expect(result.details.data.details).toEqual({
+      theme: "foundation",
+      updatedAgents: ["agent-1", "agent-2"],
+    });
   });
 
   it("uses the broker broadcast path for broadcast dispatcher send targets", async () => {
