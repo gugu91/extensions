@@ -5,7 +5,7 @@ the [pi coding agent](https://github.com/nicholasgasior/pi-coding-agent).
 
 Current state: the repo has moved from the initial **50+ merged PRs in a
 single day** sprint into a broader Pinet stabilization and docs pass, with a
-broker/follower Slack mesh, persistent PiComms, Slack canvases, scheduled
+broker/follower Slack mesh, durable Pinet lanes/inbox state, Slack canvases, scheduled
 wake-ups, worktree guardrails, checked-in Slack manifest deploy tooling,
 optional mesh auth, and a browser-playwright workspace package for
 interactive browsing and screenshots.
@@ -19,7 +19,7 @@ interactive browsing and screenshots.
 | [`slack-bridge`](slack-bridge/)             | Slack assistant app (Pinet) — broker mesh, inbox, canvases, deploy tooling      |
 | [`slack-api`](slack-api/)                   | Typed Slack Web API client + CLI generated from OpenAPI                         |
 | [`imessage-bridge`](imessage-bridge/)       | macOS/iMessage send-first transport package + readiness helpers                 |
-| [`nvim-bridge`](nvim-bridge/)               | Neovim editor context sync + PiComms persistent comments                        |
+| [`nvim-bridge`](nvim-bridge/)               | Neovim editor context sync; PiComms disabled pending Pinet adapter replacement  |
 | [`neon-psql`](neon-psql/)                   | Config-driven Neon tunnel + `psql` tool                                         |
 | [`types`](types/)                           | Shared ambient type declarations                                                |
 

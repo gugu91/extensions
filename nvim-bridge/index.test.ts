@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CommentRecord } from "./comments.js";
+import extension from "./index.js";
 import {
   buildPiCommsReadPrompt,
   formatContext,
@@ -32,6 +34,28 @@ function createComment(overrides: Partial<CommentRecord> = {}): CommentRecord {
     ...overrides,
   };
 }
+
+describe("nvim-bridge extension registration", () => {
+  it("registers only the editor bridge surface while PiComms is disabled", () => {
+    const tools: string[] = [];
+    const commands: string[] = [];
+    const events: string[] = [];
+    const pi = {
+      registerTool: vi.fn((definition: { name: string }) => tools.push(definition.name)),
+      registerCommand: vi.fn((name: string) => commands.push(name)),
+      on: vi.fn((name: string) => events.push(name)),
+    } as unknown as ExtensionAPI;
+
+    extension(pi);
+
+    expect(tools).toEqual(["open_in_editor"]);
+    expect(tools).not.toEqual(
+      expect.arrayContaining(["comment_add", "comment_list", "comment_wipe_all"]),
+    );
+    expect(commands).not.toEqual(expect.arrayContaining(["picomms:read", "picomms:clean"]));
+    expect(events).toEqual(["session_start", "before_agent_start", "session_shutdown"]);
+  });
+});
 
 describe("formatContext", () => {
   it("formats the current editor viewport, cursor, and selection", () => {
