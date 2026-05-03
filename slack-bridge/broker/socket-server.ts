@@ -18,6 +18,10 @@ import type {
   JsonRpcError,
   MessageAdapter,
   NormalizedMessageContent,
+  PortLeaseAcquireInput,
+  PortLeaseListOptions,
+  PortLeaseReleaseInput,
+  PortLeaseRenewInput,
   PinetLaneListOptions,
   PinetLaneParticipantUpsertInput,
   PinetLaneRole,
@@ -508,6 +512,18 @@ export class BrokerSocketServer {
           return this.handleLaneUpsert(req, state);
         case "lane.participant":
           return this.handleLaneParticipant(req, state);
+        case "portLease.acquire":
+          return this.handlePortLeaseAcquire(req, state);
+        case "portLease.renew":
+          return this.handlePortLeaseRenew(req, state);
+        case "portLease.release":
+          return this.handlePortLeaseRelease(req, state);
+        case "portLease.status":
+          return this.handlePortLeaseStatus(req, state);
+        case "portLease.list":
+          return this.handlePortLeaseList(req, state);
+        case "portLease.expire":
+          return this.handlePortLeaseExpire(req, state);
         case "schedule.create":
           return this.handleScheduleCreate(req, state);
         case "status.update":
@@ -1112,6 +1128,141 @@ export class BrokerSocketServer {
       const participant = this.db.setPinetLaneParticipant(input);
       this.db.touchAgentActivity(state.agentId);
       return rpcOk(req.id, participant);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handlePortLeaseAcquire(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const input: PortLeaseAcquireInput = {
+      purpose: typeof params.purpose === "string" ? params.purpose : "",
+      ttlMs: typeof params.ttlMs === "number" ? params.ttlMs : Number(params.ttlMs),
+      ownerAgentId: state.agentId,
+      ...(typeof params.host === "string" ? { host: params.host } : {}),
+      ...(typeof params.port === "number" ? { port: params.port } : {}),
+      ...(typeof params.minPort === "number" ? { minPort: params.minPort } : {}),
+      ...(typeof params.maxPort === "number" ? { maxPort: params.maxPort } : {}),
+      ...(typeof params.pid === "number" || params.pid === null
+        ? { pid: params.pid as number | null }
+        : {}),
+      ...(params.metadata && typeof params.metadata === "object" && !Array.isArray(params.metadata)
+        ? { metadata: params.metadata as Record<string, unknown> }
+        : params.metadata === null
+          ? { metadata: null }
+          : {}),
+    };
+
+    try {
+      const lease = this.db.acquirePortLease(input);
+      this.db.touchAgentActivity(state.agentId);
+      return rpcOk(req.id, lease);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handlePortLeaseRenew(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const input: PortLeaseRenewInput = {
+      leaseId: typeof params.leaseId === "string" ? params.leaseId : "",
+      ttlMs: typeof params.ttlMs === "number" ? params.ttlMs : Number(params.ttlMs),
+      ownerAgentId: state.agentId,
+    };
+
+    try {
+      const lease = this.db.renewPortLease(input);
+      this.db.touchAgentActivity(state.agentId);
+      return rpcOk(req.id, lease);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handlePortLeaseRelease(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const input: PortLeaseReleaseInput = {
+      leaseId: typeof params.leaseId === "string" ? params.leaseId : "",
+      ownerAgentId: state.agentId,
+    };
+
+    try {
+      const lease = this.db.releasePortLease(input);
+      this.db.touchAgentActivity(state.agentId);
+      return rpcOk(req.id, lease);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handlePortLeaseStatus(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const leaseId = typeof params.leaseId === "string" ? params.leaseId : "";
+    try {
+      const lease = this.db.getPortLease(leaseId);
+      return rpcOk(req.id, lease?.ownerAgentId === state.agentId ? lease : null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handlePortLeaseList(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const options: PortLeaseListOptions = {
+      ...(typeof params.includeInactive === "boolean"
+        ? { includeInactive: params.includeInactive }
+        : {}),
+      ...(typeof params.expiredOnly === "boolean" ? { expiredOnly: params.expiredOnly } : {}),
+      ownerAgentId: state.agentId,
+      ...(typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+      ...(typeof params.host === "string" ? { host: params.host } : {}),
+    };
+    try {
+      return rpcOk(req.id, this.db.listPortLeases(options));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handlePortLeaseExpire(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    try {
+      const leases = this.db
+        .expirePortLeases()
+        .filter((lease) => lease.ownerAgentId === state.agentId);
+      if (leases.length > 0) {
+        this.db.touchAgentActivity(state.agentId);
+      }
+      return rpcOk(req.id, leases);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return rpcError(req.id, RPC_INVALID_PARAMS, message);

@@ -106,6 +106,57 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     ).rejects.toThrow("Invalid Pinet lane role");
   });
 
+  it("scopes port lease follower RPCs to the registered agent", async () => {
+    const reg1 = await client.register("lease-owner", "🔌");
+
+    const info = server.getConnectInfo();
+    if (info.type !== "tcp") throw new Error("Expected TCP");
+    const client2 = new BrokerClient({ host: info.host, port: info.port });
+    await client2.connect();
+    const reg2 = await client2.register("lease-neighbor", "🧯");
+
+    try {
+      const lease = await client.acquirePortLease({
+        purpose: "preview",
+        ttlMs: 600_000,
+        port: 52030,
+        ownerAgentId: "spoofed-owner",
+      });
+
+      expect(lease.ownerAgentId).toBe(reg1.agentId);
+      await expect(client2.listPortLeases({ includeInactive: true })).resolves.toEqual([]);
+      await expect(client2.listPortLeases({ ownerAgentId: reg1.agentId })).resolves.toEqual([]);
+      await expect(client2.getPortLease(lease.id)).resolves.toBeNull();
+      await expect(
+        client2.renewPortLease({
+          leaseId: lease.id,
+          ttlMs: 600_000,
+          ownerAgentId: reg1.agentId,
+        }),
+      ).rejects.toThrow(/No active port lease/);
+      await expect(
+        client2.releasePortLease({ leaseId: lease.id, ownerAgentId: reg1.agentId }),
+      ).rejects.toThrow(/No active port lease/);
+
+      await (
+        client2 as unknown as {
+          request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+        }
+      ).request("portLease.expire", { nowIso: new Date(Date.now() + 86_400_000).toISOString() });
+      expect(db.getPortLease(lease.id)?.status).toBe("active");
+
+      const renewed = await client.renewPortLease({ leaseId: lease.id, ttlMs: 600_000 });
+      expect(renewed.ownerAgentId).toBe(reg1.agentId);
+      expect(reg2.agentId).not.toBe(reg1.agentId);
+      await expect(client.releasePortLease({ leaseId: lease.id })).resolves.toMatchObject({
+        status: "released",
+        ownerAgentId: reg1.agentId,
+      });
+    } finally {
+      client2.disconnect();
+    }
+  });
+
   it("register → send → pollInbox → ack (full path)", async () => {
     // Register two agents
     const reg1 = await client.register("sender-agent", "📤");

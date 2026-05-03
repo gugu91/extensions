@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { classifyPinetMail } from "./mail-classification.js";
@@ -21,6 +22,12 @@ import type {
   TaskAssignmentStatus,
   ScheduledWakeupInfo,
   ScheduledWakeupDelivery,
+  PortLeaseAcquireInput,
+  PortLeaseInfo,
+  PortLeaseListOptions,
+  PortLeaseReleaseInput,
+  PortLeaseRenewInput,
+  PortLeaseStatus,
   PinetLaneInfo,
   PinetLaneListOptions,
   PinetLaneParticipantInfo,
@@ -117,6 +124,21 @@ interface ScheduledWakeupRow {
   created_at: string;
 }
 
+interface PortLeaseRow {
+  id: string;
+  purpose: string;
+  port: number;
+  host: string;
+  owner_agent_id: string | null;
+  pid: number | null;
+  status: string;
+  metadata: string | null;
+  acquired_at: string;
+  renewed_at: string;
+  expires_at: string;
+  released_at: string | null;
+}
+
 interface PinetLaneRow {
   lane_id: string;
   name: string | null;
@@ -188,6 +210,30 @@ function rowToThread(row: ThreadRow): ThreadInfo {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function rowToPortLease(row: PortLeaseRow): PortLeaseInfo {
+  return {
+    id: row.id,
+    purpose: row.purpose,
+    port: row.port,
+    host: row.host,
+    ownerAgentId: row.owner_agent_id,
+    pid: row.pid,
+    status: normalizePortLeaseStatus(row.status),
+    metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+    acquiredAt: row.acquired_at,
+    renewedAt: row.renewed_at,
+    expiresAt: row.expires_at,
+    releasedAt: row.released_at,
+  };
+}
+
+function normalizePortLeaseStatus(value: string): PortLeaseStatus {
+  if (value === "released" || value === "expired") {
+    return value;
+  }
+  return "active";
 }
 
 function getStringMetadataValue(
@@ -482,6 +528,70 @@ function serializeOptionalMetadata(
   return value === null ? null : JSON.stringify(value);
 }
 
+function normalizePortLeasePurpose(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("purpose must be a non-empty string");
+  }
+  return trimmed;
+}
+
+function normalizePortLeaseId(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("leaseId must be a non-empty string");
+  }
+  return trimmed;
+}
+
+function normalizeOptionalPortLeaseOwner(
+  value: string | null | undefined,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizePortLeaseHost(value: string | undefined): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "127.0.0.1";
+}
+
+function normalizePortLeasePort(value: number, label = "port"): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${label} must be an integer between 1 and 65535`);
+  }
+  return value;
+}
+
+function normalizePortLeaseTtlMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("ttlMs must be a positive finite number");
+  }
+  return Math.max(1, Math.round(value));
+}
+
+function normalizePortLeasePid(value: number | null | undefined): number | null {
+  if (value === undefined || value === null) return null;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error("pid must be a positive integer");
+  }
+  return value;
+}
+
+function normalizePortLeaseRange(
+  minPort?: number,
+  maxPort?: number,
+): { minPort: number; maxPort: number } {
+  const min = normalizePortLeasePort(minPort ?? 49152, "minPort");
+  const max = normalizePortLeasePort(maxPort ?? 65535, "maxPort");
+  if (min > max) {
+    throw new Error("minPort must be less than or equal to maxPort");
+  }
+  return { minPort: min, maxPort: max };
+}
+
 // ─── Default DB path ─────────────────────────────────────
 
 export function defaultDbPath(): string {
@@ -490,7 +600,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 15;
+export const CURRENT_BROKER_SCHEMA_VERSION = 16;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -1010,6 +1120,36 @@ function addScheduledWakeupStableIdColumn(db: DatabaseSync): void {
   ).run();
 }
 
+function createPortLeaseTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS port_leases (
+      id TEXT PRIMARY KEY NOT NULL,
+      purpose TEXT NOT NULL,
+      port INTEGER NOT NULL,
+      host TEXT NOT NULL DEFAULT '127.0.0.1',
+      owner_agent_id TEXT,
+      pid INTEGER,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('active', 'released', 'expired')),
+      metadata TEXT,
+      acquired_at TEXT NOT NULL,
+      renewed_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      released_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_port_leases_active_port
+      ON port_leases(host, port)
+      WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_port_leases_expiry
+      ON port_leases(status, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_port_leases_owner
+      ON port_leases(owner_agent_id, status, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_port_leases_purpose
+      ON port_leases(purpose, status, expires_at);
+  `);
+}
+
 function createPinetLaneTables(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS pinet_lanes (
@@ -1114,6 +1254,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 15:
           createPinetLaneTables(db);
+          break;
+        case 16:
+          createPortLeaseTable(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -1368,6 +1511,251 @@ export class BrokerDB implements BrokerDBInterface {
   deleteSetting(key: string): void {
     const db = this.getDb();
     db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+  }
+
+  // ─── Port leases ─────────────────────────────────────
+
+  acquirePortLease(input: PortLeaseAcquireInput): PortLeaseInfo {
+    const db = this.getDb();
+    const purpose = normalizePortLeasePurpose(input.purpose);
+    const ttlMs = normalizePortLeaseTtlMs(input.ttlMs);
+    const host = normalizePortLeaseHost(input.host);
+    const requestedPort = input.port === undefined ? undefined : normalizePortLeasePort(input.port);
+    const explicitRange = input.minPort !== undefined || input.maxPort !== undefined;
+    const { minPort, maxPort } = explicitRange
+      ? normalizePortLeaseRange(input.minPort, input.maxPort)
+      : requestedPort === undefined
+        ? normalizePortLeaseRange(input.minPort, input.maxPort)
+        : { minPort: requestedPort, maxPort: requestedPort };
+    const ownerAgentId = normalizeOptionalPortLeaseOwner(input.ownerAgentId) ?? null;
+    const pid = normalizePortLeasePid(input.pid);
+    const metadata = serializeOptionalMetadata(input.metadata) ?? null;
+
+    if (requestedPort !== undefined && (requestedPort < minPort || requestedPort > maxPort)) {
+      throw new Error("port must be within minPort and maxPort");
+    }
+
+    return this.withTransaction(() => {
+      const now = new Date();
+      const nowIso = now.toISOString();
+      this.expirePortLeasesInternal(nowIso);
+
+      const port = requestedPort ?? this.findAvailablePortLeasePort(host, minPort, maxPort);
+      if (port === null) {
+        throw new Error(`No available port lease in range ${minPort}-${maxPort} for ${host}`);
+      }
+
+      const leaseId = crypto.randomUUID();
+      const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+      try {
+        db.prepare(
+          `INSERT INTO port_leases (
+             id, purpose, port, host, owner_agent_id, pid, status, metadata,
+             acquired_at, renewed_at, expires_at, released_at
+           ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, NULL)`,
+        ).run(leaseId, purpose, port, host, ownerAgentId, pid, metadata, nowIso, nowIso, expiresAt);
+      } catch (error) {
+        if (requestedPort !== undefined) {
+          throw new Error(`Port ${host}:${requestedPort} already has an active lease`, {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+
+      const lease = this.getPortLeaseRowById(leaseId);
+      if (!lease) {
+        throw new Error(`Failed to create port lease ${leaseId}`);
+      }
+      return rowToPortLease(lease);
+    });
+  }
+
+  renewPortLease(input: PortLeaseRenewInput): PortLeaseInfo {
+    const db = this.getDb();
+    const leaseId = normalizePortLeaseId(input.leaseId);
+    const ttlMs = normalizePortLeaseTtlMs(input.ttlMs);
+    const ownerAgentId = normalizeOptionalPortLeaseOwner(input.ownerAgentId);
+
+    return this.withTransaction(() => {
+      const now = new Date();
+      const nowIso = now.toISOString();
+      this.expirePortLeasesInternal(nowIso);
+      const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+
+      const result =
+        ownerAgentId === undefined
+          ? db
+              .prepare(
+                `UPDATE port_leases
+                 SET renewed_at = ?, expires_at = ?
+                 WHERE id = ? AND status = 'active'`,
+              )
+              .run(nowIso, expiresAt, leaseId)
+          : db
+              .prepare(
+                `UPDATE port_leases
+                 SET renewed_at = ?, expires_at = ?
+                 WHERE id = ? AND status = 'active' AND owner_agent_id IS ?`,
+              )
+              .run(nowIso, expiresAt, leaseId, ownerAgentId);
+
+      if (Number(result.changes ?? 0) === 0) {
+        throw new Error("No active port lease matched leaseId/ownerAgentId");
+      }
+      const lease = this.getPortLeaseRowById(leaseId);
+      if (!lease) {
+        throw new Error(`Port lease ${leaseId} disappeared after renew`);
+      }
+      return rowToPortLease(lease);
+    });
+  }
+
+  releasePortLease(input: PortLeaseReleaseInput): PortLeaseInfo {
+    const db = this.getDb();
+    const leaseId = normalizePortLeaseId(input.leaseId);
+    const ownerAgentId = normalizeOptionalPortLeaseOwner(input.ownerAgentId);
+
+    return this.withTransaction(() => {
+      const nowIso = new Date().toISOString();
+      this.expirePortLeasesInternal(nowIso);
+      const result =
+        ownerAgentId === undefined
+          ? db
+              .prepare(
+                `UPDATE port_leases
+                 SET status = 'released', released_at = ?
+                 WHERE id = ? AND status = 'active'`,
+              )
+              .run(nowIso, leaseId)
+          : db
+              .prepare(
+                `UPDATE port_leases
+                 SET status = 'released', released_at = ?
+                 WHERE id = ? AND status = 'active' AND owner_agent_id IS ?`,
+              )
+              .run(nowIso, leaseId, ownerAgentId);
+
+      if (Number(result.changes ?? 0) === 0) {
+        throw new Error("No active port lease matched leaseId/ownerAgentId");
+      }
+      const lease = this.getPortLeaseRowById(leaseId);
+      if (!lease) {
+        throw new Error(`Port lease ${leaseId} disappeared after release`);
+      }
+      return rowToPortLease(lease);
+    });
+  }
+
+  getPortLease(leaseId: string): PortLeaseInfo | null {
+    const id = normalizePortLeaseId(leaseId);
+    this.expirePortLeases();
+    const row = this.getPortLeaseRowById(id);
+    return row ? rowToPortLease(row) : null;
+  }
+
+  listPortLeases(options: PortLeaseListOptions = {}): PortLeaseInfo[] {
+    const db = this.getDb();
+    this.expirePortLeases();
+    const clauses: string[] = [];
+    const values: (string | number | null)[] = [];
+
+    if (options.expiredOnly) {
+      clauses.push("status = 'expired'");
+    } else if (!options.includeInactive) {
+      clauses.push("status = 'active'");
+    }
+    if (options.ownerAgentId !== undefined) {
+      clauses.push("owner_agent_id IS ?");
+      values.push(normalizeOptionalPortLeaseOwner(options.ownerAgentId) ?? null);
+    }
+    if (options.purpose !== undefined) {
+      clauses.push("purpose = ?");
+      values.push(normalizePortLeasePurpose(options.purpose));
+    }
+    if (options.host !== undefined) {
+      clauses.push("host = ?");
+      values.push(normalizePortLeaseHost(options.host));
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = db
+      .prepare(
+        `SELECT * FROM port_leases
+         ${where}
+         ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'expired' THEN 1 ELSE 2 END,
+                  expires_at ASC,
+                  acquired_at ASC`,
+      )
+      .all(...values) as unknown as PortLeaseRow[];
+    return rows.map(rowToPortLease);
+  }
+
+  expirePortLeases(nowIso = new Date().toISOString()): PortLeaseInfo[] {
+    return this.withTransaction(() => this.expirePortLeasesInternal(nowIso));
+  }
+
+  private expirePortLeasesInternal(nowIso: string): PortLeaseInfo[] {
+    const db = this.getDb();
+    if (Number.isNaN(Date.parse(nowIso))) {
+      throw new Error("nowIso must be a valid ISO timestamp");
+    }
+
+    const expiredRows = db
+      .prepare(
+        `SELECT * FROM port_leases
+         WHERE status = 'active' AND expires_at <= ?
+         ORDER BY expires_at ASC, acquired_at ASC`,
+      )
+      .all(nowIso) as unknown as PortLeaseRow[];
+    if (expiredRows.length === 0) {
+      return [];
+    }
+
+    const expire = db.prepare(
+      `UPDATE port_leases
+       SET status = 'expired', released_at = COALESCE(released_at, ?)
+       WHERE id = ? AND status = 'active'`,
+    );
+    for (const row of expiredRows) {
+      expire.run(nowIso, row.id);
+    }
+
+    const placeholders = expiredRows.map(() => "?").join(", ");
+    const rows = db
+      .prepare(`SELECT * FROM port_leases WHERE id IN (${placeholders}) ORDER BY expires_at ASC`)
+      .all(...expiredRows.map((row) => row.id)) as unknown as PortLeaseRow[];
+    return rows.map(rowToPortLease);
+  }
+
+  private findAvailablePortLeasePort(
+    host: string,
+    minPort: number,
+    maxPort: number,
+  ): number | null {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT port FROM port_leases
+         WHERE host = ? AND status = 'active' AND port BETWEEN ? AND ?
+         ORDER BY port ASC`,
+      )
+      .all(host, minPort, maxPort) as Array<{ port: number }>;
+    const activePorts = new Set(rows.map((row) => row.port));
+    for (let port = minPort; port <= maxPort; port += 1) {
+      if (!activePorts.has(port)) {
+        return port;
+      }
+    }
+    return null;
+  }
+
+  private getPortLeaseRowById(leaseId: string): PortLeaseRow | null {
+    const db = this.getDb();
+    const row = db.prepare("SELECT * FROM port_leases WHERE id = ?").get(leaseId) as
+      | PortLeaseRow
+      | undefined;
+    return row ?? null;
   }
 
   touchAgent(id: string): void {

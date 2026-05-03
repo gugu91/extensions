@@ -141,6 +141,54 @@ export interface ScheduledWakeupDelivery {
   message: BrokerMessage;
 }
 
+export type PortLeaseStatus = "active" | "released" | "expired";
+
+export interface PortLeaseInfo {
+  id: string;
+  purpose: string;
+  port: number;
+  host: string;
+  ownerAgentId: string | null;
+  pid: number | null;
+  status: PortLeaseStatus;
+  metadata: Record<string, unknown> | null;
+  acquiredAt: string;
+  renewedAt: string;
+  expiresAt: string;
+  releasedAt: string | null;
+}
+
+export interface PortLeaseAcquireInput {
+  purpose: string;
+  ttlMs: number;
+  ownerAgentId?: string | null;
+  host?: string;
+  port?: number;
+  minPort?: number;
+  maxPort?: number;
+  pid?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface PortLeaseRenewInput {
+  leaseId: string;
+  ttlMs: number;
+  ownerAgentId?: string | null;
+}
+
+export interface PortLeaseReleaseInput {
+  leaseId: string;
+  ownerAgentId?: string | null;
+}
+
+export interface PortLeaseListOptions {
+  includeInactive?: boolean;
+  expiredOnly?: boolean;
+  ownerAgentId?: string;
+  purpose?: string;
+  host?: string;
+}
+
 export type PinetLaneState =
   | "planned"
   | "active"
@@ -299,6 +347,12 @@ export interface BrokerDBInterface {
   getAgentByStableId(stableId: string): AgentInfo | null;
   getAgents(): AgentInfo[];
   getChannelAssignment(channel: string): ChannelAssignment | null;
+  acquirePortLease?(input: PortLeaseAcquireInput): PortLeaseInfo;
+  renewPortLease?(input: PortLeaseRenewInput): PortLeaseInfo;
+  releasePortLease?(input: PortLeaseReleaseInput): PortLeaseInfo;
+  getPortLease?(leaseId: string): PortLeaseInfo | null;
+  listPortLeases?(options?: PortLeaseListOptions): PortLeaseInfo[];
+  expirePortLeases?(nowIso?: string): PortLeaseInfo[];
   /**
    * Inbound user access policy for routing.
    * - `null` => explicit allow-all

@@ -145,6 +145,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("pinet:send")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:schedule")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:free")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:ports")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:reload")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:exit")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:skin")).toBe(false);
@@ -156,6 +157,7 @@ describe("isToolBlocked", () => {
     expect(READ_ONLY_TOOLS.has("pinet:send")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:schedule")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:free")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("pinet:ports")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:reload")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:exit")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:skin")).toBe(false);
@@ -165,6 +167,7 @@ describe("isToolBlocked", () => {
   it("classifies Pinet dispatcher and legacy policy names for readOnly checks", () => {
     const g: SecurityGuardrails = { readOnly: true };
     expect(isToolBlocked("pinet:send", g)).toBe(true);
+    expect(isToolBlocked("pinet:ports", g)).toBe(true);
     expect(isToolBlocked("pinet:reload", g)).toBe(true);
     expect(isToolBlocked("pinet:exit", g)).toBe(true);
     expect(isToolBlocked("pinet:skin", g)).toBe(false);

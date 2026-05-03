@@ -229,7 +229,7 @@ describe("BrokerDB message sync identity", () => {
         ),
       );
 
-      expect(version.user_version).toBe(15);
+      expect(version.user_version).toBe(16);
       expect(messageColumns.has("external_id")).toBe(true);
       expect(messageColumns.has("external_ts")).toBe(true);
       expect(inboxColumns.has("read_at")).toBe(true);
@@ -1236,6 +1236,114 @@ describe("BrokerDB message sync identity", () => {
         highestMailClass: "fwup",
         mailClassCounts: { steering: 0, fwup: 1, maintenance_context: 0 },
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("acquires requested and allocated port leases with active uniqueness", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      const first = db.acquirePortLease({
+        purpose: "preview",
+        ttlMs: 600_000,
+        port: 52000,
+        ownerAgentId: "agent-1",
+        pid: 123,
+        metadata: { repo: "extensions" },
+      });
+      expect(first).toMatchObject({
+        purpose: "preview",
+        host: "127.0.0.1",
+        port: 52000,
+        ownerAgentId: "agent-1",
+        pid: 123,
+        status: "active",
+        metadata: { repo: "extensions" },
+      });
+      expect(() =>
+        db.acquirePortLease({ purpose: "conflict", ttlMs: 600_000, port: 52000 }),
+      ).toThrow(/already has an active lease/);
+
+      const second = db.acquirePortLease({
+        purpose: "allocated",
+        ttlMs: 600_000,
+        minPort: 52000,
+        maxPort: 52002,
+      });
+      expect(second.port).toBe(52001);
+      expect(db.listPortLeases().map((lease) => lease.port)).toEqual([52000, 52001]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("acquires an explicit requested port outside the default allocation range", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      const lease = db.acquirePortLease({ purpose: "vite", ttlMs: 600_000, port: 3000 });
+      expect(lease).toMatchObject({ host: "127.0.0.1", port: 3000, status: "active" });
+      expect(() =>
+        db.acquirePortLease({
+          purpose: "range-mismatch",
+          ttlMs: 600_000,
+          port: 3000,
+          minPort: 52000,
+          maxPort: 52010,
+        }),
+      ).toThrow(/port must be within minPort and maxPort/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renews, releases, and reuses port leases", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      const lease = db.acquirePortLease({
+        purpose: "server",
+        ttlMs: 1000,
+        port: 52010,
+        ownerAgentId: "agent-1",
+      });
+      const renewed = db.renewPortLease({
+        leaseId: lease.id,
+        ttlMs: 10_000,
+        ownerAgentId: "agent-1",
+      });
+      expect(Date.parse(renewed.expiresAt)).toBeGreaterThan(Date.parse(lease.expiresAt));
+      expect(() =>
+        db.renewPortLease({ leaseId: lease.id, ttlMs: 10_000, ownerAgentId: "agent-2" }),
+      ).toThrow(/No active port lease/);
+
+      const released = db.releasePortLease({ leaseId: lease.id, ownerAgentId: "agent-1" });
+      expect(released.status).toBe("released");
+      expect(db.listPortLeases()).toEqual([]);
+
+      const replacement = db.acquirePortLease({ purpose: "replacement", ttlMs: 1000, port: 52010 });
+      expect(replacement.port).toBe(52010);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("expires stale port leases before allocation and through maintenance hooks", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    try {
+      const lease = db.acquirePortLease({ purpose: "short", ttlMs: 1, port: 52020, pid: 456 });
+      const expired = db.expirePortLeases(new Date(Date.parse(lease.expiresAt) + 1).toISOString());
+      expect(expired).toHaveLength(1);
+      expect(expired[0]).toMatchObject({ id: lease.id, status: "expired", pid: 456 });
+      expect(db.getPortLease(lease.id)?.status).toBe("expired");
+      expect(db.listPortLeases({ expiredOnly: true })[0].id).toBe(lease.id);
+
+      const replacement = db.acquirePortLease({ purpose: "reuse", ttlMs: 1000, port: 52020 });
+      expect(replacement.id).not.toBe(lease.id);
+      expect(replacement.port).toBe(52020);
     } finally {
       db.close();
     }

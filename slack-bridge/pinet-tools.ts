@@ -24,6 +24,11 @@ import { isBroadcastChannelTarget } from "./broker/agent-messaging.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import type {
+  PortLeaseAcquireInput,
+  PortLeaseInfo,
+  PortLeaseListOptions,
+  PortLeaseReleaseInput,
+  PortLeaseRenewInput,
   PinetLaneInfo,
   PinetLaneListOptions,
   PinetLaneParticipantInfo,
@@ -84,6 +89,12 @@ export interface RegisterPinetToolsDeps {
   setPinetLaneParticipant: (
     input: PinetLaneParticipantUpsertInput,
   ) => Promise<PinetLaneParticipantInfo>;
+  acquirePortLease: (input: PortLeaseAcquireInput) => Promise<PortLeaseInfo>;
+  renewPortLease: (input: PortLeaseRenewInput) => Promise<PortLeaseInfo>;
+  releasePortLease: (input: PortLeaseReleaseInput) => Promise<PortLeaseInfo>;
+  getPortLease: (leaseId: string) => Promise<PortLeaseInfo | null>;
+  listPortLeases: (options: PortLeaseListOptions) => Promise<PortLeaseInfo[]>;
+  expirePortLeases: () => Promise<PortLeaseInfo[]>;
 }
 
 interface PinetAgentsRoutingHint {
@@ -101,6 +112,7 @@ type PinetDispatcherAction =
   | "schedule"
   | "agents"
   | "lanes"
+  | "ports"
   | "reload"
   | "exit"
   | "help";
@@ -149,6 +161,11 @@ const PINET_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
   free: [{ action: "free", args: { note: "Wrapped up <issue>" } }],
   schedule: [{ action: "schedule", args: { delay: "30m", message: "Check queue state" } }],
   agents: [{ action: "agents", args: { repo: "<repo>", role: "worker", full: true } }],
+  ports: [
+    { action: "ports", args: { op: "acquire", purpose: "preview", ttl_ms: 600000 } },
+    { action: "ports", args: { op: "renew", lease_id: "<lease-id>", ttl_ms: 600000 } },
+    { action: "ports", args: { op: "list", include_inactive: true } },
+  ],
   lanes: [
     { action: "lanes", args: { op: "list", full: true } },
     {
@@ -212,6 +229,7 @@ function normalizeDispatcherAction(value: unknown): PinetDispatcherAction {
     "schedule",
     "agents",
     "lanes",
+    "ports",
     "reload",
     "exit",
   ];
@@ -255,7 +273,11 @@ function classifyPinetError(message: string): PinetDispatcherError {
   if (
     message.includes("thread_id must be") ||
     message.includes("message is required") ||
-    message.includes("target is required")
+    message.includes("target is required") ||
+    message.includes("lease_id") ||
+    message.includes("ttl_ms") ||
+    message.includes("purpose") ||
+    message.includes("port")
   ) {
     return {
       class: "input",
@@ -732,6 +754,19 @@ function getMaybeBoolean(params: Record<string, unknown>, key: string): boolean 
   return typeof value === "boolean" ? value : undefined;
 }
 
+function getMaybeNumber(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function requireNumber(params: Record<string, unknown>, key: string): number {
+  const value = getMaybeNumber(params, key);
+  if (value === undefined) {
+    throw new Error(`${key} must be a finite number`);
+  }
+  return value;
+}
+
 function hasParam(params: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(params, key);
 }
@@ -763,6 +798,156 @@ function getMaybeMetadata(
   const value = params.metadata;
   if (value === null) return null;
   return isRecord(value) ? value : undefined;
+}
+
+function formatPortLeaseSummary(lease: PortLeaseInfo): string {
+  return `${lease.host}:${lease.port} ${lease.status} lease=${lease.id} purpose=${lease.purpose} owner=${lease.ownerAgentId ?? "none"} expires=${lease.expiresAt}`;
+}
+
+function formatPortLeases(leases: PortLeaseInfo[], full: boolean): string {
+  if (leases.length === 0) return "Pinet port leases: none.";
+  if (!full) return `Pinet port leases: ${leases.length}.`;
+  return [
+    "Pinet port leases:",
+    ...leases.map((lease) => `- ${formatPortLeaseSummary(lease)}`),
+  ].join("\n");
+}
+
+function runPinetPortsAction(
+  params: Record<string, unknown>,
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+  output: PinetOutputOptions,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const op = getMaybeString(params, "op")?.toLowerCase() ?? "list";
+    deps.requireToolPolicy(toolName, undefined, `op=${op} | format=${output.format}`);
+    if (!deps.pinetEnabled()) {
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
+    }
+
+    if (op === "acquire") {
+      const purpose = getMaybeString(params, "purpose");
+      if (!purpose) throw new Error("ports op=acquire requires purpose");
+      const ttlMs = requireNumber(params, "ttl_ms");
+      const lease = await deps.acquirePortLease({
+        purpose,
+        ttlMs,
+        ...(getMaybeString(params, "host") ? { host: getMaybeString(params, "host") } : {}),
+        ...(getMaybeNumber(params, "port") !== undefined
+          ? { port: getMaybeNumber(params, "port") }
+          : {}),
+        ...(getMaybeNumber(params, "min_port") !== undefined
+          ? { minPort: getMaybeNumber(params, "min_port") }
+          : {}),
+        ...(getMaybeNumber(params, "max_port") !== undefined
+          ? { maxPort: getMaybeNumber(params, "max_port") }
+          : {}),
+        ...(getMaybeNumber(params, "pid") !== undefined
+          ? { pid: getMaybeNumber(params, "pid") }
+          : {}),
+        ...(getMaybeMetadata(params) !== undefined ? { metadata: getMaybeMetadata(params) } : {}),
+      });
+      return {
+        content: [
+          { type: "text", text: `Pinet port lease acquired: ${formatPortLeaseSummary(lease)}.` },
+        ],
+        details: { lease },
+        compactDetails: {
+          leaseId: lease.id,
+          host: lease.host,
+          port: lease.port,
+          expiresAt: lease.expiresAt,
+        },
+        fullDetails: { lease },
+      };
+    }
+
+    if (op === "renew") {
+      const leaseId = getMaybeString(params, "lease_id");
+      if (!leaseId) throw new Error("ports op=renew requires lease_id");
+      const lease = await deps.renewPortLease({
+        leaseId,
+        ttlMs: requireNumber(params, "ttl_ms"),
+      });
+      return {
+        content: [
+          { type: "text", text: `Pinet port lease renewed: ${formatPortLeaseSummary(lease)}.` },
+        ],
+        details: { lease },
+        compactDetails: { leaseId: lease.id, expiresAt: lease.expiresAt },
+        fullDetails: { lease },
+      };
+    }
+
+    if (op === "release") {
+      const leaseId = getMaybeString(params, "lease_id");
+      if (!leaseId) throw new Error("ports op=release requires lease_id");
+      const lease = await deps.releasePortLease({
+        leaseId,
+      });
+      return {
+        content: [
+          { type: "text", text: `Pinet port lease released: ${formatPortLeaseSummary(lease)}.` },
+        ],
+        details: { lease },
+        compactDetails: { leaseId: lease.id, status: lease.status },
+        fullDetails: { lease },
+      };
+    }
+
+    if (op === "status") {
+      const leaseId = getMaybeString(params, "lease_id");
+      if (!leaseId) throw new Error("ports op=status requires lease_id");
+      const lease = await deps.getPortLease(leaseId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: lease
+              ? `Pinet port lease: ${formatPortLeaseSummary(lease)}.`
+              : "Pinet port lease: not found.",
+          },
+        ],
+        details: { lease },
+        compactDetails: lease ? { leaseId: lease.id, status: lease.status } : { lease: null },
+        fullDetails: { lease },
+      };
+    }
+
+    if (op === "expire") {
+      const leases = await deps.expirePortLeases();
+      return {
+        content: [{ type: "text", text: `Pinet port leases expired: ${leases.length}.` }],
+        details: { leases },
+        compactDetails: { leaseCount: leases.length, leases: leases.slice(0, 10) },
+        fullDetails: { leases },
+      };
+    }
+
+    if (op === "list") {
+      const leases = await deps.listPortLeases({
+        ...(getMaybeBoolean(params, "include_inactive") !== undefined
+          ? { includeInactive: getMaybeBoolean(params, "include_inactive") }
+          : {}),
+        ...(getMaybeBoolean(params, "expired_only") !== undefined
+          ? { expiredOnly: getMaybeBoolean(params, "expired_only") }
+          : {}),
+        ...(getMaybeString(params, "purpose")
+          ? { purpose: getMaybeString(params, "purpose") }
+          : {}),
+        ...(getMaybeString(params, "host") ? { host: getMaybeString(params, "host") } : {}),
+      });
+      return {
+        content: [{ type: "text", text: formatPortLeases(leases, output.full) }],
+        details: { leases },
+        compactDetails: { leaseCount: leases.length, leases: leases.slice(0, 10) },
+        fullDetails: { leases },
+      };
+    }
+
+    throw new Error("ports op must be acquire, renew, release, status, list, or expire");
+  })();
 }
 
 function runPinetLanesAction(
@@ -1079,6 +1264,36 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   });
 
   registerAction({
+    name: "ports",
+    description:
+      "Acquire, renew, release, inspect, list, or expire durable Pinet local port leases.",
+    parameters: Type.Object({
+      op: Type.Optional(
+        Type.String({ description: "Operation: acquire, renew, release, status, list, or expire" }),
+      ),
+      purpose: Type.Optional(Type.String({ description: "Lease purpose for op=acquire" })),
+      ttl_ms: Type.Optional(Type.Number({ description: "Lease TTL in milliseconds" })),
+      lease_id: Type.Optional(Type.String({ description: "Lease id for renew/release/status" })),
+      host: Type.Optional(Type.String({ description: "Host binding; default 127.0.0.1" })),
+      port: Type.Optional(Type.Number({ description: "Requested port for op=acquire" })),
+      min_port: Type.Optional(Type.Number({ description: "Minimum allocation port" })),
+      max_port: Type.Optional(Type.Number({ description: "Maximum allocation port" })),
+      pid: Type.Optional(
+        Type.Number({ description: "Optional process id associated with the lease" }),
+      ),
+      include_inactive: Type.Optional(
+        Type.Boolean({ description: "Include released/expired rows" }),
+      ),
+      expired_only: Type.Optional(Type.Boolean({ description: "List only expired rows" })),
+      metadata: Type.Optional(
+        Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()]),
+      ),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
+    }),
+    execute: (_id, params, output) => runPinetPortsAction(params, deps, "pinet:ports", output),
+  });
+
+  registerAction({
     name: "lanes",
     description:
       "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility.",
@@ -1166,11 +1381,11 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     label: "Pinet Dispatcher",
     description: "Dispatch Pinet operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, reload, exit, and help. Use /pinet start, /pinet follow, and /pinet unfollow for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
+      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, ports, reload, exit, and help. Use /pinet start, /pinet follow, and /pinet unfollow for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
     parameters: Type.Object({
       action: Type.String({
         description:
-          "Action name: help, send, read, free, schedule, agents, lanes, reload, or exit.",
+          "Action name: help, send, read, free, schedule, agents, lanes, ports, reload, or exit.",
       }),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {

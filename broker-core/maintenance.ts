@@ -1,4 +1,4 @@
-import type { AgentInfo, BacklogEntry, ThreadInfo } from "./types.js";
+import type { AgentInfo, BacklogEntry, PortLeaseInfo, ThreadInfo } from "./types.js";
 
 export const DEFAULT_BROKER_MAINTENANCE_INTERVAL_MS = 5_000;
 export const DEFAULT_BUSY_ASSIGNMENT_AGE_MS = 30_000;
@@ -28,6 +28,7 @@ export interface BrokerMaintenanceDB {
   getThread(threadId: string): ThreadInfo | null;
   assignBacklogEntry(id: number, agentId: string): BacklogEntry | null;
   dropBacklogEntry(id: number, reason: string): BacklogEntry | null;
+  expirePortLeases?: (nowIso?: string) => PortLeaseInfo[];
 }
 
 export interface BrokerMaintenanceOptions {
@@ -83,6 +84,7 @@ export function runBrokerMaintenancePass(
   const now = options.now ?? Date.now();
   const busyAssignmentAgeMs = options.busyAssignmentAgeMs ?? DEFAULT_BUSY_ASSIGNMENT_AGE_MS;
   const reapedAgentIds = db.pruneStaleAgents(options.staleAfterMs);
+  const expiredPortLeases = db.expirePortLeases?.(new Date(now).toISOString()) ?? [];
   db.purgeDisconnectedAgents();
   const repaired = db.repairThreadOwnership();
   for (const agentId of repaired.releasedAgentIds) {
@@ -165,6 +167,11 @@ export function runBrokerMaintenancePass(
   if (reapedAgentIds.length > 0) {
     anomalies.push(
       `reaped ${reapedAgentIds.length} stale agent${reapedAgentIds.length === 1 ? "" : "s"}`,
+    );
+  }
+  if (expiredPortLeases.length > 0) {
+    anomalies.push(
+      `expired ${expiredPortLeases.length} port lease${expiredPortLeases.length === 1 ? "" : "s"}`,
     );
   }
   if (repairedThreadClaims > 0) {

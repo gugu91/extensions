@@ -85,6 +85,64 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
       updatedAt: "2026-05-01T00:00:00.000Z",
       lastActivityAt: "2026-05-01T00:00:00.000Z",
     }),
+    acquirePortLease: async (input) => ({
+      id: "lease-1",
+      purpose: input.purpose,
+      port: input.port ?? input.minPort ?? 49152,
+      host: input.host ?? "127.0.0.1",
+      ownerAgentId: input.ownerAgentId ?? "agent-1",
+      pid: input.pid ?? null,
+      status: "active",
+      metadata: input.metadata ?? null,
+      acquiredAt: "2026-05-01T00:00:00.000Z",
+      renewedAt: "2026-05-01T00:00:00.000Z",
+      expiresAt: "2026-05-01T00:10:00.000Z",
+      releasedAt: null,
+    }),
+    renewPortLease: async (input) => ({
+      id: input.leaseId,
+      purpose: "preview",
+      port: 49152,
+      host: "127.0.0.1",
+      ownerAgentId: input.ownerAgentId ?? "agent-1",
+      pid: null,
+      status: "active",
+      metadata: null,
+      acquiredAt: "2026-05-01T00:00:00.000Z",
+      renewedAt: "2026-05-01T00:05:00.000Z",
+      expiresAt: "2026-05-01T00:15:00.000Z",
+      releasedAt: null,
+    }),
+    releasePortLease: async (input) => ({
+      id: input.leaseId,
+      purpose: "preview",
+      port: 49152,
+      host: "127.0.0.1",
+      ownerAgentId: input.ownerAgentId ?? "agent-1",
+      pid: null,
+      status: "released",
+      metadata: null,
+      acquiredAt: "2026-05-01T00:00:00.000Z",
+      renewedAt: "2026-05-01T00:00:00.000Z",
+      expiresAt: "2026-05-01T00:10:00.000Z",
+      releasedAt: "2026-05-01T00:03:00.000Z",
+    }),
+    getPortLease: async (leaseId) => ({
+      id: leaseId,
+      purpose: "preview",
+      port: 49152,
+      host: "127.0.0.1",
+      ownerAgentId: "agent-1",
+      pid: null,
+      status: "active",
+      metadata: null,
+      acquiredAt: "2026-05-01T00:00:00.000Z",
+      renewedAt: "2026-05-01T00:00:00.000Z",
+      expiresAt: "2026-05-01T00:10:00.000Z",
+      releasedAt: null,
+    }),
+    listPortLeases: async () => [],
+    expirePortLeases: async () => [],
   };
 
   return { ...defaults, ...overrides };
@@ -119,11 +177,11 @@ describe("registerPinetTools", () => {
     const pinet = tools.get("pinet");
 
     expect(pinet?.promptSnippet).toContain("Use this compact dispatcher for Pinet actions");
-    expect(pinet?.promptSnippet).toContain("reload, exit, and help");
-    expect(pinet?.promptSnippet).not.toContain("action=skin");
+    expect(pinet?.promptSnippet).toContain("lanes, ports, reload");
+    expect(pinet?.promptSnippet).not.toContain("skin");
     expect(pinet?.promptSnippet).toContain('args.format="json"');
     expect(JSON.stringify(pinet?.parameters)).toContain(
-      "help, send, read, free, schedule, agents, lanes, reload, or exit",
+      "help, send, read, free, schedule, agents, lanes, ports, reload, or exit",
     );
   });
 
@@ -469,8 +527,51 @@ describe("registerPinetTools", () => {
         expect.objectContaining({ action: "schedule", guardrail_tool: "pinet:schedule" }),
         expect.objectContaining({ action: "agents", guardrail_tool: "pinet:agents" }),
         expect.objectContaining({ action: "lanes", guardrail_tool: "pinet:lanes" }),
+        expect.objectContaining({ action: "ports", guardrail_tool: "pinet:ports" }),
       ]),
     );
+  });
+
+  it("routes action-dispatched port lease acquire", async () => {
+    const acquirePortLease = vi.fn(createDeps().acquirePortLease);
+    const tools = registerWithDeps(createDeps({ acquirePortLease }));
+
+    const result = (await tools.get("pinet")?.execute("tool-call-ports-acquire", {
+      action: "ports",
+      args: {
+        op: "acquire",
+        purpose: "preview",
+        ttl_ms: 600_000,
+        min_port: 52000,
+        max_port: 52010,
+        format: "json",
+      },
+    })) as {
+      details: { status: string; data: { details: { lease: { port: number } } } };
+    };
+
+    expect(acquirePortLease).toHaveBeenCalledWith({
+      purpose: "preview",
+      ttlMs: 600_000,
+      minPort: 52000,
+      maxPort: 52010,
+    });
+    expect(result.details.status).toBe("succeeded");
+    expect(result.details.data.details.lease.port).toBe(52000);
+  });
+
+  it("routes action-dispatched port lease list", async () => {
+    const listPortLeases = vi.fn(createDeps().listPortLeases);
+    const tools = registerWithDeps(createDeps({ listPortLeases }));
+
+    const result = (await tools.get("pinet")?.execute("tool-call-ports-list", {
+      action: "ports",
+      args: { op: "list", include_inactive: true },
+    })) as { details: { status: string; data: { details: { leases: unknown[] } } } };
+
+    expect(listPortLeases).toHaveBeenCalledWith({ includeInactive: true });
+    expect(result.details.status).toBe("succeeded");
+    expect(result.details.data.details.leases).toEqual([]);
   });
 
   it("rejects legacy direct-tool names as dispatcher action values", async () => {
