@@ -123,44 +123,15 @@ export function resolveBrokerPromptCandidates(
   const defaultPromptPath = path.resolve(
     options.defaultPromptPath ?? path.join(moduleDir, "prompts", "broker", "tmux.md"),
   );
-  const legacyBrokerPromptPath = path.resolve(moduleDir, "prompts", "broker", "broker.md");
-  const legacyDefaultPromptPath = path.resolve(moduleDir, "prompts", "broker", "default.md");
   const defaultRoot = path.resolve(path.dirname(path.dirname(path.dirname(defaultPromptPath))));
-  const legacyBrokerRoot = path.resolve(
-    path.dirname(path.dirname(path.dirname(legacyBrokerPromptPath))),
-  );
-  const legacyDefaultRoot = path.resolve(
-    path.dirname(path.dirname(path.dirname(legacyDefaultPromptPath))),
-  );
-  const packagedCandidates: BrokerPromptCandidate[] = options.defaultPromptPath
-    ? [
-        {
-          source: "packaged",
-          path: defaultPromptPath,
-          root: defaultRoot,
-          required: true,
-        },
-      ]
-    : [
-        {
-          source: "packaged",
-          path: defaultPromptPath,
-          root: defaultRoot,
-          required: false,
-        },
-        {
-          source: "packaged",
-          path: legacyBrokerPromptPath,
-          root: legacyBrokerRoot,
-          required: false,
-        },
-        {
-          source: "packaged",
-          path: legacyDefaultPromptPath,
-          root: legacyDefaultRoot,
-          required: true,
-        },
-      ];
+  const packagedCandidates: BrokerPromptCandidate[] = [
+    {
+      source: "packaged",
+      path: defaultPromptPath,
+      root: defaultRoot,
+      required: true,
+    },
+  ];
   const configuredCandidate = resolveConfiguredBrokerPromptCandidate(options.configuredPrompt, {
     workspaceRoot,
     homeDir,
@@ -175,32 +146,8 @@ export function resolveBrokerPromptCandidates(
       required: false,
     },
     {
-      source: "workspace",
-      path: path.join(workspaceRoot, ".pi", "slack-bridge", "broker.md"),
-      root: workspaceRoot,
-      required: false,
-    },
-    {
-      source: "workspace",
-      path: path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
-      root: workspaceRoot,
-      required: false,
-    },
-    {
       source: "user",
       path: path.join(userRoot, "tmux.md"),
-      root: userRoot,
-      required: false,
-    },
-    {
-      source: "user",
-      path: path.join(userRoot, "broker.md"),
-      root: userRoot,
-      required: false,
-    },
-    {
-      source: "user",
-      path: path.join(userRoot, "broker-prompt.md"),
       root: userRoot,
       required: false,
     },
