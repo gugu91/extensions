@@ -11,6 +11,11 @@ import type {
 import type {
   ClientAgentInfo,
   NormalizedMessageContent,
+  PortLeaseAcquireInput,
+  PortLeaseInfo,
+  PortLeaseListOptions,
+  PortLeaseReleaseInput,
+  PortLeaseRenewInput,
   PinetLaneInfo,
   PinetLaneListOptions,
   PinetLaneParticipantInfo,
@@ -61,6 +66,11 @@ export interface ScheduledWakeupInfo {
 }
 
 export type {
+  PortLeaseAcquireInput,
+  PortLeaseInfo,
+  PortLeaseListOptions,
+  PortLeaseReleaseInput,
+  PortLeaseRenewInput,
   PinetLaneInfo,
   PinetLaneListOptions,
   PinetLaneParticipantInfo,
@@ -552,6 +562,45 @@ export class BrokerClient {
       "lane.participant",
       input as unknown as Record<string, unknown>,
     )) as PinetLaneParticipantInfo;
+  }
+
+  async acquirePortLease(input: PortLeaseAcquireInput): Promise<PortLeaseInfo> {
+    return (await this.request(
+      "portLease.acquire",
+      input as unknown as Record<string, unknown>,
+    )) as PortLeaseInfo;
+  }
+
+  async renewPortLease(input: PortLeaseRenewInput): Promise<PortLeaseInfo> {
+    return (await this.request(
+      "portLease.renew",
+      input as unknown as Record<string, unknown>,
+    )) as PortLeaseInfo;
+  }
+
+  async releasePortLease(input: PortLeaseReleaseInput): Promise<PortLeaseInfo> {
+    return (await this.request(
+      "portLease.release",
+      input as unknown as Record<string, unknown>,
+    )) as PortLeaseInfo;
+  }
+
+  async getPortLease(leaseId: string): Promise<PortLeaseInfo | null> {
+    return (await this.request("portLease.status", { leaseId })) as PortLeaseInfo | null;
+  }
+
+  async listPortLeases(options: PortLeaseListOptions = {}): Promise<PortLeaseInfo[]> {
+    return (await this.request(
+      "portLease.list",
+      options as unknown as Record<string, unknown>,
+    )) as PortLeaseInfo[];
+  }
+
+  async expirePortLeases(nowIso?: string): Promise<PortLeaseInfo[]> {
+    return (await this.request(
+      "portLease.expire",
+      nowIso ? { nowIso } : undefined,
+    )) as PortLeaseInfo[];
   }
   // ─── Queries ─────────────────────────────────────────
 

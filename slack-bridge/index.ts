@@ -20,6 +20,10 @@ import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import type {
+  PortLeaseAcquireInput,
+  PortLeaseListOptions,
+  PortLeaseReleaseInput,
+  PortLeaseRenewInput,
   PinetLaneListOptions,
   PinetLaneParticipantUpsertInput,
   PinetLaneUpsertInput,
@@ -869,6 +873,81 @@ export default function (pi: ExtensionAPI) {
     throw new Error("Pinet is in an unexpected state.");
   }
 
+  async function acquirePortLease(input: PortLeaseAcquireInput) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.acquirePortLease({ ...input, ownerAgentId: input.ownerAgentId ?? selfId ?? null });
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.acquirePortLease(input);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function renewPortLease(input: PortLeaseRenewInput) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.renewPortLease({ ...input, ownerAgentId: input.ownerAgentId ?? selfId ?? null });
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.renewPortLease(input);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function releasePortLease(input: PortLeaseReleaseInput) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      const selfId = getActiveBrokerSelfId();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.releasePortLease({ ...input, ownerAgentId: input.ownerAgentId ?? selfId ?? null });
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.releasePortLease(input);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function getPortLease(leaseId: string) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.getPortLease(leaseId);
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.getPortLease(leaseId);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function listPortLeases(options: PortLeaseListOptions) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.listPortLeases(options);
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.listPortLeases(options);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
+  async function expirePortLeases(nowIso?: string) {
+    if (brokerRole === "broker") {
+      const db = getActiveBrokerDb();
+      if (!db) throw new Error("Broker database is unavailable.");
+      return db.expirePortLeases(nowIso);
+    }
+    if (brokerRole === "follower" && brokerClient?.client) {
+      return await brokerClient.client.expirePortLeases(nowIso);
+    }
+    throw new Error("Pinet is in an unexpected state.");
+  }
+
   async function readPinetInbox(options: {
     threadId?: string;
     limit?: number;
@@ -1114,6 +1193,12 @@ export default function (pi: ExtensionAPI) {
       listPinetLanes,
       upsertPinetLane,
       setPinetLaneParticipant,
+      acquirePortLease,
+      renewPortLease,
+      releasePortLease,
+      getPortLease,
+      listPortLeases,
+      expirePortLeases,
     },
     iMessageTools: {
       pinetEnabled: () => pinetEnabled,
