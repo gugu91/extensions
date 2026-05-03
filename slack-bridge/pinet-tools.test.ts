@@ -55,6 +55,36 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
     }),
     listBrokerAgents: () => [makeAgent()],
     listFollowerAgents: async (_includeGhosts: boolean) => [makeAgent({ id: "agent-2" })],
+    listPinetLanes: async () => [],
+    upsertPinetLane: async (input) => ({
+      laneId: input.laneId,
+      name: input.name ?? null,
+      task: input.task ?? null,
+      issueNumber: input.issueNumber ?? null,
+      prNumber: input.prNumber ?? null,
+      threadId: input.threadId ?? null,
+      ownerAgentId: input.ownerAgentId ?? null,
+      implementationLeadAgentId: input.implementationLeadAgentId ?? null,
+      pmMode: input.pmMode ?? false,
+      state: input.state ?? "active",
+      summary: input.summary ?? null,
+      metadata: input.metadata ?? null,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+      lastActivityAt: "2026-05-01T00:00:00.000Z",
+      participants: [],
+    }),
+    setPinetLaneParticipant: async (input) => ({
+      laneId: input.laneId,
+      agentId: input.agentId,
+      role: input.role,
+      status: input.status ?? null,
+      summary: input.summary ?? null,
+      metadata: input.metadata ?? null,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+      lastActivityAt: "2026-05-01T00:00:00.000Z",
+    }),
   };
 
   return { ...defaults, ...overrides };
@@ -91,7 +121,7 @@ describe("registerPinetTools", () => {
     expect(pinet?.promptSnippet).toContain("Use this compact dispatcher for Pinet actions");
     expect(pinet?.promptSnippet).toContain('args.format="json"');
     expect(JSON.stringify(pinet?.parameters)).toContain(
-      "help, send, read, free, schedule, or agents",
+      "help, send, read, free, schedule, agents, lanes, or help",
     );
   });
 
@@ -395,6 +425,7 @@ describe("registerPinetTools", () => {
         expect.objectContaining({ action: "free", guardrail_tool: "pinet:free" }),
         expect.objectContaining({ action: "schedule", guardrail_tool: "pinet:schedule" }),
         expect.objectContaining({ action: "agents", guardrail_tool: "pinet:agents" }),
+        expect.objectContaining({ action: "lanes", guardrail_tool: "pinet:lanes" }),
       ]),
     );
   });
@@ -512,6 +543,143 @@ describe("registerPinetTools", () => {
     expect(scheduleBrokerWakeup).toHaveBeenCalledWith("2026-04-14T12:05:00.000Z", "check queue");
     expect(result.details.data.text).toBe("Pinet wake-up scheduled for 2026-04-14T12:05:00.000Z.");
     expect(result.details.data.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
+  });
+
+  it("updates durable PM lane metadata through the lanes dispatcher", async () => {
+    const upsertPinetLane = vi.fn(createDeps().upsertPinetLane);
+    const setPinetLaneParticipant = vi.fn(createDeps().setPinetLaneParticipant);
+    const deps = createDeps({ upsertPinetLane, setPinetLaneParticipant });
+    const tools = registerWithDeps(deps);
+
+    const laneResult = (await tools.get("pinet")?.execute("tool-call-lane-upsert", {
+      action: "lanes",
+      args: {
+        op: "upsert",
+        lane_id: "issue-688",
+        issue_number: 688,
+        owner_agent: "worker-pm",
+        implementation_lead: "worker-lead",
+        pm_mode: true,
+        state: "active",
+        summary: "maintainer-consented PM mode",
+        full: true,
+      },
+    })) as {
+      details: { status: string; data: { text: string; details: { lane: { pmMode: boolean } } } };
+    };
+
+    const participantResult = (await tools.get("pinet")?.execute("tool-call-lane-participant", {
+      action: "lanes",
+      args: {
+        op: "participant",
+        lane_id: "issue-688",
+        agent_id: "worker-pm",
+        lane_role: "pm",
+        status: "coordinating",
+      },
+    })) as { details: { status: string; data: { text: string } } };
+
+    expect(upsertPinetLane).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneId: "issue-688",
+        issueNumber: 688,
+        ownerAgentId: "worker-pm",
+        implementationLeadAgentId: "worker-lead",
+        pmMode: true,
+        state: "active",
+      }),
+    );
+    expect(setPinetLaneParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({ laneId: "issue-688", agentId: "worker-pm", role: "pm" }),
+    );
+    expect(laneResult.details.status).toBe("succeeded");
+    expect(laneResult.details.data.details.lane.pmMode).toBe(true);
+    expect(participantResult.details.data.text).toContain("participant worker-pm saved as pm");
+  });
+
+  it("passes explicit null clears through the lanes dispatcher", async () => {
+    const upsertPinetLane = vi.fn(createDeps().upsertPinetLane);
+    const setPinetLaneParticipant = vi.fn(createDeps().setPinetLaneParticipant);
+    const tools = registerWithDeps(createDeps({ upsertPinetLane, setPinetLaneParticipant }));
+
+    await tools.get("pinet")?.execute("tool-call-lane-clear", {
+      action: "lanes",
+      args: {
+        op: "upsert",
+        lane_id: "issue-688",
+        pr_number: null,
+        owner_agent: null,
+        implementation_lead: null,
+        summary: null,
+        metadata: null,
+      },
+    });
+    await tools.get("pinet")?.execute("tool-call-participant-clear", {
+      action: "lanes",
+      args: {
+        op: "participant",
+        lane_id: "issue-688",
+        agent_id: "worker-pm",
+        lane_role: "observer",
+        status: null,
+        summary: null,
+        metadata: null,
+      },
+    });
+
+    expect(upsertPinetLane).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneId: "issue-688",
+        prNumber: null,
+        ownerAgentId: null,
+        implementationLeadAgentId: null,
+        summary: null,
+        metadata: null,
+      }),
+    );
+    expect(setPinetLaneParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneId: "issue-688",
+        agentId: "worker-pm",
+        role: "observer",
+        status: null,
+        summary: null,
+        metadata: null,
+      }),
+    );
+  });
+
+  it("renders detached lanes only when explicitly included or filtered", async () => {
+    const listPinetLanes = vi.fn(async () => [
+      {
+        laneId: "issue-123",
+        name: null,
+        task: null,
+        issueNumber: 123,
+        prNumber: null,
+        threadId: null,
+        ownerAgentId: "worker-human",
+        implementationLeadAgentId: null,
+        pmMode: false,
+        state: "detached" as const,
+        summary: "manual supervision",
+        metadata: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z",
+        lastActivityAt: "2026-05-01T00:00:00.000Z",
+        participants: [],
+      },
+    ]);
+    const tools = registerWithDeps(createDeps({ listPinetLanes }));
+
+    const result = (await tools.get("pinet")?.execute("tool-call-lanes-list", {
+      action: "lanes",
+      args: { state: "detached", full: true },
+    })) as { details: { data: { text: string } } };
+
+    expect(listPinetLanes).toHaveBeenCalledWith({ state: "detached" });
+    expect(result.details.data.text).toContain("issue-123 [detached]");
+    expect(result.details.data.text).toContain("manual supervision");
   });
 
   it("renders broker pinet agents output with routing hints and outbound counts", async () => {

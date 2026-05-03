@@ -85,6 +85,44 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
           updatedAt: "2026-04-02T16:59:05.000Z",
         },
       ],
+      lanes: [
+        {
+          laneId: "issue-688",
+          name: "PM lane",
+          task: null,
+          issueNumber: 688,
+          prNumber: null,
+          threadId: "a2a:broker:pm",
+          ownerAgentId: "worker-1",
+          implementationLeadAgentId: "worker-1",
+          pmMode: true,
+          state: "active",
+          summary: "coordination active",
+          metadata: null,
+          createdAt: "2026-04-02T16:58:00.000Z",
+          updatedAt: "2026-04-02T17:00:06.000Z",
+          lastActivityAt: "2026-04-02T17:00:06.000Z",
+          participants: [],
+        },
+        {
+          laneId: "issue-123",
+          name: null,
+          task: null,
+          issueNumber: 123,
+          prNumber: null,
+          threadId: null,
+          ownerAgentId: "worker-2",
+          implementationLeadAgentId: null,
+          pmMode: false,
+          state: "detached",
+          summary: "manual supervision",
+          metadata: null,
+          createdAt: "2026-04-02T16:57:00.000Z",
+          updatedAt: "2026-04-02T17:00:07.000Z",
+          lastActivityAt: "2026-04-02T17:00:07.000Z",
+          participants: [],
+        },
+      ],
       recentCycles: [
         {
           startedAt: "2026-04-02T17:00:00.000Z",
@@ -113,5 +151,7 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
     expect(snapshot.roster[0]?.label).toContain("The Broker Otter");
     expect(snapshot.roster[1]?.taskSummary).toContain("#217 PR #221 open");
     expect(snapshot.recentOutcomes).toContain("#202 PR #205 merged");
+    expect(snapshot.activeLanes[0]).toContain("issue-688 [active]");
+    expect(snapshot.detachedLanes[0]).toContain("issue-123 [detached]");
   });
 });

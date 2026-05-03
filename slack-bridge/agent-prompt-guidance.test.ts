@@ -178,7 +178,7 @@ describe("createAgentPromptGuidance", () => {
       result.systemPrompt.indexOf("TASK WORKFLOW:"),
     );
     expect(result.systemPrompt.indexOf("TASK WORKFLOW:")).toBeLessThan(
-      result.systemPrompt.indexOf("PINET DELEGATION RULES:"),
+      result.systemPrompt.indexOf("HELPER / DELEGATION RULES:"),
     );
   });
 });

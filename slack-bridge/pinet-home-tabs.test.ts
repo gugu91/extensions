@@ -64,6 +64,8 @@ function createBrokerSnapshot(): BrokerControlPlaneDashboardSnapshot {
     },
     activeTasks: ["#217 PR #225 open"],
     recentOutcomes: ["#205 PR #205 merged"],
+    activeLanes: ["issue-688 [active] (#688 · PM) owner worker-pm"],
+    detachedLanes: ["issue-123 [detached] (#123) — manual"],
     roster: [
       {
         id: "broker-1",
@@ -147,6 +149,12 @@ describe("createPinetHomeTabs", () => {
       "xoxb-test",
       expect.objectContaining({ user_id: "U456" }),
     );
+    const firstPublishBody = (slack.mock.calls[0] as unknown[] | undefined)?.[2] as
+      | Record<string, unknown>
+      | undefined;
+    expect(JSON.stringify(firstPublishBody)).toContain("Lane metadata");
+    expect(JSON.stringify(firstPublishBody)).toContain("issue-688 [active]");
+    expect(JSON.stringify(firstPublishBody)).toContain("issue-123 [detached]");
     expect(notify).not.toHaveBeenCalled();
   });
 

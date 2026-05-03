@@ -229,7 +229,7 @@ describe("BrokerDB message sync identity", () => {
         ),
       );
 
-      expect(version.user_version).toBe(14);
+      expect(version.user_version).toBe(15);
       expect(messageColumns.has("external_id")).toBe(true);
       expect(messageColumns.has("external_ts")).toBe(true);
       expect(inboxColumns.has("read_at")).toBe(true);
@@ -426,6 +426,173 @@ describe("BrokerDB message sync identity", () => {
 
       db.updateThread("thread-metadata", { metadata: { migrated: true } });
       expect(db.getThread("thread-metadata")?.metadata).toEqual({ migrated: true });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists PM lane metadata and participants across reopen", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    const dbPath = path.join(dir, "broker.db");
+
+    try {
+      db.upsertPinetLane({
+        laneId: "issue-detached",
+        issueNumber: 123,
+        ownerAgentId: "worker-human",
+        state: "detached",
+        summary: "Human supervised lane.",
+      });
+      db.upsertPinetLane({
+        laneId: "issue-688",
+        name: "Issue #688 PM lane",
+        task: "Coordinate follower delegation metadata",
+        issueNumber: 688,
+        threadId: "a2a:broker:pm",
+        ownerAgentId: "worker-pm",
+        implementationLeadAgentId: "worker-lead",
+        pmMode: true,
+        state: "active",
+        summary: "PM mode enabled after maintainer consent.",
+        metadata: { consent: "maintainer", source: "broker-thread" },
+      });
+      db.setPinetLaneParticipant({
+        laneId: "issue-688",
+        agentId: "worker-pm",
+        role: "pm",
+        status: "coordinating",
+        summary: "Owns status, blockers, and second-pass review.",
+      });
+      db.setPinetLaneParticipant({
+        laneId: "issue-688",
+        agentId: "worker-lead",
+        role: "lead",
+        status: "implementing",
+        metadata: { worktree: ".worktrees/fix-lane-metadata-688" },
+      });
+
+      const [lane] = db.listPinetLanes();
+      expect(db.listPinetLanes().map((entry) => entry.laneId)).not.toContain("issue-detached");
+      expect(db.listPinetLanes({ state: "detached" })[0]).toMatchObject({
+        laneId: "issue-detached",
+        state: "detached",
+      });
+      expect(lane).toMatchObject({
+        laneId: "issue-688",
+        ownerAgentId: "worker-pm",
+        implementationLeadAgentId: "worker-lead",
+        pmMode: true,
+        state: "active",
+        issueNumber: 688,
+        metadata: { consent: "maintainer", source: "broker-thread" },
+      });
+      expect(lane.participants).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "worker-pm", role: "pm" }),
+          expect.objectContaining({ agentId: "worker-lead", role: "lead" }),
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+
+    const reopened = new BrokerDB(dbPath);
+    try {
+      reopened.initialize();
+      expect(reopened.listPinetLanes({ ownerAgentId: "worker-pm" })[0]).toMatchObject({
+        laneId: "issue-688",
+        pmMode: true,
+        participants: expect.arrayContaining([
+          expect.objectContaining({ agentId: "worker-pm", role: "pm" }),
+        ]),
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("clears nullable lane and participant fields explicitly", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+
+    try {
+      db.upsertPinetLane({
+        laneId: "issue-clear",
+        issueNumber: 688,
+        prNumber: 689,
+        threadId: "a2a:broker:pm",
+        ownerAgentId: "worker-pm",
+        implementationLeadAgentId: "worker-lead",
+        summary: "stale summary",
+        metadata: { stale: true },
+      });
+      db.setPinetLaneParticipant({
+        laneId: "issue-clear",
+        agentId: "worker-pm",
+        role: "pm",
+        status: "coordinating",
+        summary: "stale participant summary",
+        metadata: { stale: true },
+      });
+
+      const cleared = db.upsertPinetLane({
+        laneId: "issue-clear",
+        prNumber: null,
+        threadId: null,
+        ownerAgentId: null,
+        implementationLeadAgentId: null,
+        summary: null,
+        metadata: null,
+      });
+      const clearedParticipant = db.setPinetLaneParticipant({
+        laneId: "issue-clear",
+        agentId: "worker-pm",
+        role: "observer",
+        status: null,
+        summary: null,
+        metadata: null,
+      });
+
+      expect(cleared).toMatchObject({
+        issueNumber: 688,
+        prNumber: null,
+        threadId: null,
+        ownerAgentId: null,
+        implementationLeadAgentId: null,
+        summary: null,
+        metadata: null,
+      });
+      expect(clearedParticipant).toMatchObject({
+        role: "observer",
+        status: null,
+        summary: null,
+        metadata: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects invalid lane states and participant roles on writes", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+
+    try {
+      expect(() =>
+        db.upsertPinetLane({
+          laneId: "issue-invalid",
+          state: "bogus" as never,
+        }),
+      ).toThrow("Invalid Pinet lane state");
+      db.upsertPinetLane({ laneId: "issue-invalid" });
+      expect(() =>
+        db.setPinetLaneParticipant({
+          laneId: "issue-invalid",
+          agentId: "worker-1",
+          role: "helper" as never,
+        }),
+      ).toThrow("Invalid Pinet lane role");
     } finally {
       db.close();
     }

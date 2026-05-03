@@ -140,6 +140,87 @@ export interface ScheduledWakeupDelivery {
   wakeup: ScheduledWakeupInfo;
   message: BrokerMessage;
 }
+
+export type PinetLaneState =
+  | "planned"
+  | "active"
+  | "blocked"
+  | "review"
+  | "ready"
+  | "done"
+  | "cancelled"
+  | "detached";
+
+export type PinetLaneRole =
+  | "broker"
+  | "coordinator"
+  | "pm"
+  | "lead"
+  | "implementer"
+  | "reviewer"
+  | "second_pass_reviewer"
+  | "observer";
+
+export interface PinetLaneParticipantInfo {
+  laneId: string;
+  agentId: string;
+  role: PinetLaneRole;
+  status: string | null;
+  summary: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  lastActivityAt: string;
+}
+
+export interface PinetLaneInfo {
+  laneId: string;
+  name: string | null;
+  task: string | null;
+  issueNumber: number | null;
+  prNumber: number | null;
+  threadId: string | null;
+  ownerAgentId: string | null;
+  implementationLeadAgentId: string | null;
+  pmMode: boolean;
+  state: PinetLaneState;
+  summary: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  lastActivityAt: string;
+  participants: PinetLaneParticipantInfo[];
+}
+
+export interface PinetLaneUpsertInput {
+  laneId: string;
+  name?: string | null;
+  task?: string | null;
+  issueNumber?: number | null;
+  prNumber?: number | null;
+  threadId?: string | null;
+  ownerAgentId?: string | null;
+  implementationLeadAgentId?: string | null;
+  pmMode?: boolean;
+  state?: PinetLaneState;
+  summary?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface PinetLaneParticipantUpsertInput {
+  laneId: string;
+  agentId: string;
+  role: PinetLaneRole;
+  status?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface PinetLaneListOptions {
+  state?: PinetLaneState;
+  ownerAgentId?: string;
+  includeDone?: boolean;
+}
 // ─── Routing ──────────────────────────────────────────────
 
 export type RoutingDecision =

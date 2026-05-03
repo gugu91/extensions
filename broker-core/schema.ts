@@ -21,6 +21,13 @@ import type {
   TaskAssignmentStatus,
   ScheduledWakeupInfo,
   ScheduledWakeupDelivery,
+  PinetLaneInfo,
+  PinetLaneListOptions,
+  PinetLaneParticipantInfo,
+  PinetLaneParticipantUpsertInput,
+  PinetLaneRole,
+  PinetLaneState,
+  PinetLaneUpsertInput,
 } from "./types.js";
 interface SqliteJournalModeResult {
   journal_mode?: string | null;
@@ -108,6 +115,36 @@ interface ScheduledWakeupRow {
   body: string;
   fire_at: string;
   created_at: string;
+}
+
+interface PinetLaneRow {
+  lane_id: string;
+  name: string | null;
+  task: string | null;
+  issue_number: number | null;
+  pr_number: number | null;
+  thread_id: string | null;
+  owner_agent_id: string | null;
+  implementation_lead_agent_id: string | null;
+  pm_mode: number;
+  state: string;
+  summary: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+  last_activity_at: string;
+}
+
+interface PinetLaneParticipantRow {
+  lane_id: string;
+  agent_id: string;
+  lane_role: string;
+  status: string | null;
+  summary: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+  last_activity_at: string;
 }
 
 export interface TaskAssignmentAwaitingReplyInfo {
@@ -314,6 +351,137 @@ function rowToScheduledWakeup(row: ScheduledWakeupRow): ScheduledWakeupInfo {
   };
 }
 
+const PINET_LANE_STATES = new Set<PinetLaneState>([
+  "planned",
+  "active",
+  "blocked",
+  "review",
+  "ready",
+  "done",
+  "cancelled",
+  "detached",
+]);
+
+const PINET_LANE_ROLES = new Set<PinetLaneRole>([
+  "broker",
+  "coordinator",
+  "pm",
+  "lead",
+  "implementer",
+  "reviewer",
+  "second_pass_reviewer",
+  "observer",
+]);
+
+function parseMetadataJson(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function rowToPinetLaneParticipant(row: PinetLaneParticipantRow): PinetLaneParticipantInfo {
+  return {
+    laneId: row.lane_id,
+    agentId: row.agent_id,
+    role: normalizePinetLaneRole(row.lane_role),
+    status: row.status,
+    summary: row.summary,
+    metadata: parseMetadataJson(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastActivityAt: row.last_activity_at,
+  };
+}
+
+function rowToPinetLane(
+  row: PinetLaneRow,
+  participants: PinetLaneParticipantInfo[] = [],
+): PinetLaneInfo {
+  return {
+    laneId: row.lane_id,
+    name: row.name,
+    task: row.task,
+    issueNumber: row.issue_number,
+    prNumber: row.pr_number,
+    threadId: row.thread_id,
+    ownerAgentId: row.owner_agent_id,
+    implementationLeadAgentId: row.implementation_lead_agent_id,
+    pmMode: row.pm_mode === 1,
+    state: normalizePinetLaneState(row.state),
+    summary: row.summary,
+    metadata: parseMetadataJson(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastActivityAt: row.last_activity_at,
+    participants,
+  };
+}
+
+function normalizePinetLaneState(
+  value: unknown,
+  fallback: PinetLaneState = "active",
+): PinetLaneState {
+  return typeof value === "string" && PINET_LANE_STATES.has(value as PinetLaneState)
+    ? (value as PinetLaneState)
+    : fallback;
+}
+
+function requirePinetLaneState(value: unknown): PinetLaneState {
+  if (typeof value === "string" && PINET_LANE_STATES.has(value as PinetLaneState)) {
+    return value as PinetLaneState;
+  }
+  throw new Error(`Invalid Pinet lane state: ${String(value)}`);
+}
+
+function normalizePinetLaneRole(
+  value: unknown,
+  fallback: PinetLaneRole = "observer",
+): PinetLaneRole {
+  return typeof value === "string" && PINET_LANE_ROLES.has(value as PinetLaneRole)
+    ? (value as PinetLaneRole)
+    : fallback;
+}
+
+function requirePinetLaneRole(value: unknown): PinetLaneRole {
+  if (typeof value === "string" && PINET_LANE_ROLES.has(value as PinetLaneRole)) {
+    return value as PinetLaneRole;
+  }
+  throw new Error(`Invalid Pinet lane role: ${String(value)}`);
+}
+
+function normalizeLaneId(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("laneId must be a non-empty string");
+  }
+  return trimmed;
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOptionalInteger(value: number | null | undefined): number | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error("lane issue/PR numbers must be non-negative integers");
+  }
+  return value;
+}
+
+function serializeOptionalMetadata(
+  value: Record<string, unknown> | null | undefined,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  return value === null ? null : JSON.stringify(value);
+}
+
 // ─── Default DB path ─────────────────────────────────────
 
 export function defaultDbPath(): string {
@@ -322,7 +490,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 14;
+export const CURRENT_BROKER_SCHEMA_VERSION = 15;
 
 const REQUIRED_AGENT_LIFECYCLE_COLUMNS = [
   "stable_id",
@@ -842,6 +1010,52 @@ function addScheduledWakeupStableIdColumn(db: DatabaseSync): void {
   ).run();
 }
 
+function createPinetLaneTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pinet_lanes (
+      lane_id TEXT PRIMARY KEY NOT NULL,
+      name TEXT,
+      task TEXT,
+      issue_number INTEGER,
+      pr_number INTEGER,
+      thread_id TEXT,
+      owner_agent_id TEXT,
+      implementation_lead_agent_id TEXT,
+      pm_mode INTEGER NOT NULL DEFAULT 0 CHECK(pm_mode IN (0, 1)),
+      state TEXT NOT NULL DEFAULT 'active'
+        CHECK(state IN ('planned', 'active', 'blocked', 'review', 'ready', 'done', 'cancelled', 'detached')),
+      summary TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pinet_lane_participants (
+      lane_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      lane_role TEXT NOT NULL
+        CHECK(lane_role IN ('broker', 'coordinator', 'pm', 'lead', 'implementer', 'reviewer', 'second_pass_reviewer', 'observer')),
+      status TEXT,
+      summary TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL,
+      PRIMARY KEY(lane_id, agent_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pinet_lanes_state_updated
+      ON pinet_lanes(state, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pinet_lanes_owner_state
+      ON pinet_lanes(owner_agent_id, state, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pinet_lanes_issue
+      ON pinet_lanes(issue_number);
+    CREATE INDEX IF NOT EXISTS idx_pinet_lane_participants_agent
+      ON pinet_lane_participants(agent_id, lane_role, updated_at DESC);
+  `);
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -897,6 +1111,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 14:
           addThreadMetadataColumn(db);
+          break;
+        case 15:
+          createPinetLaneTables(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -1959,6 +2176,208 @@ export class BrokerDB implements BrokerDBInterface {
            updated_at = ?
        WHERE id = ?`,
     ).run(status, prNumber, new Date().toISOString(), id);
+  }
+
+  // ─── Pinet lane metadata ─────────────────────────────
+
+  upsertPinetLane(input: PinetLaneUpsertInput): PinetLaneInfo {
+    const db = this.getDb();
+    const laneId = normalizeLaneId(input.laneId);
+    const now = new Date().toISOString();
+    const existing = db.prepare("SELECT * FROM pinet_lanes WHERE lane_id = ?").get(laneId) as
+      | PinetLaneRow
+      | undefined;
+    const nextState =
+      input.state === undefined
+        ? existing
+          ? rowToPinetLane(existing).state
+          : "active"
+        : requirePinetLaneState(input.state);
+
+    if (!existing) {
+      db.prepare(
+        `INSERT INTO pinet_lanes (
+           lane_id, name, task, issue_number, pr_number, thread_id,
+           owner_agent_id, implementation_lead_agent_id, pm_mode, state,
+           summary, metadata, created_at, updated_at, last_activity_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        laneId,
+        normalizeOptionalText(input.name) ?? null,
+        normalizeOptionalText(input.task) ?? null,
+        normalizeOptionalInteger(input.issueNumber) ?? null,
+        normalizeOptionalInteger(input.prNumber) ?? null,
+        normalizeOptionalText(input.threadId) ?? null,
+        normalizeOptionalText(input.ownerAgentId) ?? null,
+        normalizeOptionalText(input.implementationLeadAgentId) ?? null,
+        input.pmMode === true ? 1 : 0,
+        nextState,
+        normalizeOptionalText(input.summary) ?? null,
+        serializeOptionalMetadata(input.metadata) ?? null,
+        now,
+        now,
+        now,
+      );
+      return this.getPinetLane(laneId)!;
+    }
+
+    db.prepare(
+      `UPDATE pinet_lanes
+       SET name = ?,
+           task = ?,
+           issue_number = ?,
+           pr_number = ?,
+           thread_id = ?,
+           owner_agent_id = ?,
+           implementation_lead_agent_id = ?,
+           pm_mode = ?,
+           state = ?,
+           summary = ?,
+           metadata = ?,
+           updated_at = ?,
+           last_activity_at = ?
+       WHERE lane_id = ?`,
+    ).run(
+      input.name === undefined ? existing.name : (normalizeOptionalText(input.name) ?? null),
+      input.task === undefined ? existing.task : (normalizeOptionalText(input.task) ?? null),
+      input.issueNumber === undefined
+        ? existing.issue_number
+        : (normalizeOptionalInteger(input.issueNumber) ?? null),
+      input.prNumber === undefined
+        ? existing.pr_number
+        : (normalizeOptionalInteger(input.prNumber) ?? null),
+      input.threadId === undefined
+        ? existing.thread_id
+        : (normalizeOptionalText(input.threadId) ?? null),
+      input.ownerAgentId === undefined
+        ? existing.owner_agent_id
+        : (normalizeOptionalText(input.ownerAgentId) ?? null),
+      input.implementationLeadAgentId === undefined
+        ? existing.implementation_lead_agent_id
+        : (normalizeOptionalText(input.implementationLeadAgentId) ?? null),
+      input.pmMode === undefined ? existing.pm_mode : input.pmMode ? 1 : 0,
+      nextState,
+      input.summary === undefined
+        ? existing.summary
+        : (normalizeOptionalText(input.summary) ?? null),
+      input.metadata === undefined
+        ? existing.metadata
+        : (serializeOptionalMetadata(input.metadata) ?? null),
+      now,
+      now,
+      laneId,
+    );
+
+    return this.getPinetLane(laneId)!;
+  }
+
+  setPinetLaneParticipant(input: PinetLaneParticipantUpsertInput): PinetLaneParticipantInfo {
+    const db = this.getDb();
+    const laneId = normalizeLaneId(input.laneId);
+    const agentId = normalizeLaneId(input.agentId);
+    const role = requirePinetLaneRole(input.role);
+    if (!this.getPinetLane(laneId)) {
+      throw new Error(`Pinet lane not found: ${laneId}`);
+    }
+
+    const now = new Date().toISOString();
+    const existing = db
+      .prepare("SELECT * FROM pinet_lane_participants WHERE lane_id = ? AND agent_id = ?")
+      .get(laneId, agentId) as PinetLaneParticipantRow | undefined;
+
+    if (!existing) {
+      db.prepare(
+        `INSERT INTO pinet_lane_participants (
+           lane_id, agent_id, lane_role, status, summary, metadata,
+           created_at, updated_at, last_activity_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        laneId,
+        agentId,
+        role,
+        normalizeOptionalText(input.status) ?? null,
+        normalizeOptionalText(input.summary) ?? null,
+        serializeOptionalMetadata(input.metadata) ?? null,
+        now,
+        now,
+        now,
+      );
+    } else {
+      db.prepare(
+        `UPDATE pinet_lane_participants
+         SET lane_role = ?,
+             status = ?,
+             summary = ?,
+             metadata = ?,
+             updated_at = ?,
+             last_activity_at = ?
+         WHERE lane_id = ? AND agent_id = ?`,
+      ).run(
+        role,
+        input.status === undefined
+          ? existing.status
+          : (normalizeOptionalText(input.status) ?? null),
+        input.summary === undefined
+          ? existing.summary
+          : (normalizeOptionalText(input.summary) ?? null),
+        input.metadata === undefined
+          ? existing.metadata
+          : (serializeOptionalMetadata(input.metadata) ?? null),
+        now,
+        now,
+        laneId,
+        agentId,
+      );
+    }
+
+    db.prepare(
+      `UPDATE pinet_lanes
+       SET updated_at = ?, last_activity_at = ?
+       WHERE lane_id = ?`,
+    ).run(now, now, laneId);
+
+    const row = db
+      .prepare("SELECT * FROM pinet_lane_participants WHERE lane_id = ? AND agent_id = ?")
+      .get(laneId, agentId) as PinetLaneParticipantRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to update Pinet lane participant ${agentId} for ${laneId}`);
+    }
+    return rowToPinetLaneParticipant(row);
+  }
+
+  getPinetLane(laneId: string): PinetLaneInfo | null {
+    const db = this.getDb();
+    const canonicalLaneId = normalizeLaneId(laneId);
+    const row = db.prepare("SELECT * FROM pinet_lanes WHERE lane_id = ?").get(canonicalLaneId) as
+      | PinetLaneRow
+      | undefined;
+    if (!row) return null;
+    const participantRows = db
+      .prepare("SELECT * FROM pinet_lane_participants WHERE lane_id = ? ORDER BY updated_at DESC")
+      .all(canonicalLaneId) as unknown as PinetLaneParticipantRow[];
+    return rowToPinetLane(row, participantRows.map(rowToPinetLaneParticipant));
+  }
+
+  listPinetLanes(options: PinetLaneListOptions = {}): PinetLaneInfo[] {
+    const db = this.getDb();
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (options.state) {
+      clauses.push("state = ?");
+      values.push(requirePinetLaneState(options.state));
+    } else if (!options.includeDone) {
+      clauses.push("state NOT IN ('done', 'cancelled', 'detached')");
+    }
+    const ownerAgentId = normalizeOptionalText(options.ownerAgentId);
+    if (ownerAgentId) {
+      clauses.push("owner_agent_id = ?");
+      values.push(ownerAgentId);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = db
+      .prepare(`SELECT * FROM pinet_lanes ${where} ORDER BY updated_at DESC, created_at DESC`)
+      .all(...values) as unknown as PinetLaneRow[];
+    return rows.map((row) => this.getPinetLane(row.lane_id)!);
   }
 
   // ─── Scheduled wake-ups ──────────────────────────────

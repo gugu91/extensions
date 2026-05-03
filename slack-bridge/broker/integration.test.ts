@@ -59,6 +59,53 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     cleanup(dir);
   });
 
+  it("persists lane metadata through follower RPC", async () => {
+    const reg = await client.register("pm-agent", "🧭");
+
+    const lane = await client.upsertLane({
+      laneId: "issue-688",
+      name: "Issue #688 PM lane",
+      issueNumber: 688,
+      ownerAgentId: reg.agentId,
+      pmMode: true,
+      state: "active",
+      summary: "Maintainer-consented PM coordination.",
+    });
+    const participant = await client.setLaneParticipant({
+      laneId: lane.laneId,
+      agentId: reg.agentId,
+      role: "pm",
+      status: "coordinating",
+    });
+
+    expect(participant.agentId).toBe(reg.agentId);
+    expect(participant.role).toBe("pm");
+    await expect(client.listLanes({ ownerAgentId: reg.agentId })).resolves.toEqual([
+      expect.objectContaining({
+        laneId: "issue-688",
+        ownerAgentId: reg.agentId,
+        pmMode: true,
+        participants: [expect.objectContaining({ agentId: reg.agentId, role: "pm" })],
+      }),
+    ]);
+  });
+
+  it("rejects invalid lane metadata values through follower RPC", async () => {
+    await client.register("pm-agent", "🧭");
+
+    await expect(
+      client.upsertLane({ laneId: "issue-invalid", state: "bogus" as never }),
+    ).rejects.toThrow("Invalid Pinet lane state");
+    await client.upsertLane({ laneId: "issue-invalid" });
+    await expect(
+      client.setLaneParticipant({
+        laneId: "issue-invalid",
+        agentId: "pm-agent",
+        role: "helper" as never,
+      }),
+    ).rejects.toThrow("Invalid Pinet lane role");
+  });
+
   it("register → send → pollInbox → ack (full path)", async () => {
     // Register two agents
     const reg1 = await client.register("sender-agent", "📤");

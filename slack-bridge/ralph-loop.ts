@@ -557,6 +557,7 @@ export async function runRalphLoopCycle(
       evaluationOptions,
       maintenance: lastMaintenance,
       assignments: projectedAssignments,
+      lanes: db.listPinetLanes({ includeDone: true }),
       recentCycles: recentRalphCycles,
       cycleStartedAt,
       cycleDurationMs: Date.now() - cycleStartMs,

@@ -37,6 +37,8 @@ describe("renderBrokerControlPlaneHomeTabView", () => {
       },
       activeTasks: ["#217 PR #225 open"],
       recentOutcomes: ["#205 PR #205 merged"],
+      activeLanes: ["issue-688 [active] (#688 · PM) owner worker-pm"],
+      detachedLanes: ["issue-123 [detached] (#123) — manual"],
       roster: [
         {
           id: "broker-1",
@@ -78,6 +80,18 @@ describe("renderBrokerControlPlaneHomeTabView", () => {
         }),
         expect.objectContaining({
           type: "header",
+          text: expect.objectContaining({ text: "Lane metadata" }),
+        }),
+        expect.objectContaining({
+          type: "header",
+          text: expect.objectContaining({ text: "Active/managed lanes" }),
+        }),
+        expect.objectContaining({
+          type: "header",
+          text: expect.objectContaining({ text: "Detached/manual-supervision lanes" }),
+        }),
+        expect.objectContaining({
+          type: "header",
           text: expect.objectContaining({ text: "Recent RALPH cycles" }),
         }),
       ]),
@@ -86,6 +100,8 @@ describe("renderBrokerControlPlaneHomeTabView", () => {
     expect(JSON.stringify(view)).toContain("ghost agents detected: ghost-1");
     expect(JSON.stringify(view)).toContain("🦦 The Broker Otter");
     expect(JSON.stringify(view)).toContain("#217 PR #225 open");
+    expect(JSON.stringify(view)).toContain("issue-688 [active]");
+    expect(JSON.stringify(view)).toContain("issue-123 [detached]");
   });
 });
 

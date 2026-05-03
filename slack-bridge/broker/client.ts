@@ -8,7 +8,15 @@ import type {
   PinetReadResult,
   PinetUnreadThreadSummary,
 } from "@gugu910/pi-pinet-core/pinet-read-formatting";
-import type { ClientAgentInfo, NormalizedMessageContent } from "./types.js";
+import type {
+  ClientAgentInfo,
+  NormalizedMessageContent,
+  PinetLaneInfo,
+  PinetLaneListOptions,
+  PinetLaneParticipantInfo,
+  PinetLaneParticipantUpsertInput,
+  PinetLaneUpsertInput,
+} from "./types.js";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -51,6 +59,14 @@ export interface ScheduledWakeupInfo {
   threadId: string;
   fireAt: string;
 }
+
+export type {
+  PinetLaneInfo,
+  PinetLaneListOptions,
+  PinetLaneParticipantInfo,
+  PinetLaneParticipantUpsertInput,
+  PinetLaneUpsertInput,
+};
 
 // ─── JSON-RPC types ──────────────────────────────────────
 
@@ -512,6 +528,30 @@ export class BrokerClient {
       threadId: result.threadId,
       fireAt: result.fireAt,
     };
+  }
+
+  async listLanes(options: PinetLaneListOptions = {}): Promise<PinetLaneInfo[]> {
+    return (await this.request("lane.list", {
+      ...(options.state ? { state: options.state } : {}),
+      ...(options.ownerAgentId ? { ownerAgentId: options.ownerAgentId } : {}),
+      ...(typeof options.includeDone === "boolean" ? { includeDone: options.includeDone } : {}),
+    })) as PinetLaneInfo[];
+  }
+
+  async upsertLane(input: PinetLaneUpsertInput): Promise<PinetLaneInfo> {
+    return (await this.request(
+      "lane.upsert",
+      input as unknown as Record<string, unknown>,
+    )) as PinetLaneInfo;
+  }
+
+  async setLaneParticipant(
+    input: PinetLaneParticipantUpsertInput,
+  ): Promise<PinetLaneParticipantInfo> {
+    return (await this.request(
+      "lane.participant",
+      input as unknown as Record<string, unknown>,
+    )) as PinetLaneParticipantInfo;
   }
   // ─── Queries ─────────────────────────────────────────
 

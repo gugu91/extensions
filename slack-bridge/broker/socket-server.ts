@@ -18,6 +18,11 @@ import type {
   JsonRpcError,
   MessageAdapter,
   NormalizedMessageContent,
+  PinetLaneListOptions,
+  PinetLaneParticipantUpsertInput,
+  PinetLaneRole,
+  PinetLaneState,
+  PinetLaneUpsertInput,
 } from "./types.js";
 import {
   RPC_PARSE_ERROR,
@@ -497,6 +502,12 @@ export class BrokerSocketServer {
           return this.handleAgentMessage(req, state);
         case "agent.broadcast":
           return this.handleAgentBroadcast(req, state);
+        case "lane.list":
+          return this.handleLaneList(req, state);
+        case "lane.upsert":
+          return this.handleLaneUpsert(req, state);
+        case "lane.participant":
+          return this.handleLaneParticipant(req, state);
         case "schedule.create":
           return this.handleScheduleCreate(req, state);
         case "status.update":
@@ -989,6 +1000,122 @@ export class BrokerSocketServer {
       RPC_INVALID_PARAMS,
       "Broadcast channels are broker-only and cannot be sent by connected clients.",
     );
+  }
+
+  private handleLaneList(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    const options: PinetLaneListOptions = {
+      ...(typeof params.state === "string" ? { state: params.state as PinetLaneState } : {}),
+      ...(typeof params.ownerAgentId === "string" ? { ownerAgentId: params.ownerAgentId } : {}),
+      ...(typeof params.includeDone === "boolean" ? { includeDone: params.includeDone } : {}),
+    };
+    try {
+      return rpcOk(req.id, this.db.listPinetLanes(options));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handleLaneUpsert(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    if (typeof params.laneId !== "string" || params.laneId.trim().length === 0) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "laneId is required");
+    }
+
+    const input: PinetLaneUpsertInput = {
+      laneId: params.laneId,
+      ...(typeof params.name === "string" || params.name === null
+        ? { name: params.name as string | null }
+        : {}),
+      ...(typeof params.task === "string" || params.task === null
+        ? { task: params.task as string | null }
+        : {}),
+      ...(typeof params.issueNumber === "number" || params.issueNumber === null
+        ? { issueNumber: params.issueNumber as number | null }
+        : {}),
+      ...(typeof params.prNumber === "number" || params.prNumber === null
+        ? { prNumber: params.prNumber as number | null }
+        : {}),
+      ...(typeof params.threadId === "string" || params.threadId === null
+        ? { threadId: params.threadId as string | null }
+        : {}),
+      ...(typeof params.ownerAgentId === "string" || params.ownerAgentId === null
+        ? { ownerAgentId: params.ownerAgentId as string | null }
+        : {}),
+      ...(typeof params.implementationLeadAgentId === "string" ||
+      params.implementationLeadAgentId === null
+        ? { implementationLeadAgentId: params.implementationLeadAgentId as string | null }
+        : {}),
+      ...(typeof params.pmMode === "boolean" ? { pmMode: params.pmMode } : {}),
+      ...(typeof params.state === "string" ? { state: params.state as PinetLaneState } : {}),
+      ...(typeof params.summary === "string" || params.summary === null
+        ? { summary: params.summary as string | null }
+        : {}),
+      ...(params.metadata && typeof params.metadata === "object" && !Array.isArray(params.metadata)
+        ? { metadata: params.metadata as Record<string, unknown> }
+        : params.metadata === null
+          ? { metadata: null }
+          : {}),
+    };
+
+    try {
+      const lane = this.db.upsertPinetLane(input);
+      this.db.touchAgentActivity(state.agentId);
+      return rpcOk(req.id, lane);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
+  }
+
+  private handleLaneParticipant(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {
+    if (!state.agentId) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "Not registered");
+    }
+
+    const params = req.params ?? {};
+    if (typeof params.laneId !== "string" || params.laneId.trim().length === 0) {
+      return rpcError(req.id, RPC_INVALID_PARAMS, "laneId is required");
+    }
+
+    const agentId =
+      typeof params.agentId === "string" && params.agentId.trim().length > 0
+        ? params.agentId
+        : state.agentId;
+    const input: PinetLaneParticipantUpsertInput = {
+      laneId: params.laneId,
+      agentId,
+      role: (typeof params.role === "string" ? params.role : "observer") as PinetLaneRole,
+      ...(typeof params.status === "string" || params.status === null
+        ? { status: params.status as string | null }
+        : {}),
+      ...(typeof params.summary === "string" || params.summary === null
+        ? { summary: params.summary as string | null }
+        : {}),
+      ...(params.metadata && typeof params.metadata === "object" && !Array.isArray(params.metadata)
+        ? { metadata: params.metadata as Record<string, unknown> }
+        : params.metadata === null
+          ? { metadata: null }
+          : {}),
+    };
+
+    try {
+      const participant = this.db.setPinetLaneParticipant(input);
+      this.db.touchAgentActivity(state.agentId);
+      return rpcOk(req.id, participant);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return rpcError(req.id, RPC_INVALID_PARAMS, message);
+    }
   }
 
   private handleScheduleCreate(req: JsonRpcRequest, state: ConnectionState): JsonRpcResponse {

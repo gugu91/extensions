@@ -221,6 +221,18 @@ describe("packaged default broker prompt", () => {
     expect(defaultPrompt).toContain("{{agentEmoji}} {{agentName}}");
   });
 
+  it("documents consent-gated PM mode and durable lane metadata", async () => {
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "default.md");
+    const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
+
+    expect(defaultPrompt).toContain("PM MODE AWARENESS");
+    expect(defaultPrompt).toContain("consent-gated");
+    expect(defaultPrompt).toContain("nominates an implementation lead");
+    expect(defaultPrompt).toContain("pinet action=lanes");
+    expect(defaultPrompt).toContain("detached` lane means human/manual supervision");
+    expect(defaultPrompt).toContain("do not auto-reassign it as normal broker-managed work");
+  });
+
   it("documents safe repo-scoped follower startup before reporting capacity gaps", async () => {
     const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "default.md");
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");

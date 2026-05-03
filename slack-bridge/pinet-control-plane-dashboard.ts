@@ -10,7 +10,7 @@ import {
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import type { BrokerMaintenanceResult } from "./broker/maintenance.js";
-import type { TaskAssignmentInfo } from "./broker/types.js";
+import type { PinetLaneInfo, TaskAssignmentInfo } from "./broker/types.js";
 import {
   buildBrokerControlPlaneDashboardSnapshot,
   type BrokerControlPlaneDashboardSnapshot,
@@ -38,6 +38,7 @@ export interface PinetControlPlaneDashboardBrokerDbPort {
   getOwnedThreadCount: (agentId: string) => number;
   getBacklogCount: (status: "pending") => number;
   listTaskAssignments: () => TaskAssignmentInfo[];
+  listPinetLanes: (options?: { includeDone?: boolean }) => PinetLaneInfo[];
   getMessagesByIds: (ids: number[]) => PinetControlPlaneDashboardMessageRecord[];
   getRecentRalphCycles: (limit: number) => BrokerControlPlaneRecentCycle[];
 }
@@ -137,6 +138,7 @@ export function createPinetControlPlaneDashboard(
       evaluationOptions,
       maintenance: deps.getLastMaintenance(),
       assignments: projectedAssignments,
+      lanes: db.listPinetLanes({ includeDone: true }),
       recentCycles: recentRalphCycles,
       cycleStartedAt,
       cycleDurationMs: 0,

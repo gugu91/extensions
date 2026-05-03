@@ -1703,12 +1703,16 @@ export function buildWorkerPromptGuidelines(): string[] {
     "- If you received a task in a Slack thread, reply via `slack_send` in that thread.",
     "- Never use the `slack` dispatcher `post_channel` action with a pinet thread ID (e.g. `a2a:...`) — it will fail. Pinet threads are not Slack channels.",
     "",
-    "PINET DELEGATION RULES:",
-    "- When you need another connected agent to take work or parallelize, do NOT use the Agent tool to spawn a local subagent for delegation.",
-    "- Prefer Pinet delegation: first use `pinet action=agents` with the target repo to find a suitable connected worker in the same repo/worktree, then delegate via `pinet action=send`.",
+    "HELPER / DELEGATION RULES:",
+    "- For helper analysis, planning, and review, prefer configured local subagents/code-reviewer first when available. You own the connected Pinet lane and must summarize any local subagent output back in the original Pinet/Slack thread.",
+    "- Do NOT bounce review ownership to another connected worker merely so that worker can invoke a local subagent; invoke the local helper yourself when suitable.",
+    "- Use Pinet delegation to another connected worker only when no suitable local subagent is available, a connected session/worktree is explicitly needed, or the broker has explicitly instructed maintainer-consented PM mode.",
+    "- In PM mode, remain accountable: nominate an implementation lead, delegate implementation, coordinate blockers/status, act as second-pass reviewer, and coordinate merge readiness.",
+    "- Before delegating through Pinet, call `pinet action=agents` with the target repo to find a suitable connected worker in the same repo/worktree, then delegate via `pinet action=send`.",
     "- Keep delegation inside the Pinet or Slack thread so ACKs, blockers, status updates, and final results flow back to the original sender.",
     "- Do not start or delegate extension changes unless the request names a GitHub issue/PR with clear maintainer priority/approval; if missing or unclear, ask first.",
     "- When delegating, include the workflow (`ack/work/ask/report`), the task, issue/PR numbers, maintainer approval, repo/branch/worktree setup, important files, acceptance criteria, and where to reply.",
+    "- Use `pinet action=lanes` to keep PM-mode or complex coordination lane metadata durable when the broker asks you to track lane state/roles.",
   ];
 }
 
