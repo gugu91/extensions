@@ -56,36 +56,68 @@ describe("resolveBrokerPromptCandidates", () => {
     expect(candidates.map((candidate) => candidate.source)).toEqual([
       "workspace",
       "workspace",
+      "workspace",
+      "user",
       "user",
       "user",
       "packaged",
     ]);
-    expect(candidates[0]?.path).toBe(path.join(workspaceRoot, ".pi", "slack-bridge", "broker.md"));
-    expect(candidates[1]?.path).toBe(
+    expect(candidates[0]?.path).toBe(path.join(workspaceRoot, ".pi", "slack-bridge", "tmux.md"));
+    expect(candidates[1]?.path).toBe(path.join(workspaceRoot, ".pi", "slack-bridge", "broker.md"));
+    expect(candidates[2]?.path).toBe(
       path.join(workspaceRoot, ".pi", "slack-bridge", "broker-prompt.md"),
     );
-    expect(candidates[2]?.path).toBe(
+    expect(candidates[3]?.path).toBe(path.join(homeDir, ".pi", "agent", "slack-bridge", "tmux.md"));
+    expect(candidates[4]?.path).toBe(
       path.join(homeDir, ".pi", "agent", "slack-bridge", "broker.md"),
     );
-    expect(candidates[3]?.path).toBe(
+    expect(candidates[5]?.path).toBe(
       path.join(homeDir, ".pi", "agent", "slack-bridge", "broker-prompt.md"),
     );
-    expect(candidates[4]?.path).toBe(packagedDefaultPath);
+    expect(candidates[6]?.path).toBe(packagedDefaultPath);
   });
 });
 
 describe("loadBrokerPrompt", () => {
-  it("loads the workspace broker.md override when it is the first valid candidate", async () => {
-    await writeText(
-      path.join(workspaceRoot, ".pi", "slack-bridge", "broker.md"),
-      "WORKSPACE PROMPT",
-    );
-    await writeText(path.join(homeDir, ".pi", "agent", "slack-bridge", "broker.md"), "USER PROMPT");
+  it("loads the workspace tmux.md override when it is the first valid candidate", async () => {
+    await writeText(path.join(workspaceRoot, ".pi", "slack-bridge", "tmux.md"), "WORKSPACE PROMPT");
+    await writeText(path.join(homeDir, ".pi", "agent", "slack-bridge", "tmux.md"), "USER PROMPT");
 
     const result = await loadBrokerPrompt(loaderOptions());
 
     expect(result).toMatchObject({ source: "workspace", content: "WORKSPACE PROMPT" });
     expect(result.warnings).toEqual([]);
+  });
+
+  it("loads configured relative paths before conventional overrides", async () => {
+    await writeText(path.join(workspaceRoot, "prompts", "custom.md"), "CONFIGURED PROMPT");
+    await writeText(path.join(workspaceRoot, ".pi", "slack-bridge", "tmux.md"), "WORKSPACE");
+
+    const result = await loadBrokerPrompt({
+      ...loaderOptions(),
+      configuredPrompt: "prompts/custom.md",
+    });
+
+    expect(result).toMatchObject({ source: "configured", content: "CONFIGURED PROMPT" });
+  });
+
+  it("loads configured packaged prompt presets", async () => {
+    const result = await loadBrokerPrompt({ ...loaderOptions(), configuredPrompt: "tmux" });
+
+    expect(result.source).toBe("configured");
+    expect(result.content).toContain("FRESH TMUX WORKERS");
+  });
+
+  it("warns and falls through from an invalid configured prompt", async () => {
+    await writeText(path.join(workspaceRoot, ".pi", "slack-bridge", "tmux.md"), "WORKSPACE");
+
+    const result = await loadBrokerPrompt({
+      ...loaderOptions(),
+      configuredPrompt: "missing/custom.md",
+    });
+
+    expect(result).toMatchObject({ source: "workspace", content: "WORKSPACE" });
+    expect(result.warnings[0]).toMatchObject({ source: "configured", reason: "unreadable" });
   });
 
   it("resolves the workspace override from the git root when launched from a nested directory", async () => {
@@ -225,8 +257,8 @@ describe("renderBrokerPromptContent", () => {
 });
 
 describe("packaged default broker prompt", () => {
-  it("keeps replaceable default policy in broker.md rather than hard-coded broker prompt helpers", async () => {
-    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "broker.md");
+  it("keeps replaceable default policy in tmux.md rather than hard-coded broker prompt helpers", async () => {
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "tmux.md");
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
     expect(defaultPrompt).toContain("NEVER WRITE CODE");
@@ -237,7 +269,7 @@ describe("packaged default broker prompt", () => {
   });
 
   it("documents consent-gated PM mode and durable lane metadata", async () => {
-    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "broker.md");
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "tmux.md");
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
     expect(defaultPrompt).toContain("PM MODE AWARENESS");
@@ -249,7 +281,7 @@ describe("packaged default broker prompt", () => {
   });
 
   it("documents safe repo-scoped follower startup before reporting capacity gaps", async () => {
-    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "broker.md");
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "tmux.md");
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
     expect(defaultPrompt).toContain("Use tmux only to launch repo-scoped Pinet follower workers");
@@ -263,7 +295,7 @@ describe("packaged default broker prompt", () => {
   });
 
   it("documents autonomous broker worker lifecycle and relay caveats", async () => {
-    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "broker.md");
+    const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "tmux.md");
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
     expect(defaultPrompt).toContain("fully autonomous / unchained broker lane");
@@ -278,10 +310,10 @@ describe("packaged default broker prompt", () => {
     expect(defaultPrompt).toContain("Never echo tokens");
   });
 
-  it("copies prompt assets into dist/prompts so the packaged broker.md is loadable", async () => {
+  it("copies prompt assets into dist/prompts so the packaged tmux.md is loadable", async () => {
     await execFileAsync("node", ["../scripts/build-package.mjs"], { cwd: process.cwd() });
 
-    const distPromptPath = path.join(process.cwd(), "dist", "prompts", "broker", "broker.md");
+    const distPromptPath = path.join(process.cwd(), "dist", "prompts", "broker", "tmux.md");
     await expect(fs.access(distPromptPath)).resolves.toBeUndefined();
     const result = await loadBrokerPrompt({
       workspaceRoot,

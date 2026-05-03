@@ -30,6 +30,7 @@ export interface SlackBridgeSettings {
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   runtimeMode?: "off" | "single" | "broker" | "follower";
+  brokerPrompt?: string;
   autoConnect?: boolean;
   autoFollow?: boolean;
   agentName?: string;

@@ -23,6 +23,7 @@ export interface AgentPromptGuidanceDeps {
   getActiveSkinTheme: () => string | null;
   getAgentPersonality: () => string | null;
   getBrokerRole: () => "broker" | "follower" | null;
+  getBrokerPromptSetting?: () => string | undefined;
   loadBrokerPrompt?: () => Promise<BrokerPromptLoadResult>;
   reportBrokerPromptWarning?: (warning: string) => void;
   reportBrokerPromptDiagnostic?: (diagnostic: string) => void;
@@ -50,7 +51,13 @@ export function createAgentPromptGuidance(deps: AgentPromptGuidanceDeps): AgentP
     }
 
     if (deps.getBrokerRole() === "broker") {
-      const brokerPrompt = await (deps.loadBrokerPrompt ?? loadBrokerPrompt)();
+      const brokerPrompt = await (
+        deps.loadBrokerPrompt ??
+        (() =>
+          loadBrokerPrompt({
+            configuredPrompt: deps.getBrokerPromptSetting?.(),
+          }))
+      )();
       for (const warning of brokerPrompt.warnings) {
         (deps.reportBrokerPromptWarning ?? console.warn)(`[slack-bridge] ${warning.message}`);
       }
