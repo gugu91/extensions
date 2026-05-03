@@ -51,10 +51,27 @@ function createBrokerDeps(overrides: Partial<PinetMeshOpsDeps> = {}) {
     }),
   ];
   let nextMessageId = 1;
-  const threads = new Map<string, { threadId: string }>();
+  const threads = new Map<
+    string,
+    {
+      threadId: string;
+      source?: string;
+      channel?: string;
+      ownerAgent?: string | null;
+      ownerBinding?: "explicit" | null;
+    }
+  >();
   const insertedMessages: BrokerMessage[] = [];
-  const createThread = vi.fn((threadId: string) => {
-    threads.set(threadId, { threadId });
+  const createThread = vi.fn(
+    (threadId: string, source: string, channel: string, ownerAgent: string | null) => {
+      threads.set(threadId, { threadId, source, channel, ownerAgent, ownerBinding: null });
+    },
+  );
+  const transferThreadOwnership = vi.fn((threadId: string, ownerAgent: string) => {
+    const existing = threads.get(threadId);
+    if (!existing) throw new Error(`Unknown thread ${threadId}`);
+    threads.set(threadId, { ...existing, ownerAgent, ownerBinding: "explicit" });
+    return { reassignedInboxCount: 2, updatedMessageCount: 1 };
   });
   const insertMessage = vi.fn(
     (
@@ -114,6 +131,7 @@ function createBrokerDeps(overrides: Partial<PinetMeshOpsDeps> = {}) {
     createThread,
     insertMessage,
     getAllAgents: () => agents,
+    transferThreadOwnership,
     recordTaskAssignment,
     scheduleWakeup,
   };
@@ -136,6 +154,7 @@ function createBrokerDeps(overrides: Partial<PinetMeshOpsDeps> = {}) {
     db,
     agents,
     createThread,
+    transferThreadOwnership,
     insertMessage,
     insertedMessages,
     recordTaskAssignment,
@@ -245,6 +264,82 @@ describe("createPinetMeshOps", () => {
         tone: "info",
       }),
     );
+  });
+
+  it("transfers broker thread ownership to the direct recipient when requested", async () => {
+    const { deps, insertedMessages, logActivity, transferThreadOwnership } = createBrokerDeps();
+    const db = deps.getActiveBrokerDb();
+    db?.createThread("1777798507.674009", "slack", "C123", "broker-1");
+    const pinetMeshOps = createPinetMeshOps(deps);
+
+    const result = await pinetMeshOps.sendPinetAgentMessage("worker-1", "please report back", {
+      threadOwnershipTransfer: { mode: "transfer", threadId: "1777798507.674009" },
+    });
+
+    expect(result).toEqual({
+      messageId: 1,
+      target: "Worker One",
+      transferredThreadId: "1777798507.674009",
+    });
+    expect(transferThreadOwnership).toHaveBeenCalledWith("1777798507.674009", "worker-1");
+    expect(insertedMessages[0]?.metadata).toMatchObject({
+      threadOwnershipTransfer: { mode: "transfer", threadId: "1777798507.674009" },
+      senderAgent: "Broker Crane",
+      a2a: true,
+    });
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "thread_transfer",
+        title: "Thread ownership transferred",
+        summary: "Transferred 1777798507.674009 to 🦊 Worker One.",
+      }),
+    );
+  });
+
+  it("rejects unknown thread ownership transfer requests before dispatch", async () => {
+    const { deps, insertMessage, transferThreadOwnership } = createBrokerDeps();
+    const pinetMeshOps = createPinetMeshOps(deps);
+
+    await expect(
+      pinetMeshOps.sendPinetAgentMessage("worker-1", "please report back", {
+        threadOwnershipTransfer: { mode: "transfer", threadId: "missing-thread" },
+      }),
+    ).rejects.toThrow("Cannot transfer unknown thread missing-thread.");
+
+    expect(insertMessage).not.toHaveBeenCalled();
+    expect(transferThreadOwnership).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Slack thread ownership transfer requests", async () => {
+    const { deps, insertMessage, transferThreadOwnership } = createBrokerDeps();
+    const db = deps.getActiveBrokerDb();
+    db?.createThread("a2a:broker-1:worker-1", "agent", "", "broker-1");
+    const pinetMeshOps = createPinetMeshOps(deps);
+
+    await expect(
+      pinetMeshOps.sendPinetAgentMessage("worker-1", "please report back", {
+        threadOwnershipTransfer: { mode: "transfer", threadId: "a2a:broker-1:worker-1" },
+      }),
+    ).rejects.toThrow("Thread a2a:broker-1:worker-1 is not a transferable Slack thread.");
+
+    expect(insertMessage).not.toHaveBeenCalled();
+    expect(transferThreadOwnership).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Slack transport ownership transfer requests", async () => {
+    const { deps, insertMessage, transferThreadOwnership } = createBrokerDeps();
+    const db = deps.getActiveBrokerDb();
+    db?.createThread("imessage:chat:alice", "imessage", "chat:alice", "broker-1");
+    const pinetMeshOps = createPinetMeshOps(deps);
+
+    await expect(
+      pinetMeshOps.sendPinetAgentMessage("worker-1", "please report back", {
+        threadOwnershipTransfer: { mode: "transfer", threadId: "imessage:chat:alice" },
+      }),
+    ).rejects.toThrow("Thread imessage:chat:alice is not a transferable Slack thread.");
+
+    expect(insertMessage).not.toHaveBeenCalled();
+    expect(transferThreadOwnership).not.toHaveBeenCalled();
   });
 
   it("routes follower direct messages through the follower client", async () => {

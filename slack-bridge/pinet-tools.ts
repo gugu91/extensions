@@ -45,7 +45,8 @@ export interface RegisterPinetToolsDeps {
   sendPinetAgentMessage: (
     target: string,
     body: string,
-  ) => Promise<{ messageId: number; target: string }>;
+    metadata?: Record<string, unknown>,
+  ) => Promise<{ messageId: number; target: string; transferredThreadId?: string }>;
   sendPinetBroadcastMessage: (
     channel: string,
     body: string,
@@ -348,6 +349,10 @@ function runPinetSendAction(
   return (async () => {
     const to = typeof params.to === "string" ? params.to.trim() : "";
     const message = typeof params.message === "string" ? params.message : "";
+    const transferThreadId =
+      typeof params.transfer_thread_id === "string" && params.transfer_thread_id.trim().length > 0
+        ? params.transfer_thread_id.trim()
+        : undefined;
 
     if (!to) {
       throw new Error("to is required");
@@ -356,7 +361,21 @@ function runPinetSendAction(
       throw new Error("message is required");
     }
 
-    deps.requireToolPolicy(toolName, undefined, `to=${to} | message=${message}`);
+    deps.requireToolPolicy(
+      toolName,
+      undefined,
+      `to=${to} | message=${message}${transferThreadId ? ` | transfer_thread_id=${transferThreadId}` : ""}`,
+    );
+
+    if (transferThreadId && deps.brokerRole() !== "broker") {
+      throw new Error("transfer_thread_id is broker-only and requires the broker role.");
+    }
+
+    if (transferThreadId && isBroadcastChannelTarget(to)) {
+      throw new Error(
+        "transfer_thread_id requires a direct agent target, not a broadcast channel.",
+      );
+    }
 
     if (deps.brokerRole() === "broker" && isBroadcastChannelTarget(to)) {
       const result = deps.sendPinetBroadcastMessage(to, message);
@@ -380,17 +399,25 @@ function runPinetSendAction(
       };
     }
 
-    const result = await deps.sendPinetAgentMessage(to, message);
+    const result = transferThreadId
+      ? await deps.sendPinetAgentMessage(to, message, {
+          threadOwnershipTransfer: { mode: "transfer", threadId: transferThreadId },
+        })
+      : await deps.sendPinetAgentMessage(to, message);
     return {
       content: [
         {
           type: "text",
           text: output.full
-            ? `Message sent to ${result.target} (id: ${result.messageId}).`
-            : `Pinet message sent to ${result.target}.`,
+            ? `Message sent to ${result.target} (id: ${result.messageId})${result.transferredThreadId ? ` and transferred thread ${result.transferredThreadId}` : ""}.`
+            : `Pinet message sent to ${result.target}${result.transferredThreadId ? `; transferred thread ${result.transferredThreadId}` : ""}.`,
         },
       ],
-      details: { messageId: result.messageId, target: result.target },
+      details: {
+        messageId: result.messageId,
+        target: result.target,
+        ...(result.transferredThreadId ? { transferredThreadId: result.transferredThreadId } : {}),
+      },
     };
   })();
 }
@@ -676,6 +703,12 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
           "Target agent name/ID, or a broker-only broadcast channel like #extensions. Avoid #all for repo-specific issue/policy announcements.",
       }),
       message: Type.String({ description: "Message body" }),
+      transfer_thread_id: Type.Optional(
+        Type.String({
+          description:
+            "Broker-only: transfer ownership of this existing Slack thread to the direct recipient after delivery (for example a Slack thread_ts).",
+        }),
+      ),
       ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
     execute: (_id, params, output) => runPinetSendAction(params, deps, "pinet:send", output),
