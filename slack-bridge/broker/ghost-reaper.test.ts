@@ -116,6 +116,15 @@ describe("broker ghost reaper", () => {
     });
   });
 
+  it("refuses to signal when process start time cannot be proven", () => {
+    expect(
+      decideGhostReapEligibility(makeAgent(), snapshot({ startedAt: undefined }), "broker-1"),
+    ).toMatchObject({ eligible: false, reason: "missing_process_start_time" });
+    expect(
+      decideGhostReapEligibility(makeAgent(), snapshot({ startedAt: "not-a-date" }), "broker-1"),
+    ).toMatchObject({ eligible: false, reason: "missing_process_start_time" });
+  });
+
   it("refuses likely PID reuse when process start is after registration", () => {
     const decision = decideGhostReapEligibility(
       makeAgent({ disconnectedAt: "2026-05-03T13:10:00.000Z" }),
@@ -130,6 +139,19 @@ describe("broker ghost reaper", () => {
     const decision = decideGhostReapEligibility(
       makeAgent({ disconnectedAt: "2026-05-03T13:00:10.000Z" }),
       snapshot({ startedAt: "2026-05-03T13:00:20.000Z" }),
+      "broker-1",
+    );
+
+    expect(decision).toMatchObject({ eligible: false, reason: "pid_reused_after_disconnect" });
+  });
+
+  it("refuses same-second PID reuse ambiguity after disconnect", () => {
+    const decision = decideGhostReapEligibility(
+      makeAgent({
+        connectedAt: "2026-05-03T12:59:00.000Z",
+        disconnectedAt: "2026-05-03T13:00:10.500Z",
+      }),
+      snapshot({ startedAt: "2026-05-03T13:00:10.000Z" }),
       "broker-1",
     );
 

@@ -41,7 +41,8 @@ export interface GhostReapResult {
 }
 
 const DEFAULT_KILL_AFTER_MS = 10_000;
-const PROCESS_START_CLOCK_SKEW_MS = 1_000;
+const PS_LSTART_MAX_FRACTION_MS = 999;
+const CLOCK_SKEW_TOLERANCE_MS = 1_000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -77,8 +78,8 @@ function commandLooksLikePiFollower(command: string): boolean {
 function parsePsSnapshot(pid: number, output: string): ProcessSnapshot | null {
   const line = output.trim();
   if (!line) return null;
-  const match = line.match(/^(\d+)\s+(?:(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+)?(.+)$/);
-  if (!match) return { pid, command: line };
+  const match = line.match(/^(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/);
+  if (!match) return null;
   const parsedPid = Number(match[1]);
   if (!Number.isFinite(parsedPid) || parsedPid !== pid) return null;
   return {
@@ -158,23 +159,24 @@ export function decideGhostReapEligibility(
     return { eligible: false, agentId: agent.id, pid, reason: "unexpected_command" };
   }
   const startedAtMs = parseIso(snapshot.startedAt);
+  if (startedAtMs == null) {
+    return { eligible: false, agentId: agent.id, pid, reason: "missing_process_start_time" };
+  }
   const connectedAtMs = parseIso(agent.connectedAt);
+  if (connectedAtMs == null) {
+    return { eligible: false, agentId: agent.id, pid, reason: "missing_agent_connected_at" };
+  }
   const disconnectedAtMs = parseIso(agent.disconnectedAt);
-  if (
-    startedAtMs != null &&
-    disconnectedAtMs != null &&
-    startedAtMs - disconnectedAtMs > PROCESS_START_CLOCK_SKEW_MS
-  ) {
+  if (disconnectedAtMs == null) {
+    return { eligible: false, agentId: agent.id, pid, reason: "missing_agent_disconnected_at" };
+  }
+  if (startedAtMs + PS_LSTART_MAX_FRACTION_MS >= disconnectedAtMs) {
     return { eligible: false, agentId: agent.id, pid, reason: "pid_reused_after_disconnect" };
   }
-  if (
-    startedAtMs != null &&
-    connectedAtMs != null &&
-    startedAtMs - connectedAtMs > PROCESS_START_CLOCK_SKEW_MS
-  ) {
+  if (startedAtMs + PS_LSTART_MAX_FRACTION_MS >= connectedAtMs) {
     return { eligible: false, agentId: agent.id, pid, reason: "pid_reused_after_registration" };
   }
-  if (disconnectedAtMs != null && disconnectedAtMs > now + PROCESS_START_CLOCK_SKEW_MS) {
+  if (disconnectedAtMs > now + CLOCK_SKEW_TOLERANCE_MS) {
     return { eligible: false, agentId: agent.id, pid, reason: "disconnect_time_in_future" };
   }
 
