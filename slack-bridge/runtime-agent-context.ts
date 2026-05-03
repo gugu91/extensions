@@ -387,6 +387,16 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     ];
 
     const skinAssignment = resolveSkinAssignment(role, getIdentitySeedForRole(role));
+    const brokerManaged = role === "worker" && process.env.PINET_BROKER_MANAGED === "1";
+    const brokerManagedMetadata = brokerManaged
+      ? {
+          brokerManaged: true,
+          brokerManagedBy: process.env.PINET_BROKER_AGENT_ID?.trim() || undefined,
+          launchSource: process.env.PINET_LAUNCH_SOURCE?.trim() || "broker-tmux",
+          tmuxSession: process.env.PINET_TMUX_SESSION?.trim() || undefined,
+          brokerManagedAt: new Date().toISOString(),
+        }
+      : {};
 
     return {
       cwd,
@@ -396,6 +406,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       repo,
       repoRoot,
       scope,
+      ...brokerManagedMetadata,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
       ...(deps.getAgentPersonality() ? { personality: deps.getAgentPersonality() } : {}),
       ...(skinAssignment?.statusVocabulary

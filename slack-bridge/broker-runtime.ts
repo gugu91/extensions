@@ -32,7 +32,7 @@ import {
   queueBrokerInboxIds,
   resetBrokerDeliveryState,
 } from "./broker-delivery.js";
-import type { InboundMessage } from "./broker/types.js";
+import type { AgentInfo, InboundMessage } from "./broker/types.js";
 import {
   type ActivityLogEntry,
   type ActivityLogTone,
@@ -47,6 +47,7 @@ import {
   stopRalphLoop,
 } from "./ralph-loop.js";
 import { TtlCache } from "./ttl-cache.js";
+import { createBrokerGhostReaper } from "./broker/ghost-reaper.js";
 
 export interface BrokerRuntimeConnectResult {
   botUserId: string | null;
@@ -223,6 +224,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   let lastBrokerControlPlaneHomeTabSnapshot: BrokerControlPlaneDashboardSnapshot | null = null;
   let lastBrokerControlPlaneHomeTabRefreshAt: string | null = null;
   let lastBrokerControlPlaneHomeTabError: string | null = null;
+  const ghostReaper = createBrokerGhostReaper({ brokerAgentId: () => activeSelfId });
   const ralphLoopState = createRalphLoopState();
 
   function ensureActivityLogger(): SlackActivityLogger {
@@ -348,6 +350,15 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         staleAfterMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
         busyAssignmentAgeMs: DEFAULT_BUSY_ASSIGNMENT_AGE_MS,
       });
+      const staleAgents = result.reapedAgentIds
+        .map((agentId) => activeBroker?.db.getAgentById(agentId) ?? null)
+        .filter((agent): agent is AgentInfo => agent !== null);
+      const processReap = ghostReaper.reapGhosts(staleAgents);
+      if (processReap.signaledAgentIds.length > 0) {
+        result.anomalies.push(
+          `signaled ${processReap.signaledAgentIds.length} broker-managed ghost process${processReap.signaledAgentIds.length === 1 ? "" : "es"}`,
+        );
+      }
       syncBrokerDbInbox(activeSelfId, activeBroker.db as BrokerDB, ctx);
       lastBrokerMaintenance = result;
 
@@ -494,6 +505,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     stopBrokerHeartbeat();
     stopBrokerMaintenance();
     stopBrokerScheduledWakeups();
+    ghostReaper.dispose();
     brokerMaintenanceRunning = false;
     brokerScheduledWakeupRunning = false;
 

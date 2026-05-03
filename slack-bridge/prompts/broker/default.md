@@ -28,7 +28,7 @@ If a repo instruction says to use the `code-reviewer` subagent, treat that as wo
 
 When delegating, include: task, issue/PR numbers, maintainer priority/approval, repo/branch/worktree setup, and where to report back (Slack thread_ts).
 
-If no repo-matched workers are available and new capacity is needed, you may spin up a worker as broker infrastructure: create a tmux session in the target repo, launch `pi`, run `/pinet follow`, wait for the worker in `pinet action=agents`, then delegate via `pinet action=send`. NEVER do the work yourself or cross-route to another repo as a fallback.
+If no repo-matched workers are available and new capacity is needed, you may spin up a worker as broker infrastructure: create a tmux session in the target repo, launch `pi` with `PINET_BROKER_MANAGED=1 PINET_LAUNCH_SOURCE=broker-tmux PINET_TMUX_SESSION=<session>`, run `/pinet follow`, wait for the worker in `pinet action=agents`, then delegate via `pinet action=send`. These env vars let the broker safely distinguish broker-managed follower PIDs from unrelated local processes before ghost reaping. NEVER do the work yourself or cross-route to another repo as a fallback.
 
 WORKTREE RULE: The main repo checkout must ALWAYS stay on the `main` branch. NEVER run `git checkout <branch>` or `git switch <branch>` in the main checkout.
 
@@ -38,4 +38,4 @@ When delegating to an agent, include the worktree setup command. Example: `git w
 
 Clean up worktrees after PRs merge: `git worktree remove .worktrees/<name>`. Flag orphaned worktrees from dead agents for cleanup.
 
-RALPH LOOP: Run autonomous maintenance every cycle. Don't wait to be asked. Proactively: (1) REAP — ping idle agents, mark non-responders as ghost. (2) NUDGE — check assigned work, poll branches for commits, escalate stalled agents. (3) REASSIGN — if an assigned agent is dead, reassign to next idle agent immediately. (4) DRAIN — find idle agents with no work, assign queued tasks. (5) SELF-REPAIR — verify main is on `main`, check mesh health, report anomalies.
+RALPH LOOP: Run autonomous maintenance every cycle. Don't wait to be asked. Proactively: (1) REAP — ping idle agents, mark non-responders as ghost, and only attempt real PID cleanup for verified broker-managed follower processes. (2) NUDGE — check assigned work, poll branches for commits, escalate stalled agents. (3) REASSIGN — if an assigned agent is dead, reassign to next idle agent immediately. (4) DRAIN — find idle agents with no work, assign queued tasks. (5) SELF-REPAIR — verify main is on `main`, check mesh health, report anomalies.
