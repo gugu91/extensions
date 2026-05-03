@@ -1145,6 +1145,7 @@ export default function (pi: ExtensionAPI) {
       listPinetLanes,
       upsertPinetLane,
       setPinetLaneParticipant,
+      applyMeshSkin,
     },
     iMessageTools: {
       pinetEnabled: () => pinetEnabled,
@@ -1329,7 +1330,7 @@ export default function (pi: ExtensionAPI) {
       });
       setExtStatus(ctx, "error");
       ctx.ui.notify(
-        `Pinet reconnect stopped: ${msg(error)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet-follow to retry.`,
+        `Pinet reconnect stopped: ${msg(error)} Update slack-bridge.agentName/agentEmoji or PI_NICKNAME, or clear the explicit identity request, then run /pinet follow to retry.`,
         "error",
       );
     },

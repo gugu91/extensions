@@ -1694,7 +1694,7 @@ export function buildWorkerPromptGuidelines(): string[] {
     "2. Do the work.",
     "3. If you hit a blocker, report it immediately and ask for what you need — blocked work must be visible so it can be unblocked or reassigned.",
     "4. When done, report the outcome (what changed, branch/PR, test results) — the sender needs closure and next steps.",
-    "5. When you have finished all assigned work and are waiting for more, call `pinet action=free` (or `/pinet-free`) to mark yourself idle/free for the broker.",
+    "5. When you have finished all assigned work and are waiting for more, call `pinet action=free` (or `/pinet free`) to mark yourself idle/free for the broker.",
     "Always reply where the task came from.",
     "If a Pinet thread explicitly says things like 'no further replies are needed', 'hard stop', or 'stay free/quiet unless a new task appears', treat it as a terminal closeout. Do NOT send another acknowledgement unless you have a real blocker, a materially new finding, or a genuinely new task arrives in that thread.",
     "",
@@ -2269,7 +2269,7 @@ export function buildFollowerRuntimeDiagnostic(
       kind,
       state: "reconnecting",
       reason: "broker disconnected",
-      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet follow.",
       ...(detail ? { detail } : {}),
     };
   }
@@ -2281,8 +2281,8 @@ export function buildFollowerRuntimeDiagnostic(
       state: connected ? "degraded" : "reconnecting",
       reason: "inbox polling failed",
       nextStep: connected
-        ? "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow."
-        : "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+        ? "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet follow."
+        : "Wait for automatic reconnect. If it does not recover, run /pinet follow.",
       ...(detail ? { detail } : {}),
     };
   }
@@ -2293,7 +2293,7 @@ export function buildFollowerRuntimeDiagnostic(
       state: "degraded",
       reason: "registration refresh failed after reconnect",
       nextStep:
-        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet follow.",
       ...(detail ? { detail } : {}),
     };
   }
@@ -2302,7 +2302,7 @@ export function buildFollowerRuntimeDiagnostic(
     kind,
     state: "error",
     reason: "automatic reconnect stopped",
-    nextStep: "Fix the reported error, then run /pinet-follow to retry.",
+    nextStep: "Fix the reported error, then run /pinet follow to retry.",
     ...(detail ? { detail } : {}),
   };
 }

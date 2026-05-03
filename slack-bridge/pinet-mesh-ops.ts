@@ -134,7 +134,7 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
     metadata?: Record<string, unknown>,
   ): Promise<{ messageId: number; target: string }> {
     if (!deps.getPinetEnabled()) {
-      throw new Error("Pinet is not running. Use /pinet-start or /pinet-follow first.");
+      throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
 
     if (isBroadcastChannelTarget(targetRef)) {

@@ -370,12 +370,14 @@ The `canvas_comments_read` dispatcher action is intentionally narrow:
 
 ### Slash commands
 
-| Command         | Description                                         |
-| --------------- | --------------------------------------------------- |
-| `/pinet-status` | Show connection status, threads, and agent identity |
-| `/pinet-rename` | Change the agent's display name                     |
-| `/pinet-logs`   | Show recent broker activity log entries             |
-| `/slack-logs`   | Show recent Slack bridge log entries                |
+| Command            | Description                                                |
+| ------------------ | ---------------------------------------------------------- |
+| `/pinet <action>`  | Unified Pinet command surface; run `/pinet help` for usage |
+| `/pinet status`    | Show connection status, threads, and agent identity        |
+| `/pinet rename`    | Change the agent's display name                            |
+| `/pinet logs`      | Show recent broker activity log entries                    |
+| `/pinet-*` aliases | Backwards-compatible aliases for legacy command names      |
+| `/slack-logs`      | Legacy alias for recent Slack bridge/Pinet activity logs   |
 
 ## Runtime modes
 
@@ -394,7 +396,7 @@ Startup selection:
 - `autoConnect` is a legacy compatibility alias for `runtimeMode: "single"`.
 - `autoFollow` is a legacy compatibility alias for `runtimeMode: "follower"` when a broker socket is available.
 - explicit `runtimeMode` wins over the legacy flags.
-- `/pinet-start` and `/pinet-follow` still switch the live session into broker/follower runtimes explicitly.
+- `/pinet start` and `/pinet follow` still switch the live session into broker/follower runtimes explicitly.
 
 ## Scope carriers (compatibility-first)
 
@@ -415,13 +417,13 @@ Pinet supports a broker/follower architecture for coordinating multiple pi agent
 **Broker** (one per mesh — coordinates routing and health):
 
 ```
-/pinet-start
+/pinet start
 ```
 
 **Follower** (workers that connect to the broker):
 
 ```
-/pinet-follow
+/pinet follow
 ```
 
 Or set `"runtimeMode": "follower"` in settings (or the legacy `"autoFollow": true`) to auto-connect when a broker is running.
@@ -436,15 +438,15 @@ Broker coordination policy is loaded from Markdown rather than a settings select
 
 Invalid higher-priority files (unsafe symlink/path escape, unreadable file, oversized content, invalid UTF-8/binary-looking content, or empty file) emit a concise warning and fall through to lower-priority candidates. Warnings identify only the candidate kind and reason; prompt bodies and private paths are not echoed.
 
-Only broker prompt content is replaceable. Broker runtime/tool restrictions remain code-owned and are appended after the loaded MD prompt, including the forbidden local `Agent` path and broker `edit`/`write` blocking. Followers keep append-only worker guidance and do not load broker prompt MD. Prompt changes are picked up on `/pinet-start` / runtime restart; this slice does not hot-reload per turn.
+Only broker prompt content is replaceable. Broker runtime/tool restrictions remain code-owned and are appended after the loaded MD prompt, including the forbidden local `Agent` path and broker `edit`/`write` blocking. Followers keep append-only worker guidance and do not load broker prompt MD. Prompt changes are picked up on `/pinet start` / runtime restart; this slice does not hot-reload per turn.
 
 ### Multi-agent tools
 
-| Tool    | Description                                                                                                                  |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`, `lanes`) |
+| Tool    | Description                                                                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pinet` | Pinet dispatcher with token-efficient `action`-based routing (`help`, `send`, `read`, `free`, `schedule`, `agents`, `lanes`, `reload`, `exit`, `skin`) |
 
-Use the dispatcher for all Pinet actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, `pinet action=agents`, and `pinet action=lanes`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
+Use the dispatcher for Pinet tool actions: `pinet action=send`, `pinet action=read`, `pinet action=free`, `pinet action=schedule`, `pinet action=agents`, `pinet action=lanes`, `pinet action=reload`, `pinet action=exit`, and `pinet action=skin`. Use slash commands for UI lifecycle transitions: `/pinet start`, `/pinet follow`, and `/pinet unfollow`. Dedicated direct Pinet tools (`pinet_message`, `pinet_read`, `pinet_agents`, `pinet_free`, `pinet_schedule`) are no longer registered. Legacy `pinet_*` guardrail patterns still match dispatcher action names, and legacy send policies such as `pinet_send` or `pinet_message` also cover `pinet action=send`, so existing security configs fail closed during migration.
 
 Dispatcher content defaults to terse CLI-style confirmations/summaries for noisy reads, sends, and agent lists. In default CLI mode, bulky read/agent payloads are also compacted in `data.details` so tool renderers do not surface full message bodies or agent metadata by accident. Pass `args.format="json"` (or `args.f` / `args["-f"]`) for the dispatcher envelope in content with full structured `data.details`, or `args.full=true` / `args["--full"]=true` for verbose text with full structured `data.details`.
 
@@ -454,21 +456,23 @@ Scheduled Pinet wake-ups use the same durable read surface: due wake-ups are per
 
 Durable lane metadata is stored in SQLite and can be inspected/updated with `pinet action=lanes`. PM-mode lanes can record the accountable follower/PM, implementation lead, participant roles (`pm`, `lead`, `implementer`, `reviewer`, `second_pass_reviewer`, etc.), linked issue/PR, state, and summary. The `detached` lane state means a lane is manually supervised by a human; broker/RALPH/status surfaces keep it visible but should not treat it as normal auto-reassignment work without explicit human/broker action.
 
-### Broker commands
+### Pinet command surface
+
+Use `/pinet <action> [args]` for mesh lifecycle and broker operations. Legacy aliases such as `/pinet-start`, `/pinet-follow`, `/pinet-free`, and `/pinet-skin` remain registered for compatibility.
 
 | Command                 | Description                                     |
 | ----------------------- | ----------------------------------------------- |
-| `/pinet-start`          | Start as the mesh broker                        |
-| `/pinet-follow`         | Connect as a follower worker                    |
-| `/pinet-unfollow`       | Disconnect from the broker                      |
-| `/pinet-reload <agent>` | Ask another agent to reload                     |
-| `/pinet-exit <agent>`   | Ask another agent to exit                       |
-| `/pinet-free`           | Mark this agent as idle                         |
-| `/pinet-skin <theme>`   | Change the mesh presentation skin (broker only) |
+| `/pinet start`          | Start as the mesh broker                        |
+| `/pinet follow`         | Connect as a follower worker                    |
+| `/pinet unfollow`       | Disconnect from the broker                      |
+| `/pinet reload <agent>` | Ask another agent to reload                     |
+| `/pinet exit <agent>`   | Ask another agent to exit                       |
+| `/pinet free`           | Mark this agent as idle                         |
+| `/pinet skin <theme>`   | Change the mesh presentation skin (broker only) |
 
 ### Pinet skins
 
-`/pinet-skin <theme>` updates mesh presentation only: names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
+`/pinet skin <theme>` updates mesh presentation only: names, emoji palette, persona/tone guidance, and optional display vocabulary for statuses. Core roles and states stay skin-neutral (`broker`, `worker`, `idle`, `working`, routing, repo, and guardrails are not redefined by skins).
 
 Built-in skins:
 

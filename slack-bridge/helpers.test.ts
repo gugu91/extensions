@@ -1706,7 +1706,7 @@ describe("buildWorkerPromptGuidelines", () => {
     const guidelines = buildWorkerPromptGuidelines();
     const joined = guidelines.join(" ");
     expect(joined).toContain("pinet action=free");
-    expect(joined).toContain("/pinet-free");
+    expect(joined).toContain("/pinet free");
     expect(joined).toContain("idle/free");
   });
 
@@ -3526,13 +3526,13 @@ describe("buildFollowerRuntimeDiagnostic", () => {
       kind: "broker_disconnect",
       state: "reconnecting",
       reason: "broker disconnected",
-      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      nextStep: "Wait for automatic reconnect. If it does not recover, run /pinet follow.",
     });
     expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
       "reconnecting — broker disconnected",
     );
     expect(formatFollowerRuntimeDiagnosticNextStep(diagnostic)).toBe(
-      "Wait for automatic reconnect. If it does not recover, run /pinet-follow.",
+      "Wait for automatic reconnect. If it does not recover, run /pinet follow.",
     );
   });
 
@@ -3548,7 +3548,7 @@ describe("buildFollowerRuntimeDiagnostic", () => {
       reason: "inbox polling failed",
       detail: "Request timed out: pollInbox",
       nextStep:
-        "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet-follow.",
+        "Watch the next poll cycle. If failures continue, inspect the broker and run /pinet follow.",
     });
     expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
       "degraded — inbox polling failed (Request timed out: pollInbox)",
@@ -3566,7 +3566,7 @@ describe("buildFollowerRuntimeDiagnostic", () => {
       reason: "registration refresh failed after reconnect",
       detail: "refresh failed once",
       nextStep:
-        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet-follow.",
+        "Follower kept the last registered identity. If status or ownership looks stale, run /pinet follow.",
     });
     expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
       "degraded — registration refresh failed after reconnect (refresh failed once)",
@@ -3583,7 +3583,7 @@ describe("buildFollowerRuntimeDiagnostic", () => {
       state: "error",
       reason: "automatic reconnect stopped",
       detail: 'Agent name "Reserved Crane" is already reserved.',
-      nextStep: "Fix the reported error, then run /pinet-follow to retry.",
+      nextStep: "Fix the reported error, then run /pinet follow to retry.",
     });
     expect(formatFollowerRuntimeDiagnosticHealth(diagnostic)).toBe(
       'error — automatic reconnect stopped (Agent name "Reserved Crane" is already reserved.)',

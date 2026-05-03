@@ -300,7 +300,7 @@ export function renderStandalonePinetHomeTabView(
         text: [
           "• Open the *Messages* tab and start a conversation with Pinet.",
           "• Mention Pinet in a channel to continue work in-thread.",
-          '• Use `runtimeMode: "single"` for local Slack-only mode, or `/pinet-start` and `/pinet-follow` for mesh runtimes.',
+          '• Use `runtimeMode: "single"` for local Slack-only mode, or `/pinet start` and `/pinet follow` for mesh runtimes.',
         ].join("\n"),
       }),
     ],

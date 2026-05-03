@@ -82,7 +82,7 @@ describe("createPinetMeshSkin", () => {
     const pinetMeshSkin = createPinetMeshSkin(deps);
 
     expect(() => pinetMeshSkin.applyMeshSkin("cyberpunk neon")).toThrow(
-      "/pinet-skin can only run on the active broker.",
+      "/pinet skin can only run on the active broker.",
     );
   });
 
@@ -90,7 +90,7 @@ describe("createPinetMeshSkin", () => {
     const { deps } = createDeps();
     const pinetMeshSkin = createPinetMeshSkin(deps);
 
-    expect(() => pinetMeshSkin.applyMeshSkin("   ")).toThrow("Usage: /pinet-skin <theme>");
+    expect(() => pinetMeshSkin.applyMeshSkin("   ")).toThrow("Usage: /pinet skin <theme>");
   });
 
   it("requires the broker identity to be available", () => {
