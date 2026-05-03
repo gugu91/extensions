@@ -550,6 +550,42 @@ describe("createRuntimeAgentContext", () => {
     fs.rmSync(repoRoot, { recursive: true, force: true });
   });
 
+  it("includes broker-managed launch metadata for marked follower workers", async () => {
+    const originalManaged = process.env.PINET_BROKER_MANAGED;
+    const originalBroker = process.env.PINET_BROKER_AGENT_ID;
+    const originalLaunchSource = process.env.PINET_LAUNCH_SOURCE;
+    const originalTmuxSession = process.env.PINET_TMUX_SESSION;
+    process.env.PINET_BROKER_MANAGED = "1";
+    process.env.PINET_BROKER_AGENT_ID = "broker-1";
+    process.env.PINET_LAUNCH_SOURCE = "broker-tmux";
+    process.env.PINET_TMUX_SESSION = "extensions-worker-1";
+    try {
+      const { deps } = createDeps();
+      const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+      const workerMetadata = await runtimeAgentContext.getAgentMetadata("worker");
+      const brokerMetadata = await runtimeAgentContext.getAgentMetadata("broker");
+
+      expect(workerMetadata).toMatchObject({
+        brokerManaged: true,
+        brokerManagedBy: "broker-1",
+        launchSource: "broker-tmux",
+        tmuxSession: "extensions-worker-1",
+      });
+      expect(typeof workerMetadata.brokerManagedAt).toBe("string");
+      expect(brokerMetadata).not.toHaveProperty("brokerManaged");
+    } finally {
+      if (originalManaged === undefined) delete process.env.PINET_BROKER_MANAGED;
+      else process.env.PINET_BROKER_MANAGED = originalManaged;
+      if (originalBroker === undefined) delete process.env.PINET_BROKER_AGENT_ID;
+      else process.env.PINET_BROKER_AGENT_ID = originalBroker;
+      if (originalLaunchSource === undefined) delete process.env.PINET_LAUNCH_SOURCE;
+      else process.env.PINET_LAUNCH_SOURCE = originalLaunchSource;
+      if (originalTmuxSession === undefined) delete process.env.PINET_TMUX_SESSION;
+      else process.env.PINET_TMUX_SESSION = originalTmuxSession;
+    }
+  });
+
   it("applies registration identity and exposes metadata/id helper behavior", () => {
     const { deps, state, agentAliases, persistState, updateBadge } = createDeps({
       state: {

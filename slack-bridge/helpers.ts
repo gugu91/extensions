@@ -883,6 +883,11 @@ export interface AgentDisplayInfo {
     role?: string;
     worktreePath?: string;
     worktreeKind?: "main" | "linked";
+    brokerManaged?: boolean;
+    brokerManagedBy?: string;
+    launchSource?: string;
+    tmuxSession?: string;
+    brokerManagedAt?: string;
     skinTheme?: string;
     personality?: string;
     skinStatusVocabulary?: PinetSkinStatusVocabulary;
@@ -1203,6 +1208,11 @@ export function buildAgentDisplayInfo(
           host: asString(metadata.host),
           repo: asString(metadata.repo) ?? capabilities.repo,
           role: asString(metadata.role) ?? capabilities.role,
+          brokerManaged: metadata.brokerManaged === true,
+          brokerManagedBy: asString(metadata.brokerManagedBy),
+          launchSource: asString(metadata.launchSource),
+          tmuxSession: asString(metadata.tmuxSession),
+          brokerManagedAt: asString(metadata.brokerManagedAt),
           skinTheme: asString(metadata.skinTheme),
           personality: asString(metadata.personality),
           ...(extractPinetSkinStatusVocabulary(metadata.skinStatusVocabulary)
@@ -2426,6 +2436,15 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
         const branch = meta.branch ? ` (${meta.branch})` : "";
         const host = meta.host ? ` @ ${meta.host}` : "";
         line += `\n   ${cwd}${branch}${host}`;
+      }
+
+      if (meta?.brokerManaged) {
+        const managed = [
+          meta.launchSource ? `source=${meta.launchSource}` : "source=broker",
+          meta.tmuxSession ? `tmux=${meta.tmuxSession}` : null,
+          meta.brokerManagedBy ? `by=${meta.brokerManagedBy}` : null,
+        ].filter((item): item is string => Boolean(item));
+        line += `\n   managed: ${managed.join(" · ")}`;
       }
 
       if (meta?.skinTheme) {
