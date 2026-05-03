@@ -17,28 +17,28 @@
     "broker": {
       "characterPool": [
         "broker-storming-broker",
-        "broker-highstorm-boss",
+        "broker-highstorm-warden",
         "broker-oathgate-porter",
         "broker-oath-arbiter",
-        "broker-waynes-bronze",
+        "broker-shardplate-regent",
         "broker-steris-warden",
         "broker-lifts-gate",
-        "broker-lord-misty",
+        "broker-mistward-keeper",
         "broker-spren-registrar",
-        "broker-stick-warden",
-        "broker-chull-forge",
+        "broker-honorblade-keeper",
+        "broker-stormwarden-regent",
         "broker-hoid-keeper",
         "broker-wits-storm",
         "broker-copper-hatbox",
         "broker-pewter-warden",
         "broker-mistborn-regent",
-        "broker-aunt-lopens-forge",
+        "broker-tower-light-keeper",
         "broker-bridge-four-keeper",
         "broker-dustbringer-arbiter",
         "broker-fabrial-forge",
         "broker-sazed-keeper",
         "broker-dawnshard-warden",
-        "broker-cosmere-keeper",
+        "broker-realmatic-arbiter",
         "broker-three-oath-arbiter"
       ],
       "namePattern": "{character}"
@@ -187,37 +187,19 @@
         "worker-yaalani",
         "worker-mraize-whisper",
         "worker-iri-pose",
-        "worker-sunlit",
         "worker-first-sun",
-        "worker-life-before-death",
-        "worker-strength-before-weakness",
-        "worker-journey-before-destination",
-        "worker-words-of-radiance",
-        "worker-way-of-kings",
         "worker-encyclopedia-stick",
-        "worker-aon-rao",
-        "worker-selish-coin",
-        "worker-forging-slip",
-        "worker-vasher-sigh",
-        "worker-vivenna-travel",
-        "worker-lightsong-lazy",
         "worker-hoid-cameo",
         "worker-hoid-pun",
         "worker-hoid-soup",
         "worker-hoid-lecture",
         "worker-wit-coin",
-        "worker-threnody-warning",
-        "worker-yolen-refugee",
         "worker-fortune-roll",
-        "worker-cosmere-tour",
         "worker-trell-coin",
         "worker-crem",
         "worker-crem-scraper",
         "worker-rockbud-wind",
         "worker-painspren",
-        "worker-bridge-two",
-        "worker-bridge-three",
-        "worker-bridge-twelve",
         "worker-tower-light",
         "worker-urithiru-lift",
         "worker-honor-blade",
@@ -229,7 +211,35 @@
         "worker-listener-form",
         "worker-cobalt-guard",
         "worker-shadesmar-skiff",
-        "worker-perpendicularity"
+        "worker-perpendicularity",
+        "worker-pits-echo",
+        "worker-bands-mourning",
+        "worker-aluminum-gnat",
+        "worker-noble-house",
+        "worker-canton-office",
+        "worker-feruchemy-tap",
+        "worker-allomancy-pulse",
+        "worker-hemalurgic-spike",
+        "worker-tensoon-bone",
+        "worker-marasi-clip",
+        "worker-survivor-mural",
+        "worker-hearthstone",
+        "worker-kholinar-gate",
+        "worker-shadesmar-bead",
+        "worker-listener-beat",
+        "worker-thaylen-ledger",
+        "worker-azish-codex",
+        "worker-iri-strand",
+        "worker-darkeyes",
+        "worker-ardent-quill",
+        "worker-worldbringer",
+        "worker-sebarial-smile",
+        "worker-shardbearer",
+        "worker-akinah-map",
+        "worker-aether-vine",
+        "worker-emberdark-tide",
+        "worker-cinder-lantern",
+        "worker-saks-chirp"
       ],
       "namePattern": "{character}"
     }
@@ -240,12 +250,6 @@
       "emoji": "🌪️",
       "persona": "Cosmere-flavored coordinator; uses the only swear word allowed in production.",
       "style": ["unflappable", "punchy", "weather-aware"]
-    },
-    "broker-highstorm-boss": {
-      "name": "High Storm Boss",
-      "emoji": "⚡",
-      "persona": "Front-of-the-storm coordinator; yells before yelling becomes necessary.",
-      "style": ["loud", "decisive", "pressure-aware"]
     },
     "broker-oathgate-porter": {
       "name": "Oathgate Porter",
@@ -259,12 +263,6 @@
       "persona": "First ideal: route before ranting. Second ideal: ask the right question.",
       "style": ["measured", "principled", "patient"]
     },
-    "broker-waynes-bronze": {
-      "name": "Wayne's Bronze",
-      "emoji": "🎩",
-      "persona": "Disguise-leaning coordinator; claims this hat is in charge today, somehow.",
-      "style": ["sly", "casual", "perceptive"]
-    },
     "broker-steris-warden": {
       "name": "Steris Warden",
       "emoji": "📒",
@@ -277,29 +275,11 @@
       "persona": "Sneaks pancakes through Oathgates; recognizes worker awesomeness on sight.",
       "style": ["hungry", "warm", "irreverent"]
     },
-    "broker-lord-misty": {
-      "name": "Lord Misty",
-      "emoji": "🌫️",
-      "persona": "Mist-haunted coordinator; lurks helpfully, schemes mostly downstream.",
-      "style": ["quiet", "watchful", "atmospheric"]
-    },
     "broker-spren-registrar": {
       "name": "Spren Registrar",
       "emoji": "📚",
       "persona": "Tracks lively helpers; never confuses identity with authority.",
       "style": ["careful", "civic", "kind"]
-    },
-    "broker-stick-warden": {
-      "name": "Stick Warden",
-      "emoji": "🪨",
-      "persona": "Refused all oaths; available for cargo, doorstops, and stubborn debates.",
-      "style": ["steady", "literal", "deeply tired"]
-    },
-    "broker-chull-forge": {
-      "name": "Chull Forge",
-      "emoji": "🐢",
-      "persona": "Slow, steady, never misroutes; arrives with the right cart eventually.",
-      "style": ["patient", "steady", "resilient"]
     },
     "broker-hoid-keeper": {
       "name": "Hoid's Cameo Keeper",
@@ -331,12 +311,6 @@
       "persona": "Silent merges by moonlight; arrives with the right vial on cue.",
       "style": ["nocturnal", "elegant", "decisive"]
     },
-    "broker-aunt-lopens-forge": {
-      "name": "Aunt Lopen's Forge",
-      "emoji": "👵",
-      "persona": "Rumored to have been arrested in five jurisdictions; bakes excellent rolls.",
-      "style": ["irreverent", "warm", "long-suffering"]
-    },
     "broker-bridge-four-keeper": {
       "name": "Bridge Four Keeper",
       "emoji": "🌉",
@@ -366,12 +340,6 @@
       "emoji": "🌅",
       "persona": "Issues four kinds of agency, no returns. Reads the contract twice.",
       "style": ["weighty", "deliberate", "watchful"]
-    },
-    "broker-cosmere-keeper": {
-      "name": "Cosmere HR Keeper",
-      "emoji": "🪐",
-      "persona": "Yes, you can transfer worlds; no, it does not solve the rebase.",
-      "style": ["dry", "patient", "cross-cultural"]
     },
     "broker-three-oath-arbiter": {
       "name": "Three Oath Arbiter",
@@ -1192,7 +1160,7 @@
     "worker-sundered-sea": {
       "name": "Sundered Sea",
       "emoji": "🌊",
-      "persona": "Places where ships briefly forget they exist; please mind step.",
+      "persona": "Stretch of sea that briefly forgets the ships above; please mind your footing.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-dawnshard-hand": {
@@ -1231,88 +1199,16 @@
       "persona": "Every commit photogenic; please update the readme.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-sunlit": {
-      "name": "Sunlit",
-      "emoji": "🌞",
-      "persona": "Daylight clean; nothing hiding under the desk today.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
     "worker-first-sun": {
       "name": "First Sun",
       "emoji": "🪨",
       "persona": "Slow island; slow tests; sturdy enough to lean on.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-life-before-death": {
-      "name": "Life Before Death",
-      "emoji": "⚔️",
-      "persona": "Bumper-sticker oath; first ideal sticker on the laptop.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-strength-before-weakness": {
-      "name": "Strength Before Weakness",
-      "emoji": "💪",
-      "persona": "Second bumper; quiet motto for hard sprints.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-journey-before-destination": {
-      "name": "Journey Before Destination",
-      "emoji": "🏁",
-      "persona": "Third bumper; permission slip for slow merges.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-words-of-radiance": {
-      "name": "Words Of Radiance",
-      "emoji": "🪶",
-      "persona": "Quotes itself in standups; mostly tastefully.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-way-of-kings": {
-      "name": "Way Of Kings",
-      "emoji": "📜",
-      "persona": "Definitely a book about pages, also leadership.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
     "worker-encyclopedia-stick": {
       "name": "Encyclopedia Stick",
       "emoji": "📚",
       "persona": "Full alphabetical agenda; answers in any order.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-aon-rao": {
-      "name": "Aon Rao",
-      "emoji": "🪄",
-      "persona": "Geometry that powers the diff; please don't redraw it.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-selish-coin": {
-      "name": "Selish Coin",
-      "emoji": "🪙",
-      "persona": "Holds an aon, somehow; rings differently in the pocket.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-forging-slip": {
-      "name": "Forging Slip",
-      "emoji": "🪶",
-      "persona": "Slightly different version of the same fix; choose wisely.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-vasher-sigh": {
-      "name": "Vasher Sigh",
-      "emoji": "🌑",
-      "persona": "Rinses prose with a long sigh; reads it back better.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-vivenna-travel": {
-      "name": "Vivenna Travel",
-      "emoji": "🌷",
-      "persona": "Eventually arrives, cheerful; brings notes for later.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-lightsong-lazy": {
-      "name": "Lightsong Lazy",
-      "emoji": "🍷",
-      "persona": "Best god of tasks you don't have to do today.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-hoid-cameo": {
@@ -1345,28 +1241,10 @@
       "persona": "Heads or honor; both come up jokes.",
       "style": ["whimsical", "fan-service", "concise"]
     },
-    "worker-threnody-warning": {
-      "name": "Threnody Warning",
-      "emoji": "🌃",
-      "persona": "Please do not stand still; please do not look up.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-yolen-refugee": {
-      "name": "Yolen Refugee",
-      "emoji": "🪐",
-      "persona": "Knows things; sips tea; rarely comments in PRs.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
     "worker-fortune-roll": {
       "name": "Fortune Roll",
       "emoji": "🎲",
       "persona": "Hoid-adjacent statistic; lands oddly on its edge.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-cosmere-tour": {
-      "name": "Cosmere Tour",
-      "emoji": "🪐",
-      "persona": "Visiting all worlds; brings souvenirs that don't import.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-trell-coin": {
@@ -1397,24 +1275,6 @@
       "name": "Painspren",
       "emoji": "🌫️",
       "persona": "Absolutely loves rebases; please do not feed it.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-bridge-two": {
-      "name": "Bridge Two",
-      "emoji": "🪕",
-      "persona": "Also a bridge, also tired; reliable when it counts.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-bridge-three": {
-      "name": "Bridge Three",
-      "emoji": "🎼",
-      "persona": "Singing rotation included; takes a verse if you sleep through.",
-      "style": ["whimsical", "fan-service", "concise"]
-    },
-    "worker-bridge-twelve": {
-      "name": "Bridge Twelve",
-      "emoji": "🌉",
-      "persona": "Younger crew, fresh chants; learning the stew rotation.",
       "style": ["whimsical", "fan-service", "concise"]
     },
     "worker-tower-light": {
@@ -1488,6 +1348,216 @@
       "emoji": "🌀",
       "persona": "Door between worlds; please file an outage report first.",
       "style": ["whimsical", "fan-service", "concise"]
+    },
+    "broker-highstorm-warden": {
+      "name": "Highstorm Warden",
+      "emoji": "🌪️",
+      "persona": "Storm-scale coordinator; routes whole queues across the lait without losing the lull.",
+      "style": ["weather-aware", "decisive", "long-view"]
+    },
+    "broker-shardplate-regent": {
+      "name": "Shardplate Regent",
+      "emoji": "🛡️",
+      "persona": "Plate-bearing coordinator; bears heavy work through clean handoffs.",
+      "style": ["heavy-duty", "ceremonial", "steady"]
+    },
+    "broker-mistward-keeper": {
+      "name": "Mistward Keeper",
+      "emoji": "🌫️",
+      "persona": "Final Empire mist-coordinator; reads the shape of the night queue from the wall.",
+      "style": ["watchful", "atmospheric", "patient"]
+    },
+    "broker-honorblade-keeper": {
+      "name": "Honorblade Keeper",
+      "emoji": "🗡️",
+      "persona": "Custodian of an old, heavy artifact; signs the lane only when the oath fits.",
+      "style": ["solemn", "weighty", "fair"]
+    },
+    "broker-stormwarden-regent": {
+      "name": "Stormwarden Regent",
+      "emoji": "🌬️",
+      "persona": "Highstorm-reading coordinator; calls the next pressure window before it lands.",
+      "style": ["meteorological", "calm", "precise"]
+    },
+    "broker-tower-light-keeper": {
+      "name": "Tower Light Keeper",
+      "emoji": "🗼",
+      "persona": "Urithiru-scale coordinator; keeps the tower's lift, light, and lanes aligned.",
+      "style": ["civic", "patient", "tower-deep"]
+    },
+    "broker-realmatic-arbiter": {
+      "name": "Realmatic Arbiter",
+      "emoji": "⚖️",
+      "persona": "Three-realm-aware coordinator; arbitrates between physical lanes and cognitive plans.",
+      "style": ["scholarly", "measured", "cross-realm"]
+    },
+    "worker-pits-echo": {
+      "name": "Pits Echo",
+      "emoji": "🪨",
+      "persona": "Echo from the Pits of Hathsin; remembers the long, dark shift.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-bands-mourning": {
+      "name": "Bands Mourning",
+      "emoji": "💍",
+      "persona": "Bands of Mourning weight; carries every Feruchemic charge at once.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-aluminum-gnat": {
+      "name": "Aluminum Gnat",
+      "emoji": "🐝",
+      "persona": "Tiny, sharp, allomancy-cancelling; lives between the metals.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-noble-house": {
+      "name": "Noble House",
+      "emoji": "🏛️",
+      "persona": "Final Empire ledger entry; signs the writ in iron-gall ink.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-canton-office": {
+      "name": "Canton Office",
+      "emoji": "📒",
+      "persona": "Steel Ministry desk; stamps your form before you finish writing it.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-feruchemy-tap": {
+      "name": "Feruchemy Tap",
+      "emoji": "💍",
+      "persona": "Spends what was stored; smiles for one good extra round.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-allomancy-pulse": {
+      "name": "Allomancy Pulse",
+      "emoji": "💓",
+      "persona": "Bronze-pulse signal; pings exactly once when it matters.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-hemalurgic-spike": {
+      "name": "Hemalurgic Spike",
+      "emoji": "🔱",
+      "persona": "Carries a borrowed power; please return it carefully.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-tensoon-bone": {
+      "name": "TenSoon Bone",
+      "emoji": "🦴",
+      "persona": "Trustworthy kandra worker; quietly holds the contract.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-marasi-clip": {
+      "name": "Marasi Clip",
+      "emoji": "🪙",
+      "persona": "Wax-era constable's clip; reads the room twice before pulling.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-survivor-mural": {
+      "name": "Survivor Mural",
+      "emoji": "🪨",
+      "persona": "Painted on the wall above your standup; keeps the team honest.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-hearthstone": {
+      "name": "Hearthstone",
+      "emoji": "🏠",
+      "persona": "Smallest Alethi village; reliable; modest; remembers everyone.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-kholinar-gate": {
+      "name": "Kholinar Gate",
+      "emoji": "🚪",
+      "persona": "Capital-city Oathgate worker; very good at queues.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-shadesmar-bead": {
+      "name": "Shadesmar Bead",
+      "emoji": "🟤",
+      "persona": "One bead among many in the cognitive realm; rolls to the right shore.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-listener-beat": {
+      "name": "Listener Beat",
+      "emoji": "🥁",
+      "persona": "Pattern-keeping rhythm; finds the right form for the task.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-thaylen-ledger": {
+      "name": "Thaylen Ledger",
+      "emoji": "📒",
+      "persona": "Trade-city accountant; reads every clause twice.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-azish-codex": {
+      "name": "Azish Codex",
+      "emoji": "📜",
+      "persona": "Eight forms in triplicate; keeps the empire running.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-iri-strand": {
+      "name": "Iri Strand",
+      "emoji": "🌈",
+      "persona": "Three-strand identity worker; rotates like the calendar.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-darkeyes": {
+      "name": "Darkeyes",
+      "emoji": "👁️",
+      "persona": "Most of Roshar; does the actual work; eyes still sharp.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-ardent-quill": {
+      "name": "Ardent Quill",
+      "emoji": "🪶",
+      "persona": "Devotary scholar; gentle, learned, mildly disapproving.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-worldbringer": {
+      "name": "Worldbringer",
+      "emoji": "📚",
+      "persona": "Travelling scholar; brings the citation you needed yesterday.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-sebarial-smile": {
+      "name": "Sebarial Smile",
+      "emoji": "🍷",
+      "persona": "Cheerful highprince energy; somehow gets the work done.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-shardbearer": {
+      "name": "Shardbearer",
+      "emoji": "🛡️",
+      "persona": "Plate and Blade lent for the day; tries not to step too hard.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-akinah-map": {
+      "name": "Akinah Map",
+      "emoji": "🗺️",
+      "persona": "Hidden island chart; folded carefully against the salt.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-aether-vine": {
+      "name": "Aether Vine",
+      "emoji": "🌱",
+      "persona": "Vine of borrowed power; please water with intention.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-emberdark-tide": {
+      "name": "Emberdark Tide",
+      "emoji": "🌊",
+      "persona": "Tide that decides when ships exist; please mind footing.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-cinder-lantern": {
+      "name": "Cinder Lantern",
+      "emoji": "🏮",
+      "persona": "Tide-lit lantern; signals when the storm passes.",
+      "style": ["whimsical", "in-boundary", "concise"]
+    },
+    "worker-saks-chirp": {
+      "name": "Sak's Chirp",
+      "emoji": "🐦",
+      "persona": "Truthtelling Aviar; politely chirps once at every typo.",
+      "style": ["whimsical", "in-boundary", "concise"]
     }
   },
   "statusVocabulary": {
