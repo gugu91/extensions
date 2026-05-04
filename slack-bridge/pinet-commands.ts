@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import {
   generateAgentName,
   agentOwnsThread,
+  formatPinetStableSessionIdentity,
   describeSlackUserAccess,
   formatFollowerRuntimeDiagnosticHealth,
   formatFollowerRuntimeDiagnosticNextStep,
@@ -17,6 +18,7 @@ import {
   type SlackScopeDiagnostics,
 } from "./slack-scope-diagnostics.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
+import type { AgentStableSessionIdentity } from "./broker/types.js";
 
 export interface PinetCommandsDeps {
   // State accessors
@@ -28,6 +30,7 @@ export interface PinetCommandsDeps {
   agentName: () => string;
   agentEmoji: () => string;
   agentOwnerToken: () => string;
+  agentSessionIdentity: () => AgentStableSessionIdentity | null;
   agentPersonality: () => string | null;
   agentAliases: () => Set<string>;
   botUserId: () => string | null;
@@ -449,6 +452,7 @@ function runPinetStatus(deps: PinetCommandsDeps, ctx: ExtensionContext): void {
     [
       `Mode: ${mode}`,
       `Agent: ${deps.agentEmoji()} ${deps.agentName()}`,
+      `Session: ${formatPinetStableSessionIdentity(deps.agentSessionIdentity())}`,
       `Bot: ${deps.botUserId() ?? "unknown"}`,
       `Connection: ${deps.runtimeConnected() ? "connected" : "disconnected"}`,
       runtimeHealthInfo,

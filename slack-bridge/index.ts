@@ -9,6 +9,7 @@ import {
   buildAllowlist,
   reloadPinetRuntimeSafely,
   buildPinetOwnerToken,
+  buildPinetStableSessionIdentity,
   resolveAgentIdentity,
   resolveBrokerStableId,
   resolveAgentStableId,
@@ -1404,6 +1405,8 @@ export default function (pi: ExtensionAPI) {
       agentName: () => agentName,
       agentEmoji: () => agentEmoji,
       agentOwnerToken: () => agentOwnerToken,
+      agentSessionIdentity: () =>
+        buildPinetStableSessionIdentity(brokerRole === "broker" ? brokerStableId : agentStableId),
       agentPersonality: () => agentPersonality,
       agentAliases: () => agentAliases,
       botUserId: () => botUserId,

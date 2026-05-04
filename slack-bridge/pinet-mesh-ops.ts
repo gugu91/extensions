@@ -1,11 +1,14 @@
-import { normalizeOutgoingPinetControlMessage } from "./helpers.js";
+import {
+  buildPinetStableSessionIdentity,
+  normalizeOutgoingPinetControlMessage,
+} from "./helpers.js";
 import {
   dispatchBroadcastAgentMessage,
   dispatchDirectAgentMessage,
   isBroadcastChannelTarget,
   type AgentMessageStorage,
 } from "./broker/agent-messaging.js";
-import type { AgentInfo, TaskAssignmentInfo } from "./broker/types.js";
+import type { AgentInfo, AgentStableSessionIdentity, TaskAssignmentInfo } from "./broker/types.js";
 import type { ActivityLogEntry } from "./activity-log.js";
 import { extractTaskAssignmentsFromMessage } from "./task-assignments.js";
 
@@ -14,6 +17,7 @@ export interface PinetMeshOpsAgentRecord {
   name: string;
   id: string;
   pid?: number;
+  stableSession?: AgentStableSessionIdentity | null;
   status: "working" | "idle";
   metadata: Record<string, unknown> | null;
   lastHeartbeat: string;
@@ -302,6 +306,7 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
       name: agent.name,
       id: agent.id,
       pid: agent.pid,
+      stableSession: agent.stableId ? buildPinetStableSessionIdentity(agent.stableId) : null,
       status: agent.status,
       metadata: agent.metadata,
       lastHeartbeat: agent.lastHeartbeat,
@@ -323,6 +328,7 @@ export function createPinetMeshOps(deps: PinetMeshOpsDeps): PinetMeshOps {
       name: agent.name,
       id: agent.id,
       pid: agent.pid,
+      stableSession: agent.stableSession,
       status: agent.status ?? "idle",
       metadata: agent.metadata,
       lastHeartbeat: agent.lastHeartbeat,

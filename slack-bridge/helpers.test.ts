@@ -62,6 +62,7 @@ import {
   resolvePersistedAgentIdentity,
   resolveRuntimeAgentIdentity,
   buildAgentStableId,
+  buildPinetStableSessionIdentity,
   resolveAgentStableId,
   buildBrokerStableId,
   resolveBrokerStableId,
@@ -1745,6 +1746,21 @@ describe("buildAgentStableId", () => {
   });
 });
 
+describe("buildPinetStableSessionIdentity", () => {
+  it("builds a stable redacted identity for session stable ids", () => {
+    const identity = buildPinetStableSessionIdentity(
+      "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
+    );
+
+    expect(identity.kind).toBe("session");
+    expect(identity.id).toMatch(/^[0-9a-f]{12}$/);
+    expect(identity.hint).toBe("…/abc123/run-0/session.jsonl");
+    expect(identity.label).toContain("session:");
+    expect(identity.label).toContain("…/abc123/run-0/session.jsonl");
+    expect(identity.label).not.toContain("/Users/alice");
+  });
+});
+
 describe("resolveAgentStableId", () => {
   it("prefers the persisted stable id across reloads", () => {
     expect(
@@ -1933,6 +1949,27 @@ describe("formatAgentList", () => {
     expect(result).toBe(
       "\u{1F9A6} Stellar Otter (broker-97446) \u2014 working\n   ~/src/extensions (main) @ macbook",
     );
+  });
+
+  it("includes pid and stable session id when present", () => {
+    const agents: AgentDisplayInfo[] = [
+      {
+        emoji: "\u{1F916}",
+        name: "Bot",
+        id: "abc",
+        pid: 12345,
+        stableSession: buildPinetStableSessionIdentity(
+          "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
+        ),
+        status: "idle",
+        metadata: null,
+      },
+    ];
+    const result = formatAgentList(agents, homedir);
+    expect(result).toMatch(
+      /^\u{1F916} Bot \(abc\) — idle pid:12345 session:[0-9a-f]{12} \(…\/abc123\/run-0\/session\.jsonl\)$/u,
+    );
+    expect(result).not.toContain("/Users/alice");
   });
 
   it("includes pid when present", () => {

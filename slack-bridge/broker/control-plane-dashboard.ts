@@ -4,7 +4,11 @@ import type {
   RalphLoopEvaluationOptions,
   RalphLoopEvaluationResult,
 } from "../helpers.js";
-import { buildAgentDisplayInfo, shortenPath } from "../helpers.js";
+import {
+  buildAgentDisplayInfo,
+  formatPinetStableSessionIdentity,
+  shortenPath,
+} from "../helpers.js";
 import type { ResolvedTaskAssignment } from "../task-assignments.js";
 import type { BrokerMaintenanceResult } from "./maintenance.js";
 import type { PinetLaneInfo } from "./types.js";
@@ -32,6 +36,7 @@ export interface BrokerControlPlaneAgentRow {
   heartbeat: string;
   branch: string;
   worktree: string;
+  session: string;
 }
 
 export interface BrokerControlPlaneDashboardSnapshot {
@@ -257,6 +262,7 @@ export function buildBrokerControlPlaneDashboardSnapshot(
       heartbeat,
       branch,
       worktree,
+      session: formatPinetStableSessionIdentity(display.stableSession),
     };
   });
 

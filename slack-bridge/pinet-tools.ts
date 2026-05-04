@@ -24,6 +24,7 @@ import { isBroadcastChannelTarget } from "./broker/agent-messaging.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import type {
+  AgentStableSessionIdentity,
   PortLeaseAcquireInput,
   PortLeaseInfo,
   PortLeaseListOptions,
@@ -43,6 +44,7 @@ export interface PinetToolsAgentRecord {
   name: string;
   id: string;
   pid?: number;
+  stableSession?: AgentStableSessionIdentity | null;
   status: "working" | "idle";
   metadata: Record<string, unknown> | null;
   lastHeartbeat: string;
@@ -695,6 +697,13 @@ function buildCompactAgentDetails(
         branch: getAgentBranch(agent) ?? null,
         role: getAgentRole(agent) ?? null,
         brokerManaged: agent.metadata?.brokerManaged === true,
+        stableSession: agent.stableSession
+          ? {
+              id: agent.stableSession.id,
+              kind: agent.stableSession.kind,
+              hint: agent.stableSession.hint ?? null,
+            }
+          : null,
         launchSource: agent.metadata?.launchSource ?? null,
         tmuxSession: agent.metadata?.tmuxSession ?? null,
         routingScore: agent.routingScore ?? null,

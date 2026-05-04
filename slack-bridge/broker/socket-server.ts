@@ -9,6 +9,7 @@ import { MessageRouter } from "./router.js";
 import { dispatchDirectAgentMessage } from "./agent-messaging.js";
 import { sendBrokerMessage } from "./message-send.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
+import { buildPinetStableSessionIdentity } from "../helpers.js";
 import type {
   AgentInfo,
   BrokerMessage,
@@ -64,8 +65,10 @@ export type AgentStatusChangeCallback = (agentId: string, status: "working" | "i
 
 function toClientAgentInfo(agent: AgentInfo): ClientAgentInfo {
   const { stableId, ...clientAgent } = agent;
-  void stableId;
-  return clientAgent;
+  return {
+    ...clientAgent,
+    ...(stableId ? { stableSession: buildPinetStableSessionIdentity(stableId) } : {}),
+  };
 }
 
 export type AgentRegistrationResolver = (input: {
