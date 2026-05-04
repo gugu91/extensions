@@ -17,6 +17,7 @@ interface MutableRuntimeState {
   brokerRole: "broker" | "follower" | null;
   activeSkinTheme: string | null;
   agentPersonality: string | null;
+  skinIdentityRole: "broker" | "worker" | null;
   agentOwnerToken: string;
 }
 
@@ -39,6 +40,7 @@ function createDeps(
     brokerRole: null,
     activeSkinTheme: "cobalt",
     agentPersonality: "steady",
+    skinIdentityRole: "worker",
     agentOwnerToken: "owner:current",
     ...overrides.state,
   };
@@ -95,6 +97,10 @@ function createDeps(
     setAgentPersonality: (personality) => {
       state.agentPersonality = personality;
     },
+    getSkinIdentityRole: () => state.skinIdentityRole,
+    setSkinIdentityRole: (role) => {
+      state.skinIdentityRole = role;
+    },
     agentAliases,
     setAgentOwnerToken: (ownerToken) => {
       state.agentOwnerToken = ownerToken;
@@ -150,6 +156,7 @@ describe("createPersistedRuntimeState", () => {
         brokerRole: "broker",
         activeSkinTheme: "oceanic",
         agentPersonality: "calm",
+        skinIdentityRole: "broker",
       },
       threads: new Map([
         [
@@ -191,6 +198,7 @@ describe("createPersistedRuntimeState", () => {
       lastPinetRole: "broker",
       activeSkinTheme: "oceanic",
       agentPersonality: "calm",
+      skinIdentityRole: "broker",
       agentAliases: ["Cobalt", "Crane"],
     });
   });
@@ -287,6 +295,7 @@ describe("createPersistedRuntimeState", () => {
     expect(state.agentOwnerToken).toBe(buildPinetOwnerToken("broker-stable-saved"));
     expect(state.activeSkinTheme).toBe("midnight");
     expect(state.agentPersonality).toBe("observant");
+    expect(state.skinIdentityRole).toBe("broker");
     expect([...agentAliases]).toEqual(["Saved Alias", "Night Crane"]);
 
     expect(threads.get("100.1")?.owner).toBe("owner:current");
@@ -334,6 +343,7 @@ describe("createPersistedRuntimeState", () => {
       lastPinetRole: "worker",
       activeSkinTheme: "midnight",
       agentPersonality: "observant",
+      skinIdentityRole: "broker",
       agentAliases: ["Saved Alias", "Night Crane"],
     });
   });

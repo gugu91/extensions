@@ -8,6 +8,7 @@ import {
   buildPinetOwnerToken,
   buildPinetSkinAssignment,
   DEFAULT_PINET_SKIN_THEME,
+  normalizePinetSkinIdentityMetadata,
   normalizePinetSkinTheme,
   resolvePinetMeshAuth,
   syncBrokerInboxEntries,
@@ -66,9 +67,15 @@ export interface BrokerRuntimeDeps {
   setBrokerStableId: (stableId: string) => void;
   getActiveSkinTheme: () => string | null;
   setActiveSkinTheme: (theme: string) => void;
+  setSkinIdentityRole: (role: "broker" | "worker" | null) => void;
   setAgentOwnerToken: (ownerToken: string) => void;
   getAgentMetadata: (role: "broker" | "worker") => Promise<Record<string, unknown>>;
-  applyLocalAgentIdentity: (name: string, emoji: string, personality: string | null) => void;
+  applyLocalAgentIdentity: (
+    name: string,
+    emoji: string,
+    personality: string | null,
+    skinIdentityRole?: "broker" | "worker" | null,
+  ) => void;
   buildSkinMetadata: (
     metadata: Record<string, unknown> | undefined,
     personality: string,
@@ -142,6 +149,74 @@ function normalizeOptionalSetting(value: string | null | undefined): string | nu
 
 export function resolveConfiguredBrokerSkinTheme(settings: SlackBridgeSettings): string {
   return normalizePinetSkinTheme(settings.skinTheme) ?? DEFAULT_PINET_SKIN_THEME;
+}
+
+export function resolveBrokerRegistrationSkinAssignment(input: {
+  theme: string;
+  role: "broker" | "worker";
+  seed: string;
+  requestedName?: string;
+  metadata?: Record<string, unknown>;
+}): {
+  name: string;
+  emoji: string;
+  personality: string;
+  statusVocabulary?: PinetSkinStatusVocabulary;
+} {
+  const assignment = buildPinetSkinAssignment({
+    theme: input.theme,
+    role: input.role,
+    seed: input.seed,
+  });
+  const metadataSkinIdentity = normalizePinetSkinIdentityMetadata(input.metadata?.skinIdentity);
+  const preservedSkinIdentity =
+    input.requestedName?.trim().length === 0 &&
+    input.metadata?.skinTheme === input.theme &&
+    metadataSkinIdentity?.role === input.role
+      ? metadataSkinIdentity
+      : null;
+  const personality =
+    preservedSkinIdentity && typeof input.metadata?.personality === "string"
+      ? input.metadata.personality
+      : assignment.personality;
+
+  return {
+    name: preservedSkinIdentity?.name ?? assignment.name,
+    emoji: preservedSkinIdentity?.emoji ?? assignment.emoji,
+    personality,
+    ...(assignment.statusVocabulary ? { statusVocabulary: assignment.statusVocabulary } : {}),
+  };
+}
+
+export function applyBrokerSelfSkinIdentity(
+  deps: Pick<BrokerRuntimeDeps, "applyLocalAgentIdentity">,
+  agent: { name: string; emoji: string },
+  personality: string,
+): void {
+  deps.applyLocalAgentIdentity(agent.name, agent.emoji, personality, "broker");
+}
+
+export async function buildBrokerSelfRegistrationMetadata(
+  deps: Pick<BrokerRuntimeDeps, "getAgentMetadata" | "buildSkinMetadata">,
+  assignment: {
+    name: string;
+    emoji: string;
+    personality: string;
+    statusVocabulary?: PinetSkinStatusVocabulary;
+  },
+): Promise<Record<string, unknown>> {
+  return {
+    ...deps.buildSkinMetadata(
+      await deps.getAgentMetadata("broker"),
+      assignment.personality,
+      assignment.statusVocabulary,
+    ),
+    skinIdentity: {
+      name: assignment.name,
+      emoji: assignment.emoji,
+      role: "broker",
+    },
+  };
 }
 
 export interface BrokerRuntime {
@@ -614,10 +689,12 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         broker.db.setSetting("pinet.skinTheme", activeSkinTheme);
         broker.server.setAgentRegistrationResolver((registration) => {
           const theme = deps.getActiveSkinTheme() ?? DEFAULT_PINET_SKIN_THEME;
-          const assignment = buildPinetSkinAssignment({
+          const assignment = resolveBrokerRegistrationSkinAssignment({
             theme,
             role: deps.getMeshRoleFromMetadata(registration.metadata, "worker"),
             seed: registration.stableId ?? registration.agentId,
+            requestedName: registration.name,
+            metadata: registration.metadata,
           });
           return {
             name: assignment.name,
@@ -640,15 +717,11 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           selfAssignment.name,
           selfAssignment.emoji,
           process.pid,
-          deps.buildSkinMetadata(
-            await deps.getAgentMetadata("broker"),
-            selfAssignment.personality,
-            selfAssignment.statusVocabulary,
-          ),
+          await buildBrokerSelfRegistrationMetadata(deps, selfAssignment),
           brokerStableId,
         );
         selfId = selfAgent.id;
-        deps.applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
+        applyBrokerSelfSkinIdentity(deps, selfAgent, selfAssignment.personality);
 
         const brokerSelfId = selfId;
         adapter.onInbound((message) => {

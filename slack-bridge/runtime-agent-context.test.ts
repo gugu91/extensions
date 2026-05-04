@@ -33,6 +33,7 @@ interface MutableRuntimeAgentState {
   agentOwnerToken: string;
   activeSkinTheme: string | null;
   agentPersonality: string | null;
+  skinIdentityRole: "broker" | "worker" | null;
 }
 
 function createContext(
@@ -86,6 +87,7 @@ function createDeps(
     agentOwnerToken: buildPinetOwnerToken("agent-stable-current"),
     activeSkinTheme: null,
     agentPersonality: null,
+    skinIdentityRole: null,
     ...overrides.state,
   };
   const threads =
@@ -164,6 +166,10 @@ function createDeps(
     getAgentPersonality: () => state.agentPersonality,
     setAgentPersonality: (personality) => {
       state.agentPersonality = personality;
+    },
+    getSkinIdentityRole: () => state.skinIdentityRole,
+    setSkinIdentityRole: (role) => {
+      state.skinIdentityRole = role;
     },
     getAgentAliases: () => agentAliases,
     getThreads: () => threads,
@@ -300,6 +306,7 @@ describe("createRuntimeAgentContext", () => {
     expect(state.agentName).toBe("Obsidian Coral Goose");
     expect(state.agentEmoji).toBe("🪿");
     expect(state.agentPersonality).toBe("observant");
+    expect(state.skinIdentityRole).toBeNull();
     expect([...agentAliases]).toEqual(["Cobalt Olive Crane"]);
     expect(threads.get("100.1")?.owner).toBe(state.agentOwnerToken);
     expect(threads.get("200.1")?.owner).toBe("someone-else");
@@ -366,6 +373,138 @@ describe("createRuntimeAgentContext", () => {
     expect(state.agentPersonality).toBe(expectedSkin.personality);
   });
 
+  it("preserves persisted skin identity when refreshing the same configured skin", () => {
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          skinTheme: "cosmere",
+        },
+      }),
+    );
+
+    const { deps, state } = createDeps({
+      state: {
+        activeSkinTheme: "cosmere",
+        agentName: "Drehy Wave",
+        agentEmoji: "🐦",
+        agentPersonality: "Nods, fixes, moves on; warmly competent.",
+        skinIdentityRole: "worker",
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+    runtimeAgentContext.refreshSettings();
+
+    expect(state.activeSkinTheme).toBe("cosmere");
+    expect(state.agentName).toBe("Drehy Wave");
+    expect(state.agentEmoji).toBe("🐦");
+    expect(state.agentPersonality).toBe("Nods, fixes, moves on; warmly competent.");
+  });
+
+  it("preserves same-role free-form skin identity when refreshing the same skin", () => {
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          skinTheme: "custom nebula",
+        },
+      }),
+    );
+
+    const { deps, state } = createDeps({
+      state: {
+        activeSkinTheme: "custom nebula",
+        skinIdentityRole: "worker",
+        agentName: "Persisted Nebula Worker",
+        agentEmoji: "🌈",
+        agentPersonality: "Custom free-form worker persona.",
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+    runtimeAgentContext.refreshSettings();
+
+    expect(state.agentName).toBe("Persisted Nebula Worker");
+    expect(state.agentEmoji).toBe("🌈");
+    expect(state.agentPersonality).toBe("Custom free-form worker persona.");
+    expect(state.skinIdentityRole).toBe("worker");
+  });
+
+  it("does not preserve manual same-role local identity edits as skin provenance", () => {
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          skinTheme: "custom nebula",
+        },
+      }),
+    );
+
+    const { deps, state } = createDeps({
+      state: {
+        activeSkinTheme: "custom nebula",
+        skinIdentityRole: "worker",
+        agentName: "Persisted Nebula Worker",
+        agentEmoji: "🌈",
+        agentPersonality: "Custom free-form worker persona.",
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+    runtimeAgentContext.applyLocalAgentIdentity("Manual Local Rename", "📝", "manual");
+    runtimeAgentContext.refreshSettings();
+
+    expect(state.agentName).not.toBe("Manual Local Rename");
+    expect(state.agentEmoji).not.toBe("📝");
+    expect(state.skinIdentityRole).toBe("worker");
+  });
+
+  it("does not preserve a broker skin identity when refreshing as a worker", () => {
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          skinTheme: "cosmere",
+        },
+      }),
+    );
+
+    const sessionFile = "/tmp/runtime-agent-context-session.json";
+    const brokerSkin = buildPinetSkinAssignment({
+      theme: "cosmere",
+      role: "broker",
+      seed: "broker-stable-current",
+    });
+    const expectedWorkerSkin = buildPinetSkinAssignment({
+      theme: "cosmere",
+      role: "worker",
+      seed: sessionFile,
+    });
+    const { deps, state } = createDeps({
+      extensionContext: createContext(sessionFile),
+      state: {
+        brokerRole: null,
+        activeSkinTheme: "cosmere",
+        agentName: brokerSkin.name,
+        agentEmoji: brokerSkin.emoji,
+        agentPersonality: brokerSkin.personality,
+        skinIdentityRole: "broker",
+      },
+    });
+    const runtimeAgentContext = createRuntimeAgentContext(deps);
+
+    runtimeAgentContext.refreshSettings();
+
+    expect(state.agentName).toBe(expectedWorkerSkin.name);
+    expect(state.agentEmoji).toBe(expectedWorkerSkin.emoji);
+    expect(state.agentPersonality).toBe(expectedWorkerSkin.personality);
+  });
+
   it("clears stale active skin when skinTheme is removed from settings", () => {
     fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
     fs.writeFileSync(
@@ -412,6 +551,7 @@ describe("createRuntimeAgentContext", () => {
         agentOwnerToken: "owner:stale",
         activeSkinTheme: "midnight",
         agentPersonality: "steady",
+        skinIdentityRole: "broker",
       },
       agentAliases: new Set(["Saved Alias", "Saved Crane"]),
     });
@@ -430,6 +570,7 @@ describe("createRuntimeAgentContext", () => {
     state.agentEmoji = "🪿";
     state.activeSkinTheme = null;
     state.agentPersonality = null;
+    state.skinIdentityRole = null;
     agentAliases.clear();
     agentAliases.add("Mutated Alias");
 
@@ -451,6 +592,7 @@ describe("createRuntimeAgentContext", () => {
     expect(state.agentEmoji).toBe("🦩");
     expect(state.activeSkinTheme).toBe("midnight");
     expect(state.agentPersonality).toBe("steady");
+    expect(state.skinIdentityRole).toBe("broker");
     expect(state.agentOwnerToken).toBe(buildPinetOwnerToken(state.brokerStableId));
     expect([...agentAliases]).toEqual(["Saved Alias"]);
   });
@@ -473,6 +615,7 @@ describe("createRuntimeAgentContext", () => {
       state: {
         activeSkinTheme: "midnight",
         agentPersonality: "observant",
+        skinIdentityRole: "broker",
       },
       gitContext: {
         cwd: workerDir,
@@ -500,6 +643,11 @@ describe("createRuntimeAgentContext", () => {
       branch: "feat/runtime-agent-context",
       role: "broker",
       skinTheme: "midnight",
+      skinIdentity: {
+        name: "Cobalt Olive Crane",
+        emoji: "🦩",
+        role: "broker",
+      },
       personality: "observant",
       skinStatusVocabulary: {
         idle: "standing by",

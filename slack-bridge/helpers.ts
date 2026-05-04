@@ -3371,6 +3371,59 @@ function buildBuiltInPinetSkinAssignment(options: {
   };
 }
 
+export interface PinetSkinIdentityMetadata {
+  name: string;
+  emoji: string;
+  role?: PinetSkinRole;
+}
+
+export function normalizePinetSkinIdentityMetadata(
+  value: unknown,
+): PinetSkinIdentityMetadata | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const name = asString(record.name);
+  const emoji = asString(record.emoji);
+  if (!name || !emoji) return null;
+
+  const role = asString(record.role);
+  return {
+    name,
+    emoji,
+    ...(role === "broker" || role === "worker" ? { role } : {}),
+  };
+}
+
+export function isPinetSkinIdentityCompatible(options: {
+  theme: string;
+  role: PinetSkinRole;
+  name: string;
+  emoji: string;
+}): boolean {
+  const normalizedTheme = normalizePinetSkinTheme(options.theme) ?? DEFAULT_PINET_SKIN_THEME;
+  const builtInProfile = getBuiltInPinetSkinProfile(normalizedTheme);
+  if (!builtInProfile) {
+    return true;
+  }
+
+  const roleDescriptor = builtInProfile.roles[options.role];
+  const rolePool = roleDescriptor.characterPool;
+  for (const characterId of rolePool) {
+    const character = builtInProfile.characters[characterId];
+    if (!character || character.emoji !== options.emoji) {
+      continue;
+    }
+    const names =
+      character.aliases && character.aliases.length > 0 ? character.aliases : [character.name];
+    if (names.includes(options.name)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function buildPinetSkinAssignment(options: {
   theme: string;
   role: PinetSkinRole;
