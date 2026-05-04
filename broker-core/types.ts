@@ -2,6 +2,17 @@ import type { PinetMailClass } from "./mail-classification.js";
 
 // ─── Domain types ─────────────────────────────────────────
 
+export interface AgentStableSessionIdentity {
+  /** Stable, non-reversible identifier derived from the raw broker stable id. */
+  id: string;
+  /** Stable-id class, e.g. a persisted Pi session file, leaf id, cwd fallback, or broker id. */
+  kind: "session" | "leaf" | "cwd" | "broker" | "stable";
+  /** Safe user-facing summary that never includes an absolute path. */
+  label: string;
+  /** Redacted tail hint for humans; safe for Slack/Pinet roster output. */
+  hint?: string;
+}
+
 export interface AgentInfo {
   id: string;
   stableId?: string | null;
@@ -20,7 +31,9 @@ export interface AgentInfo {
   outboundCount?: number;
 }
 
-export type ClientAgentInfo = Omit<AgentInfo, "stableId">;
+export type ClientAgentInfo = Omit<AgentInfo, "stableId"> & {
+  stableSession?: AgentStableSessionIdentity | null;
+};
 
 export interface ThreadInfo {
   threadId: string;

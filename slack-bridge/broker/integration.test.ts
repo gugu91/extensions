@@ -431,7 +431,14 @@ describe("broker integration — client ↔ server ↔ DB", () => {
     const names = agents.map((a) => a.name).sort();
     expect(names).toEqual(["agent-alpha", "agent-beta"]);
     expect(agents.every((agent) => !("stableId" in agent))).toBe(true);
-    expect(agents.find((agent) => agent.name === "agent-alpha")?.outboundCount).toBe(1);
+    const alpha = agents.find((agent) => agent.name === "agent-alpha");
+    expect(alpha?.stableSession).toMatchObject({
+      kind: "session",
+      hint: "…/tmp/alpha",
+    });
+    expect(alpha?.stableSession?.id).toMatch(/^[0-9a-f]{12}$/);
+    expect(alpha?.stableSession?.label).not.toContain("host:session:/tmp/alpha");
+    expect(alpha?.outboundCount).toBe(1);
     expect(agents.find((agent) => agent.name === "agent-beta")?.outboundCount).toBe(0);
 
     client2.disconnect();

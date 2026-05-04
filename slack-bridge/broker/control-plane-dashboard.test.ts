@@ -28,6 +28,7 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
           name: "Cosmic Crane",
           emoji: "🦩",
           status: "working",
+          stableId: "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
           lastHeartbeat: "2026-04-02T17:00:10.000Z",
           lastActivity: "2026-04-02T17:00:11.000Z",
           pendingInboxCount: 1,
@@ -150,6 +151,9 @@ describe("buildBrokerControlPlaneDashboardSnapshot", () => {
     expect(snapshot.taskCounts.mergedPrs).toBe(1);
     expect(snapshot.roster[0]?.label).toContain("The Broker Otter");
     expect(snapshot.roster[1]?.taskSummary).toContain("#217 PR #221 open");
+    expect(snapshot.roster[1]?.session).toContain("session:");
+    expect(snapshot.roster[1]?.session).toContain("…/abc123/run-0/session.jsonl");
+    expect(snapshot.roster[1]?.session).not.toContain("/Users/alice");
     expect(snapshot.recentOutcomes).toContain("#202 PR #205 merged");
     expect(snapshot.activeLanes[0]).toContain("issue-688 [active]");
     expect(snapshot.detachedLanes[0]).toContain("issue-123 [detached]");

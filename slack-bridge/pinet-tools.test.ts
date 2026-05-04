@@ -883,7 +883,17 @@ describe("registerPinetTools", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
-    const listBrokerAgents = vi.fn(() => [makeAgent({ outboundCount: 3 })]);
+    const listBrokerAgents = vi.fn(() => [
+      makeAgent({
+        outboundCount: 3,
+        stableSession: {
+          id: "abcdef123456",
+          kind: "session",
+          label: "session:abcdef123456 (…/run-0/session.jsonl)",
+          hint: "…/run-0/session.jsonl",
+        },
+      }),
+    ]);
     const deps = createDeps({ listBrokerAgents });
     const tools = registerWithDeps(deps);
 
@@ -910,6 +920,9 @@ describe("registerPinetTools", () => {
       "Agent routing hints: repo=extensions · tools=read,edit · task=review #395",
     );
     expect(result.details.data.text).toContain("Golden Chalk Rabbit");
+    expect(result.details.data.text).toContain(
+      "pid:101 session:abcdef123456 (…/run-0/session.jsonl)",
+    );
     expect(result.details.data.text).toContain("outbound: 3 this session");
     expect(result.details.data.details.hint).toEqual({
       repo: "extensions",
@@ -924,7 +937,17 @@ describe("registerPinetTools", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
-    const listBrokerAgents = vi.fn(() => [makeAgent({ metadata: { repo: "extensions" } })]);
+    const listBrokerAgents = vi.fn(() => [
+      makeAgent({
+        metadata: { repo: "extensions" },
+        stableSession: {
+          id: "abcdef123456",
+          kind: "session",
+          label: "session:abcdef123456 (…/run-0/session.jsonl)",
+          hint: "…/run-0/session.jsonl",
+        },
+      }),
+    ]);
     const deps = createDeps({ listBrokerAgents });
     const tools = registerWithDeps(deps);
 
@@ -938,7 +961,12 @@ describe("registerPinetTools", () => {
           text: string;
           details: {
             count: number;
-            agents: Array<{ name: string; repo: string | null; metadata?: unknown }>;
+            agents: Array<{
+              name: string;
+              repo: string | null;
+              metadata?: unknown;
+              stableSession?: { id: string; kind: string; hint: string | null } | null;
+            }>;
             hint: { repo?: string };
           };
           compact_details?: unknown;
@@ -951,6 +979,11 @@ describe("registerPinetTools", () => {
     expect(result.details.data.text).not.toContain("pid:");
     expect(result.details.data.details.agents[0]?.name).toBe("Golden Chalk Rabbit");
     expect(result.details.data.details.agents[0]?.repo).toBe("extensions");
+    expect(result.details.data.details.agents[0]?.stableSession).toEqual({
+      id: "abcdef123456",
+      kind: "session",
+      hint: "…/run-0/session.jsonl",
+    });
     expect(result.details.data.details.agents[0]?.metadata).toBeUndefined();
     expect(result.details.data.details.hint.repo).toBe("extensions");
     expect(result.details.data.compact_details).toBeUndefined();

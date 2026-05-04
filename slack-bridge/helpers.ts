@@ -13,6 +13,7 @@ import {
 } from "@gugu910/pi-transport-core";
 import type { ReactionCommandSettings } from "./reaction-triggers.js";
 import { buildPinetReadPointer } from "./broker-inbound-persistence.js";
+import type { AgentStableSessionIdentity } from "./broker/types.js";
 import { matchesToolPattern } from "./guardrails.js";
 
 // ─── Settings ────────────────────────────────────────────
@@ -875,6 +876,7 @@ export interface AgentDisplayInfo {
   name: string;
   id: string;
   pid?: number;
+  stableSession?: AgentStableSessionIdentity | null;
   status: "working" | "idle";
   metadata?: {
     cwd?: string;
@@ -918,6 +920,8 @@ export interface AgentVisibilityInput {
   name: string;
   id: string;
   pid?: number;
+  stableId?: string | null;
+  stableSession?: AgentStableSessionIdentity | null;
   status: "working" | "idle";
   metadata?: Record<string, unknown> | null;
   lastHeartbeat?: string;
@@ -1188,6 +1192,11 @@ export function buildAgentDisplayInfo(
   }
 
   const metadata = asRecord(agent.metadata);
+  const stableSession =
+    agent.stableSession ??
+    (typeof (agent as { stableId?: unknown }).stableId === "string"
+      ? buildPinetStableSessionIdentity((agent as { stableId: string }).stableId)
+      : null);
   const capabilities = extractAgentCapabilities(metadata);
   const capabilityTags = buildAgentCapabilityTags(capabilities);
 
@@ -1201,6 +1210,7 @@ export function buildAgentDisplayInfo(
     name: agent.name,
     id: agent.id,
     ...(agent.pid != null ? { pid: agent.pid } : {}),
+    ...(stableSession ? { stableSession } : {}),
     status: agent.status,
     metadata: metadata
       ? {
@@ -2445,7 +2455,8 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
         : "";
       const stuckTag = a.stuck ? " [stuck]" : "";
       const pid = a.pid != null ? ` pid:${a.pid}` : "";
-      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${statusFlavor}${health}${stuckTag}${pid}`;
+      const session = a.stableSession ? ` ${a.stableSession.label}` : "";
+      let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${statusFlavor}${health}${stuckTag}${pid}${session}`;
 
       const meta = a.metadata;
       if (meta && (meta.cwd || meta.branch || meta.host)) {
@@ -2705,6 +2716,60 @@ export function buildPinetOwnerToken(stableId: string): string {
   const primary = hashString(stableId).toString(16).padStart(8, "0");
   const secondary = hashString(`${stableId}:owner`).toString(16).padStart(8, "0");
   return `owner:${primary}${secondary}`;
+}
+
+function parsePinetStableId(stableId: string): {
+  kind: AgentStableSessionIdentity["kind"];
+  value: string;
+} {
+  const firstColon = stableId.indexOf(":");
+  const secondColon = firstColon === -1 ? -1 : stableId.indexOf(":", firstColon + 1);
+  if (firstColon === -1 || secondColon === -1) {
+    return { kind: "stable", value: stableId };
+  }
+
+  const rawKind = stableId.slice(firstColon + 1, secondColon);
+  const value = stableId.slice(secondColon + 1);
+  const kind = ["session", "leaf", "cwd", "broker"].includes(rawKind)
+    ? (rawKind as AgentStableSessionIdentity["kind"])
+    : "stable";
+  return { kind, value };
+}
+
+function redactStableSessionValue(kind: AgentStableSessionIdentity["kind"], value: string): string {
+  const looksPathLike =
+    kind === "session" ||
+    kind === "cwd" ||
+    kind === "broker" ||
+    value.includes("/") ||
+    value.includes("\\");
+  if (!looksPathLike) {
+    return value.length > 48 ? `${value.slice(0, 45)}...` : value;
+  }
+
+  const parts = value.split(/[\\/]+/).filter(Boolean);
+  const tail = parts.slice(-3).join("/");
+  return tail ? `…/${tail}` : "…";
+}
+
+export function buildPinetStableSessionIdentity(stableId: string): AgentStableSessionIdentity {
+  const { kind, value } = parsePinetStableId(stableId);
+  const id = buildPinetOwnerToken(stableId)
+    .replace(/^owner:/, "")
+    .slice(0, 12);
+  const hint = redactStableSessionValue(kind, value);
+  return {
+    id,
+    kind,
+    label: `${kind}:${id}${hint ? ` (${hint})` : ""}`,
+    ...(hint ? { hint } : {}),
+  };
+}
+
+export function formatPinetStableSessionIdentity(
+  identity: AgentStableSessionIdentity | null | undefined,
+): string {
+  return identity ? identity.label : "unknown";
 }
 
 export function generateAgentName(

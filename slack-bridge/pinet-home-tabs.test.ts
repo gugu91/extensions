@@ -76,6 +76,7 @@ function createBrokerSnapshot(): BrokerControlPlaneDashboardSnapshot {
         workload: "0 inbox / 0 threads",
         taskSummary: "—",
         heartbeat: "2s ago",
+        session: "session:abcdef123456 (…/run-0/session.jsonl)",
         branch: "main",
         worktree: "main checkout",
       },

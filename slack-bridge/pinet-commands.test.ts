@@ -49,6 +49,12 @@ function createDeps(overrides: Partial<PinetCommandsDeps> = {}): PinetCommandsDe
     agentName: () => "Slate Chalk Otter",
     agentEmoji: () => "🦦",
     agentOwnerToken: () => "owner-token",
+    agentSessionIdentity: () => ({
+      id: "abcdef123456",
+      kind: "session",
+      label: "session:abcdef123456 (…/run-0/session.jsonl)",
+      hint: "…/run-0/session.jsonl",
+    }),
     agentPersonality: () => null,
     agentAliases: () => new Set<string>(),
     botUserId: () => "U123",
@@ -116,6 +122,19 @@ describe("registerPinetCommands", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet start"), "info");
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/pinet skin <theme>"), "info");
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/pinet-start"), "info");
+  });
+
+  it("shows the redacted stable session identity in /pinet status", async () => {
+    const commands = registerCommands(createDeps());
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("status", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Session: session:abcdef123456 (…/run-0/session.jsonl)"),
+      "info",
+    );
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/Users/"), "info");
   });
 
   it("routes /pinet reload through the existing remote-control message path", async () => {

@@ -160,6 +160,7 @@ function buildRosterBlocks(snapshot: BrokerControlPlaneDashboardSnapshot): Slack
               `Workload: ${row.workload}`,
               `Task: ${truncate(row.taskSummary, 120)}`,
               `Heartbeat: ${row.heartbeat}`,
+              `Session: ${row.session}`,
               `Branch: ${row.branch} · Worktree: ${row.worktree}`,
             ].join("\n"),
           }),
