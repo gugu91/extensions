@@ -194,6 +194,10 @@ User opens Pinet in Slack sidebar
 
 Messages queue while the agent is busy. When the agent finishes, it automatically drains the inbox and responds.
 
+### Reaction triggers
+
+Configured emoji reactions create structured Pinet requests from the reacted-to Slack message. The default set includes `:arrow_up:` / ⬆️ as `steer`, which marks the referenced message as steering and asks the target agent to treat it as an operator instruction when relevant and safe. Pinet adds ✅ when it accepts the reaction-triggered request. If it cannot process the reaction at all, it adds ❌; check broker logs for the underlying Slack/API error. When Slack cannot return the reacted message text, Pinet still routes the reaction with channel/thread/message IDs so steering reactions do not fail solely because message lookup was unavailable.
+
 ### Available tools
 
 Slack-bridge uses progressive disclosure to keep the per-turn tool surface

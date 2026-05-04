@@ -1683,6 +1683,89 @@ describe("SlackAdapter — reaction triggers", () => {
       name: "white_check_mark",
     });
   });
+
+  it("routes arrow-up steering reactions even when Slack cannot fetch the reacted message", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const rawBody = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = rawBody.startsWith("{")
+        ? (JSON.parse(rawBody) as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(rawBody));
+
+      if (url.endsWith("/conversations.history")) {
+        return mockSlackResponse({ messages: [] });
+      }
+
+      if (url.endsWith("/users.info")) {
+        if (parsedBody.user === "U_REACTOR") {
+          return mockSlackResponse({ user: { real_name: "Alice" } });
+        }
+        if (parsedBody.user === "U_TARGET") {
+          return mockSlackResponse({ user: { real_name: "Bob" } });
+        }
+      }
+
+      if (url.endsWith("/reactions.add")) {
+        return mockSlackResponse();
+      }
+
+      throw new Error(`unexpected Slack API call: ${url}`);
+    });
+
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      allowAllWorkspaceUsers: true,
+    });
+    (adapter as unknown as { botUserId: string | null }).botUserId = "U_BOT";
+
+    const handler = vi.fn();
+    adapter.onInbound(handler);
+
+    await (
+      adapter as unknown as { onReactionAdded: (evt: Record<string, unknown>) => Promise<void> }
+    ).onReactionAdded({
+      type: "reaction_added",
+      user: "U_REACTOR",
+      reaction: "arrow_up",
+      item_user: "U_TARGET",
+      item: {
+        type: "message",
+        channel: "C123",
+        ts: "111.333",
+      },
+      event_ts: "999.000",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "slack",
+        threadId: "111.333",
+        channel: "C123",
+        userId: "U_REACTOR",
+        userName: "Alice",
+        timestamp: "999.000",
+        metadata: expect.objectContaining({
+          reactionTrigger: true,
+          reactionName: "arrow_up",
+          reactionAction: "steer",
+          reactedMessageFetchStatus: "unavailable",
+          referencedMessageTs: "111.333",
+          reactedMessageAuthor: "Bob",
+          reactedMessageAuthorId: "U_TARGET",
+        }),
+      }),
+    );
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("- action: steer");
+    expect(handler.mock.calls[0]?.[0]?.text).toContain("message text unavailable");
+
+    const reactionBodies = fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith("/reactions.add"))
+      .map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    expect(reactionBodies).toEqual([
+      { channel: "C123", timestamp: "111.333", name: "white_check_mark" },
+    ]);
+  });
 });
 
 describe("SlackAdapter — send", () => {

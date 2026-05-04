@@ -333,20 +333,18 @@ export class SlackAdapter implements MessageAdapter {
 
     try {
       const reactedMessage = await this.fetchMessageByTs(item.channel, item.ts);
-      if (!reactedMessage) {
-        throw new Error(`Unable to fetch reacted message ${item.ts} in channel ${item.channel}`);
-      }
+      const reactedMessageFetchStatus = reactedMessage ? "found" : "unavailable";
 
       const threadTs =
-        (reactedMessage.thread_ts as string | undefined) ??
-        (reactedMessage.ts as string | undefined) ??
+        (reactedMessage?.thread_ts as string | undefined) ??
+        (reactedMessage?.ts as string | undefined) ??
         item.ts;
 
       if (!this.getThread(threadTs)) {
         this.threads.set(threadTs, {
           channelId: item.channel,
           threadTs,
-          userId: (reactedMessage.user as string | undefined) ?? userId,
+          userId: (reactedMessage?.user as string | undefined) ?? userId,
         });
         try {
           this.config.rememberKnownThread?.(threadTs, item.channel, null);
@@ -358,18 +356,20 @@ export class SlackAdapter implements MessageAdapter {
       const reactorName = await this.resolveUser(userId);
       if (this.shuttingDown) return;
       const reactedMessageAuthorId =
-        (reactedMessage.user as string | undefined) ?? (evt.item_user as string | undefined);
+        (reactedMessage?.user as string | undefined) ?? (evt.item_user as string | undefined);
       const reactedMessageAuthor = reactedMessageAuthorId
         ? await this.resolveUser(reactedMessageAuthorId)
-        : (reactedMessage.bot_id as string | undefined)
+        : (reactedMessage?.bot_id as string | undefined)
           ? "bot"
           : "unknown";
       if (this.shuttingDown) return;
 
       const reactedMessageText =
-        typeof reactedMessage.text === "string" && reactedMessage.text.trim().length > 0
+        typeof reactedMessage?.text === "string" && reactedMessage.text.trim().length > 0
           ? reactedMessage.text
-          : "(no text)";
+          : reactedMessage
+            ? "(no text)"
+            : "(message text unavailable; Slack did not return the reacted message, so use the channel/thread/message ids for context)";
 
       const threadInfo = this.getThread(threadTs);
       const reactionEventTs = (evt.event_ts as string | undefined) ?? item.ts;
@@ -402,6 +402,7 @@ export class SlackAdapter implements MessageAdapter {
           referencedThreadTs: threadTs,
           referencedMessageTs: item.ts,
           referencedExternalId: `${item.channel}:${item.ts}`,
+          reactedMessageFetchStatus,
           reactedMessageAuthor,
           ...(reactedMessageAuthorId ? { reactedMessageAuthorId } : {}),
         },
