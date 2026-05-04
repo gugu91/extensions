@@ -2455,9 +2455,7 @@ export function formatAgentList(agents: AgentDisplayInfo[], homedir: string): st
         : "";
       const stuckTag = a.stuck ? " [stuck]" : "";
       const pid = a.pid != null ? ` pid:${a.pid}` : "";
-      const session = a.stableSession
-        ? ` session:${a.stableSession.id}${a.stableSession.hint ? ` (${a.stableSession.hint})` : ""}`
-        : "";
+      const session = a.stableSession ? ` ${a.stableSession.label}` : "";
       let line = `${a.emoji} ${a.name} (${a.id}) \u2014 ${a.status}${statusFlavor}${health}${stuckTag}${pid}${session}`;
 
       const meta = a.metadata;
@@ -2739,7 +2737,12 @@ function parsePinetStableId(stableId: string): {
 }
 
 function redactStableSessionValue(kind: AgentStableSessionIdentity["kind"], value: string): string {
-  const looksPathLike = kind === "session" || kind === "cwd" || value.includes("/");
+  const looksPathLike =
+    kind === "session" ||
+    kind === "cwd" ||
+    kind === "broker" ||
+    value.includes("/") ||
+    value.includes("\\");
   if (!looksPathLike) {
     return value.length > 48 ? `${value.slice(0, 45)}...` : value;
   }

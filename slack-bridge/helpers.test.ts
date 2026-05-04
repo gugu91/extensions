@@ -1747,18 +1747,50 @@ describe("buildAgentStableId", () => {
 });
 
 describe("buildPinetStableSessionIdentity", () => {
-  it("builds a stable redacted identity for session stable ids", () => {
-    const identity = buildPinetStableSessionIdentity(
-      "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
-    );
+  it.each([
+    {
+      kind: "session",
+      stableId: "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
+      hint: "…/abc123/run-0/session.jsonl",
+      leaked: "/Users/alice",
+    },
+    {
+      kind: "session",
+      stableId: "win:session:C:\\Users\\alice\\.pi\\agent\\sessions\\abc123\\run-0\\session.jsonl",
+      hint: "…/abc123/run-0/session.jsonl",
+      leaked: "C:\\Users\\alice",
+    },
+    {
+      kind: "cwd",
+      stableId: "win:cwd:C:\\Users\\alice\\src\\extensions",
+      hint: "…/alice/src/extensions",
+      leaked: "C:\\Users\\alice",
+    },
+    {
+      kind: "broker",
+      stableId: "win:broker:C:\\Users\\alice\\src\\extensions",
+      hint: "…/alice/src/extensions",
+      leaked: "C:\\Users\\alice",
+    },
+    {
+      kind: "stable",
+      stableId: "legacy:unknown:C:\\Users\\alice\\src\\extensions",
+      hint: "…/alice/src/extensions",
+      leaked: "C:\\Users\\alice",
+    },
+  ] as const)(
+    "builds a stable redacted identity for $kind stable ids",
+    ({ kind, stableId, hint, leaked }) => {
+      const identity = buildPinetStableSessionIdentity(stableId);
 
-    expect(identity.kind).toBe("session");
-    expect(identity.id).toMatch(/^[0-9a-f]{12}$/);
-    expect(identity.hint).toBe("…/abc123/run-0/session.jsonl");
-    expect(identity.label).toContain("session:");
-    expect(identity.label).toContain("…/abc123/run-0/session.jsonl");
-    expect(identity.label).not.toContain("/Users/alice");
-  });
+      expect(identity.kind).toBe(kind);
+      expect(identity.id).toMatch(/^[0-9a-f]{12}$/);
+      expect(identity.hint).toBe(hint);
+      expect(identity.label).toContain(`${kind}:`);
+      expect(identity.label).toContain(hint);
+      expect(identity.label).not.toContain(leaked);
+    },
+  );
 });
 
 describe("resolveAgentStableId", () => {
@@ -1951,25 +1983,35 @@ describe("formatAgentList", () => {
     );
   });
 
-  it("includes pid and stable session id when present", () => {
+  it.each([
+    {
+      label: "session",
+      stableId: "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
+      hintPattern: "…/abc123/run-0/session.jsonl",
+    },
+    {
+      label: "broker",
+      stableId: "macbook:broker:C:\\Users\\alice\\src\\extensions",
+      hintPattern: "…/alice/src/extensions",
+    },
+  ])("includes pid and stable $label identity when present", ({ label, stableId, hintPattern }) => {
     const agents: AgentDisplayInfo[] = [
       {
         emoji: "\u{1F916}",
         name: "Bot",
         id: "abc",
         pid: 12345,
-        stableSession: buildPinetStableSessionIdentity(
-          "macbook:session:/Users/alice/.pi/agent/sessions/abc123/run-0/session.jsonl",
-        ),
+        stableSession: buildPinetStableSessionIdentity(stableId),
         status: "idle",
         metadata: null,
       },
     ];
     const result = formatAgentList(agents, homedir);
-    expect(result).toMatch(
-      /^\u{1F916} Bot \(abc\) — idle pid:12345 session:[0-9a-f]{12} \(…\/abc123\/run-0\/session\.jsonl\)$/u,
-    );
+    expect(result).toContain(`\u{1F916} Bot (abc) — idle pid:12345 ${label}:`);
+    expect(result).toMatch(new RegExp(`${label}:[0-9a-f]{12}`));
+    expect(result).toContain(`(${hintPattern})`);
     expect(result).not.toContain("/Users/alice");
+    expect(result).not.toContain("C:\\Users\\alice");
   });
 
   it("includes pid when present", () => {
