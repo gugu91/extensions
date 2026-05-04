@@ -20,6 +20,7 @@ export interface PersistedState {
   lastPinetRole?: "broker" | "worker";
   activeSkinTheme?: string | null;
   agentPersonality?: string | null;
+  skinIdentityRole?: "broker" | "worker" | null;
   agentAliases?: string[];
 }
 
@@ -48,6 +49,8 @@ export interface PersistedRuntimeStateDeps {
   setActiveSkinTheme: (theme: string | null) => void;
   getAgentPersonality: () => string | null;
   setAgentPersonality: (personality: string | null) => void;
+  getSkinIdentityRole: () => "broker" | "worker" | null;
+  setSkinIdentityRole: (role: "broker" | "worker" | null) => void;
   agentAliases: Set<string>;
   setAgentOwnerToken: (ownerToken: string) => void;
   getSettings: () => SlackBridgeSettings;
@@ -80,6 +83,7 @@ export function createPersistedRuntimeState(
         lastPinetRole: deps.getBrokerRole() === "broker" ? "broker" : "worker",
         activeSkinTheme: deps.getActiveSkinTheme(),
         agentPersonality: deps.getAgentPersonality(),
+        skinIdentityRole: deps.getSkinIdentityRole(),
         agentAliases: [...deps.agentAliases],
       } satisfies PersistedState);
     } catch (error) {
@@ -135,6 +139,7 @@ export function createPersistedRuntimeState(
           : (ctx.sessionManager.getSessionFile() ?? agentStableId);
       deps.setActiveSkinTheme(savedState?.activeSkinTheme ?? null);
       deps.setAgentPersonality(savedState?.agentPersonality ?? null);
+      deps.setSkinIdentityRole(savedState?.skinIdentityRole ?? (savedState ? restoredRole : null));
       deps.agentAliases.clear();
       for (const alias of savedState?.agentAliases ?? []) {
         if (alias) {

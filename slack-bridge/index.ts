@@ -117,6 +117,7 @@ export default function (pi: ExtensionAPI) {
   let agentOwnerToken = buildPinetOwnerToken(agentStableId);
   let activeSkinTheme: string | null = null;
   let agentPersonality: string | null = null;
+  let skinIdentityRole: "broker" | "worker" | null = null;
   const agentAliases = new Set<string>();
   // Security guardrails
   let guardrails: SecurityGuardrails = settings.security ?? {};
@@ -181,6 +182,10 @@ export default function (pi: ExtensionAPI) {
     getAgentPersonality: () => agentPersonality,
     setAgentPersonality: (personality) => {
       agentPersonality = personality;
+    },
+    getSkinIdentityRole: () => skinIdentityRole,
+    setSkinIdentityRole: (role) => {
+      skinIdentityRole = role;
     },
     agentAliases,
     setAgentOwnerToken: (ownerToken) => {
@@ -290,6 +295,10 @@ export default function (pi: ExtensionAPI) {
     getAgentPersonality: () => agentPersonality,
     setAgentPersonality: (personality) => {
       agentPersonality = personality;
+    },
+    getSkinIdentityRole: () => skinIdentityRole,
+    setSkinIdentityRole: (role) => {
+      skinIdentityRole = role;
     },
     getAgentAliases: () => agentAliases,
     getThreads: () => threads,
@@ -614,6 +623,9 @@ export default function (pi: ExtensionAPI) {
     getActiveSkinTheme: () => activeSkinTheme,
     setActiveSkinTheme: (theme) => {
       activeSkinTheme = theme;
+    },
+    setSkinIdentityRole: (role) => {
+      skinIdentityRole = role;
     },
     setAgentOwnerToken: (ownerToken) => {
       agentOwnerToken = ownerToken;

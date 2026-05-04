@@ -10,9 +10,11 @@ import {
   buildPinetSkinAssignment,
   buildSlackCompatibilityScope,
   getSlackUserAccessWarning,
+  isPinetSkinIdentityCompatible,
   isUserAllowed as checkUserAllowed,
   loadSettings as loadSettingsFromFile,
   normalizeOwnedThreads,
+  normalizePinetSkinIdentityMetadata,
   normalizePinetSkinTheme,
   resolveRuntimeAgentIdentity,
   shortenPath,
@@ -42,6 +44,7 @@ export interface ReloadableRuntimeSnapshot {
   agentEmoji: string;
   activeSkinTheme: string | null;
   agentPersonality: string | null;
+  skinIdentityRole: RuntimeAgentRole | null;
   agentAliases: string[];
 }
 
@@ -74,6 +77,8 @@ export interface RuntimeAgentContextDeps {
   setActiveSkinTheme: (theme: string | null) => void;
   getAgentPersonality: () => string | null;
   setAgentPersonality: (personality: string | null) => void;
+  getSkinIdentityRole: () => RuntimeAgentRole | null;
+  setSkinIdentityRole: (role: RuntimeAgentRole | null) => void;
   getAgentAliases: () => Set<string>;
   getThreads: () => Map<string, SinglePlayerThreadInfo>;
   getExtensionContext: () => ExtensionContext | null;
@@ -103,6 +108,7 @@ export interface RuntimeAgentContext {
     nextName: string,
     nextEmoji: string,
     nextPersonality: string | null,
+    skinIdentityRole?: RuntimeAgentRole | null,
   ) => void;
   refreshSettings: () => void;
   snapshotReloadableRuntime: () => ReloadableRuntimeSnapshot;
@@ -235,12 +241,14 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     nextName: string,
     nextEmoji: string,
     nextPersonality: string | null,
+    skinRole?: RuntimeAgentRole | null,
   ): void {
     const previousName = deps.getAgentName();
     if (
       previousName === nextName &&
       deps.getAgentEmoji() === nextEmoji &&
-      (deps.getAgentPersonality() ?? null) === (nextPersonality ?? null)
+      (deps.getAgentPersonality() ?? null) === (nextPersonality ?? null) &&
+      deps.getSkinIdentityRole() === (skinRole ?? null)
     ) {
       return;
     }
@@ -248,6 +256,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     deps.setAgentName(nextName);
     deps.setAgentEmoji(nextEmoji);
     deps.setAgentPersonality(nextPersonality ?? null);
+    deps.setSkinIdentityRole(skinRole ?? null);
     rememberAgentAlias(previousName);
     normalizeOwnedThreads(
       deps.getThreads().values(),
@@ -276,15 +285,42 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     deps.setReactionCommands(resolveReactionCommands(settings.reactionCommands));
     deps.setSecurityPrompt(buildSecurityPrompt(guardrails));
     const configuredSkinTheme = normalizePinetSkinTheme(settings.skinTheme);
+    const previousSkinTheme = deps.getActiveSkinTheme();
+    const previousSkinIdentity = {
+      name: deps.getAgentName().trim(),
+      emoji: deps.getAgentEmoji().trim(),
+      personality: deps.getAgentPersonality(),
+    };
     deps.setActiveSkinTheme(configuredSkinTheme);
 
     const role = deps.getBrokerRole() === "broker" ? "broker" : "worker";
     const identitySeed = getIdentitySeedForRole(role);
     const skinIdentity = resolveSkinAssignment(role, identitySeed);
     if (skinIdentity) {
+      if (
+        configuredSkinTheme &&
+        previousSkinTheme === configuredSkinTheme &&
+        deps.getSkinIdentityRole() === role &&
+        previousSkinIdentity.name &&
+        previousSkinIdentity.emoji &&
+        isPinetSkinIdentityCompatible({
+          theme: configuredSkinTheme,
+          role,
+          name: previousSkinIdentity.name,
+          emoji: previousSkinIdentity.emoji,
+        })
+      ) {
+        deps.setAgentName(previousSkinIdentity.name);
+        deps.setAgentEmoji(previousSkinIdentity.emoji);
+        deps.setAgentPersonality(previousSkinIdentity.personality ?? skinIdentity.personality);
+        deps.setSkinIdentityRole(role);
+        return;
+      }
+
       deps.setAgentName(skinIdentity.name);
       deps.setAgentEmoji(skinIdentity.emoji);
       deps.setAgentPersonality(skinIdentity.personality);
+      deps.setSkinIdentityRole(role);
       return;
     }
 
@@ -298,6 +334,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     deps.setAgentName(refreshedIdentity.name);
     deps.setAgentEmoji(refreshedIdentity.emoji);
     deps.setAgentPersonality(null);
+    deps.setSkinIdentityRole(null);
   }
 
   function snapshotReloadableRuntime(): ReloadableRuntimeSnapshot {
@@ -313,6 +350,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       agentEmoji: deps.getAgentEmoji(),
       activeSkinTheme: deps.getActiveSkinTheme(),
       agentPersonality: deps.getAgentPersonality(),
+      skinIdentityRole: deps.getSkinIdentityRole(),
       agentAliases: [...deps.getAgentAliases()],
     };
   }
@@ -329,6 +367,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     deps.setAgentEmoji(snapshot.agentEmoji);
     deps.setActiveSkinTheme(snapshot.activeSkinTheme);
     deps.setAgentPersonality(snapshot.agentPersonality);
+    deps.setSkinIdentityRole(snapshot.skinIdentityRole);
     deps.setAgentOwnerToken(
       buildPinetOwnerToken(
         getStableIdForRole(deps.getBrokerRole() === "broker" ? "broker" : "worker"),
@@ -387,6 +426,15 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     ];
 
     const skinAssignment = resolveSkinAssignment(role, getIdentitySeedForRole(role));
+    const skinIdentityRole = deps.getSkinIdentityRole();
+    const activeSkinIdentity =
+      deps.getActiveSkinTheme() && skinIdentityRole
+        ? {
+            name: deps.getAgentName(),
+            emoji: deps.getAgentEmoji(),
+            role: skinIdentityRole,
+          }
+        : null;
     const brokerManaged = role === "worker" && process.env.PINET_BROKER_MANAGED === "1";
     const brokerManagedMetadata = brokerManaged
       ? {
@@ -408,6 +456,7 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
       scope,
       ...brokerManagedMetadata,
       ...(deps.getActiveSkinTheme() ? { skinTheme: deps.getActiveSkinTheme() } : {}),
+      ...(activeSkinIdentity ? { skinIdentity: activeSkinIdentity } : {}),
       ...(deps.getAgentPersonality() ? { personality: deps.getAgentPersonality() } : {}),
       ...(skinAssignment?.statusVocabulary
         ? { skinStatusVocabulary: skinAssignment.statusVocabulary }
@@ -460,10 +509,14 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     metadata?: Record<string, unknown> | null;
   }): void {
     deps.setActiveSkinTheme(asStringValue(registration.metadata?.skinTheme) ?? null);
+    const registrationSkinIdentity = normalizePinetSkinIdentityMetadata(
+      registration.metadata?.skinIdentity,
+    );
     applyLocalAgentIdentity(
       registration.name,
       registration.emoji,
       asStringValue(registration.metadata?.personality) ?? null,
+      deps.getActiveSkinTheme() ? (registrationSkinIdentity?.role ?? null) : null,
     );
   }
 
