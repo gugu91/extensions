@@ -267,11 +267,22 @@ describe("packaged default broker prompt", () => {
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
     expect(defaultPrompt).toContain("fully autonomous / unchained broker lane");
+    expect(defaultPrompt).toContain("WORKER REUSE BEFORE LAUNCH");
+    expect(defaultPrompt).toContain("healthy idle workers already in the target repo/worktree");
     expect(defaultPrompt).toContain("FRESH TMUX WORKERS");
+    expect(defaultPrompt).toContain("only after the reuse check says capacity is missing");
+    expect(defaultPrompt).toContain("tmux new-session -d -s <session> -c <repo>");
+    expect(defaultPrompt).toContain(
+      "Store the tmux session/socket and repo/worktree in durable lane metadata",
+    );
     expect(defaultPrompt).toContain("Mac mini");
     expect(defaultPrompt).toContain("WORKER GRACE PERIOD");
     expect(defaultPrompt).toContain("one-hour grace period");
     expect(defaultPrompt).toContain("route follow-up");
+    expect(defaultPrompt).toContain("WORKER CAP AND TMUX HYGIENE");
+    expect(defaultPrompt).toContain("start at most one fresh worker per new lane");
+    expect(defaultPrompt).toContain("TMUX HYGIENE");
+    expect(defaultPrompt).toContain("close sessions whose worker exited after grace");
     expect(defaultPrompt).toContain("THREAD OWNERSHIP AND REPORTING");
     expect(defaultPrompt).toContain("direct Slack posting is blocked");
     expect(defaultPrompt).toContain("GITHUB AND SECRET HANDLING");
