@@ -103,7 +103,7 @@ describe("registerSlackTools", () => {
         } as SlackResult;
       }
 
-      if (method === "chat.delete") {
+      if (method === "chat.delete" || method === "chat.update") {
         return {
           ok: true,
           token,
@@ -288,6 +288,7 @@ describe("registerSlackTools", () => {
       "create_channel",
       "project_create",
       "post_channel",
+      "update",
       "delete",
       "pin",
       "bookmark",
@@ -1132,6 +1133,73 @@ describe("registerSlackTools", () => {
     expect(clearPendingAttention).toHaveBeenCalledWith("123.456");
   });
 
+  it("updates Slack messages through the dispatcher", async () => {
+    const { registeredTools, slack, requireToolPolicy } = setup();
+    const dispatcher = registeredTools.get("slack")!;
+
+    const response = await dispatcher.execute("tool-update", {
+      action: "update",
+      args: {
+        channel: "#deployments",
+        ts: "1712345678.000200",
+        text: "Deploy complete",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "Deploy complete" } }],
+      },
+    });
+    const envelope = response.details as SlackDispatcherEnvelope;
+
+    expect(envelope.status).toBe("succeeded");
+    expect(envelope.data).toMatchObject({
+      text: "Updated Slack message 1712345678.000200 in channel #deployments.",
+      details: {
+        channel: "resolved:#deployments",
+        ts: "1712345678.000200",
+        blocksCount: 1,
+      },
+    });
+    expect(slack).toHaveBeenCalledWith("chat.update", "xoxb-initial", {
+      channel: "resolved:#deployments",
+      ts: "1712345678.000200",
+      text: "Deploy complete",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "Deploy complete" } }],
+    });
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "slack:update",
+      "1712345678.000200",
+      "channel=#deployments | ts=1712345678.000200 | text=Deploy complete | blocks=1",
+    );
+  });
+
+  it("documents Slack update dispatcher schema and validates required payload", async () => {
+    const { registeredTools, slack } = setup();
+    const dispatcher = registeredTools.get("slack")!;
+
+    const help = await dispatcher.execute("tool-help-update", {
+      action: "help",
+      args: { topic: "update" },
+    });
+    const helpEnvelope = help.details as SlackDispatcherEnvelope;
+    expect(helpEnvelope.data).toMatchObject({
+      action: "update",
+      guardrail_tool: "slack:update",
+      examples: [expect.objectContaining({ action: "update" })],
+    });
+    expect(JSON.stringify(helpEnvelope.data)).toContain("chat.update");
+    expect(JSON.stringify(helpEnvelope.data)).toContain("channel");
+    expect(JSON.stringify(helpEnvelope.data)).toContain("ts");
+
+    const missingPayload = await dispatcher.execute("tool-update-missing-payload", {
+      action: "update",
+      args: { channel: "#deployments", ts: "1712345678.000200" },
+    });
+    const missingEnvelope = missingPayload.details as SlackDispatcherEnvelope;
+    expect(missingEnvelope.status).toBe("failed");
+    expect(missingEnvelope.errors[0]?.message).toBe(
+      "Provide text or blocks to update the Slack message.",
+    );
+    expect(slack).not.toHaveBeenCalledWith("chat.update", expect.any(String), expect.any(Object));
+  });
+
   it("includes blocks when slack_post_channel posts a rich message", async () => {
     const { slack, tools } = setup();
 
@@ -1375,6 +1443,7 @@ describe("registerSlackTools", () => {
     expect(catalogEnvelope.status).toBe("succeeded");
     expect(catalogResponse.content?.[0]?.text).toContain('"status": "succeeded"');
     expect(catalogResponse.content?.[0]?.text).toContain('"action": "post_channel"');
+    expect(catalogResponse.content?.[0]?.text).toContain('"action": "update"');
 
     const schemaResponse = await dispatcher.execute("tool-help-topic", {
       action: "help",

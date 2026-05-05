@@ -218,6 +218,7 @@ Cold Slack actions live behind the `slack` dispatcher:
 | `upload`               | Upload files, snippets, or diffs into Slack                                       |
 | `schedule`             | Schedule a message for later delivery                                             |
 | `post_channel`         | Post to a channel (by name or ID)                                                 |
+| `update`               | Update an existing bot-posted Slack message by channel and message timestamp      |
 | `delete`               | Delete a bot-posted message or an entire thread                                   |
 | `read_channel`         | Read channel history or a thread in a channel                                     |
 | `create_channel`       | Create a new Slack channel                                                        |
@@ -252,10 +253,11 @@ migration.
 - **Channel posting is explicit.** `post_channel` posts to a named channel or
   channel ID. When `channel` is omitted, it first resolves a provided
   `thread_ts` to a tracked thread channel, then falls back to `defaultChannel`
-  from settings. `slack_send` is intentionally narrower and resolves the
-  current tracked assistant thread/DM context.
+  from settings. `update` edits an existing message and requires the exact
+  `channel` plus message `ts`. `slack_send` is intentionally narrower and
+  resolves the current tracked assistant thread/DM context.
 - **Rich messages use Block Kit JSON.** Pass `blocks` directly to
-  `slack_send` or `post_channel`; keep `text` as the notification/fallback.
+  `slack_send`, `post_channel`, or `update`; keep `text` as the notification/fallback.
   Block Kit builder tools are not registered by this package. Load the bundled
   `slack-bridge` skill for copyable status-report, button, code, and diff
   templates. The package also bundles `pinet-skin-creator` for safely drafting
