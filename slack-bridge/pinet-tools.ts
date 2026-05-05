@@ -313,17 +313,87 @@ function buildPinetDispatcherEnvelope(
   return { status, data, errors, warnings };
 }
 
+function formatPinetHelpCliText(data: Record<string, unknown>): string | null {
+  const actions = Array.isArray(data.actions)
+    ? data.actions
+        .map((action) =>
+          isRecord(action) && typeof action.action === "string" ? action.action : null,
+        )
+        .filter((action): action is string => Boolean(action))
+    : [];
+  if (actions.length > 0) {
+    const note = typeof data.note === "string" && data.note.trim() ? ` ${data.note.trim()}` : "";
+    return `Pinet actions: ${actions.join(", ")}.${note}`;
+  }
+
+  if (typeof data.action === "string") {
+    const description =
+      typeof data.description === "string" && data.description.trim()
+        ? ` — ${data.description.trim()}`
+        : "";
+    return `Pinet ${data.action}${description}. Use args.format="json" or args.full=true for schema/details; JSON/full output can fill context quickly.`;
+  }
+
+  return null;
+}
+
 function getPinetEnvelopeCliText(envelope: PinetDispatcherEnvelope): string {
   if (envelope.status === "succeeded" && isRecord(envelope.data)) {
     const text = envelope.data.text;
     if (typeof text === "string" && text.length > 0) return text;
+
+    const helpText = formatPinetHelpCliText(envelope.data);
+    if (helpText) return helpText;
+
+    const action = typeof envelope.data.action === "string" ? ` ${envelope.data.action}` : "";
+    return `Pinet${action} succeeded. Use args.format="json" or args.full=true for details; JSON/full output can fill context quickly.`;
   }
-  return JSON.stringify(envelope, null, 2);
+
+  const errors = envelope.errors.map((error) => error.message).filter(Boolean);
+  const hints = Array.from(
+    new Set(envelope.errors.map((error) => error.hint).filter((hint) => hint.length > 0)),
+  );
+  if (errors.length > 0) {
+    return `Pinet ${envelope.status}: ${errors.join("; ")}${hints.length > 0 ? ` Hint: ${hints.join(" ")}` : ""}`;
+  }
+
+  return `Pinet ${envelope.status}. Use args.format="json" or args.full=true for details; JSON/full output can fill context quickly.`;
+}
+
+function getTolerantPinetOutputOptions(value: unknown): PinetOutputOptions {
+  if (!isRecord(value)) return { format: "cli", full: false };
+
+  const rawFormat = value.format ?? value.f ?? value["-f"];
+  const normalizedFormat = rawFormat == null ? "cli" : String(rawFormat).trim().toLowerCase();
+  const format = normalizedFormat === "json" ? "json" : "cli";
+  const rawFull = value.full ?? value["--full"];
+  return { format, full: rawFull === true };
+}
+
+function getOptionalPinetOutputOptions(value: unknown): PinetOutputOptions {
+  if (!isRecord(value)) return { format: "cli", full: false };
+  try {
+    return normalizePinetOutputOptions(value);
+  } catch {
+    return getTolerantPinetOutputOptions(value);
+  }
+}
+
+function shouldRenderStructuredPinetEnvelope(
+  envelope: PinetDispatcherEnvelope,
+  output: PinetOutputOptions,
+): boolean {
+  if (output.format === "json") return true;
+  if (!output.full) return false;
+  if (envelope.status === "failed") return true;
+  if (!isRecord(envelope.data)) return true;
+  const text = envelope.data.text;
+  return typeof text !== "string" || text.length === 0;
 }
 
 function wrapDispatcherEnvelope(
   envelope: PinetDispatcherEnvelope,
-  output: PinetOutputOptions = { format: "json", full: true },
+  output: PinetOutputOptions = { format: "cli", full: false },
 ): {
   content: Array<{ type: "text"; text: string }>;
   details: PinetDispatcherEnvelope;
@@ -332,10 +402,9 @@ function wrapDispatcherEnvelope(
     content: [
       {
         type: "text",
-        text:
-          output.format === "json"
-            ? JSON.stringify(envelope, null, 2)
-            : getPinetEnvelopeCliText(envelope),
+        text: shouldRenderStructuredPinetEnvelope(envelope, output)
+          ? JSON.stringify(envelope, null, 2)
+          : getPinetEnvelopeCliText(envelope),
       },
     ],
     details: envelope,
@@ -1381,7 +1450,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     label: "Pinet Dispatcher",
     description: "Dispatch Pinet operations by action with compact help and schema discovery.",
     promptSnippet:
-      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, ports, reload, exit, and help. Use /pinet start, /pinet follow, and /pinet unfollow for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail.',
+      'Use this compact dispatcher for Pinet actions: send, read, free, schedule, agents, lanes, ports, reload, exit, and help. Use /pinet start, /pinet follow, and /pinet unfollow for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" or args.full=true for explicit detail, but avoid JSON/full unless needed because it can fill context quickly.',
     parameters: Type.Object({
       action: Type.String({
         description:
@@ -1390,7 +1459,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
           description:
-            'Action arguments. Add format="cli"|"json" (or f/"-f") and full=true (or "--full": true) for explicit presentation control. Default cli keeps data.details compact; format="json" or full=true exposes full structured details.',
+            'Action arguments. Add format="cli"|"json" (or f/"-f") and full=true (or "--full": true) for explicit presentation control. Default cli keeps data.details compact; format="json" or full=true exposes full structured details and can fill context quickly, so use it only when needed.',
         }),
       ),
     }),
@@ -1408,6 +1477,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
               hint: 'Use action="help" to inspect supported actions.',
             },
           ]),
+          getOptionalPinetOutputOptions(params.args),
         );
       }
 
@@ -1426,6 +1496,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
                 hint: 'Use format="cli" or format="json" and full as a boolean.',
               },
             ]),
+            getTolerantPinetOutputOptions(args),
           );
         }
         return wrapDispatcherEnvelope(
@@ -1445,6 +1516,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
               hint: 'Use action="help" to inspect supported actions.',
             },
           ]),
+          getOptionalPinetOutputOptions(params.args),
         );
       }
 
@@ -1458,6 +1530,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
               hint: "Pass a JSON object as args.",
             },
           ]),
+          getOptionalPinetOutputOptions(params.args),
         );
       }
 
@@ -1474,6 +1547,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
               hint: 'Use format="cli" or format="json" and full as a boolean.',
             },
           ]),
+          getTolerantPinetOutputOptions(params.args),
         );
       }
 
@@ -1494,6 +1568,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
         const message = getErrorMessage(error);
         return wrapDispatcherEnvelope(
           buildPinetDispatcherEnvelope("failed", null, [classifyPinetError(message)]),
+          output,
         );
       }
     },
