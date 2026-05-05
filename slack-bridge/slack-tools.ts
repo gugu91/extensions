@@ -170,6 +170,12 @@ const SLACK_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
       args: { channel: "#deployments", text: "Deploy complete" },
     },
   ],
+  update: [
+    {
+      action: "update",
+      args: { channel: "#deployments", ts: "1712345678.000200", text: "Deploy complete" },
+    },
+  ],
   read_channel: [{ action: "read_channel", args: { channel: "#deployments", limit: 20 } }],
   confirm_action: [
     {
@@ -920,7 +926,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     name: "slack",
     label: "Slack",
     description:
-      "Dispatcher for non-hot Slack actions: react, read, upload, schedule, presence, export, post_channel, read_channel, confirm_action, delete, pin, bookmark, create_channel, project_create, canvas_comments_read, canvas_create, canvas_update, modal_open, modal_push, modal_update, and help. Use slack_inbox and slack_send for hot-path inbox/reply work.",
+      "Dispatcher for non-hot Slack actions: react, read, upload, schedule, presence, export, post_channel, update, read_channel, confirm_action, delete, pin, bookmark, create_channel, project_create, canvas_comments_read, canvas_create, canvas_update, modal_open, modal_push, modal_update, and help. Use slack_inbox and slack_send for hot-path inbox/reply work.",
     promptSnippet:
       "Run non-hot Slack actions through a compact dispatcher. Use action='help' for the action catalogue or args.topic for a specific schema. Defaults to compact cli output; pass args.format='json' (or args.response_format='json' when the action owns format) or args.full=true for structured/full details.",
     promptGuidelines: [
@@ -932,7 +938,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     parameters: Type.Object({
       action: Type.String({
         description:
-          "Action name: help | react | read | upload | schedule | presence | export | post_channel | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
+          "Action name: help | react | read | upload | schedule | presence | export | post_channel | update | read_channel | confirm_action | delete | pin | bookmark | create_channel | project_create | canvas_comments_read | canvas_create | canvas_update | modal_open | modal_push | modal_update",
       }),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {
@@ -2411,6 +2417,71 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
           ...(delivery.adapter ? { adapter: delivery.adapter } : {}),
           ...(delivery.messageId ? { messageId: delivery.messageId } : {}),
           ...(delivery.fallbackReason ? { fallbackReason: delivery.fallbackReason } : {}),
+        },
+      };
+    },
+  });
+
+  registerSlackAction({
+    name: "slack_update",
+    label: "Slack Update Message",
+    description:
+      "Update an existing Slack message by channel and message timestamp using chat.update.",
+    promptSnippet:
+      "Update a Slack message previously posted by the bot. Provide the channel and exact message ts plus text and/or blocks.",
+    parameters: Type.Object({
+      channel: Type.String({ description: "Channel name or ID containing the message to update" }),
+      ts: Type.String({ description: "Message timestamp (ts) of the Slack message to update" }),
+      text: Type.Optional(Type.String({ description: "Updated message text (Slack markdown)" })),
+      blocks: Type.Optional(
+        Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description: "Optional replacement Slack Block Kit blocks JSON array",
+        }),
+      ),
+    }),
+    async execute(id, params) {
+      const channelInput = typeof params.channel === "string" ? params.channel.trim() : "";
+      const ts = typeof params.ts === "string" ? params.ts.trim() : "";
+      const text = typeof params.text === "string" ? params.text : undefined;
+      const blocks =
+        params.blocks === undefined ? undefined : normalizeSlackBlocksInput(params.blocks);
+
+      if (!channelInput) {
+        throw new Error("channel is required.");
+      }
+      if (!ts) {
+        throw new Error("ts is required.");
+      }
+      if ((text == null || text.length === 0) && (!blocks || blocks.length === 0)) {
+        throw new Error("Provide text or blocks to update the Slack message.");
+      }
+
+      requireToolPolicy(
+        id,
+        ts,
+        `channel=${channelInput} | ts=${ts} | text=${text ?? ""} | blocks=${summarizeSlackBlocksForPolicy(blocks)}`,
+      );
+
+      const channelId = await resolveChannel(channelInput);
+      const body: Record<string, unknown> = {
+        channel: channelId,
+        ts,
+        ...(text != null ? { text } : {}),
+        ...(blocks ? { blocks } : {}),
+      };
+      const response = await slack("chat.update", getBotToken(), body);
+      const updatedTs = typeof response.ts === "string" ? response.ts : ts;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Updated Slack message ${updatedTs} in channel ${channelInput}.`,
+          },
+        ],
+        details: {
+          channel: channelId,
+          ts: updatedTs,
+          blocksCount: blocks?.length ?? 0,
         },
       };
     },

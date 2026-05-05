@@ -48,7 +48,7 @@ should use the colon form.
 
 ## Action quick map
 
-- Thread/channel messaging: `post_channel`, `read`, `read_channel`, `export`
+- Thread/channel messaging: `post_channel`, `update`, `read`, `read_channel`, `export`
 - Lightweight acknowledgement: `react`
 - Files/snippets: `upload`
 - Time-based follow-up: `schedule`
@@ -63,7 +63,7 @@ should use the colon form.
 ## Block Kit patterns
 
 No Block Kit builder tool is registered. Build the JSON inline and pass it to
-`slack_send` or `slack` action `post_channel` as `blocks`.
+`slack_send`, `slack` action `post_channel`, or `slack` action `update` as `blocks`.
 
 ### Status report
 
