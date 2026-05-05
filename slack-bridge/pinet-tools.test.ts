@@ -180,6 +180,7 @@ describe("registerPinetTools", () => {
     expect(pinet?.promptSnippet).toContain("lanes, ports, reload");
     expect(pinet?.promptSnippet).not.toContain("skin");
     expect(pinet?.promptSnippet).toContain('args.format="json"');
+    expect(pinet?.promptSnippet).toContain("fill context quickly");
     expect(JSON.stringify(pinet?.parameters)).toContain(
       "help, send, read, free, schedule, agents, lanes, ports, reload, or exit",
     );
@@ -214,14 +215,19 @@ describe("registerPinetTools", () => {
     });
   });
 
-  it("rejects the removed dispatcher skin action", async () => {
+  it("rejects the removed dispatcher skin action with compact CLI text by default", async () => {
     const tools = registerWithDeps(createDeps());
 
     const result = (await tools.get("pinet")?.execute("tool-call-1", {
       action: "skin",
       args: { theme: "foundation" },
-    })) as { details: { status: string; errors: Array<{ message: string }> } };
+    })) as {
+      content: Array<{ text: string }>;
+      details: { status: string; errors: Array<{ message: string }> };
+    };
 
+    expect(result.content[0]?.text).toContain("Pinet failed: Unknown Pinet action: skin");
+    expect(result.content[0]?.text).not.toContain('"errors"');
     expect(result.details.status).toBe("failed");
     expect(result.details.errors[0]?.message).toBe("Unknown Pinet action: skin");
   });
@@ -501,7 +507,7 @@ describe("registerPinetTools", () => {
     expect(envelope.data.full_details).toBeUndefined();
   });
 
-  it("routes action-dispatched help through the dispatcher", async () => {
+  it("routes action-dispatched help through the dispatcher with compact CLI text by default", async () => {
     const tools = registerWithDeps(createDeps());
 
     const result = (await tools.get("pinet")?.execute("tool-call-dispatch-help", {
@@ -517,6 +523,9 @@ describe("registerPinetTools", () => {
       };
     };
 
+    expect(result.content[0]?.text).toContain("Pinet actions:");
+    expect(result.content[0]?.text).toContain("send");
+    expect(result.content[0]?.text).not.toContain('"args_schema"');
     expect(result.details.status).toBe("succeeded");
     expect(result.details.data.note).toContain("Use args.topic");
     expect(result.details.data.actions).toEqual(
@@ -530,6 +539,59 @@ describe("registerPinetTools", () => {
         expect.objectContaining({ action: "ports", guardrail_tool: "pinet:ports" }),
       ]),
     );
+  });
+
+  it("preserves explicit JSON output for action-dispatched help", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-help-json", {
+      action: "help",
+      args: { format: "json" },
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain('"status": "succeeded"');
+    expect(result.content[0]?.text).toContain('"args_schema"');
+  });
+
+  it("preserves explicit full output for action-dispatched help", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-help-full", {
+      action: "help",
+      args: { full: true },
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain('"status": "succeeded"');
+    expect(result.content[0]?.text).toContain('"args_schema"');
+  });
+
+  it("preserves valid structured help output flags when a sibling output flag is invalid", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const jsonResult = (await tools.get("pinet")?.execute("tool-call-help-json-invalid-full", {
+      action: "help",
+      args: { format: "json", full: "true" },
+    })) as { content: Array<{ text: string }> };
+    const fullResult = (await tools.get("pinet")?.execute("tool-call-help-full-invalid-format", {
+      action: "help",
+      args: { format: "yaml", full: true },
+    })) as { content: Array<{ text: string }> };
+
+    expect(jsonResult.content[0]?.text).toContain('"status": "failed"');
+    expect(jsonResult.content[0]?.text).toContain('"full must be a boolean when provided."');
+    expect(fullResult.content[0]?.text).toContain('"status": "failed"');
+    expect(fullResult.content[0]?.text).toContain('"format must be');
+  });
+
+  it("warns compact help topic callers that JSON/full output can fill context quickly", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-dispatch-help-topic", {
+      action: "help",
+      args: { topic: "read" },
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain("JSON/full output can fill context quickly");
   });
 
   it("routes action-dispatched port lease acquire", async () => {
@@ -583,6 +645,79 @@ describe("registerPinetTools", () => {
 
     expect(result.details.status).toBe("failed");
     expect(result.details.errors[0]?.message).toContain("Unknown Pinet action: pinet_send");
+  });
+
+  it("preserves explicit JSON output for dispatcher errors", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-error-json", {
+      action: "skin",
+      args: { theme: "foundation", format: "json" },
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain('"status": "failed"');
+    expect(result.content[0]?.text).toContain('"errors"');
+  });
+
+  it("preserves explicit full output for dispatcher errors", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-error-full", {
+      action: "skin",
+      args: { theme: "foundation", full: true },
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain('"status": "failed"');
+    expect(result.content[0]?.text).toContain('"errors"');
+  });
+
+  it("preserves explicit full output for action runtime errors", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-runtime-error-full", {
+      action: "send",
+      args: { message: "dispatch now", full: true },
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain('"status": "failed"');
+    expect(result.content[0]?.text).toContain('"to is required"');
+  });
+
+  it("preserves valid structured action output flags when a sibling output flag is invalid", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const jsonResult = (await tools.get("pinet")?.execute("tool-call-send-json-invalid-full", {
+      action: "send",
+      args: { to: "alpha", message: "dispatch now", format: "json", full: "true" },
+    })) as { content: Array<{ text: string }> };
+    const fullResult = (await tools.get("pinet")?.execute("tool-call-send-full-invalid-format", {
+      action: "send",
+      args: { to: "alpha", message: "dispatch now", format: "yaml", full: true },
+    })) as { content: Array<{ text: string }> };
+
+    expect(jsonResult.content[0]?.text).toContain('"status": "failed"');
+    expect(jsonResult.content[0]?.text).toContain('"full must be a boolean when provided."');
+    expect(fullResult.content[0]?.text).toContain('"status": "failed"');
+    expect(fullResult.content[0]?.text).toContain('"format must be');
+  });
+
+  it("reports invalid output options as compact CLI text by default", async () => {
+    const tools = registerWithDeps(createDeps());
+
+    const result = (await tools.get("pinet")?.execute("tool-call-invalid-output", {
+      action: "send",
+      args: { to: "alpha", message: "dispatch now", full: "true" },
+    })) as {
+      content: Array<{ text: string }>;
+      details: { status: string; errors: Array<{ message: string }> };
+    };
+
+    expect(result.content[0]?.text).toContain(
+      "Pinet failed: full must be a boolean when provided.",
+    );
+    expect(result.content[0]?.text).not.toContain('"errors"');
+    expect(result.details.status).toBe("failed");
+    expect(result.details.errors[0]?.message).toBe("full must be a boolean when provided.");
   });
 
   it("routes action-dispatched pinet send", async () => {
