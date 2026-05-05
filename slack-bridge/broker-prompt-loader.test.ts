@@ -252,12 +252,14 @@ describe("packaged default broker prompt", () => {
     const defaultPromptPath = path.join(process.cwd(), "prompts", "broker", "tmux.md");
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
-    expect(defaultPrompt).toContain("Use tmux only to launch repo-scoped Pinet follower workers");
+    expect(defaultPrompt).toContain(
+      "Use tmux only for broker-managed follower lifecycle operations",
+    );
+    expect(defaultPrompt).toContain("inspect recorded broker-managed sessions");
+    expect(defaultPrompt).toContain("never manipulate unrelated or unmapped tmux sessions");
     expect(defaultPrompt).toContain("create a tmux session in the target repo");
     expect(defaultPrompt).toContain("/pinet follow");
-    expect(defaultPrompt).toContain(
-      "only report the capacity gap if you cannot safely start a worker",
-    );
+    expect(defaultPrompt).toContain("start fresh repo-scoped Pinet follower capacity");
     expect(defaultPrompt).not.toContain("ask for a repo-matched worker");
     expect(defaultPrompt).not.toContain("suggest they spin up a new agent in that repo");
   });
@@ -267,10 +269,12 @@ describe("packaged default broker prompt", () => {
     const defaultPrompt = await fs.readFile(defaultPromptPath, "utf8");
 
     expect(defaultPrompt).toContain("fully autonomous / unchained broker lane");
-    expect(defaultPrompt).toContain("WORKER REUSE BEFORE LAUNCH");
-    expect(defaultPrompt).toContain("healthy idle workers already in the target repo/worktree");
+    expect(defaultPrompt).not.toContain("WORKER REUSE BEFORE LAUNCH");
     expect(defaultPrompt).toContain("FRESH TMUX WORKERS");
-    expect(defaultPrompt).toContain("only after the reuse check says capacity is missing");
+    expect(defaultPrompt).toContain("launch a fresh tmux-backed Pinet follower worker");
+    expect(defaultPrompt).toContain(
+      "unless the maintainer explicitly asks to reuse an existing worker",
+    );
     expect(defaultPrompt).toContain("tmux new-session -d -s <session> -c <repo>");
     expect(defaultPrompt).toContain(
       "Store the tmux session/socket and repo/worktree in durable lane metadata",
@@ -279,9 +283,15 @@ describe("packaged default broker prompt", () => {
     expect(defaultPrompt).toContain("WORKER GRACE PERIOD");
     expect(defaultPrompt).toContain("one-hour grace period");
     expect(defaultPrompt).toContain("route follow-up");
+    expect(defaultPrompt).toContain("fail closed: report the worker as a cleanup candidate");
     expect(defaultPrompt).toContain("WORKER CAP AND TMUX HYGIENE");
-    expect(defaultPrompt).toContain("start at most one fresh worker per new lane");
+    expect(defaultPrompt).toContain("pruning, not by recycling old context into new lanes");
+    expect(defaultPrompt).toContain("Start at most one fresh worker per new lane");
     expect(defaultPrompt).toContain("TMUX HYGIENE");
+    expect(defaultPrompt).toContain("do not recycle unrelated idle workers as a shortcut");
+    expect(defaultPrompt).toContain(
+      "report ambiguous cases as cleanup candidates instead of guessing",
+    );
     expect(defaultPrompt).toContain("close sessions whose worker exited after grace");
     expect(defaultPrompt).toContain("THREAD OWNERSHIP AND REPORTING");
     expect(defaultPrompt).toContain("direct Slack posting is blocked");
