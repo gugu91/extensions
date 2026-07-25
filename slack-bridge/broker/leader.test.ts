@@ -2,7 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { defaultLockPath, LeaderLock } from "./leader.js";
+import {
+  defaultLockPath,
+  getProcessStartTime,
+  inspectBrokerLock,
+  LeaderLock,
+  readBrokerLockOwner,
+} from "./leader.js";
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -66,15 +72,34 @@ describe("LeaderLock", () => {
     lock.release();
   });
 
-  it("writes the current PID to the lock file", () => {
+  it("writes the current PID as the first line of the lock file", () => {
     const lockPath = path.join(dir, "lock");
     const lock = new LeaderLock(lockPath);
     lock.tryAcquire();
 
-    const written = fs.readFileSync(lockPath, "utf-8").trim();
-    expect(written).toBe(String(process.pid));
+    const [pidLine] = fs.readFileSync(lockPath, "utf-8").split("\n");
+    expect(pidLine).toBe(String(process.pid));
+    // Legacy readers parse the whole trimmed content with parseInt — the
+    // structured metadata must not change the PID they see.
+    expect(parseInt(fs.readFileSync(lockPath, "utf-8").trim(), 10)).toBe(process.pid);
 
     lock.release();
+  });
+
+  it("writes structured owner metadata alongside the PID", () => {
+    const lockPath = path.join(dir, "lock");
+    const lock = new LeaderLock(lockPath);
+    lock.tryAcquire();
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner).not.toBeNull();
+    expect(owner?.pid).toBe(process.pid);
+    expect(owner?.legacy).toBe(false);
+    expect(owner?.instanceId).toBe(lock.getInstanceId());
+    expect(owner?.createdAt).toBeTruthy();
+
+    lock.release();
+    expect(lock.getInstanceId()).toBeNull();
   });
 
   it("release removes the lock file", () => {
@@ -141,6 +166,57 @@ describe("LeaderLock", () => {
     lock.release();
   });
 
+  it("reclaims a lock whose PID was reused by an unrelated process", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(
+      lockPath,
+      `${process.pid}\n${JSON.stringify({
+        version: 2,
+        processStartTime: "boot-A",
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    const lock = new LeaderLock(lockPath, {
+      getProcessStartTime: () => "boot-B",
+    });
+    expect(lock.tryAcquire()).toBe(true);
+    lock.release();
+  });
+
+  it("does not reclaim a live lock when the start time is unknown", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(
+      lockPath,
+      `${process.pid}\n${JSON.stringify({
+        version: 2,
+        processStartTime: "boot-A",
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    // Unknown current start time must never count as evidence of staleness.
+    const lock = new LeaderLock(lockPath, {
+      getProcessStartTime: () => null,
+    });
+    expect(lock.tryAcquire()).toBe(false);
+  });
+
+  it("reclaims an unreadable lock file", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "not-a-pid\n", "utf-8");
+
+    const lock = new LeaderLock(lockPath);
+    expect(lock.tryAcquire()).toBe(true);
+    lock.release();
+  });
+
   it("release does not remove the file if another PID overwrote it", () => {
     const lockPath = path.join(dir, "lock");
     const lock = new LeaderLock(lockPath);
@@ -154,5 +230,175 @@ describe("LeaderLock", () => {
     // File should still exist because the PID didn't match
     expect(fs.existsSync(lockPath)).toBe(true);
     expect(fs.readFileSync(lockPath, "utf-8").trim()).toBe("999999999");
+  });
+});
+
+// ─── readBrokerLockOwner ─────────────────────────────────
+
+describe("readBrokerLockOwner", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  it("returns null when the lock file does not exist", () => {
+    expect(readBrokerLockOwner(path.join(dir, "missing"))).toBeNull();
+  });
+
+  it("parses a legacy plain-PID lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "12345", "utf-8");
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner).toEqual({
+      pid: 12345,
+      processStartTime: null,
+      instanceId: null,
+      hostname: null,
+      createdAt: null,
+      legacy: true,
+    });
+  });
+
+  it("parses a structured lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(
+      lockPath,
+      `12345\n${JSON.stringify({
+        version: 2,
+        processStartTime: "boot-A",
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner).toEqual({
+      pid: 12345,
+      processStartTime: "boot-A",
+      instanceId: "inst-1",
+      hostname: "host",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      legacy: false,
+    });
+  });
+
+  it("treats a PID followed by corrupt metadata as a legacy lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "12345\nnot-json", "utf-8");
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner?.pid).toBe(12345);
+    expect(owner?.legacy).toBe(true);
+  });
+
+  it("returns null for unparsable content", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "garbage", "utf-8");
+    expect(readBrokerLockOwner(lockPath)).toBeNull();
+  });
+});
+
+// ─── inspectBrokerLock ───────────────────────────────────
+
+describe("inspectBrokerLock", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  function writeStructuredLock(lockPath: string, pid: number, processStartTime: string): void {
+    fs.writeFileSync(
+      lockPath,
+      `${pid}\n${JSON.stringify({
+        version: 2,
+        processStartTime,
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+  }
+
+  it("reports none when the lock file does not exist", () => {
+    expect(inspectBrokerLock(path.join(dir, "missing"))).toEqual({ state: "none", owner: null });
+  });
+
+  it("reports unreadable for unparsable content", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "garbage", "utf-8");
+    expect(inspectBrokerLock(lockPath)).toEqual({ state: "unreadable", owner: null });
+  });
+
+  it("reports stale-dead when the recorded PID is not running", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "2147483647", "utf-8");
+
+    const inspection = inspectBrokerLock(lockPath);
+    expect(inspection.state).toBe("stale-dead");
+    if (inspection.state === "stale-dead") {
+      expect(inspection.owner.pid).toBe(2147483647);
+    }
+  });
+
+  it("reports alive for a live legacy lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, String(process.pid), "utf-8");
+
+    const inspection = inspectBrokerLock(lockPath);
+    expect(inspection.state).toBe("alive");
+  });
+
+  it("reports stale-pid-reused when start times differ", () => {
+    const lockPath = path.join(dir, "lock");
+    writeStructuredLock(lockPath, process.pid, "boot-A");
+
+    const inspection = inspectBrokerLock(lockPath, {
+      getProcessStartTime: () => "boot-B",
+    });
+    expect(inspection.state).toBe("stale-pid-reused");
+    if (inspection.state === "stale-pid-reused") {
+      expect(inspection.owner.pid).toBe(process.pid);
+      expect(inspection.currentStartTime).toBe("boot-B");
+    }
+  });
+
+  it("reports alive when start times match", () => {
+    const lockPath = path.join(dir, "lock");
+    writeStructuredLock(lockPath, process.pid, "boot-A");
+
+    const inspection = inspectBrokerLock(lockPath, {
+      getProcessStartTime: () => "boot-A",
+    });
+    expect(inspection.state).toBe("alive");
+  });
+});
+
+// ─── getProcessStartTime ─────────────────────────────────
+
+describe("getProcessStartTime", () => {
+  it("returns a stable non-empty value for the current process", () => {
+    const first = getProcessStartTime(process.pid);
+    const second = getProcessStartTime(process.pid);
+    expect(first).toBeTruthy();
+    expect(second).toBe(first);
+  });
+
+  it("returns null for an invalid pid", () => {
+    expect(getProcessStartTime(-1)).toBeNull();
+    expect(getProcessStartTime(0)).toBeNull();
   });
 });
