@@ -170,25 +170,25 @@ describe("requestBrokerShutdown", () => {
     });
   });
 
-  it("reports failed with a wrong mesh secret and never invokes the handler", async () => {
+  it("reports rejected with a wrong mesh secret and never invokes the handler", async () => {
     server = new BrokerSocketServer(db, sockPath, { meshSecret: "sekrit" });
     const handler = vi.fn(async () => {});
     server.setAdminShutdownHandler(handler);
     await server.start();
 
     const result = await requestBrokerShutdown({ socketPath: sockPath, meshSecret: "wrong" });
-    expect(result).toBe("failed");
+    expect(result).toBe("rejected");
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("reports failed without a mesh secret when the broker requires one", async () => {
+  it("reports rejected without a mesh secret when the broker requires one", async () => {
     server = new BrokerSocketServer(db, sockPath, { meshSecret: "sekrit" });
     const handler = vi.fn(async () => {});
     server.setAdminShutdownHandler(handler);
     await server.start();
 
     const result = await requestBrokerShutdown({ socketPath: sockPath });
-    expect(result).toBe("failed");
+    expect(result).toBe("rejected");
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -396,6 +396,46 @@ describe("replaceBrokerOwner", () => {
 
     expect(result.outcome).toBe("replaced-terminated");
     expect(kill).toHaveBeenCalledWith(OWNER_PID, "SIGTERM");
+  });
+
+  it("refuses automatic SIGTERM for a legacy lock without a start-time fence", async () => {
+    // Legacy PID-only lock: no instanceId, no processStartTime — PID reuse
+    // cannot be detected, so the owner must never be signalled automatically.
+    fs.writeFileSync(lockPath, String(OWNER_PID), "utf-8");
+    const kill = vi.fn();
+
+    const result = await replaceBrokerOwner({
+      lockPath,
+      probes: { isProcessRunning: () => true, getProcessStartTime: () => "whatever" },
+      requestShutdown: async () => "unsupported",
+      kill,
+      sleep: async () => {},
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(kill).not.toHaveBeenCalled();
+    expect(result.error).toContain("predates identity fencing");
+    expect(result.error).toContain(`ps -p ${OWNER_PID}`);
+  });
+
+  it("aborts without SIGTERM when the broker rejects the shutdown request", async () => {
+    // A responsive broker refusing shutdown (e.g. mesh secret mismatch) is
+    // not stranded — escalating to signals would bypass its refusal.
+    writeStructuredLock(lockPath, OWNER_PID);
+    const kill = vi.fn();
+
+    const result = await replaceBrokerOwner({
+      lockPath,
+      probes: aliveProbes,
+      requestShutdown: async () => "rejected",
+      kill,
+      sleep: async () => {},
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(kill).not.toHaveBeenCalled();
+    expect(result.error).toContain("rejected the shutdown request");
+    expect(result.error).toContain("mesh secret");
   });
 
   it("aborts when the lock owner changes mid-flight", async () => {

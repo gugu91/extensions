@@ -217,16 +217,48 @@ export function inspectBrokerLock(
   return { state: "alive", owner };
 }
 
+/**
+ * Atomically create `filePath` with `content` already in place, failing when
+ * the path exists. A plain `writeFileSync("wx")` opens the file and then
+ * writes, so concurrent readers can observe an empty just-created file;
+ * writing a private temp file and `link()`ing it into place makes the path
+ * appear with its full content in one exclusive step.
+ */
+function exclusiveCreateFile(filePath: string, content: string): boolean {
+  const tmpPath = `${filePath}.${process.pid}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, content, "utf-8");
+    fs.linkSync(tmpPath, filePath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
 // ─── Leader lock ─────────────────────────────────────────
 
 /**
  * Leader election via lock file.
  *
- * Only one broker process should run at a time. The leader writes its PID on
- * the first line (kept legacy-compatible so older builds still see a live
- * owner) followed by a JSON metadata line recording process start time and a
- * per-acquisition instance id. Stale locks (dead PID, reused PID, unreadable
- * content) are automatically reclaimed.
+ * Only one broker process should run at a time. The leader creates the lock
+ * file with an exclusive create (`O_CREAT | O_EXCL`), writing its PID on the
+ * first line (kept legacy-compatible so older builds still see a live owner)
+ * followed by a JSON metadata line recording process start time and a
+ * per-acquisition instance id.
+ *
+ * Exclusive creation is the only way the lock comes into existence, so
+ * simultaneous contenders on an empty path get exactly one winner from the
+ * kernel. Stale locks (dead PID, reused PID, unreadable content) are only
+ * ever unlinked while holding an exclusively-created reclaim mutex file,
+ * with staleness re-verified under that mutex — so a fresh lock can never be
+ * destroyed by a concurrent reclaimer, and the lock path never goes empty
+ * while a live owner's lock exists.
  */
 export class LeaderLock {
   private readonly lockPath: string;
@@ -247,21 +279,35 @@ export class LeaderLock {
 
     fs.mkdirSync(path.dirname(this.lockPath), { recursive: true });
 
-    const inspection = inspectBrokerLock(this.lockPath, this.probes);
-    if (inspection.state === "alive") {
-      // Another live process holds the lock
-      return false;
-    }
-    if (inspection.state !== "none") {
-      // Stale or unreadable lock — remove it
-      try {
-        fs.unlinkSync(this.lockPath);
-      } catch {
-        /* already gone */
+    // Two passes: exclusive create, and one stale-reclaim + retry.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (this.tryExclusiveCreate()) {
+        return true;
+      }
+
+      const inspection = inspectBrokerLock(this.lockPath, this.probes);
+      if (inspection.state === "alive") {
+        // Another live process holds the lock.
+        return false;
+      }
+      if (inspection.state === "none") {
+        // The holder released between our create attempt and inspection.
+        continue;
+      }
+      if (!this.reclaimStaleLock()) {
+        // The lock is no longer stale, or another contender is reclaiming
+        // it. Back off conservatively.
+        return false;
       }
     }
+    return false;
+  }
 
-    // Write our identity atomically (write to temp, rename)
+  /**
+   * Create the lock file exclusively. Returns true when this process now
+   * holds the lock; false when another lock file already exists.
+   */
+  private tryExclusiveCreate(): boolean {
     const pid = process.pid;
     const instanceId = crypto.randomUUID();
     const startTimeOf = this.probes.getProcessStartTime ?? getProcessStartTime;
@@ -273,11 +319,15 @@ export class LeaderLock {
       createdAt: new Date().toISOString(),
     };
     const content = `${pid}\n${JSON.stringify(metadata)}\n`;
-    const tmpPath = `${this.lockPath}.${pid}.tmp`;
-    fs.writeFileSync(tmpPath, content, "utf-8");
-    fs.renameSync(tmpPath, this.lockPath);
+    // Exclusive create with full content — the kernel picks exactly one
+    // winner among simultaneous contenders, and no reader can ever observe a
+    // partially-written lock.
+    if (!exclusiveCreateFile(this.lockPath, content)) {
+      return false;
+    }
 
-    // Verify we actually won (guard against race)
+    // Paranoia read-back: if the file somehow no longer records our identity,
+    // treat the acquisition as lost and leave the file to its current owner.
     const written = readBrokerLockOwner(this.lockPath);
     if (!written || written.pid !== pid || written.instanceId !== instanceId) {
       return false;
@@ -289,15 +339,88 @@ export class LeaderLock {
   }
 
   /**
+   * Remove a stale lock under an exclusive reclaim mutex.
+   *
+   * The mutex file (`<lockPath>.reclaim`) is created with `O_EXCL`, so at
+   * most one reclaimer proceeds at a time, and staleness is re-verified
+   * while holding it. Because stale locks are only ever unlinked under this
+   * mutex, the lock path cannot go empty while a live owner's lock exists —
+   * which is what makes the exclusive create in `tryAcquire` a sound
+   * arbiter. A mutex left behind by a crashed reclaimer (dead PID) is itself
+   * reclaimed.
+   *
+   * Returns true when the caller may retry an exclusive create.
+   */
+  private reclaimStaleLock(): boolean {
+    const mutexPath = `${this.lockPath}.reclaim`;
+    const isRunning = this.probes.isProcessRunning ?? isProcessRunning;
+
+    let holdsMutex = false;
+    for (let campaign = 0; campaign < 2 && !holdsMutex; campaign++) {
+      if (exclusiveCreateFile(mutexPath, `${process.pid}\n`)) {
+        holdsMutex = true;
+      } else {
+        // Mutex exists — held by a live reclaimer, or left by a crashed one.
+        let holderRaw: string;
+        try {
+          holderRaw = fs.readFileSync(mutexPath, "utf-8").trim();
+        } catch {
+          continue; // vanished — retry the campaign
+        }
+        const holderPid = /^\d+$/.test(holderRaw) ? parseInt(holderRaw, 10) : null;
+        if (holderPid !== null && holderPid > 0 && isRunning(holderPid)) {
+          return false; // a live reclaimer is working — back off
+        }
+        // Crashed reclaimer. Remove its mutex only if it still records the
+        // dead holder we just read, then retry the campaign.
+        try {
+          if (fs.readFileSync(mutexPath, "utf-8").trim() === holderRaw) {
+            fs.unlinkSync(mutexPath);
+          }
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+    if (!holdsMutex) return false;
+
+    try {
+      // Re-verify staleness while holding the mutex. We are now the only
+      // process allowed to unlink the lock, so no fresh lock can be created
+      // (the path stays occupied) until we decide.
+      const current = inspectBrokerLock(this.lockPath, this.probes);
+      if (current.state === "alive") {
+        return false;
+      }
+      if (current.state !== "none") {
+        try {
+          fs.unlinkSync(this.lockPath);
+        } catch {
+          /* already gone */
+        }
+      }
+      return true;
+    } finally {
+      try {
+        fs.unlinkSync(mutexPath);
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
+  /**
    * Release the lock if we hold it.
    */
   release(): void {
     if (!this.acquired) return;
 
     try {
-      // Only remove if it's still our PID
+      // Only remove the lock when it still records THIS acquisition — PID
+      // alone is not enough, because a later broker instance in the same
+      // process may have legitimately re-acquired with a new instance id.
       const owner = readBrokerLockOwner(this.lockPath);
-      if (owner && owner.pid === process.pid) {
+      if (owner && owner.pid === process.pid && owner.instanceId === this.instanceId) {
         fs.unlinkSync(this.lockPath);
       }
     } catch {

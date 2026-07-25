@@ -233,7 +233,15 @@ export async function probeBrokerSocket(
 
 // ─── Graceful shutdown request ───────────────────────────
 
-export type BrokerShutdownRequestResult = "accepted" | "unsupported" | "unreachable" | "failed";
+export type BrokerShutdownRequestResult =
+  | "accepted"
+  /** The broker responded with method-not-found — it predates the RPC. */
+  | "unsupported"
+  /** The broker responded with an error (e.g. auth rejection) — it is alive and refusing. */
+  | "rejected"
+  | "unreachable"
+  /** Connected but no usable response — the broker looks hung. */
+  | "failed";
 
 export interface RequestBrokerShutdownOptions {
   target?: ListenTarget;
@@ -262,11 +270,11 @@ export async function requestBrokerShutdown(
   try {
     const secret = options.meshSecret?.trim();
     const authResponse = await client.call("auth", secret ? { secret } : {}, timeoutMs);
-    if (authResponse.error) return "failed";
+    if (authResponse.error) return "rejected";
 
     const shutdownResponse = await client.call("admin.shutdown", {}, timeoutMs);
     if (shutdownResponse.error) {
-      return shutdownResponse.error.code === RPC_METHOD_NOT_FOUND ? "unsupported" : "failed";
+      return shutdownResponse.error.code === RPC_METHOD_NOT_FOUND ? "unsupported" : "rejected";
     }
     return "accepted";
   } catch {
@@ -497,7 +505,39 @@ export async function replaceBrokerOwner(
     steps.push("Broker accepted shutdown but did not release the lock in time.");
   }
 
+  if (shutdownResult === "rejected") {
+    // The broker is responsive and refused the request (typically a mesh
+    // secret mismatch). A responsive broker is not stranded — do not
+    // escalate to signals.
+    return {
+      outcome: "failed",
+      owner,
+      steps,
+      error:
+        "The running broker rejected the shutdown request (often a mesh secret mismatch). " +
+        "It is responsive, so it was not terminated. Fix the mesh secret configuration, " +
+        "or stop that broker from its own session, then retry.",
+    };
+  }
+
   // ── Step 2: fenced termination fallback ──
+  if (!owner.processStartTime) {
+    // Legacy locks (and structured locks with an unknown start time) carry no
+    // PID-reuse fence, so an automatic SIGTERM could hit an unrelated process
+    // that reused the PID. Require a manual, human-verified step instead.
+    steps.push(
+      "Lock owner has no recorded process start identity — refusing automatic termination.",
+    );
+    return {
+      outcome: "failed",
+      owner,
+      steps,
+      error:
+        `The lock owner (pid ${owner.pid}) predates identity fencing, so automatic termination ` +
+        `cannot verify it is still the original broker. Inspect it manually (ps -p ${owner.pid}), ` +
+        `terminate it yourself if it is truly the stranded broker, then run /pinet start.`,
+    };
+  }
   const preTerminate = inspect();
   if (preTerminate.state !== "alive") {
     steps.push("Lock was released before termination was needed.");

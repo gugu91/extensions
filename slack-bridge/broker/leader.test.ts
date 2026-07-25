@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -231,6 +232,153 @@ describe("LeaderLock", () => {
     expect(fs.existsSync(lockPath)).toBe(true);
     expect(fs.readFileSync(lockPath, "utf-8").trim()).toBe("999999999");
   });
+
+  it("release does not remove a successor lock acquired by the same process", () => {
+    const lockPath = path.join(dir, "lock");
+    const stale = new LeaderLock(lockPath);
+    expect(stale.tryAcquire()).toBe(true);
+
+    // A later broker instance in the same process legitimately re-acquires
+    // (e.g. after the first instance's runtime was torn down out of band).
+    fs.unlinkSync(lockPath);
+    const successor = new LeaderLock(lockPath);
+    expect(successor.tryAcquire()).toBe(true);
+
+    // The stale handle must not delete the successor's lock: same PID, but a
+    // different acquisition instance.
+    stale.release();
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(readBrokerLockOwner(lockPath)?.instanceId).toBe(successor.getInstanceId());
+
+    successor.release();
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("does not destroy a fresh lock that appears between inspection and reclaim", () => {
+    const lockPath = path.join(dir, "lock");
+    // Start from a stale dead-PID lock…
+    fs.writeFileSync(lockPath, "2147483647", "utf-8");
+
+    // …but have the liveness probe simulate a concurrent fresh acquisition
+    // by swapping in another owner's structured lock mid-inspection.
+    const freshContent = `999999998\n${JSON.stringify({
+      version: 2,
+      processStartTime: "boot-F",
+      instanceId: "inst-fresh",
+      hostname: "host",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    })}\n`;
+    const lock = new LeaderLock(lockPath, {
+      isProcessRunning: (pid) => {
+        if (pid === 2147483647) {
+          fs.writeFileSync(lockPath, freshContent, "utf-8");
+          return false;
+        }
+        return true;
+      },
+    });
+
+    // Acquisition must back off rather than reclaim the changed lock.
+    expect(lock.tryAcquire()).toBe(false);
+    expect(readBrokerLockOwner(lockPath)?.instanceId).toBe("inst-fresh");
+  });
+});
+
+// ─── Simultaneous acquisition (multi-process) ───────────
+
+describe("LeaderLock simultaneous acquisition", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  async function raceContenders(options: { children: number; staleLock: boolean }): Promise<{
+    winners: number;
+    losers: number;
+  }> {
+    const lockPath = path.join(dir, "lock");
+    const gatePath = path.join(dir, "gate");
+    const donePath = path.join(dir, "done");
+    if (options.staleLock) {
+      fs.writeFileSync(lockPath, "2147483647", "utf-8");
+    }
+
+    // Node 22.18+/24 strip types natively, so children can import the .ts
+    // module directly with plain `node`. A winner must stay alive (holding
+    // the lock) until every contender has decided — otherwise a slower
+    // contender would correctly reclaim the already-dead winner's lock and
+    // the round would measure dead-owner recovery, not mutual exclusion.
+    const leaderModuleUrl = new URL("../../broker-core/leader.ts", import.meta.url).href;
+    const childScript = path.join(dir, "contender.mjs");
+    fs.writeFileSync(
+      childScript,
+      [
+        `import * as fs from "node:fs";`,
+        `const { LeaderLock } = await import(${JSON.stringify(leaderModuleUrl)});`,
+        `const resultPath = process.argv[2];`,
+        `while (!fs.existsSync(${JSON.stringify(gatePath)})) { /* spin until the gate opens */ }`,
+        `const lock = new LeaderLock(${JSON.stringify(lockPath)});`,
+        `const acquired = lock.tryAcquire();`,
+        `fs.writeFileSync(resultPath, JSON.stringify({ acquired }));`,
+        `while (acquired && !fs.existsSync(${JSON.stringify(donePath)})) { /* hold the lock */ }`,
+        `process.exit(0);`,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const resultPaths = Array.from({ length: options.children }, (_, i) =>
+      path.join(dir, `result-${i}.json`),
+    );
+    const children = resultPaths.map((resultPath) =>
+      spawn(process.execPath, ["--no-warnings", childScript, resultPath], { stdio: "ignore" }),
+    );
+    // Attach exit promises immediately — losers exit long before the round
+    // ends, and a listener attached after the event has fired never resolves.
+    const exits = children.map(
+      (child) =>
+        new Promise<void>((resolve, reject) => {
+          child.on("error", reject);
+          child.on("exit", () => resolve());
+        }),
+    );
+    // Let every child reach the spin gate, then open it so all contenders
+    // attempt acquisition together.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    fs.writeFileSync(gatePath, "go", "utf-8");
+
+    // Wait until every contender has recorded its outcome, then let winners
+    // exit.
+    const deadline = Date.now() + 20_000;
+    while (resultPaths.some((p) => !fs.existsSync(p))) {
+      if (Date.now() > deadline) throw new Error("contenders did not all report in time");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    fs.writeFileSync(donePath, "done", "utf-8");
+    await Promise.all(exits);
+
+    const outcomes = resultPaths.map(
+      (p) => JSON.parse(fs.readFileSync(p, "utf-8")) as { acquired: boolean },
+    );
+    const winners = outcomes.filter((o) => o.acquired).length;
+    const losers = outcomes.filter((o) => !o.acquired).length;
+    expect(winners + losers).toBe(options.children);
+    return { winners, losers };
+  }
+
+  it("elects exactly one leader among simultaneous contenders", async () => {
+    const { winners } = await raceContenders({ children: 8, staleLock: false });
+    expect(winners).toBe(1);
+  }, 30_000);
+
+  it("elects exactly one leader when contenders race over a stale lock", async () => {
+    const { winners } = await raceContenders({ children: 8, staleLock: true });
+    expect(winners).toBe(1);
+  }, 30_000);
 });
 
 // ─── readBrokerLockOwner ─────────────────────────────────

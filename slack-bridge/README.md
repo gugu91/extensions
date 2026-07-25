@@ -395,6 +395,16 @@ longer have that broker's Pi session (crash, laptop restart, stalled process):
    over the socket, falls back to a verified SIGTERM against the recorded lock
    owner, and never escalates to SIGKILL.
 
+Two cases intentionally refuse automatic termination:
+
+- **Legacy locks** (written by older builds, PID-only): there is no recorded
+  process start identity, so a SIGTERM could hit an unrelated process that
+  reused the PID. Inspect the process manually (`ps -p <pid>`), terminate it
+  yourself if it is truly the stranded broker, then run `/pinet start`.
+- **Rejected shutdown**: a broker that responds but rejects the shutdown
+  request (usually a mesh secret mismatch) is alive, not stranded. Fix the
+  mesh secret configuration or stop that broker from its own session.
+
 ### Stalled agents
 
 If work gets stuck:

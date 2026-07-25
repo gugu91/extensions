@@ -103,3 +103,27 @@ New lock format, backward compatible with legacy plain-PID readers:
   handler-missing → method-not-found.
 - pinet-commands: start conflict messaging per classification, `start replace`
   flow, status global-broker section.
+
+## Post-review hardening (PR #952 review findings)
+
+- **Exclusive acquisition**: `tryAcquire` no longer uses check-then-rename
+  (which admitted multiple simultaneous leaders — reproduced at 4–7 winners
+  of 8 contenders on the base algorithm with winners held alive). The lock is
+  created via write-temp + `link()` (atomic, exclusive, full content at the
+  instant the path exists), so the kernel picks exactly one winner. Stale
+  locks are only unlinked while holding an exclusively-created
+  `<lockPath>.reclaim` mutex, with staleness re-verified under the mutex; a
+  mutex left by a crashed reclaimer (dead PID) is itself reclaimed.
+- **Release fencing**: `release()` requires the on-disk `instanceId` to match
+  this acquisition, not just the PID, so a stale handle cannot delete a
+  successor's lock.
+- **Termination fencing**: `replaceBrokerOwner` refuses automatic SIGTERM for
+  owners without a recorded process start identity (legacy locks), and
+  aborts without signalling when a responsive broker rejects the shutdown
+  RPC (`rejected`, typically a mesh secret mismatch) — a responsive broker
+  is not stranded.
+- **Multi-process regression tests**: two stress tests spawn 8 real
+  contender processes racing over an empty path and over a stale lock, and
+  assert exactly one winner (winners hold the lock until every contender has
+  decided, so the test measures mutual exclusion rather than legitimate
+  dead-owner recovery).
