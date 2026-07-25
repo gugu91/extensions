@@ -139,6 +139,13 @@ export interface BrokerRuntimeDeps {
     openedAt?: string,
   ) => Promise<BrokerControlPlaneDashboardSnapshot | null>;
   createAdapterBindings: readonly PinetRuntimeAdapterFactory[];
+  /**
+   * Invoked when an authenticated local client asks this broker to shut down
+   * gracefully (`admin.shutdown`, used by `/pinet start replace`). The
+   * implementation should stop the Pinet runtime in the owning session and
+   * notify its operator; the session itself stays alive.
+   */
+  onAdminShutdownRequested: (ctx: ExtensionContext) => Promise<void>;
 }
 
 function normalizeOptionalSetting(value: string | null | undefined): string | null {
@@ -648,6 +655,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           }
           deps.onAgentStatusChange(ctx, changedAgentId, status);
         });
+        broker.server.setAdminShutdownHandler(() => deps.onAdminShutdownRequested(ctx));
 
         startBrokerHeartbeat();
         startBrokerMaintenance(ctx);

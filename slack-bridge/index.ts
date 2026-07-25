@@ -7,6 +7,7 @@ import {
   type InboxMessage,
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
+  resolvePinetMeshAuth,
   reloadPinetRuntimeSafely,
   buildPinetOwnerToken,
   resolveAgentIdentity,
@@ -19,6 +20,13 @@ import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
 import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
+import {
+  inspectBrokerLock,
+  probeBrokerSocket,
+  replaceBrokerOwner,
+  type ReplaceBrokerOwnerResult,
+} from "./broker/index.js";
+import { readMeshSecret } from "./broker/auth.js";
 import {
   collectAgentLifecycleStatuses,
   type AgentLifecycleStatus,
@@ -833,6 +841,17 @@ export default function (pi: ExtensionAPI) {
     buildCurrentDashboardSnapshot: async (openedAt) =>
       buildCurrentBrokerControlPlaneDashboardSnapshot(openedAt),
     createAdapterBindings: [slackPinetAdapterFactory],
+    onAdminShutdownRequested: async (ctx) => {
+      // `/pinet start replace` from another local session: stop being the
+      // broker but keep this session alive (issue #951).
+      ctx.ui.notify(
+        "Pinet broker shutdown requested by another local session (/pinet start replace). Stopping the broker runtime in this session.",
+        "warning",
+      );
+      await stopPinetRuntime(ctx, { releaseIdentity: true });
+      slackRequestRuntime.reset();
+      singlePlayerRuntime.resetShutdownState();
+    },
     onMaintenanceResult: (ctx, { result, previousSignature, signature }) => {
       if (signature && signature !== previousSignature) {
         ctx.ui.notify(`Pinet broker: ${result.anomalies.join("; ")}`, "warning");
@@ -1166,6 +1185,23 @@ export default function (pi: ExtensionAPI) {
 
     await connectAsFollower(ctx);
     void ensureSlackScopeDiagnostics(ctx);
+  }
+
+  /**
+   * Resolve the local mesh secret value for client-side broker RPCs
+   * (graceful takeover). Returns null when no secret is configured or the
+   * secret file is unreadable — callers degrade to fenced termination.
+   */
+  function resolveLocalMeshSecretValue(): string | null {
+    const meshAuth = resolvePinetMeshAuth(settings);
+    if (meshAuth.meshSecret) {
+      return meshAuth.meshSecret;
+    }
+    try {
+      return meshAuth.meshSecretPath ? readMeshSecret(meshAuth.meshSecretPath) : readMeshSecret();
+    } catch {
+      return null;
+    }
   }
 
   async function stopPinetRuntime(
@@ -1598,7 +1634,16 @@ export default function (pi: ExtensionAPI) {
       lastBrokerControlPlaneHomeTabRefreshAt: () => brokerRuntime.getLastHomeTabRefreshAt(),
       lastBrokerControlPlaneHomeTabError: () => brokerRuntime.getLastHomeTabError(),
       subtreeBrokerStatus: () => subtreeBrokerRuntime.getStatus(),
+      inspectGlobalBroker: async () => {
+        const lock = inspectBrokerLock();
+        if (lock.state !== "alive") {
+          return { lock, probe: null };
+        }
+        return { lock, probe: await probeBrokerSocket() };
+      },
       getPinetRegistrationBlockReason: pinetRegistrationGate.getBlockReason,
+      replaceGlobalBroker: async (): Promise<ReplaceBrokerOwnerResult> =>
+        replaceBrokerOwner({ meshSecret: resolveLocalMeshSecretValue() }),
       connectAsBroker: (ctx) => transitionToRuntimeMode(ctx, "broker"),
       connectAsFollower: (ctx) => transitionToRuntimeMode(ctx, "follower"),
       reloadPinetRuntime,

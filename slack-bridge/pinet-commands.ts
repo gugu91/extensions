@@ -18,6 +18,11 @@ import {
   type SlackScopeDiagnostics,
 } from "./slack-scope-diagnostics.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
+import type {
+  BrokerLockInspection,
+  BrokerSocketProbeResult,
+  ReplaceBrokerOwnerResult,
+} from "./broker/index.js";
 import type { RalphSnoozeStatus } from "./ralph-loop.js";
 import type {
   SubtreeBrokerStatus,
@@ -62,8 +67,13 @@ export interface PinetCommandsDeps {
   lastBrokerControlPlaneHomeTabError: () => string | null;
   subtreeBrokerStatus: () => SubtreeBrokerStatus;
 
+  // Global broker state (machine-wide lock + socket, independent of this
+  // session's runtime — usable while disconnected)
+  inspectGlobalBroker: () => Promise<GlobalBrokerInspection>;
+
   // Actions
   getPinetRegistrationBlockReason: () => string;
+  replaceGlobalBroker: (ctx: ExtensionContext) => Promise<ReplaceBrokerOwnerResult>;
   connectAsBroker: (ctx: ExtensionContext) => Promise<void>;
   connectAsFollower: (ctx: ExtensionContext) => Promise<void>;
   reloadPinetRuntime: (ctx: ExtensionContext) => Promise<void>;
@@ -110,7 +120,11 @@ const PINET_PRIMARY_COMMANDS: Array<{
   args: string;
   description: string;
 }> = [
-  { action: "start", args: "", description: "Start as the mesh broker" },
+  {
+    action: "start",
+    args: "[replace]",
+    description: "Start as the mesh broker (replace: take over a stale/stranded broker)",
+  },
   { action: "follow", args: "", description: "Connect as a follower worker" },
   { action: "unfollow", args: "", description: "Disconnect from the broker" },
   { action: "reload", args: "<agent>", description: "Ask another agent to reload" },
@@ -242,7 +256,7 @@ export async function runPinetCommandAction(
 ): Promise<void> {
   switch (action) {
     case "start":
-      await runPinetStart(deps, ctx);
+      await runPinetStart(deps, args, ctx);
       return;
     case "follow":
       await runPinetFollow(deps, ctx);
@@ -260,7 +274,7 @@ export async function runPinetCommandAction(
       await runPinetFree(deps, ctx);
       return;
     case "status":
-      runPinetStatus(deps, ctx);
+      await runPinetStatus(deps, ctx);
       return;
     case "logs":
       runPinetLogs(deps, ctx);
@@ -299,12 +313,26 @@ export function registerPinetCommands(pi: ExtensionAPI, deps: PinetCommandsDeps)
   });
 }
 
-async function runPinetStart(deps: PinetCommandsDeps, ctx: ExtensionContext): Promise<void> {
+async function runPinetStart(
+  deps: PinetCommandsDeps,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
   if (deps.pinetRegistrationBlocked()) {
     ctx.ui.notify(deps.getPinetRegistrationBlockReason(), "warning");
     return;
   }
   deps.setExtCtx(ctx);
+
+  const trimmedArgs = args.trim().toLowerCase();
+  const wantReplace = ["replace", "--replace", "takeover"].includes(trimmedArgs);
+  if (trimmedArgs && !wantReplace) {
+    ctx.ui.notify(
+      `Unknown /pinet start option: ${args.trim()}\nUsage: /pinet start [replace]`,
+      "warning",
+    );
+    return;
+  }
 
   if (deps.runtimeMode() === "broker") {
     try {
@@ -316,6 +344,29 @@ async function runPinetStart(deps: PinetCommandsDeps, ctx: ExtensionContext): Pr
       deps.setExtStatus(ctx, "error");
     }
     return;
+  }
+
+  if (wantReplace) {
+    let replaceResult: ReplaceBrokerOwnerResult;
+    try {
+      replaceResult = await deps.replaceGlobalBroker(ctx);
+    } catch (err) {
+      ctx.ui.notify(`Pinet broker replace failed: ${errorMsg(err)}`, "error");
+      deps.setExtStatus(ctx, "error");
+      return;
+    }
+    const stepsText = replaceResult.steps.length
+      ? `\n${replaceResult.steps.map((step) => `• ${step}`).join("\n")}`
+      : "";
+    if (replaceResult.outcome === "failed" || replaceResult.outcome === "owner-changed") {
+      ctx.ui.notify(
+        `Pinet broker replace ${replaceResult.outcome === "failed" ? "failed" : "aborted"}: ${replaceResult.error ?? "unknown error"}${stepsText}`,
+        "error",
+      );
+      deps.setExtStatus(ctx, "error");
+      return;
+    }
+    ctx.ui.notify(`Pinet broker replace: ${replaceResult.outcome}.${stepsText}`, "info");
   }
 
   try {
@@ -678,8 +729,48 @@ async function runPinetSubtree(
   }
 }
 
-function runPinetStatus(deps: PinetCommandsDeps, ctx: ExtensionContext): void {
+export interface GlobalBrokerInspection {
+  lock: BrokerLockInspection;
+  probe: BrokerSocketProbeResult | null;
+}
+
+/**
+ * Machine-wide broker state line for `/pinet status`, so a disconnected
+ * session — precisely the one that needs recovery — can see who holds the
+ * broker lock and whether that broker is healthy (issue #951).
+ */
+export function formatGlobalBrokerReport(report: GlobalBrokerInspection): string {
+  const { lock, probe } = report;
+  switch (lock.state) {
+    case "none":
+      return "Global broker: none running on this machine (lock free). Use /pinet start.";
+    case "unreadable":
+      return "Global broker: unreadable lock file — /pinet start will reclaim it.";
+    case "stale-dead":
+      return `Global broker: stale lock from dead pid ${lock.owner.pid} — /pinet start will reclaim it.`;
+    case "stale-pid-reused":
+      return `Global broker: lock pid ${lock.owner.pid} was reused by an unrelated process — /pinet start will reclaim it.`;
+    case "alive": {
+      const since = lock.owner.createdAt ? ` since ${lock.owner.createdAt}` : "";
+      if (probe === "healthy") {
+        return `Global broker: active (pid ${lock.owner.pid}${since}). Use /pinet follow to join it, or /pinet start replace to take it over.`;
+      }
+      const socketState = probe === "unreachable" ? "unreachable" : "unresponsive";
+      return `Global broker: pid ${lock.owner.pid} holds the lock${since} but the broker socket is ${socketState} — likely stranded. Use /pinet start replace to recover.`;
+    }
+  }
+}
+
+async function runPinetStatus(deps: PinetCommandsDeps, ctx: ExtensionContext): Promise<void> {
   const mode = deps.runtimeMode();
+  let globalBrokerInfo: string[] = [];
+  if (mode === "off" || mode === "single") {
+    try {
+      globalBrokerInfo = [formatGlobalBrokerReport(await deps.inspectGlobalBroker())];
+    } catch (err) {
+      globalBrokerInfo = [`Global broker: inspection failed (${errorMsg(err)})`];
+    }
+  }
   const ownedCount = [...deps.threads().values()].filter((t) =>
     agentOwnsThread(t.owner, deps.agentName(), deps.agentAliases(), deps.agentOwnerToken()),
   ).length;
@@ -753,6 +844,7 @@ function runPinetStatus(deps: PinetCommandsDeps, ctx: ExtensionContext): void {
       ...ralphSnoozeInfo,
       ...brokerHomeTabInfo,
       ...subtreeBrokerInfo,
+      ...globalBrokerInfo,
     ].join("\n"),
     "info",
   );

@@ -263,6 +263,7 @@ Main commands:
 Coordinator commands:
 
 - `/pinet start` or `/pinet broker` - become the broker
+- `/pinet start replace` - take over a stale or stranded broker (graceful shutdown first, then a fenced SIGTERM fallback)
 - `/pinet follow` - become a follower
 - `/pinet unfollow` - disconnect from broker
 - `/pinet reload <agent>` - ask another agent to reload
@@ -379,6 +380,20 @@ If Pinet does not respond:
 3. Check `allowedUsers` or `allowAllWorkspaceUsers`
 4. Look in the log channel for errors
 5. Try `/pinet status` to check if Pinet is running
+
+### Stranded broker (lock held, controlling session lost)
+
+If `/pinet start` reports that another broker is already running but you no
+longer have that broker's Pi session (crash, laptop restart, stalled process):
+
+1. Run `/pinet status` from any session — it reports machine-wide broker lock
+   ownership and socket health even while disconnected.
+2. If the broker is healthy and you just want to participate, run
+   `/pinet follow`.
+3. If the broker is stranded (or you need the broker in this session), run
+   `/pinet start replace`. It asks the current broker to shut down gracefully
+   over the socket, falls back to a verified SIGTERM against the recorded lock
+   owner, and never escalates to SIGKILL.
 
 ### Stalled agents
 

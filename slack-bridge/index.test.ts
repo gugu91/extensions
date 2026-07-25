@@ -288,6 +288,7 @@ describe("slack-bridge top-level shutdown", () => {
       db: BrokerDB;
       server: {
         setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        setAdminShutdownHandler: ReturnType<typeof vi.fn>;
         onAgentMessage: ReturnType<typeof vi.fn>;
         onAgentStatusChange: ReturnType<typeof vi.fn>;
       };
@@ -317,6 +318,7 @@ describe("slack-bridge top-level shutdown", () => {
       db.initialize();
       const server = {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       };
@@ -451,6 +453,7 @@ describe("slack-bridge top-level shutdown", () => {
       db: BrokerDB;
       server: {
         setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        setAdminShutdownHandler: ReturnType<typeof vi.fn>;
         onAgentMessage: ReturnType<typeof vi.fn>;
         onAgentStatusChange: ReturnType<typeof vi.fn>;
       };
@@ -470,6 +473,7 @@ describe("slack-bridge top-level shutdown", () => {
       db.initialize();
       const server = {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       };
@@ -565,6 +569,7 @@ describe("slack-bridge top-level shutdown", () => {
       db: BrokerDB;
       server: {
         setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        setAdminShutdownHandler: ReturnType<typeof vi.fn>;
         onAgentMessage: ReturnType<typeof vi.fn>;
         onAgentStatusChange: ReturnType<typeof vi.fn>;
       };
@@ -584,6 +589,7 @@ describe("slack-bridge top-level shutdown", () => {
       db.initialize();
       const server = {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       };
@@ -677,6 +683,7 @@ describe("slack-bridge top-level shutdown", () => {
       db: BrokerDB;
       server: {
         setAgentRegistrationResolver: ReturnType<typeof vi.fn>;
+        setAdminShutdownHandler: ReturnType<typeof vi.fn>;
         onAgentMessage: ReturnType<typeof vi.fn>;
         onAgentStatusChange: ReturnType<typeof vi.fn>;
       };
@@ -702,6 +709,7 @@ describe("slack-bridge top-level shutdown", () => {
       db.initialize();
       const server = {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       };
@@ -811,6 +819,7 @@ describe("slack-bridge top-level shutdown", () => {
       db.initialize();
       const server = {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       };
@@ -946,6 +955,7 @@ describe("slack-bridge top-level shutdown", () => {
     const adapters: Array<{ name: string; send?: (msg: unknown) => Promise<unknown> }> = [];
     const server = {
       setAgentRegistrationResolver: vi.fn(),
+      setAdminShutdownHandler: vi.fn(),
       setOutboundMessageAdapters: vi.fn(),
       onAgentMessage: vi.fn(),
       onAgentStatusChange: vi.fn(),
@@ -1100,6 +1110,7 @@ describe("slack-bridge top-level shutdown", () => {
     });
     const server = {
       setAgentRegistrationResolver: vi.fn(),
+      setAdminShutdownHandler: vi.fn(),
       setOutboundMessageAdapters: vi.fn(),
       onAgentMessage: vi.fn(),
       onAgentStatusChange: vi.fn(),
@@ -1852,6 +1863,7 @@ describe("slack-bridge top-level shutdown", () => {
       db: restartedDb,
       server: {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       },
@@ -2291,6 +2303,7 @@ describe("slack-bridge top-level shutdown", () => {
       db: restartedDb,
       server: {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       },
@@ -3204,6 +3217,7 @@ describe("slack-bridge Pinet reconnect", () => {
         db,
         server: {
           setAgentRegistrationResolver: vi.fn(),
+          setAdminShutdownHandler: vi.fn(),
           onAgentMessage: vi.fn(),
           onAgentStatusChange: vi.fn(),
         },
@@ -3339,6 +3353,7 @@ describe("slack-bridge Pinet reconnect", () => {
         db,
         server: {
           setAgentRegistrationResolver: vi.fn(),
+          setAdminShutdownHandler: vi.fn(),
           onAgentMessage: vi.fn(),
           onAgentStatusChange: vi.fn(),
         },
@@ -4227,6 +4242,7 @@ describe("slack-bridge broker startup backlog recovery", () => {
       db: restartedDb,
       server: {
         setAgentRegistrationResolver: vi.fn(),
+        setAdminShutdownHandler: vi.fn(),
         onAgentMessage: vi.fn(),
         onAgentStatusChange: vi.fn(),
       },
@@ -4360,6 +4376,7 @@ describe("slack-bridge broker startup backlog recovery", () => {
     });
     const brokerServer = {
       setAgentRegistrationResolver: vi.fn(),
+      setAdminShutdownHandler: vi.fn(),
       onAgentMessage: vi.fn(),
       onAgentStatusChange: vi.fn(),
     };
@@ -4633,6 +4650,7 @@ describe("slack-bridge broker startup backlog recovery", () => {
         db,
         server: {
           setAgentRegistrationResolver: vi.fn(),
+          setAdminShutdownHandler: vi.fn(),
           onAgentMessage: vi.fn(),
           onAgentStatusChange: vi.fn(),
         },
