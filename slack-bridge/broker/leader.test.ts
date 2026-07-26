@@ -1,8 +1,15 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { defaultLockPath, LeaderLock } from "./leader.js";
+import {
+  defaultLockPath,
+  getProcessStartTime,
+  inspectBrokerLock,
+  LeaderLock,
+  readBrokerLockOwner,
+} from "./leader.js";
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -66,15 +73,34 @@ describe("LeaderLock", () => {
     lock.release();
   });
 
-  it("writes the current PID to the lock file", () => {
+  it("writes the current PID as the first line of the lock file", () => {
     const lockPath = path.join(dir, "lock");
     const lock = new LeaderLock(lockPath);
     lock.tryAcquire();
 
-    const written = fs.readFileSync(lockPath, "utf-8").trim();
-    expect(written).toBe(String(process.pid));
+    const [pidLine] = fs.readFileSync(lockPath, "utf-8").split("\n");
+    expect(pidLine).toBe(String(process.pid));
+    // Legacy readers parse the whole trimmed content with parseInt — the
+    // structured metadata must not change the PID they see.
+    expect(parseInt(fs.readFileSync(lockPath, "utf-8").trim(), 10)).toBe(process.pid);
 
     lock.release();
+  });
+
+  it("writes structured owner metadata alongside the PID", () => {
+    const lockPath = path.join(dir, "lock");
+    const lock = new LeaderLock(lockPath);
+    lock.tryAcquire();
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner).not.toBeNull();
+    expect(owner?.pid).toBe(process.pid);
+    expect(owner?.legacy).toBe(false);
+    expect(owner?.instanceId).toBe(lock.getInstanceId());
+    expect(owner?.createdAt).toBeTruthy();
+
+    lock.release();
+    expect(lock.getInstanceId()).toBeNull();
   });
 
   it("release removes the lock file", () => {
@@ -141,6 +167,57 @@ describe("LeaderLock", () => {
     lock.release();
   });
 
+  it("reclaims a lock whose PID was reused by an unrelated process", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(
+      lockPath,
+      `${process.pid}\n${JSON.stringify({
+        version: 2,
+        processStartTime: "boot-A",
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    const lock = new LeaderLock(lockPath, {
+      getProcessStartTime: () => "boot-B",
+    });
+    expect(lock.tryAcquire()).toBe(true);
+    lock.release();
+  });
+
+  it("does not reclaim a live lock when the start time is unknown", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(
+      lockPath,
+      `${process.pid}\n${JSON.stringify({
+        version: 2,
+        processStartTime: "boot-A",
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    // Unknown current start time must never count as evidence of staleness.
+    const lock = new LeaderLock(lockPath, {
+      getProcessStartTime: () => null,
+    });
+    expect(lock.tryAcquire()).toBe(false);
+  });
+
+  it("reclaims an unreadable lock file", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "not-a-pid\n", "utf-8");
+
+    const lock = new LeaderLock(lockPath);
+    expect(lock.tryAcquire()).toBe(true);
+    lock.release();
+  });
+
   it("release does not remove the file if another PID overwrote it", () => {
     const lockPath = path.join(dir, "lock");
     const lock = new LeaderLock(lockPath);
@@ -154,5 +231,368 @@ describe("LeaderLock", () => {
     // File should still exist because the PID didn't match
     expect(fs.existsSync(lockPath)).toBe(true);
     expect(fs.readFileSync(lockPath, "utf-8").trim()).toBe("999999999");
+  });
+
+  it("release does not remove a successor lock acquired by the same process", () => {
+    const lockPath = path.join(dir, "lock");
+    const stale = new LeaderLock(lockPath);
+    expect(stale.tryAcquire()).toBe(true);
+
+    // A later broker instance in the same process legitimately re-acquires
+    // (e.g. after the first instance's runtime was torn down out of band).
+    fs.unlinkSync(lockPath);
+    const successor = new LeaderLock(lockPath);
+    expect(successor.tryAcquire()).toBe(true);
+
+    // The stale handle must not delete the successor's lock: same PID, but a
+    // different acquisition instance.
+    stale.release();
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(readBrokerLockOwner(lockPath)?.instanceId).toBe(successor.getInstanceId());
+
+    successor.release();
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("backs off when the reclaim mutex is held by a live reclaimer", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "2147483647", "utf-8"); // stale dead-PID lock
+
+    // A live holder with a matching start identity — and, separately, a
+    // legacy bare-PID mutex — must both be treated as an active reclaimer.
+    const start = getProcessStartTime(process.pid) ?? "";
+    for (const content of [`${process.pid}\n${start}\n`, `${process.pid}\n`]) {
+      fs.writeFileSync(`${lockPath}.reclaim`, content, "utf-8");
+      const lock = new LeaderLock(lockPath);
+      expect(lock.tryAcquire()).toBe(false);
+      expect(fs.existsSync(`${lockPath}.reclaim`)).toBe(true);
+      fs.unlinkSync(`${lockPath}.reclaim`);
+    }
+  });
+
+  it("reclaims a mutex abandoned by a crashed reclaimer whose PID was reused", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "2147483647", "utf-8"); // stale dead-PID lock
+
+    // The mutex records a live PID but a different start identity: the
+    // recording process is gone and its PID was reused, so the abandoned
+    // mutex must not strand reclamation forever.
+    fs.writeFileSync(`${lockPath}.reclaim`, `${process.pid}\nboot-old\n`, "utf-8");
+    const lock = new LeaderLock(lockPath, { getProcessStartTime: () => "boot-new" });
+    expect(lock.tryAcquire()).toBe(true);
+    expect(fs.existsSync(`${lockPath}.reclaim`)).toBe(false);
+    lock.release();
+  });
+
+  it("does not destroy a fresh lock that appears between inspection and reclaim", () => {
+    const lockPath = path.join(dir, "lock");
+    // Start from a stale dead-PID lock…
+    fs.writeFileSync(lockPath, "2147483647", "utf-8");
+
+    // …but have the liveness probe simulate a concurrent fresh acquisition
+    // by swapping in another owner's structured lock mid-inspection.
+    const freshContent = `999999998\n${JSON.stringify({
+      version: 2,
+      processStartTime: "boot-F",
+      instanceId: "inst-fresh",
+      hostname: "host",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    })}\n`;
+    const lock = new LeaderLock(lockPath, {
+      isProcessRunning: (pid) => {
+        if (pid === 2147483647) {
+          fs.writeFileSync(lockPath, freshContent, "utf-8");
+          return false;
+        }
+        return true;
+      },
+    });
+
+    // Acquisition must back off rather than reclaim the changed lock.
+    expect(lock.tryAcquire()).toBe(false);
+    expect(readBrokerLockOwner(lockPath)?.instanceId).toBe("inst-fresh");
+  });
+});
+
+// ─── Simultaneous acquisition (multi-process) ───────────
+
+describe("LeaderLock simultaneous acquisition", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  async function raceContenders(options: { children: number; staleLock: boolean }): Promise<{
+    winners: number;
+    losers: number;
+  }> {
+    const lockPath = path.join(dir, "lock");
+    const gatePath = path.join(dir, "gate");
+    const donePath = path.join(dir, "done");
+    if (options.staleLock) {
+      fs.writeFileSync(lockPath, "2147483647", "utf-8");
+    }
+
+    // Node 22.18+/24 strip types natively, so children can import the .ts
+    // module directly with plain `node`. A winner must stay alive (holding
+    // the lock) until every contender has decided — otherwise a slower
+    // contender would correctly reclaim the already-dead winner's lock and
+    // the round would measure dead-owner recovery, not mutual exclusion.
+    const leaderModuleUrl = new URL("../../broker-core/leader.ts", import.meta.url).href;
+    const childScript = path.join(dir, "contender.mjs");
+    fs.writeFileSync(
+      childScript,
+      [
+        `import * as fs from "node:fs";`,
+        `const { LeaderLock } = await import(${JSON.stringify(leaderModuleUrl)});`,
+        `const resultPath = process.argv[2];`,
+        `fs.writeFileSync(resultPath + ".ready", "ready");`,
+        `while (!fs.existsSync(${JSON.stringify(gatePath)})) { /* spin until the gate opens */ }`,
+        `const lock = new LeaderLock(${JSON.stringify(lockPath)});`,
+        `const acquired = lock.tryAcquire();`,
+        `fs.writeFileSync(resultPath, JSON.stringify({ acquired }));`,
+        `while (acquired && !fs.existsSync(${JSON.stringify(donePath)})) { /* hold the lock */ }`,
+        `process.exit(0);`,
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const resultPaths = Array.from({ length: options.children }, (_, i) =>
+      path.join(dir, `result-${i}.json`),
+    );
+    const children = resultPaths.map((resultPath) =>
+      spawn(process.execPath, ["--no-warnings", childScript, resultPath], { stdio: "ignore" }),
+    );
+    // Attach exit promises immediately — losers exit long before the round
+    // ends, and a listener attached after the event has fired never resolves.
+    const exits = children.map(
+      (child) =>
+        new Promise<void>((resolve, reject) => {
+          child.on("error", reject);
+          child.on("exit", () => resolve());
+        }),
+    );
+    try {
+      // Readiness barrier: wait until every child has reached the spin gate,
+      // then open it so all contenders attempt acquisition together. A fixed
+      // sleep would let slow children start after the gate opened, quietly
+      // weakening the race into a sequential acquisition test.
+      const readyDeadline = Date.now() + 15_000;
+      while (resultPaths.some((p) => !fs.existsSync(`${p}.ready`))) {
+        if (Date.now() > readyDeadline)
+          throw new Error("contenders did not all reach the gate in time");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      fs.writeFileSync(gatePath, "go", "utf-8");
+
+      // Wait until every contender has recorded its outcome, then let
+      // winners exit.
+      const deadline = Date.now() + 20_000;
+      while (resultPaths.some((p) => !fs.existsSync(p))) {
+        if (Date.now() > deadline) throw new Error("contenders did not all report in time");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      fs.writeFileSync(donePath, "done", "utf-8");
+      await Promise.all(exits);
+    } finally {
+      // Never leak spinning children on a failed round.
+      for (const child of children) {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }
+      await Promise.allSettled(exits);
+    }
+
+    const outcomes = resultPaths.map(
+      (p) => JSON.parse(fs.readFileSync(p, "utf-8")) as { acquired: boolean },
+    );
+    const winners = outcomes.filter((o) => o.acquired).length;
+    const losers = outcomes.filter((o) => !o.acquired).length;
+    expect(winners + losers).toBe(options.children);
+    return { winners, losers };
+  }
+
+  it("elects exactly one leader among simultaneous contenders", async () => {
+    const { winners } = await raceContenders({ children: 8, staleLock: false });
+    expect(winners).toBe(1);
+  }, 30_000);
+
+  it("elects exactly one leader when contenders race over a stale lock", async () => {
+    const { winners } = await raceContenders({ children: 8, staleLock: true });
+    expect(winners).toBe(1);
+  }, 30_000);
+});
+
+// ─── readBrokerLockOwner ─────────────────────────────────
+
+describe("readBrokerLockOwner", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  it("returns null when the lock file does not exist", () => {
+    expect(readBrokerLockOwner(path.join(dir, "missing"))).toBeNull();
+  });
+
+  it("parses a legacy plain-PID lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "12345", "utf-8");
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner).toEqual({
+      pid: 12345,
+      processStartTime: null,
+      instanceId: null,
+      hostname: null,
+      createdAt: null,
+      legacy: true,
+    });
+  });
+
+  it("parses a structured lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(
+      lockPath,
+      `12345\n${JSON.stringify({
+        version: 2,
+        processStartTime: "boot-A",
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner).toEqual({
+      pid: 12345,
+      processStartTime: "boot-A",
+      instanceId: "inst-1",
+      hostname: "host",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      legacy: false,
+    });
+  });
+
+  it("treats a PID followed by corrupt metadata as a legacy lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "12345\nnot-json", "utf-8");
+
+    const owner = readBrokerLockOwner(lockPath);
+    expect(owner?.pid).toBe(12345);
+    expect(owner?.legacy).toBe(true);
+  });
+
+  it("returns null for unparsable content", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "garbage", "utf-8");
+    expect(readBrokerLockOwner(lockPath)).toBeNull();
+  });
+});
+
+// ─── inspectBrokerLock ───────────────────────────────────
+
+describe("inspectBrokerLock", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = tmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  function writeStructuredLock(lockPath: string, pid: number, processStartTime: string): void {
+    fs.writeFileSync(
+      lockPath,
+      `${pid}\n${JSON.stringify({
+        version: 2,
+        processStartTime,
+        instanceId: "inst-1",
+        hostname: "host",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+  }
+
+  it("reports none when the lock file does not exist", () => {
+    expect(inspectBrokerLock(path.join(dir, "missing"))).toEqual({ state: "none", owner: null });
+  });
+
+  it("reports unreadable for unparsable content", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "garbage", "utf-8");
+    expect(inspectBrokerLock(lockPath)).toEqual({ state: "unreadable", owner: null });
+  });
+
+  it("reports stale-dead when the recorded PID is not running", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "2147483647", "utf-8");
+
+    const inspection = inspectBrokerLock(lockPath);
+    expect(inspection.state).toBe("stale-dead");
+    if (inspection.state === "stale-dead") {
+      expect(inspection.owner.pid).toBe(2147483647);
+    }
+  });
+
+  it("reports alive for a live legacy lock", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, String(process.pid), "utf-8");
+
+    const inspection = inspectBrokerLock(lockPath);
+    expect(inspection.state).toBe("alive");
+  });
+
+  it("reports stale-pid-reused when start times differ", () => {
+    const lockPath = path.join(dir, "lock");
+    writeStructuredLock(lockPath, process.pid, "boot-A");
+
+    const inspection = inspectBrokerLock(lockPath, {
+      getProcessStartTime: () => "boot-B",
+    });
+    expect(inspection.state).toBe("stale-pid-reused");
+    if (inspection.state === "stale-pid-reused") {
+      expect(inspection.owner.pid).toBe(process.pid);
+      expect(inspection.currentStartTime).toBe("boot-B");
+    }
+  });
+
+  it("reports alive when start times match", () => {
+    const lockPath = path.join(dir, "lock");
+    writeStructuredLock(lockPath, process.pid, "boot-A");
+
+    const inspection = inspectBrokerLock(lockPath, {
+      getProcessStartTime: () => "boot-A",
+    });
+    expect(inspection.state).toBe("alive");
+  });
+});
+
+// ─── getProcessStartTime ─────────────────────────────────
+
+describe("getProcessStartTime", () => {
+  it("returns a stable non-empty value for the current process", () => {
+    const first = getProcessStartTime(process.pid);
+    const second = getProcessStartTime(process.pid);
+    expect(first).toBeTruthy();
+    expect(second).toBe(first);
+  });
+
+  it("returns null for an invalid pid", () => {
+    expect(getProcessStartTime(-1)).toBeNull();
+    expect(getProcessStartTime(0)).toBeNull();
   });
 });

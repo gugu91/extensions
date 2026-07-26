@@ -191,6 +191,7 @@ export class BrokerSocketServer {
     Pick<MessageAdapter, "name" | "send" | "invokeCapability">
   > = [];
   private agentRegistrationResolver: AgentRegistrationResolver | null = null;
+  private adminShutdownHandler: (() => void | Promise<void>) | null = null;
 
   constructor(
     db: BrokerDB,
@@ -322,6 +323,17 @@ export class BrokerSocketServer {
 
   setAgentRegistrationResolver(resolver: AgentRegistrationResolver | null): void {
     this.agentRegistrationResolver = resolver;
+  }
+
+  /**
+   * Register a handler invoked when an authenticated local client requests a
+   * graceful broker shutdown via the `admin.shutdown` RPC (used by
+   * `/pinet start replace` to take over a broker whose controlling session
+   * was lost). When no handler is wired, the RPC reports method-not-found so
+   * callers treat the broker as not supporting remote shutdown.
+   */
+  setAdminShutdownHandler(handler: (() => void | Promise<void>) | null): void {
+    this.adminShutdownHandler = handler;
   }
 
   setOutboundMessageAdapters(
@@ -548,6 +560,8 @@ export class BrokerSocketServer {
           return this.handleScheduleCreate(req, state);
         case "status.update":
           return this.handleStatusUpdate(req, state);
+        case "admin.shutdown":
+          return this.handleAdminShutdown(req);
         case "adapter.capability":
           return await this.handleAdapterCapability(req, state);
         case "slack.proxy":
@@ -1634,6 +1648,33 @@ export class BrokerSocketServer {
       /* best effort */
     }
     return rpcOk(req.id, { ok: true });
+  }
+
+  // ─── Admin shutdown handler ───────────────────────────
+
+  /**
+   * Graceful remote shutdown. Requires authentication (enforced by the
+   * generic auth gate). Responds first, then invokes the wired handler on the
+   * next tick so the requester receives the acknowledgement before the broker
+   * tears down its socket.
+   */
+  private handleAdminShutdown(req: JsonRpcRequest): JsonRpcResponse {
+    const handler = this.adminShutdownHandler;
+    if (!handler) {
+      return rpcError(
+        req.id,
+        RPC_METHOD_NOT_FOUND,
+        "This broker does not support remote shutdown.",
+      );
+    }
+    setImmediate(() => {
+      void Promise.resolve()
+        .then(() => handler())
+        .catch(() => {
+          /* best effort — the requester falls back to fenced termination */
+        });
+    });
+    return rpcOk(req.id, { ok: true, shuttingDown: true });
   }
 
   // ─── Adapter capability handler ───────────────────────

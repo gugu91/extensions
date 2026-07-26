@@ -1959,13 +1959,15 @@ describe("LeaderLock", () => {
     expect(lock.isLeader()).toBe(false);
   });
 
-  it("writes current PID to lock file", () => {
+  it("writes current PID as the first line of the lock file", () => {
     const lockPath = path.join(dir, "test.lock");
     const lock = new LeaderLock(lockPath);
     lock.tryAcquire();
 
     const content = fs.readFileSync(lockPath, "utf-8").trim();
-    expect(content).toBe(String(process.pid));
+    expect(content.split("\n")[0]).toBe(String(process.pid));
+    // Legacy readers parse with parseInt over the whole content.
+    expect(parseInt(content, 10)).toBe(process.pid);
     lock.release();
   });
 
@@ -2414,9 +2416,9 @@ describe("startBroker leader lock", () => {
     const lockPath = path.join(dir, "broker.lock");
     const broker = await launch({ lockPath });
 
-    // Lock file should exist with our PID
+    // Lock file should exist with our PID on the first line
     expect(fs.existsSync(lockPath)).toBe(true);
-    expect(fs.readFileSync(lockPath, "utf-8").trim()).toBe(String(process.pid));
+    expect(fs.readFileSync(lockPath, "utf-8").trim().split("\n")[0]).toBe(String(process.pid));
 
     await broker.stop();
     brokers.length = 0;
@@ -2436,7 +2438,7 @@ describe("startBroker leader lock", () => {
         lockPath,
         meshSecretPath: path.join(dir, "pinet.secret"),
       }),
-    ).rejects.toThrow("Another pinet broker is already running");
+    ).rejects.toThrow(/Another pinet broker is already running|holds the pinet broker lock/);
   });
 
   it("second broker starts after first stops", async () => {

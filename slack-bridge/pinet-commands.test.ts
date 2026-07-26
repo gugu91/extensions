@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  formatGlobalBrokerReport,
   formatPinetCommandHelp,
   registerPinetCommands,
   type PinetCommandsDeps,
 } from "./pinet-commands.js";
+import type { BrokerLockOwner } from "./broker/index.js";
 import type { SlackBridgeSettings } from "./helpers.js";
 import type { SlackScopeDiagnostics } from "./slack-scope-diagnostics.js";
 import type { SlackBridgeRuntimeMode } from "./runtime-mode.js";
@@ -100,6 +102,13 @@ function createDeps(overrides: Partial<PinetCommandsDeps> = {}): PinetCommandsDe
       spawnedWorkers: [],
     }),
     getPinetRegistrationBlockReason: () => "blocked",
+    inspectGlobalBroker: async () => ({ lock: { state: "none", owner: null }, probe: null }),
+    replaceGlobalBroker: async () => ({
+      outcome: "no-conflict",
+      owner: null,
+      steps: [],
+      error: null,
+    }),
     connectAsBroker: async () => {},
     connectAsFollower: async () => {},
     reloadPinetRuntime: async () => {},
@@ -342,11 +351,198 @@ describe("registerPinetCommands", () => {
   });
 });
 
+describe("/pinet start replace", () => {
+  it("replaces the global broker before starting as broker", async () => {
+    const callOrder: string[] = [];
+    const replaceGlobalBroker = vi.fn(async () => {
+      callOrder.push("replace");
+      return {
+        outcome: "replaced-graceful" as const,
+        owner: null,
+        steps: ["Graceful shutdown request: accepted."],
+        error: null,
+      };
+    });
+    const connectAsBroker = vi.fn(async () => {
+      callOrder.push("connect");
+    });
+    const commands = registerCommands(
+      createDeps({ runtimeMode: () => "off", replaceGlobalBroker, connectAsBroker }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("start replace", ctx);
+
+    expect(callOrder).toEqual(["replace", "connect"]);
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Pinet broker replace: replaced-graceful."),
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Graceful shutdown request: accepted."),
+      "info",
+    );
+  });
+
+  it("does not start as broker when replacement fails", async () => {
+    const replaceGlobalBroker = vi.fn(async () => ({
+      outcome: "failed" as const,
+      owner: null,
+      steps: ["Sending SIGTERM to verified lock owner pid 1336."],
+      error: "Broker pid 1336 is still holding the lock after SIGTERM.",
+    }));
+    const connectAsBroker = vi.fn(async () => {});
+    const commands = registerCommands(
+      createDeps({ runtimeMode: () => "off", replaceGlobalBroker, connectAsBroker }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("start replace", ctx);
+
+    expect(connectAsBroker).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Pinet broker replace failed: Broker pid 1336"),
+      "error",
+    );
+  });
+
+  it("aborts without starting when the owner changed mid-replacement", async () => {
+    const replaceGlobalBroker = vi.fn(async () => ({
+      outcome: "owner-changed" as const,
+      owner: null,
+      steps: [],
+      error: "The broker lock changed owners during replacement.",
+    }));
+    const connectAsBroker = vi.fn(async () => {});
+    const commands = registerCommands(
+      createDeps({ runtimeMode: () => "off", replaceGlobalBroker, connectAsBroker }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("start replace", ctx);
+
+    expect(connectAsBroker).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Pinet broker replace aborted"),
+      "error",
+    );
+  });
+
+  it("rejects unknown start options", async () => {
+    const connectAsBroker = vi.fn(async () => {});
+    const replaceGlobalBroker = vi.fn(createDeps().replaceGlobalBroker);
+    const commands = registerCommands(
+      createDeps({ runtimeMode: () => "off", replaceGlobalBroker, connectAsBroker }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("start bogus", ctx);
+
+    expect(connectAsBroker).not.toHaveBeenCalled();
+    expect(replaceGlobalBroker).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Usage: /pinet start [replace]"),
+      "warning",
+    );
+  });
+});
+
+describe("/pinet status — global broker state", () => {
+  it("reports machine-wide broker state while disconnected", async () => {
+    const inspectGlobalBroker = vi.fn(createDeps().inspectGlobalBroker);
+    const commands = registerCommands(
+      createDeps({ runtimeMode: () => "off", inspectGlobalBroker }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("status", ctx);
+
+    expect(inspectGlobalBroker).toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Global broker: none running on this machine"),
+      "info",
+    );
+  });
+
+  it("reports a stranded broker with recovery guidance", async () => {
+    const owner: BrokerLockOwner = {
+      pid: 1336,
+      processStartTime: "boot-A",
+      instanceId: "inst-1",
+      hostname: "host",
+      createdAt: "2026-07-25T10:00:00.000Z",
+      legacy: false,
+    };
+    const commands = registerCommands(
+      createDeps({
+        runtimeMode: () => "off",
+        inspectGlobalBroker: async () => ({
+          lock: { state: "alive", owner },
+          probe: "unreachable",
+        }),
+      }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("status", ctx);
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("pid 1336 holds the lock"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("/pinet start replace"), "info");
+  });
+
+  it("does not inspect global broker state in broker mode", async () => {
+    const inspectGlobalBroker = vi.fn(createDeps().inspectGlobalBroker);
+    const commands = registerCommands(
+      createDeps({ runtimeMode: () => "broker", inspectGlobalBroker }),
+    );
+    const { ctx } = createContext();
+
+    await commands.get("pinet")?.handler("status", ctx);
+
+    expect(inspectGlobalBroker).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatGlobalBrokerReport", () => {
+  const owner: BrokerLockOwner = {
+    pid: 1336,
+    processStartTime: "boot-A",
+    instanceId: "inst-1",
+    hostname: "host",
+    createdAt: "2026-07-25T10:00:00.000Z",
+    legacy: false,
+  };
+
+  it("describes each lock state with a next step", () => {
+    expect(
+      formatGlobalBrokerReport({ lock: { state: "none", owner: null }, probe: null }),
+    ).toContain("none running");
+    expect(
+      formatGlobalBrokerReport({ lock: { state: "unreadable", owner: null }, probe: null }),
+    ).toContain("unreadable lock file");
+    expect(
+      formatGlobalBrokerReport({ lock: { state: "stale-dead", owner }, probe: null }),
+    ).toContain("stale lock from dead pid 1336");
+    expect(
+      formatGlobalBrokerReport({
+        lock: { state: "stale-pid-reused", owner, currentStartTime: "boot-B" },
+        probe: null,
+      }),
+    ).toContain("reused by an unrelated process");
+    expect(
+      formatGlobalBrokerReport({ lock: { state: "alive", owner }, probe: "healthy" }),
+    ).toContain("/pinet follow");
+    expect(
+      formatGlobalBrokerReport({ lock: { state: "alive", owner }, probe: "unresponsive" }),
+    ).toContain("likely stranded");
+  });
+});
+
 describe("formatPinetCommandHelp", () => {
   it("documents the consolidated primary actions", () => {
     const help = formatPinetCommandHelp();
 
-    expect(help).toContain("/pinet start");
+    expect(help).toContain("/pinet start [replace]");
     expect(help).toContain("/pinet follow");
     expect(help).toContain("/pinet reload <agent>");
     expect(help).toContain("/pinet exit <agent>");
