@@ -254,6 +254,36 @@ describe("LeaderLock", () => {
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
+  it("backs off when the reclaim mutex is held by a live reclaimer", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "2147483647", "utf-8"); // stale dead-PID lock
+
+    // A live holder with a matching start identity — and, separately, a
+    // legacy bare-PID mutex — must both be treated as an active reclaimer.
+    const start = getProcessStartTime(process.pid) ?? "";
+    for (const content of [`${process.pid}\n${start}\n`, `${process.pid}\n`]) {
+      fs.writeFileSync(`${lockPath}.reclaim`, content, "utf-8");
+      const lock = new LeaderLock(lockPath);
+      expect(lock.tryAcquire()).toBe(false);
+      expect(fs.existsSync(`${lockPath}.reclaim`)).toBe(true);
+      fs.unlinkSync(`${lockPath}.reclaim`);
+    }
+  });
+
+  it("reclaims a mutex abandoned by a crashed reclaimer whose PID was reused", () => {
+    const lockPath = path.join(dir, "lock");
+    fs.writeFileSync(lockPath, "2147483647", "utf-8"); // stale dead-PID lock
+
+    // The mutex records a live PID but a different start identity: the
+    // recording process is gone and its PID was reused, so the abandoned
+    // mutex must not strand reclamation forever.
+    fs.writeFileSync(`${lockPath}.reclaim`, `${process.pid}\nboot-old\n`, "utf-8");
+    const lock = new LeaderLock(lockPath, { getProcessStartTime: () => "boot-new" });
+    expect(lock.tryAcquire()).toBe(true);
+    expect(fs.existsSync(`${lockPath}.reclaim`)).toBe(false);
+    lock.release();
+  });
+
   it("does not destroy a fresh lock that appears between inspection and reclaim", () => {
     const lockPath = path.join(dir, "lock");
     // Start from a stale dead-PID lock…
@@ -321,6 +351,7 @@ describe("LeaderLock simultaneous acquisition", () => {
         `import * as fs from "node:fs";`,
         `const { LeaderLock } = await import(${JSON.stringify(leaderModuleUrl)});`,
         `const resultPath = process.argv[2];`,
+        `fs.writeFileSync(resultPath + ".ready", "ready");`,
         `while (!fs.existsSync(${JSON.stringify(gatePath)})) { /* spin until the gate opens */ }`,
         `const lock = new LeaderLock(${JSON.stringify(lockPath)});`,
         `const acquired = lock.tryAcquire();`,
@@ -346,20 +377,35 @@ describe("LeaderLock simultaneous acquisition", () => {
           child.on("exit", () => resolve());
         }),
     );
-    // Let every child reach the spin gate, then open it so all contenders
-    // attempt acquisition together.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    fs.writeFileSync(gatePath, "go", "utf-8");
+    try {
+      // Readiness barrier: wait until every child has reached the spin gate,
+      // then open it so all contenders attempt acquisition together. A fixed
+      // sleep would let slow children start after the gate opened, quietly
+      // weakening the race into a sequential acquisition test.
+      const readyDeadline = Date.now() + 15_000;
+      while (resultPaths.some((p) => !fs.existsSync(`${p}.ready`))) {
+        if (Date.now() > readyDeadline)
+          throw new Error("contenders did not all reach the gate in time");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      fs.writeFileSync(gatePath, "go", "utf-8");
 
-    // Wait until every contender has recorded its outcome, then let winners
-    // exit.
-    const deadline = Date.now() + 20_000;
-    while (resultPaths.some((p) => !fs.existsSync(p))) {
-      if (Date.now() > deadline) throw new Error("contenders did not all report in time");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Wait until every contender has recorded its outcome, then let
+      // winners exit.
+      const deadline = Date.now() + 20_000;
+      while (resultPaths.some((p) => !fs.existsSync(p))) {
+        if (Date.now() > deadline) throw new Error("contenders did not all report in time");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      fs.writeFileSync(donePath, "done", "utf-8");
+      await Promise.all(exits);
+    } finally {
+      // Never leak spinning children on a failed round.
+      for (const child of children) {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }
+      await Promise.allSettled(exits);
     }
-    fs.writeFileSync(donePath, "done", "utf-8");
-    await Promise.all(exits);
 
     const outcomes = resultPaths.map(
       (p) => JSON.parse(fs.readFileSync(p, "utf-8")) as { acquired: boolean },

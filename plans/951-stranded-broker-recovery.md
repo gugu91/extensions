@@ -28,7 +28,9 @@ New lock format, backward compatible with legacy plain-PID readers:
 ```
 
 - Line 1 stays a plain PID so an older broker build parsing with `parseInt`
-  still sees a live PID and refuses to take over (no mixed-version split-brain).
+  still sees a live PID and refuses to take over (no mixed-version split-brain
+  while the owner is alive; see the residual-risk note below for the
+  stale-reclaim window).
 - `processStartTime` is captured deterministically (`/proc/<pid>/stat` start
   field on Linux, `LC_ALL=C ps -p <pid> -o lstart=` elsewhere) and compared by
   exact string equality. PID-reuse is only declared when both stored and
@@ -113,7 +115,9 @@ New lock format, backward compatible with legacy plain-PID readers:
   instant the path exists), so the kernel picks exactly one winner. Stale
   locks are only unlinked while holding an exclusively-created
   `<lockPath>.reclaim` mutex, with staleness re-verified under the mutex; a
-  mutex left by a crashed reclaimer (dead PID) is itself reclaimed.
+  mutex left by a crashed reclaimer (dead PID, or a PID provably reused by an
+  unrelated process — the mutex records the reclaimer's start identity) is
+  itself reclaimed.
 - **Release fencing**: `release()` requires the on-disk `instanceId` to match
   this acquisition, not just the PID, so a stale handle cannot delete a
   successor's lock.
@@ -126,4 +130,24 @@ New lock format, backward compatible with legacy plain-PID readers:
   contender processes racing over an empty path and over a stale lock, and
   assert exactly one winner (winners hold the lock until every contender has
   decided, so the test measures mutual exclusion rather than legitimate
-  dead-owner recovery).
+  dead-owner recovery; a readiness barrier ensures every contender reaches
+  the gate before it opens).
+- **Boot-scoped Linux identity**: `/proc/<pid>/stat` start ticks are relative
+  to the current boot, so the recorded identity is scoped with the kernel
+  `boot_id` — a PID reused after a reboot can never present the pre-reboot
+  owner's identity to the SIGTERM fence.
+
+## Known residual risks (accepted)
+
+- **Mixed-version stale reclaim**: pre-v2 builds replace a stale lock via
+  plain rename, which can overwrite a just-acquired v2 lock if an old and a
+  new build race over the same stale lock in the same instant. Any
+  representation old builds cannot overwrite would also break their ability
+  to read the owner PID; the window closes once no pre-v2 sessions remain.
+- **Fence→signal atomicity**: the verified owner could exit and its PID be
+  reused between the final fence re-check and `SIGTERM`. Closing this needs
+  an identity-bound kernel handle (Linux `pidfd_send_signal`), unavailable
+  without native code under the zero-dependency rule.
+- **macOS start-time precision**: `ps lstart` has one-second resolution, so
+  a PID reused within the same wall-clock second as the original process is
+  indistinguishable from it.

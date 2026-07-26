@@ -58,6 +58,12 @@ export interface BrokerLockProbes {
  * for exact equality against a value captured by this same function, so the
  * format does not need to be parseable — only stable for a given process.
  *
+ * On Linux the tick count is only unique within a single boot, so it is
+ * scoped with the kernel boot id: a PID reused after a reboot can then never
+ * present the same identity as the pre-reboot owner. `ps lstart` has
+ * one-second resolution, so a PID reused within the same wall-clock second
+ * as the original process is indistinguishable — an accepted residual risk.
+ *
  * Returns null when the start time cannot be determined; callers must treat
  * null as "unknown" and never use it as evidence of staleness.
  */
@@ -77,7 +83,17 @@ export function getProcessStartTime(pid: number): string | null {
         // Fields after comm+state start at index 1 here; starttime is overall
         // field 22, i.e. index 19 of the post-state remainder.
         const startTime = fields[19];
-        if (startTime && /^\d+$/.test(startTime)) return startTime;
+        if (startTime && /^\d+$/.test(startTime)) {
+          // starttime is measured in clock ticks since boot — scope it with
+          // the boot id so identities never collide across reboots.
+          let bootId = "";
+          try {
+            bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf-8").trim();
+          } catch {
+            /* boot id unavailable — token stays valid within this boot */
+          }
+          return bootId ? `${bootId}:${startTime}` : startTime;
+        }
       }
     } catch {
       /* fall through to ps */
@@ -259,6 +275,15 @@ function exclusiveCreateFile(filePath: string, content: string): boolean {
  * with staleness re-verified under that mutex — so a fresh lock can never be
  * destroyed by a concurrent reclaimer, and the lock path never goes empty
  * while a live owner's lock exists.
+ *
+ * Known mixed-version limitation: builds that predate the structured format
+ * replace a lock they consider stale with a plain rename over the lock path,
+ * which can overwrite a just-acquired v2 lock when an old and a new build
+ * race over the same stale lock. Exclusive acquisition is therefore only
+ * guaranteed among processes running this code; the window disappears once
+ * no pre-v2 sessions remain. A representation old builds cannot overwrite
+ * (such as a lock directory) would also break their ability to read the
+ * owner PID, which this format deliberately preserves.
  */
 export class LeaderLock {
   private readonly lockPath: string;
@@ -341,23 +366,25 @@ export class LeaderLock {
   /**
    * Remove a stale lock under an exclusive reclaim mutex.
    *
-   * The mutex file (`<lockPath>.reclaim`) is created with `O_EXCL`, so at
-   * most one reclaimer proceeds at a time, and staleness is re-verified
-   * while holding it. Because stale locks are only ever unlinked under this
-   * mutex, the lock path cannot go empty while a live owner's lock exists —
-   * which is what makes the exclusive create in `tryAcquire` a sound
-   * arbiter. A mutex left behind by a crashed reclaimer (dead PID) is itself
-   * reclaimed.
+   * The mutex file (`<lockPath>.reclaim`) is created with `O_EXCL` and
+   * records the reclaimer's PID plus start identity, so at most one
+   * reclaimer proceeds at a time, and staleness is re-verified while holding
+   * it. Because stale locks are only ever unlinked under this mutex, the
+   * lock path cannot go empty while a live owner's lock exists — which is
+   * what makes the exclusive create in `tryAcquire` a sound arbiter. A mutex
+   * left behind by a crashed reclaimer (dead PID, or a PID provably reused
+   * by an unrelated process) is itself reclaimed.
    *
    * Returns true when the caller may retry an exclusive create.
    */
   private reclaimStaleLock(): boolean {
     const mutexPath = `${this.lockPath}.reclaim`;
     const isRunning = this.probes.isProcessRunning ?? isProcessRunning;
+    const startTimeOf = this.probes.getProcessStartTime ?? getProcessStartTime;
 
     let holdsMutex = false;
     for (let campaign = 0; campaign < 2 && !holdsMutex; campaign++) {
-      if (exclusiveCreateFile(mutexPath, `${process.pid}\n`)) {
+      if (exclusiveCreateFile(mutexPath, `${process.pid}\n${startTimeOf(process.pid) ?? ""}\n`)) {
         holdsMutex = true;
       } else {
         // Mutex exists — held by a live reclaimer, or left by a crashed one.
@@ -367,9 +394,18 @@ export class LeaderLock {
         } catch {
           continue; // vanished — retry the campaign
         }
-        const holderPid = /^\d+$/.test(holderRaw) ? parseInt(holderRaw, 10) : null;
+        const [pidLine = "", startLine = ""] = holderRaw.split("\n");
+        const holderPid = /^\d+$/.test(pidLine.trim()) ? parseInt(pidLine.trim(), 10) : null;
+        const recordedStart = startLine.trim();
         if (holderPid !== null && holderPid > 0 && isRunning(holderPid)) {
-          return false; // a live reclaimer is working — back off
+          // The PID is live, but it may be an unrelated process that reused
+          // a crashed reclaimer's PID. Back off unless the recorded start
+          // identity provably belongs to a different process — uncertainty
+          // always means "assume the reclaimer is alive".
+          const currentStart = startTimeOf(holderPid);
+          if (!recordedStart || currentStart === null || currentStart === recordedStart) {
+            return false; // a live reclaimer is working — back off
+          }
         }
         // Crashed reclaimer. Remove its mutex only if it still records the
         // dead holder we just read, then retry the campaign.

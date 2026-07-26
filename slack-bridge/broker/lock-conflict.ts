@@ -550,6 +550,12 @@ export async function replaceBrokerOwner(
   }
   if (!sameOwner(preTerminate)) return ownerChangedResult();
 
+  // The fence re-check above and the signal below are not atomic: the
+  // verified owner could exit and its PID be reused in between. Closing that
+  // window needs a kernel handle bound to process identity (e.g. Linux
+  // pidfd_send_signal), which Node does not expose without native code — the
+  // immediately-preceding pid + start-time + instanceId fence keeps the
+  // residual window negligible.
   steps.push(`Sending SIGTERM to verified lock owner pid ${owner.pid}.`);
   try {
     kill(owner.pid, "SIGTERM");
