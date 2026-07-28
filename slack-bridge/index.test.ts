@@ -1911,7 +1911,7 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionShutdown?.({}, ctx);
   });
 
-  it("drains queued single-mode Slack inbox work on agent_end even without Pinet enabled", async () => {
+  it("keeps queued single-mode Slack work out of Pi until compaction finishes", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
     fs.writeFileSync(
@@ -1988,10 +1988,14 @@ describe("slack-bridge top-level shutdown", () => {
 
     const sessionStart = events.get("session_start");
     const agentEnd = events.get("agent_end");
+    const sessionBeforeCompact = events.get("session_before_compact");
+    const sessionCompact = events.get("session_compact");
     const sessionShutdown = events.get("session_shutdown");
 
     expect(sessionStart).toBeDefined();
     expect(agentEnd).toBeDefined();
+    expect(sessionBeforeCompact).toBeDefined();
+    expect(sessionCompact).toBeDefined();
     expect(sessionShutdown).toBeDefined();
 
     await sessionStart?.({}, ctx);
@@ -2022,9 +2026,13 @@ describe("slack-bridge top-level shutdown", () => {
     });
     expect(sendUserMessage).not.toHaveBeenCalled();
 
+    const compaction = new AbortController();
+    await sessionBeforeCompact?.({ signal: compaction.signal }, ctx);
     idle = true;
     await agentEnd?.({ type: "agent_end", messages: [] }, ctx);
+    expect(sendUserMessage).not.toHaveBeenCalled();
 
+    await sessionCompact?.({}, ctx);
     await vi.waitFor(() => {
       expect(sendUserMessage).toHaveBeenCalledWith(
         expect.stringContaining("hello from Slack inbox"),

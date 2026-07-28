@@ -47,6 +47,7 @@ import { createToolRegistrationRuntime } from "./tool-registration-runtime.js";
 import { createSlackRuntimeAccess } from "./slack-runtime-access.js";
 import { createThreadConfirmationPolicy } from "./thread-confirmations.js";
 import { persistDeliveredInboundMessage } from "./broker-inbound-persistence.js";
+import { createCompactionGate } from "./compaction-gate.js";
 import {
   createIMessageAdapter,
   detectIMessageMvpEnvironment,
@@ -238,6 +239,14 @@ export default function (pi: ExtensionAPI) {
     },
   });
   const { updateBadge, setExtStatus, maybeDrainInboxIfIdle } = sessionUiRuntime;
+
+  const compactionGate = createCompactionGate(() => {
+    maybeDrainInboxIfIdle();
+    const ctx = sessionUiRuntime.getExtensionContext();
+    if (ctx) subtreeBrokerRuntime.drainInbox(ctx);
+  });
+  const isIdleAndNotCompacting = () =>
+    !compactionGate.isActive() && (sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true);
   let reportAgentStatus: (status: "working" | "idle") => Promise<void> = async () => {};
   let deliverTrackedSlackFollowUpMessage: (options: {
     prompt: string;
@@ -247,7 +256,7 @@ export default function (pi: ExtensionAPI) {
     sendUserMessage: (body) => {
       pi.sendUserMessage(body);
     },
-    isIdle: () => sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true,
+    isIdle: isIdleAndNotCompacting,
     takeInboxMessages: (maxMessages) => inbox.splice(0, maxMessages ?? inbox.length),
     restoreInboxMessages: (messages) => {
       inbox.unshift(...messages);
@@ -270,12 +279,13 @@ export default function (pi: ExtensionAPI) {
 
   function deliverSteeringMessage(text: string, ctx: ExtensionContext): boolean {
     try {
-      if (ctx.isIdle?.() ?? true) {
-        pi.sendUserMessage(text);
-      } else {
-        pi.sendUserMessage(text, { deliverAs: "steer" });
-      }
-      return true;
+      return compactionGate.tryDeliver(() => {
+        if (ctx.isIdle?.() ?? true) {
+          pi.sendUserMessage(text);
+        } else {
+          pi.sendUserMessage(text, { deliverAs: "steer" });
+        }
+      });
     } catch (error) {
       console.error(`[slack-bridge] Pinet steering delivery failed: ${msg(error)}`);
       return false;
@@ -535,7 +545,7 @@ export default function (pi: ExtensionAPI) {
   const pinetMaintenanceDelivery = createPinetMaintenanceDelivery({
     getActiveBrokerDb,
     getActiveBrokerSelfId,
-    isIdle: () => sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true,
+    isIdle: isIdleAndNotCompacting,
     sendUserMessage: (body) => {
       pi.sendUserMessage(body);
     },
@@ -1695,6 +1705,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Lifecycle ──────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    compactionGate.reset();
     singlePlayerRuntime.resetShutdownState();
     slackRequestRuntime.reset();
     resetRemoteControlState();
@@ -1739,11 +1750,16 @@ export default function (pi: ExtensionAPI) {
 
   agentEventRuntime.register(pi);
 
-  pi.on("session_compact", async (_event, ctx) => {
-    maybeDrainInboxIfIdle(ctx);
+  pi.on("session_before_compact", (event) => {
+    compactionGate.begin(event.signal);
+  });
+
+  pi.on("session_compact", () => {
+    compactionGate.end();
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    compactionGate.reset();
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
     sessionUiRuntime.cleanupForSessionShutdown();

@@ -164,6 +164,7 @@ export interface SubtreeBrokerRuntime {
   getHibernationRuntimeControl: () => SubtreeHibernationRuntimeControl | null;
   stop: (options?: { releaseIdentity?: boolean; stopChildren?: boolean }) => Promise<void>;
   getStatus: () => SubtreeBrokerStatus;
+  drainInbox: (ctx: ExtensionContext) => void;
   readInbox: (options?: PinetReadOptions) => PinetReadResult | null;
   sendMessage: (
     target: string,
@@ -502,6 +503,11 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     deps.maybeDrainInboxIfIdle(ctx);
   }
 
+  function drainInbox(ctx: ExtensionContext): void {
+    if (!activeBroker || !selfAgentId) return;
+    drainSelfInbox(ctx, activeBroker, selfAgentId);
+  }
+
   function readInbox(options: PinetReadOptions = {}): PinetReadResult | null {
     if (!activeBroker || !selfAgentId) return null;
     if (options.threadId && !activeBroker.db.getThread(options.threadId)) return null;
@@ -764,6 +770,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     startedAt = new Date().toISOString();
     activePaths = paths;
     startHeartbeat(broker, selfAgent.id);
+    broker.db.recoverPendingTargetedBacklog(selfAgent.id);
+    drainSelfInbox(ctx, broker, selfAgent.id);
     broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
     broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
 
@@ -909,6 +917,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     getHibernationRuntimeControl,
     stop,
     getStatus,
+    drainInbox,
     readInbox,
     sendMessage,
     listAgents,
