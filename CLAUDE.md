@@ -82,6 +82,10 @@ Treat review feedback as repo-owned guardrails, not one-off fixes. When an
 agent or reviewer catches a repeatable issue, prefer a cheap deterministic lint,
 test, or CI check so the next agent gets the correction before review.
 
+- **Write decisive code.** Prefer clear invariants over defensive branches,
+  catches, comments, and tests for states the system does not permit. Catch only
+  where failure changes ownership or retry behaviour. Every regression test must
+  fail against the bug or a plausible mutation; otherwise remove it.
 - **Parse boundaries, do not spread `unknown`.** External, serialized, config,
   JSON, Slack, Pinet, and MCP-shaped values must be parsed at the boundary into a
   named DTO or domain type. The diff-aware `lint:agent-standards` check prevents
