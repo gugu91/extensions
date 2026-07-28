@@ -240,42 +240,13 @@ export default function (pi: ExtensionAPI) {
   });
   const { updateBadge, setExtStatus, maybeDrainInboxIfIdle } = sessionUiRuntime;
 
-  // Hold inbound deliveries while Pi compaction has session persistence
-  // disconnected (#941). ctx.isIdle() keeps returning true during compaction,
-  // so without this gate a delivery starts an agent run whose messages are
-  // never written to the session file, leaving an orphaned toolResult that
-  // later bricks the session with provider pairing errors. Release is deferred
-  // to a fresh macrotask because session_compact fires before Pi reconnects
-  // persistence.
-  const compactionGate = createCompactionGate({
-    onRelease: (heldMessages, reason) => {
-      if (heldMessages.length === 0) {
-        maybeDrainInboxIfIdle();
-        return;
-      }
-      console.log(
-        `[slack-bridge] compaction hold released (${reason}); delivering ${heldMessages.length} held message(s)`,
-      );
-      try {
-        const combined = heldMessages.join("\n\n");
-        if (sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true) {
-          pi.sendUserMessage(combined);
-        } else {
-          pi.sendUserMessage(combined, { deliverAs: "steer" });
-        }
-      } catch (error) {
-        console.error(`[slack-bridge] held delivery after compaction failed: ${msg(error)}`);
-      }
-      // Inbox messages queued during the hold are drained once the delivery
-      // above settles; the session-ui drain re-arms itself while busy.
-      const drainTimer = setTimeout(() => {
-        maybeDrainInboxIfIdle();
-      }, 1000);
-      drainTimer.unref?.();
-    },
+  const compactionGate = createCompactionGate(() => {
+    maybeDrainInboxIfIdle();
+    const ctx = sessionUiRuntime.getExtensionContext();
+    if (ctx) subtreeBrokerRuntime.drainInbox(ctx);
   });
   const isIdleAndNotCompacting = () =>
-    !compactionGate.isCompacting() && (sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true);
+    !compactionGate.isActive() && (sessionUiRuntime.getExtensionContext()?.isIdle?.() ?? true);
   let reportAgentStatus: (status: "working" | "idle") => Promise<void> = async () => {};
   let deliverTrackedSlackFollowUpMessage: (options: {
     prompt: string;
@@ -307,17 +278,14 @@ export default function (pi: ExtensionAPI) {
   drainInboxPort = drainInbox;
 
   function deliverSteeringMessage(text: string, ctx: ExtensionContext): boolean {
-    if (compactionGate.holdMessage(text)) {
-      console.log("[slack-bridge] Pinet delivery held during compaction");
-      return true;
-    }
     try {
-      if (ctx.isIdle?.() ?? true) {
-        pi.sendUserMessage(text);
-      } else {
-        pi.sendUserMessage(text, { deliverAs: "steer" });
-      }
-      return true;
+      return compactionGate.tryDeliver(() => {
+        if (ctx.isIdle?.() ?? true) {
+          pi.sendUserMessage(text);
+        } else {
+          pi.sendUserMessage(text, { deliverAs: "steer" });
+        }
+      });
     } catch (error) {
       console.error(`[slack-bridge] Pinet steering delivery failed: ${msg(error)}`);
       return false;
@@ -1737,12 +1705,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Lifecycle ──────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
-    const staleHeld = compactionGate.discard();
-    if (staleHeld.length > 0) {
-      console.error(
-        `[slack-bridge] dropping ${staleHeld.length} held message(s) from a previous session`,
-      );
-    }
+    compactionGate.reset();
     singlePlayerRuntime.resetShutdownState();
     slackRequestRuntime.reset();
     resetRemoteControlState();
@@ -1787,25 +1750,16 @@ export default function (pi: ExtensionAPI) {
 
   agentEventRuntime.register(pi);
 
-  pi.on("session_before_compact", async (event: { signal?: AbortSignal }) => {
-    compactionGate.beginHold({ signal: event.signal });
-    // Never return a value: a truthy result would override other extensions'
-    // custom compaction content.
-    return undefined;
+  pi.on("session_before_compact", (event) => {
+    compactionGate.begin(event.signal);
   });
 
-  pi.on("session_compact", async (_event, ctx) => {
-    compactionGate.endHold("compacted");
-    maybeDrainInboxIfIdle(ctx);
+  pi.on("session_compact", () => {
+    compactionGate.end();
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    const droppedHeld = compactionGate.discard();
-    if (droppedHeld.length > 0) {
-      console.error(
-        `[slack-bridge] dropping ${droppedHeld.length} held message(s) at session shutdown`,
-      );
-    }
+    compactionGate.reset();
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
     sessionUiRuntime.cleanupForSessionShutdown();
