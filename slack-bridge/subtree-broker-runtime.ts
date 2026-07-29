@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -36,7 +36,6 @@ import {
 } from "./broker/hibernation-activation.js";
 import { freezeHibernationActivationAuthority } from "./broker/hibernation-activation-authority.js";
 import type { BrokerDB } from "./broker/schema.js";
-import type { AgentRuntimeSpec } from "@pinet/broker-core/types";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_SPAWN_REGISTRATION_TIMEOUT_MS = 45_000;
@@ -49,30 +48,53 @@ export interface SubtreeBrokerPaths {
   lockPath: string;
 }
 
-export interface SubtreeWorkerRecord {
-  launchId: string;
+interface WorkerRuntimeSpecBase {
   sessionName: string;
+  tmuxSocketPath: string | null;
+}
+
+export type WorkerRuntimeSpec =
+  | (WorkerRuntimeSpecBase & {
+      runtimeKind: "tmux";
+    })
+  | (WorkerRuntimeSpecBase & {
+      runtimeKind: "herdr";
+      herdrSession: string;
+      herdrConfigDir: string;
+      herdrPaneId: string | null;
+      herdrShellPid: number | null;
+    });
+
+type TmuxWorkerRuntimeSpec = Extract<WorkerRuntimeSpec, { runtimeKind: "tmux" }>;
+type HerdrWorkerRuntimeSpec = Extract<WorkerRuntimeSpec, { runtimeKind: "herdr" }>;
+
+export type SubtreeWorkerRecord = WorkerRuntimeSpec & {
+  launchId: string;
   repoPath: string;
   role: string;
   laneId: string | null;
   agentId: string | null;
   startedAt: string;
-  runtimeKind: AgentRuntimeSpec["runtimeKind"];
   monitorCommand: string;
-  tmuxSocketPath: string | null;
+};
+
+interface WorkerRuntimeController<T extends WorkerRuntimeSpec> {
+  createLaunchSpec: (sessionName: string) => T;
+  monitorCommand: (spec: T) => string;
+  launch: (spec: T, launcherPath: string, launchEnv: Record<string, string>) => Promise<void>;
+  cleanup: (spec: T) => Promise<void>;
 }
 
-interface WorkerRuntimeSpec {
-  runtimeKind: AgentRuntimeSpec["runtimeKind"];
-  sessionName: string;
-  tmuxSocketPath: string | null;
+export interface HerdrCommandOptions {
+  env: NodeJS.ProcessEnv;
+  detached?: boolean;
 }
 
-interface WorkerRuntimeController {
-  createLaunchSpec: (sessionName: string) => WorkerRuntimeSpec;
-  monitorCommand: (spec: WorkerRuntimeSpec) => string;
-  launch: (spec: WorkerRuntimeSpec, launcherPath: string) => Promise<void>;
-  cleanup: (spec: WorkerRuntimeSpec) => Promise<void>;
+export type HerdrCommandRunner = (args: string[], options: HerdrCommandOptions) => Promise<string>;
+
+export interface HerdrWorkerRuntimeControllerOptions {
+  herdrSession: string;
+  herdrConfigDir: string;
 }
 
 export interface SubtreeBrokerStatus {
@@ -195,6 +217,7 @@ export interface SubtreeBrokerRuntimeDeps {
   runRemoteControl: (command: PinetControlCommand, ctx: ExtensionContext) => void;
   formatError: (error: unknown) => string;
   runTmuxCommand?: (args: string[]) => Promise<void>;
+  runHerdrCommand?: HerdrCommandRunner;
 }
 
 /**
@@ -373,10 +396,26 @@ function isMissingTmuxTarget(error: Error): boolean {
   );
 }
 
+function herdrErrorText(error: Error): string {
+  const stderr = "stderr" in error && typeof error.stderr === "string" ? error.stderr : "";
+  return `${error.message}\n${stderr}`;
+}
+
+function isMissingHerdrSession(error: Error): boolean {
+  return /Error:\s*Os\s*\{\s*code:\s*2,\s*kind:\s*NotFound,\s*message:\s*"No such file or directory"\s*\}/.test(
+    herdrErrorText(error),
+  );
+}
+
+// agent-standards-ignore prefer-inline-single-use-helper: precise Herdr absence classifier
+function isMissingHerdrPane(error: Error): boolean {
+  return /"code"\s*:\s*"pane_not_found"/.test(herdrErrorText(error));
+}
+
 // agent-standards-ignore prefer-inline-single-use-helper: runtime backend construction seam
 function createTmuxWorkerRuntimeController(
   runTmuxCommand: (args: string[]) => Promise<void>,
-): WorkerRuntimeController {
+): WorkerRuntimeController<TmuxWorkerRuntimeSpec> {
   return {
     createLaunchSpec: (sessionName) => ({
       runtimeKind: "tmux",
@@ -416,6 +455,152 @@ function createTmuxWorkerRuntimeController(
         ]);
       } catch (error) {
         if (!(error instanceof Error) || !isMissingTmuxTarget(error)) throw error;
+      }
+    },
+  };
+}
+
+function runHerdrSessionCommand(
+  runner: HerdrCommandRunner,
+  spec: HerdrWorkerRuntimeSpec,
+  args: string[],
+  detached = false,
+): Promise<string> {
+  return runner(["--session", spec.herdrSession, ...args], {
+    env: { ...process.env, XDG_CONFIG_HOME: spec.herdrConfigDir },
+    ...(detached ? { detached: true } : {}),
+  });
+}
+
+// agent-standards-ignore prefer-inline-single-use-helper: dedicated Herdr ownership boundary
+function ensureHerdrConfig(configDir: string): void {
+  const herdrDir = path.join(configDir, "herdr");
+  const configPath = path.join(herdrDir, "config.toml");
+  fs.mkdirSync(herdrDir, { recursive: true });
+  if (!fs.existsSync(configPath)) {
+    fs.writeFileSync(configPath, "[experimental]\npane_history = true\n", { mode: 0o600 });
+  }
+}
+
+export function createHerdrWorkerRuntimeController(
+  runHerdrCommand: HerdrCommandRunner,
+  options: HerdrWorkerRuntimeControllerOptions,
+): WorkerRuntimeController<HerdrWorkerRuntimeSpec> {
+  return {
+    createLaunchSpec: (sessionName) => ({
+      runtimeKind: "herdr",
+      sessionName,
+      tmuxSocketPath: null,
+      herdrSession: options.herdrSession,
+      herdrConfigDir: options.herdrConfigDir,
+      herdrPaneId: null,
+      herdrShellPid: null,
+    }),
+    monitorCommand: (spec) =>
+      `XDG_CONFIG_HOME=${quoteShellValue(spec.herdrConfigDir)} herdr session attach ${quoteShellValue(spec.herdrSession)}`,
+    launch: async (spec, launcherPath, launchEnv) => {
+      ensureHerdrConfig(spec.herdrConfigDir);
+      try {
+        await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "list"]);
+      } catch (error) {
+        if (!(error instanceof Error) || !isMissingHerdrSession(error)) throw error;
+        await runHerdrSessionCommand(runHerdrCommand, spec, ["server"], true);
+        let ready = false;
+        let lastMissingError = error;
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          try {
+            await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "list"]);
+            ready = true;
+            break;
+          } catch (probeError) {
+            if (!(probeError instanceof Error) || !isMissingHerdrSession(probeError)) {
+              throw probeError;
+            }
+            lastMissingError = probeError;
+            await sleep(50);
+          }
+        }
+        if (!ready) {
+          throw new Error(`Herdr session ${spec.herdrSession} did not become ready`, {
+            cause: lastMissingError,
+          });
+        }
+      }
+
+      const createOutput = await runHerdrSessionCommand(runHerdrCommand, spec, [
+        "workspace",
+        "create",
+        "--cwd",
+        path.dirname(launcherPath),
+        "--label",
+        spec.sessionName,
+        ...Object.entries(launchEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+        "--no-focus",
+      ]);
+      const createResponse = JSON.parse(createOutput) as {
+        result?: { root_pane?: { pane_id?: string } };
+      };
+      const paneId = createResponse.result?.root_pane?.pane_id;
+      if (typeof paneId !== "string" || paneId.length === 0) {
+        throw new Error("Herdr workspace create returned no pane id");
+      }
+      spec.herdrPaneId = paneId;
+
+      const processOutput = await runHerdrSessionCommand(runHerdrCommand, spec, [
+        "pane",
+        "process-info",
+        "--pane",
+        paneId,
+      ]);
+      const processResponse = JSON.parse(processOutput) as {
+        result?: { process_info?: { shell_pid?: number } };
+      };
+      const shellPid = processResponse.result?.process_info?.shell_pid;
+      if (!Number.isInteger(shellPid) || (shellPid ?? 0) <= 0) {
+        throw new Error(`Herdr pane ${paneId} returned no shell PID`);
+      }
+      spec.herdrShellPid = shellPid ?? null;
+
+      await runHerdrSessionCommand(runHerdrCommand, spec, [
+        "pane",
+        "run",
+        paneId,
+        quoteShellValue(launcherPath),
+      ]);
+    },
+    cleanup: async (spec) => {
+      const paneId = spec.herdrPaneId;
+      const recordedShellPid = spec.herdrShellPid;
+      if (!paneId || recordedShellPid === null) {
+        throw new Error(`Herdr runtime ${spec.sessionName} has no recorded pane generation`);
+      }
+
+      try {
+        await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "get", paneId]);
+        const processOutput = await runHerdrSessionCommand(runHerdrCommand, spec, [
+          "pane",
+          "process-info",
+          "--pane",
+          paneId,
+        ]);
+        const processResponse = JSON.parse(processOutput) as {
+          result?: { process_info?: { shell_pid?: number } };
+        };
+        const observedShellPid = processResponse.result?.process_info?.shell_pid;
+        if (!Number.isInteger(observedShellPid) || (observedShellPid ?? 0) <= 0) {
+          throw new Error(`Herdr pane ${paneId} returned no shell PID`);
+        }
+        if (observedShellPid !== recordedShellPid) {
+          throw new Error(
+            `Refusing to clean up Herdr pane ${paneId}: recorded shell PID ${recordedShellPid}, observed ${observedShellPid}`,
+          );
+        }
+        await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "close", paneId]);
+      } catch (error) {
+        if (error instanceof Error && (isMissingHerdrPane(error) || isMissingHerdrSession(error))) {
+          return;
+        }
+        throw error;
       }
     },
   };
@@ -534,12 +719,41 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     (async (args: string[]): Promise<void> => {
       await execFileAsync("tmux", args);
     });
-  const tmuxWorkerRuntimeController = createTmuxWorkerRuntimeController(runTmuxCommand);
-  const workerRuntimeControllers: Partial<
-    Record<AgentRuntimeSpec["runtimeKind"], WorkerRuntimeController>
-  > = {
-    tmux: tmuxWorkerRuntimeController,
+  const runHerdrCommand =
+    deps.runHerdrCommand ??
+    (async (args: string[], options: HerdrCommandOptions): Promise<string> => {
+      if (!options.detached) {
+        const { stdout } = await execFileAsync("herdr", args, { env: options.env });
+        return stdout;
+      }
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn("herdr", args, {
+          detached: true,
+          env: options.env,
+          stdio: "ignore",
+        });
+        child.once("error", reject);
+        child.once("spawn", () => {
+          child.unref();
+          resolve();
+        });
+      });
+      return "";
+    });
+  const workerRuntimeControllers = {
+    tmux: createTmuxWorkerRuntimeController(runTmuxCommand),
+    herdr: createHerdrWorkerRuntimeController(runHerdrCommand, {
+      herdrSession: "pinet-workers",
+      herdrConfigDir: path.join(os.homedir(), ".pi", "pinet-herdr-config"),
+    }),
   };
+
+  // agent-standards-ignore prefer-inline-single-use-helper: discriminated runtime cleanup dispatch
+  function cleanupWorkerRuntime(spec: WorkerRuntimeSpec): Promise<void> {
+    return spec.runtimeKind === "tmux"
+      ? workerRuntimeControllers.tmux.cleanup(spec)
+      : workerRuntimeControllers.herdr.cleanup(spec);
+  }
 
   function stopHeartbeat(): void {
     if (!heartbeatTimer) return;
@@ -789,7 +1003,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const tmuxSocketPath = findTmuxSocketPath();
     await Promise.all(
       childTmuxSessions(broker, agentId).map((sessionName) =>
-        tmuxWorkerRuntimeController
+        workerRuntimeControllers.tmux
           .cleanup({ runtimeKind: "tmux", sessionName, tmuxSocketPath })
           .catch(() => undefined),
       ),
@@ -986,9 +1200,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       fenceLaunch(activeBroker, handle.launchId);
       spawnedWorkers.delete(handle.launchId);
       try {
-        const controller = workerRuntimeControllers[worker.runtimeKind];
-        if (!controller) throw new Error(`Unsupported worker runtime: ${worker.runtimeKind}`);
-        await controller.cleanup(worker);
+        await cleanupWorkerRuntime(worker);
       } catch (error) {
         spawnedWorkers.set(handle.launchId, worker);
         throw error;
@@ -1000,7 +1212,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
     const sessionName = buildTmuxSessionName(repoPath, role, launchId);
-    const runtimeController = tmuxWorkerRuntimeController;
+    const runtimeController = workerRuntimeControllers.tmux;
     const runtimeSpec = runtimeController.createLaunchSpec(sessionName);
     const monitorCommand = runtimeController.monitorCommand(runtimeSpec);
     const childLaunchEnv = buildChildLaunchEnv(activePaths, selfAgentId, {
@@ -1023,18 +1235,16 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       { mode: 0o700 },
     );
 
-    const workerRecord: SubtreeWorkerRecord = {
+    const workerRecord = {
+      ...runtimeSpec,
       launchId,
-      sessionName,
       repoPath,
       role,
       laneId: input.laneId ?? null,
       agentId: null,
       startedAt: new Date().toISOString(),
-      runtimeKind: runtimeSpec.runtimeKind,
       monitorCommand,
-      tmuxSocketPath: runtimeSpec.tmuxSocketPath,
-    };
+    } satisfies SubtreeWorkerRecord;
     const launchHandle: SubtreeSpawnLaunchHandle = {
       launchId,
       tmuxSessionName: sessionName,
@@ -1043,7 +1253,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     };
     spawnedWorkers.set(launchId, workerRecord);
     try {
-      await runtimeController.launch(runtimeSpec, launcherPath);
+      await runtimeController.launch(workerRecord, launcherPath, childLaunchEnv);
     } catch (error) {
       fenceLaunch(activeBroker, launchId);
       throw new SubtreeSpawnLaunchError(
