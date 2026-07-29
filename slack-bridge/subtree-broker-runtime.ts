@@ -557,8 +557,10 @@ export function createHerdrWorkerRuntimeController(
         "--label",
         spec.sessionName,
         ...Object.entries(launchEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
-        "--env",
-        "PINET_TMUX_SESSION=",
+        ...PER_LAUNCH_PINET_ENV_KEYS.filter((key) => !(key in launchEnv)).flatMap((key) => [
+          "--env",
+          `${key}=`,
+        ]),
         "--no-focus",
       ]);
       const createResponse = JSON.parse(createOutput) as {
@@ -683,6 +685,27 @@ function childStartupPrompt(parentAgentId: string): string {
   ].join(" ");
 }
 
+/**
+ * Per-launch PINET identity env var NAMES. A child launch must either set
+ * these explicitly or have them cleared at the pane/launcher boundary, so a
+ * child can never inherit stale identity (broker owner, lane, tmux locator,
+ * parentage) from the parent process environment or a shared, long-lived
+ * Herdr server started by an earlier agent.
+ */
+const PER_LAUNCH_PINET_ENV_KEYS = [
+  "PINET_BROKER_AGENT_ID",
+  "PINET_BROKER_MANAGED",
+  "PINET_LANE_ID",
+  "PINET_LAUNCH_ID",
+  "PINET_LAUNCH_SOURCE",
+  "PINET_PARENT_AGENT_ID",
+  "PINET_ROOT_AGENT_ID",
+  "PINET_SOCKET_PATH",
+  "PINET_SPAWNED_BY_AGENT_ID",
+  "PINET_SUBTREE_ROLE",
+  "PINET_TMUX_SESSION",
+];
+
 function buildLauncherScript(input: {
   repoPath: string;
   env: Record<string, string>;
@@ -716,7 +739,9 @@ function buildLauncherScript(input: {
     `cd ${quoteShellValue(input.repoPath)}`,
     ...inheritedExports,
     ...envExports,
-    ...(input.env.PINET_LAUNCH_SOURCE?.endsWith("-herdr") ? ["unset PINET_TMUX_SESSION"] : []),
+    ...PER_LAUNCH_PINET_ENV_KEYS.filter((key) => !(key in input.env)).map(
+      (key) => `unset ${key}`,
+    ),
     `export PI_NICKNAME=${quoteShellValue(nickname)}`,
     `exec pi -e ${quoteShellValue(input.extensionEntryPath)} ${quoteShellValue(input.startupPrompt)}`,
     "",

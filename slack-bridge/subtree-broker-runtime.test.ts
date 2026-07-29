@@ -260,6 +260,8 @@ describe("subtree broker spawn lifecycle", () => {
     const runHerdrCommand = vi.fn(async (args: string[]) => {
       if (args.includes("create")) {
         expect(args).toContain("PINET_TMUX_SESSION=");
+        expect(args).toContain("PINET_BROKER_AGENT_ID=");
+        expect(args).toContain("PINET_LANE_ID=");
         launchId =
           args
             .find((value) => value.startsWith("PINET_LAUNCH_ID="))
@@ -274,7 +276,10 @@ describe("subtree broker spawn lifecycle", () => {
         const quotedLauncherPath = args.at(-1);
         if (!quotedLauncherPath) throw new Error("missing launcher path");
         const launcherPath = quotedLauncherPath.slice(1, -1);
-        expect(fs.readFileSync(launcherPath, "utf8")).toContain("unset PINET_TMUX_SESSION");
+        const launcherScript = fs.readFileSync(launcherPath, "utf8");
+        expect(launcherScript).toContain("unset PINET_TMUX_SESSION");
+        expect(launcherScript).toContain("unset PINET_BROKER_AGENT_ID");
+        expect(launcherScript).toContain("unset PINET_LANE_ID");
         const control = runtime.getHibernationRuntimeControl();
         const parentAgentId = runtime.getStatus().selfAgentId;
         if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
