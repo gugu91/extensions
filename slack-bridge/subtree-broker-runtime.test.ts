@@ -320,7 +320,7 @@ describe("subtree broker spawn lifecycle", () => {
         `invalid-runtime-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
         {
           getSettings: () =>
-            ({ subtreeWorkerRuntime: invalidRuntime }) as unknown as SlackBridgeSettings,
+            Object.assign({} as SlackBridgeSettings, { subtreeWorkerRuntime: invalidRuntime }),
           runTmuxCommand: tmuxRun,
           runHerdrCommand: herdrRun,
         },
@@ -488,7 +488,7 @@ describe("subtree broker spawn lifecycle", () => {
         agentId: string,
         name: string,
         launchId: string,
-        metadata: Record<string, unknown>,
+        metadata: Record<string, string>,
       ): Promise<void> => {
         const socketPath = runtime.getStatus().paths?.socketPath;
         if (!socketPath) throw new Error("subtree broker did not start");
