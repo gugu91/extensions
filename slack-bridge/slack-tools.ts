@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { getSubtreeInboxIds } from "./broker-delivery.js";
 import type { InboxMessage } from "./helpers.js";
 import type { SlackResult } from "./slack-api.js";
 import {
@@ -96,6 +97,7 @@ export interface RegisterSlackToolsDeps {
   getAgentOwnerToken: () => string;
   getLastDmChannel: () => string | null;
   updateBadge: () => void;
+  markSubtreeInboxIdsDelivered: (inboxIds: number[]) => void;
   resolveUser: (userId: string) => Promise<string>;
   threadContext: SlackToolsThreadContextPort;
   resolveChannel: (nameOrId: string) => Promise<string>;
@@ -1774,6 +1776,15 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
                 ? ` | metadata.kind=${String(message.metadata.kind)}`
                 : "";
         lines.push(`${prefix} (${message.timestamp}): ${message.text}${metadataSuffix}`);
+      }
+
+      const subtreeInboxIds = getSubtreeInboxIds(pending);
+      if (subtreeInboxIds.length > 0) {
+        try {
+          deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
+        } catch {
+          /* best effort */
+        }
       }
 
       return {

@@ -1308,6 +1308,9 @@ export default function (pi: ExtensionAPI) {
       getAgentOwnerToken: () => agentOwnerToken,
       getLastDmChannel: () => lastDmChannel,
       updateBadge,
+      markSubtreeInboxIdsDelivered: (inboxIds) => {
+        subtreeBrokerRuntime.markDelivered(inboxIds);
+      },
       resolveUser,
       threadContext: singlePlayerRuntime.getThreadContextPort(),
       resolveChannel,
