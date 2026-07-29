@@ -171,15 +171,39 @@ describe("runtime spec persistence", () => {
     const db = new BrokerDB(path);
     try {
       db.initialize();
-      expect(db.getAgentRuntimeSpec("worker-legacy")).toMatchObject({
-        runtimeKind: "tmux",
-        tmuxSocket: "/private/tmp/tmux-501/default",
-        tmuxSession: "worker-legacy",
-        tmuxTarget: "worker-legacy:0.0",
-      });
 
       const sqlite = new DatabaseSync(path);
       try {
+        expect(sqlite.prepare("SELECT * FROM agent_runtime_specs").get()).toEqual({
+          agent_id: "worker-legacy",
+          stable_id: "host:session:worker-legacy",
+          broker_owner_id: "broker-1",
+          cwd: "/repo/wt",
+          repo_root: "/repo",
+          worktree_path: "/repo/wt",
+          runtime_kind: "tmux",
+          tmux_socket: "/private/tmp/tmux-501/default",
+          tmux_session: "worker-legacy",
+          tmux_target: "worker-legacy:0.0",
+          executable: "/usr/local/bin/pi",
+          argv_json: '["pi","--resume"]',
+          env_allowlist_json: '["HOME"]',
+          session_resume_ref: "session:legacy",
+          config_fingerprint: "cfg-legacy",
+          expected_host: "host-1",
+          expected_user: "tm",
+          launch_source: "pinet-spawn",
+          vcs_identity: "gugu91/pinet",
+          created_at: "2026-07-01T00:00:00.000Z",
+          updated_at: "2026-07-01T00:00:00.000Z",
+        });
+
+        const columns = sqlite.prepare("PRAGMA table_info(agent_runtime_specs)").all() as Array<{
+          name: string;
+          pk: number;
+        }>;
+        expect(columns.find((column) => column.name === "agent_id")?.pk).toBe(1);
+
         const version = sqlite.prepare("PRAGMA user_version").get() as { user_version: number };
         expect(version.user_version).toBe(23);
       } finally {
