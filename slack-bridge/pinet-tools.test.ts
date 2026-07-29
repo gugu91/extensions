@@ -9,6 +9,7 @@ import {
   type RegisterPinetToolsDeps,
 } from "./pinet-tools.js";
 import type { AgentLifecycleStatus } from "@pinet/broker-core";
+import { SubtreeSpawnRegistrationTimeoutError } from "./subtree-broker-runtime.js";
 
 interface MinimalRenderTheme {
   fg: (_color: string, text: string) => string;
@@ -1671,6 +1672,94 @@ describe("registerPinetTools", () => {
     expect(result.details.data.details).toMatchObject({
       status: "started",
       agentId: "child-1",
+    });
+  });
+
+  it("returns timed-out subtree launch handles in error text and details", async () => {
+    const handle = {
+      launchId: "subtree-timeout-1",
+      tmuxSessionName: "pinet-extensions-reviewer-timeout-1",
+      socketPath: "/tmp/pinet-subtrees/worker-1/pinet.sock",
+      state: "launched_unregistered" as const,
+    };
+    const spawnSubtreeWorker = vi.fn(async () => {
+      throw new SubtreeSpawnRegistrationTimeoutError(45_000, handle);
+    });
+    const tools = registerWithDeps(
+      createDeps({ brokerRole: () => "follower", spawnSubtreeWorker }),
+    );
+
+    const result = (await tools.get("pinet")?.execute("tool-call-spawn-timeout", {
+      action: "spawn",
+      args: { task: "Review PR #761", repo: "extensions", full: true },
+    })) as {
+      content: Array<{ text: string }>;
+      details: {
+        status: string;
+        data: { details: { launchHandle: typeof handle } };
+        errors: Array<{ retryable: boolean }>;
+      };
+    };
+
+    expect(result.content[0]?.text).toContain(`launchId=${handle.launchId}`);
+    expect(result.content[0]?.text).toContain(`tmuxSessionName=${handle.tmuxSessionName}`);
+    expect(result.content[0]?.text).toContain(`socketPath=${handle.socketPath}`);
+    expect(result.details.data.details.launchHandle).toEqual(handle);
+    expect(result.details.errors[0]?.retryable).toBe(true);
+  });
+
+  it("checks Pinet initialization before reading a spawn payload", async () => {
+    const taskGetter = vi.fn(() => {
+      throw new Error("payload was read");
+    });
+    const args = { repo: "extensions" };
+    Object.defineProperty(args, "task", { enumerable: true, get: taskGetter });
+    const requireToolPolicy = vi.fn();
+    const spawnSubtreeWorker = vi.fn(createDeps().spawnSubtreeWorker);
+    const tools = registerWithDeps(
+      createDeps({
+        pinetEnabled: () => false,
+        brokerRole: () => "follower",
+        requireToolPolicy,
+        spawnSubtreeWorker,
+      }),
+    );
+
+    const result = (await tools.get("pinet")?.execute("tool-call-spawn-uninitialized", {
+      action: "spawn",
+      args,
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]?.text).toContain(
+      "Pinet is not running. Use /pinet start or /pinet follow first.",
+    );
+    expect(taskGetter).not.toHaveBeenCalled();
+    expect(requireToolPolicy).not.toHaveBeenCalled();
+    expect(spawnSubtreeWorker).not.toHaveBeenCalled();
+  });
+
+  it("forwards a timeout handle so retry cleanup precedes relaunch", async () => {
+    const spawnSubtreeWorker = vi.fn(createDeps().spawnSubtreeWorker);
+    const tools = registerWithDeps(
+      createDeps({ brokerRole: () => "follower", spawnSubtreeWorker }),
+    );
+    const retryHandle = {
+      launchId: "subtree-timeout-1",
+      tmuxSessionName: "pinet-extensions-reviewer-timeout-1",
+      socketPath: "/tmp/pinet-subtrees/worker-1/pinet.sock",
+      state: "launched_unregistered",
+    };
+
+    await tools.get("pinet")?.execute("tool-call-spawn-retry", {
+      action: "spawn",
+      args: { task: "Review PR #761", repo: "extensions", retry_handle: retryHandle },
+    });
+
+    expect(spawnSubtreeWorker).toHaveBeenCalledWith({
+      task: "Review PR #761",
+      repo: "extensions",
+      role: "subworker",
+      cleanupHandle: retryHandle,
     });
   });
 

@@ -1385,6 +1385,7 @@ export default function (pi: ExtensionAPI) {
       searchPinetSessions,
       listSubtreeAgents: (includeGhosts) => subtreeBrokerRuntime.listAgents(includeGhosts),
       getSubtreeSelfAgentId: () => subtreeBrokerRuntime.getStatus().selfAgentId,
+      subtreeSpawnReady: () => sessionUiRuntime.getExtensionContext() !== null,
       spawnSubtreeWorker: async (input) => {
         const activeCtx = sessionUiRuntime.getExtensionContext();
         if (!activeCtx) throw new Error("No active Pi extension context for subtree spawn.");
