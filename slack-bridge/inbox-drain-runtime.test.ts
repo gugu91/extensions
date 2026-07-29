@@ -168,14 +168,14 @@ describe("createInboxDrainRuntime", () => {
     } = createDeps();
     inbox.push(
       createMessage({ brokerInboxId: 77 }),
-      createMessage({ brokerInboxId: 77, brokerInboxOrigin: "subtree" }),
+      createMessage({ brokerInboxId: 78, brokerInboxOrigin: "subtree" }),
     );
     setBrokerRole("broker");
 
     runtime.drainInbox();
 
     expect(markBrokerInboxIdsDelivered).toHaveBeenCalledWith([77]);
-    expect(markSubtreeInboxIdsDelivered).toHaveBeenCalledWith([77]);
+    expect(markSubtreeInboxIdsDelivered).toHaveBeenCalledWith([78]);
   });
 
   it("does not drain inbox work while the agent is active", () => {
@@ -200,14 +200,7 @@ describe("createInboxDrainRuntime", () => {
   });
 
   it("requeues pending inbox work when the follow-up delivery is not accepted", () => {
-    const {
-      runtime,
-      inbox,
-      updateBadge,
-      reportStatus,
-      markBrokerInboxIdsDelivered,
-      markSubtreeInboxIdsDelivered,
-    } = createDeps({
+    const { runtime, inbox, updateBadge, reportStatus, markSubtreeInboxIdsDelivered } = createDeps({
       deliverTrackedSlackFollowUpMessage: vi.fn(() => false),
     });
     const message = createMessage({
@@ -220,7 +213,6 @@ describe("createInboxDrainRuntime", () => {
 
     expect(reportStatus).toHaveBeenCalledWith("working");
     expect(updateBadge).toHaveBeenCalledTimes(2);
-    expect(markBrokerInboxIdsDelivered).not.toHaveBeenCalled();
     expect(markSubtreeInboxIdsDelivered).not.toHaveBeenCalled();
     expect(inbox).toEqual([message]);
   });

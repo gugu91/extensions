@@ -1780,11 +1780,7 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
 
       const subtreeInboxIds = getSubtreeInboxIds(pending);
       if (subtreeInboxIds.length > 0) {
-        try {
-          deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
-        } catch {
-          /* best effort */
-        }
+        deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
       }
 
       return {

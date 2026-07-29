@@ -97,11 +97,7 @@ export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrain
         }
       }
       if (subtreeInboxIds.length > 0) {
-        try {
-          deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
-        } catch {
-          /* best effort */
-        }
+        deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
       }
       return;
     }

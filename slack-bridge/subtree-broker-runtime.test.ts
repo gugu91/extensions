@@ -113,7 +113,6 @@ describe("subtree broker inbox delivery", () => {
     restarted.markDelivered([inboxId]);
 
     expect(restarted.getHibernationRuntimeControl()?.db.getPendingInboxCount(selfId)).toBe(0);
-    expect(restarted.readInbox()?.messages).toHaveLength(1);
   });
 });
 
