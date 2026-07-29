@@ -189,6 +189,13 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("pinet_read", g)).toBe(false);
   });
 
+  it("cross-matches canonical and legacy lanes write aliases in blockedTools", () => {
+    expect(isToolBlocked("pinet:lanes:write", { blockedTools: ["pinet:lanes:write"] })).toBe(true);
+    expect(isToolBlocked("pinet_lanes:write", { blockedTools: ["pinet_lanes:write"] })).toBe(true);
+    expect(isToolBlocked("pinet:lanes:write", { blockedTools: ["pinet_lanes:write"] })).toBe(true);
+    expect(isToolBlocked("pinet_lanes:write", { blockedTools: ["pinet:lanes:write"] })).toBe(true);
+  });
+
   it("combines readOnly and blockedTools", () => {
     const g: SecurityGuardrails = { readOnly: true, blockedTools: ["slack_create_channel"] };
     expect(isToolBlocked("bash", g)).toBe(true); // write tool + readOnly
