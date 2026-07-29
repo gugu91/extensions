@@ -903,6 +903,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   async function spawnWorkerOnce(
     ctx: ExtensionContext,
     input: SubtreeSpawnInput,
+    onLaunchAttempt?: () => void,
   ): Promise<SubtreeSpawnResult> {
     if (!input.task.trim()) throw new Error("spawn requires task");
     if (!input.repo.trim()) throw new Error("spawn requires repo");
@@ -941,6 +942,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       { mode: 0o700 },
     );
 
+    onLaunchAttempt?.();
     await runTmuxCommand([...tmuxBaseArgs, "new-session", "-d", "-s", sessionName, launcherPath]);
     const workerRecord: SubtreeWorkerRecord = {
       launchId,
@@ -1030,10 +1032,13 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const existingRetry = retrySpawns.get(cleanupHandle.launchId);
     if (existingRetry) return existingRetry;
 
-    const retry = spawnWorkerOnce(ctx, input);
+    let replacementMayHaveLaunched = false;
+    const retry = spawnWorkerOnce(ctx, input, () => {
+      replacementMayHaveLaunched = true;
+    });
     retrySpawns.set(cleanupHandle.launchId, retry);
     void retry.catch(() => {
-      if (retrySpawns.get(cleanupHandle.launchId) === retry) {
+      if (!replacementMayHaveLaunched && retrySpawns.get(cleanupHandle.launchId) === retry) {
         retrySpawns.delete(cleanupHandle.launchId);
       }
     });

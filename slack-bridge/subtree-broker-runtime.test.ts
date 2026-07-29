@@ -406,6 +406,68 @@ describe("subtree broker spawn lifecycle", () => {
     expect(launchCount).toBe(2);
   });
 
+  it("keeps a retry handle consumed when its replacement also times out", async () => {
+    const tmux = createTmuxHarness();
+    const { runtime } = createRuntime(
+      () => false,
+      `retry-timeout-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand: tmux.run },
+    );
+    let launchCount = 0;
+    tmux.setOnLaunch((facts) => {
+      launchCount += 1;
+      if (launchCount === 3) registerChild(runtime, facts, "recovered-child");
+    });
+
+    let originalTimeout: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Original attempt",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) originalTimeout = error;
+      else throw error;
+    }
+    if (!originalTimeout) throw new Error("expected original registration timeout");
+
+    let replacementTimeout: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Replacement attempt",
+        repo: ".",
+        waitForRegistrationMs: 5,
+        cleanupHandle: originalTimeout.handle,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) replacementTimeout = error;
+      else throw error;
+    }
+    if (!replacementTimeout) throw new Error("expected replacement registration timeout");
+
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Do not launch another replacement",
+        repo: ".",
+        cleanupHandle: originalTimeout.handle,
+      }),
+    ).rejects.toBe(replacementTimeout);
+    expect(launchCount).toBe(2);
+    expect(tmux.liveSessions).toEqual(new Set([replacementTimeout.handle.tmuxSessionName]));
+
+    const recovered = await runtime.spawnWorker(ctx, {
+      task: "Recover using the replacement handle",
+      repo: ".",
+      cleanupHandle: replacementTimeout.handle,
+    });
+
+    expect(launchCount).toBe(3);
+    expect(tmux.liveSessions).toEqual(new Set([recovered.sessionName]));
+    expect(runtime.listAgents()?.filter((agent) => agent.parentAgentId)).toHaveLength(1);
+    expect(recovered.agentId).toBe("recovered-child");
+  });
+
   it("propagates operational tmux cleanup failures without launching a replacement", async () => {
     const tmux = createTmuxHarness();
     let failProbe = false;
