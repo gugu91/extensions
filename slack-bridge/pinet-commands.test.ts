@@ -135,6 +135,7 @@ function createDeps(overrides: Partial<PinetCommandsDeps> = {}): PinetCommandsDe
     spawnSubtreeWorker: async (_ctx, input) => ({
       status: "started",
       launchId: "launch-1",
+      runtimeKind: "tmux",
       sessionName: "pinet-extensions-reviewer-launch-1",
       repoPath: `/tmp/${input.repo}`,
       role: input.role ?? "subworker",

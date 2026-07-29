@@ -110,6 +110,7 @@ export interface PinetSubtreeSpawnInput {
 export interface PinetSubtreeSpawnResult {
   status: "started";
   launchId: string;
+  runtimeKind: "tmux" | "herdr";
   sessionName: string;
   repoPath: string;
   role: string;
@@ -434,7 +435,7 @@ function classifyPinetError(message: string): PinetDispatcherError {
       class: "runtime",
       message,
       retryable: true,
-      hint: "Retry spawn with retry_handle to clean up the exact timed-out tmux session before relaunching.",
+      hint: "Retry spawn with retry_handle to clean up the exact recorded worker runtime before relaunching.",
     };
   }
 
@@ -1314,7 +1315,7 @@ function runPinetSpawnAction(
         {
           type: "text",
           text: output.full
-            ? `Pinet subtree worker started: ${result.agentName} (${result.agentId}) in tmux session ${result.sessionName}. Task message ${result.messageId} delivered. Monitor: ${result.monitorCommand}`
+            ? `Pinet subtree worker started: ${result.agentName} (${result.agentId}) using ${result.runtimeKind} runtime ${result.sessionName}. Task message ${result.messageId} delivered. Monitor: ${result.monitorCommand}`
             : `Pinet subtree worker started: ${result.agentName} (${result.agentId}). Task message ${result.messageId} delivered.`,
         },
       ],
@@ -2469,7 +2470,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   registerAction({
     name: "spawn",
     description:
-      "Worker-only: launch a tmux-backed child worker into this worker's active subtree broker and deliver the task over Pinet.",
+      "Worker-only: launch a child worker with the configured runtime into this worker's active subtree broker and deliver the task over Pinet.",
     parameters: Type.Object({
       task: Type.String({ description: "Scoped task prompt for the child worker" }),
       repo: Type.String({ description: "Repo/workspace scope for the child worker" }),

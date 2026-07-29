@@ -131,6 +131,7 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
     spawnSubtreeWorker: async (input) => ({
       status: "started",
       launchId: "launch-1",
+      runtimeKind: "tmux",
       sessionName: "pinet-extensions-reviewer-launch-1",
       repoPath: `/tmp/${input.repo}`,
       role: input.role ?? "subworker",

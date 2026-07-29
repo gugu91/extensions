@@ -136,16 +136,20 @@ export interface SubtreeSpawnLaunchHandle {
   tmuxSessionName: string;
   socketPath: string;
   state: "launched_unregistered";
+  runtimeKind?: WorkerRuntimeSpec["runtimeKind"];
+  monitorCommand?: string;
 }
 
 export class SubtreeSpawnRegistrationTimeoutError extends Error {
   readonly handle: SubtreeSpawnLaunchHandle;
 
   constructor(timeoutMs: number, handle: SubtreeSpawnLaunchHandle) {
+    const runtimeKind = handle.runtimeKind ?? "tmux";
+    const monitorHint = handle.monitorCommand ? `; monitor=${handle.monitorCommand}` : "";
     super(
-      `subtree worker session ${handle.tmuxSessionName} started but did not register within ${timeoutMs}ms; ` +
+      `subtree ${runtimeKind} worker ${handle.tmuxSessionName} started but did not register within ${timeoutMs}ms; ` +
         `launchId=${handle.launchId}; tmuxSessionName=${handle.tmuxSessionName}; ` +
-        `socketPath=${handle.socketPath}; state=${handle.state}`,
+        `socketPath=${handle.socketPath}; state=${handle.state}${monitorHint}`,
     );
     this.name = "SubtreeSpawnRegistrationTimeoutError";
     this.handle = handle;
@@ -184,6 +188,7 @@ export interface SubtreeSpawnInput {
 export interface SubtreeSpawnResult {
   status: "started";
   launchId: string;
+  runtimeKind: WorkerRuntimeSpec["runtimeKind"];
   sessionName: string;
   repoPath: string;
   role: string;
@@ -962,7 +967,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   async function waitForSpawnedAgent(input: {
     broker: Broker;
     handle: SubtreeSpawnLaunchHandle;
-    tmuxBaseArgs: string[];
+    runtimeSpec: WorkerRuntimeSpec;
     timeoutMs: number;
   }): Promise<AgentInfo> {
     const deadline = Date.now() + input.timeoutMs;
@@ -976,9 +981,15 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         );
       if (agent) return agent;
 
-      if (Date.now() - lastFollowAttemptAt > 6_000) {
+      if (
+        input.runtimeSpec.runtimeKind === "tmux" &&
+        Date.now() - lastFollowAttemptAt > 6_000
+      ) {
         lastFollowAttemptAt = Date.now();
-        await sendFollowCommand(input.handle.tmuxSessionName, input.tmuxBaseArgs).catch(() => {
+        await sendFollowCommand(
+          input.runtimeSpec.sessionName,
+          buildTmuxBaseArgs(input.runtimeSpec.tmuxSocketPath),
+        ).catch(() => {
           // The session may still be starting; the loop retries until timeout.
         });
       }
@@ -1297,6 +1308,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       tmuxSessionName: sessionName,
       socketPath,
       state: "launched_unregistered",
+      runtimeKind: workerRecord.runtimeKind,
+      monitorCommand: workerRecord.monitorCommand,
     };
     spawnedWorkers.set(launchId, workerRecord);
     try {
@@ -1317,7 +1330,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const agent = await waitForSpawnedAgent({
       broker: activeBroker,
       handle: launchHandle,
-      tmuxBaseArgs: buildTmuxBaseArgs(runtimeSpec.tmuxSocketPath),
+      runtimeSpec: workerRecord,
       timeoutMs: input.waitForRegistrationMs ?? DEFAULT_SPAWN_REGISTRATION_TIMEOUT_MS,
     });
     const updatedRecord: SubtreeWorkerRecord = { ...workerRecord, agentId: agent.id };
@@ -1378,6 +1391,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     return {
       status: "started",
       launchId,
+      runtimeKind: workerRecord.runtimeKind,
       sessionName,
       repoPath,
       role,
