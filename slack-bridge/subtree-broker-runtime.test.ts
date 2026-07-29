@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BrokerClient } from "./broker/client.js";
 import type { PinetControlCommand, SlackBridgeSettings } from "./helpers.js";
 import {
   buildSubtreeBrokerPaths,
@@ -514,6 +515,7 @@ describe("subtree broker spawn lifecycle", () => {
 
   it("fences an old launch before cleanup so an in-flight registration cannot survive retry", async () => {
     const tmux = createTmuxHarness();
+    const meshSecret = "fenced-retry-secret";
     let firstLaunch: TmuxLaunchFacts | null = null;
     let launchCount = 0;
     const runTmuxCommand = async (args: string[]): Promise<void> => {
@@ -525,7 +527,10 @@ describe("subtree broker spawn lifecycle", () => {
     const { runtime } = createRuntime(
       () => false,
       `fenced-retry-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
-      { runTmuxCommand },
+      {
+        getSettings: () => ({ meshSecret }) as SlackBridgeSettings,
+        runTmuxCommand,
+      },
     );
     tmux.setOnLaunch((facts) => {
       launchCount += 1;
@@ -552,10 +557,26 @@ describe("subtree broker spawn lifecycle", () => {
       cleanupHandle: timeoutError.handle,
     });
 
-    const agents = runtime.getHibernationRuntimeControl()?.db.getAgents() ?? [];
+    const lateClient = new BrokerClient({ path: timeoutError.handle.socketPath, meshSecret });
+    await lateClient.connect();
+    await expect(
+      lateClient.register("Late Old Child", "🌱", {
+        parentAgentId: runtime.getStatus().selfAgentId,
+        launchId: timeoutError.handle.launchId,
+        tmuxSession: timeoutError.handle.tmuxSessionName,
+      }),
+    ).rejects.toThrow("spawn launch has already been cleaned up");
+    lateClient.disconnect();
+
+    const db = runtime.getHibernationRuntimeControl()?.db;
+    const oldHistoricalAgent = db?.getAllAgents().find((agent) => agent.id === "late-old-child");
     expect(replacement.agentId).toBe("replacement-child");
-    expect(agents.some((agent) => agent.id === "late-old-child")).toBe(false);
-    expect(agents.filter((agent) => agent.parentAgentId)).toHaveLength(1);
+    // Cleanup preserves the direct-DB race as disconnected history, but no old launch remains live.
+    expect(oldHistoricalAgent?.disconnectedAt).not.toBeNull();
+    expect(
+      db?.getAgents().some((agent) => agent.metadata?.launchId === timeoutError.handle.launchId),
+    ).toBe(false);
+    expect(db?.getAgents().filter((agent) => agent.parentAgentId)).toHaveLength(1);
     expect(tmux.liveSessions).toEqual(new Set([replacement.sessionName]));
   });
 });
