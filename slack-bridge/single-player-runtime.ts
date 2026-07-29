@@ -534,9 +534,12 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
             deps.setExtStatus(ctx, "reconnecting");
           }
         },
-        onError: (error) => {
-          if (!isAbortError(error)) {
-            console.error(`[slack-bridge] Slack access: ${deps.formatError(error)}`);
+        onError: (error, source) => {
+          if (isAbortError(error)) return;
+          if (source === "connection") {
+            deps.setExtStatus(ctx, "error");
+          } else {
+            ctx.ui.notify(`Slack event failed: ${deps.formatError(error)}`, "error");
           }
         },
         onThreadStarted: (event) => onThreadStarted(event),

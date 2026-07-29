@@ -360,6 +360,7 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionStart?.({}, ctx);
     await pinetStart?.handler("start", ctx);
 
+    expect(setStatus).toHaveBeenLastCalledWith("slack-bridge", expect.stringContaining("⟳"));
     expect(brokerRuntimes).toHaveLength(1);
     brokerRuntimes[0]!.db.registerAgent("sender", "Sender", "📤", 202);
     brokerRuntimes[0]!.db.queueMessage("broker-leaf", {

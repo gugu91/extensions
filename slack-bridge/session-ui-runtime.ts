@@ -83,6 +83,7 @@ export function createSessionUiRuntime(deps: SessionUiRuntimeDeps): SessionUiRun
   let terminalInputUnsubscribe: (() => void) | null = null;
   let deferredDrainTimer: ReturnType<typeof setTimeout> | null = null;
   let extCtx: ExtensionContext | null = null;
+  let statusState: SessionUiStatusState = "ok";
 
   function getExtensionContext(): ExtensionContext | null {
     return extCtx;
@@ -93,7 +94,7 @@ export function createSessionUiRuntime(deps: SessionUiRuntimeDeps): SessionUiRun
   }
 
   function updateBadge(): void {
-    if (!extCtx?.hasUI) return;
+    if (statusState !== "ok" || !extCtx?.hasUI) return;
     const t = extCtx.ui.theme;
     const n = deps.getInboxLength();
     const label =
@@ -104,6 +105,7 @@ export function createSessionUiRuntime(deps: SessionUiRuntimeDeps): SessionUiRun
   }
 
   function setExtStatus(ctx: ExtensionContext, state: SessionUiStatusState): void {
+    statusState = state;
     if (!ctx.hasUI) return;
     extCtx = ctx;
     const t = ctx.ui.theme;

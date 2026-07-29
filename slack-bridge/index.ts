@@ -725,6 +725,7 @@ export default function (pi: ExtensionAPI) {
     getAllowedUsers: () => allowedUsers,
     shouldAllowAllWorkspaceUsers: () =>
       resolveAllowAllWorkspaceUsers(settings, process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS),
+    setExtStatus,
     onAppHomeOpened: handleBrokerAppHomeOpened,
     onSlashCommand: handleBrokerSlackSlashCommand,
   });
@@ -1462,6 +1463,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Commands ───────────────────────────────────────
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
+    setExtStatus(ctx, "reconnecting");
     refreshSettings();
     maybeWarnSlackUserAccess(ctx);
     maybeWarnSlackGuardrailPosture(ctx);
@@ -1539,7 +1541,6 @@ export default function (pi: ExtensionAPI) {
     }
 
     brokerRuntime.startObservability(ctx);
-    setExtStatus(ctx, "ok");
     brokerRuntime.logActivity({
       kind: "broker_started",
       level: "actions",
