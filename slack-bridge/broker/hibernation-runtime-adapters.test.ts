@@ -17,6 +17,7 @@ function makeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpec {
     cwd: "/repo/root",
     repoRoot: "/repo/root",
     worktreePath: "/repo/root",
+    runtimeKind: "tmux",
     tmuxSocket: "/tmp/tmux.sock",
     tmuxSession: "pinet-repo-worker-abcd",
     tmuxTarget: "pinet-repo-worker-abcd:0.0",

@@ -948,7 +948,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 22;
+export const CURRENT_BROKER_SCHEMA_VERSION = 23;
 
 /**
  * Lifecycle states whose durable identity, inbox, thread ownership, and runtime
@@ -1729,6 +1729,7 @@ function createAgentHibernationTables(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS agent_runtime_specs (
       agent_id TEXT PRIMARY KEY NOT NULL, stable_id TEXT NOT NULL, broker_owner_id TEXT NOT NULL,
       cwd TEXT NOT NULL, repo_root TEXT NOT NULL, worktree_path TEXT NOT NULL,
+      runtime_kind TEXT NOT NULL DEFAULT 'tmux' CHECK(runtime_kind IN ('tmux')),
       tmux_socket TEXT NOT NULL, tmux_session TEXT NOT NULL, tmux_target TEXT NOT NULL,
       executable TEXT NOT NULL, argv_json TEXT NOT NULL, env_allowlist_json TEXT NOT NULL,
       session_resume_ref TEXT NOT NULL, config_fingerprint TEXT NOT NULL,
@@ -1857,6 +1858,19 @@ function addRuntimeSpecVcsIdentityColumn(db: DatabaseSync): void {
   );
 }
 
+/** Runtime backend discriminant. Existing rows are tmux runtimes. */
+// agent-standards-ignore prefer-inline-single-use-helper: one-function-per-
+// migration-case is the established schema-migration seam; keeps the version
+// switch a readable index.
+function addRuntimeSpecKindColumn(db: DatabaseSync): void {
+  ensureColumn(
+    db,
+    "agent_runtime_specs",
+    "runtime_kind",
+    "ALTER TABLE agent_runtime_specs ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'tmux' CHECK(runtime_kind IN ('tmux'))",
+  );
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -1936,6 +1950,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 22:
           addRuntimeSpecVcsIdentityColumn(db);
+          break;
+        case 23:
+          addRuntimeSpecKindColumn(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -2624,14 +2641,15 @@ export class BrokerDB implements BrokerDBInterface {
       const createdAt = existing?.created_at ?? now;
       db.prepare(
         `INSERT INTO agent_runtime_specs
-         (agent_id, stable_id, broker_owner_id, cwd, repo_root, worktree_path, tmux_socket,
-          tmux_session, tmux_target, executable, argv_json, env_allowlist_json,
+         (agent_id, stable_id, broker_owner_id, cwd, repo_root, worktree_path, runtime_kind,
+          tmux_socket, tmux_session, tmux_target, executable, argv_json, env_allowlist_json,
           session_resume_ref, config_fingerprint, expected_host, expected_user, launch_source,
           vcs_identity, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(agent_id) DO UPDATE SET stable_id=excluded.stable_id,
            broker_owner_id=excluded.broker_owner_id, cwd=excluded.cwd, repo_root=excluded.repo_root,
-           worktree_path=excluded.worktree_path, tmux_socket=excluded.tmux_socket,
+           worktree_path=excluded.worktree_path, runtime_kind=excluded.runtime_kind,
+           tmux_socket=excluded.tmux_socket,
            tmux_session=excluded.tmux_session, tmux_target=excluded.tmux_target,
            executable=excluded.executable, argv_json=excluded.argv_json,
            env_allowlist_json=excluded.env_allowlist_json,
@@ -2647,6 +2665,7 @@ export class BrokerDB implements BrokerDBInterface {
         input.cwd,
         input.repoRoot,
         input.worktreePath,
+        input.runtimeKind,
         input.tmuxSocket,
         input.tmuxSession,
         input.tmuxTarget,
@@ -2679,6 +2698,7 @@ export class BrokerDB implements BrokerDBInterface {
           cwd: string;
           repo_root: string;
           worktree_path: string;
+          runtime_kind: "tmux";
           tmux_socket: string;
           tmux_session: string;
           tmux_target: string;
@@ -2703,6 +2723,7 @@ export class BrokerDB implements BrokerDBInterface {
       cwd: row.cwd,
       repoRoot: row.repo_root,
       worktreePath: row.worktree_path,
+      runtimeKind: row.runtime_kind,
       tmuxSocket: row.tmux_socket,
       tmuxSession: row.tmux_session,
       tmuxTarget: row.tmux_target,

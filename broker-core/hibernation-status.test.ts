@@ -19,6 +19,7 @@ function runtimeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpe
     cwd: "/Users/secret/work/extensions",
     repoRoot: "/Users/secret/work/extensions",
     worktreePath: "/Users/secret/work/extensions/.worktrees/x",
+    runtimeKind: "tmux",
     tmuxSocket: "/private/tmp/tmux-501/pinet",
     tmuxSession: "pinet-agent-a",
     tmuxTarget: "pinet-agent-a:0.0",

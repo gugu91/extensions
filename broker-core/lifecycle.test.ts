@@ -116,11 +116,14 @@ describe("agent hibernation lifecycle", () => {
     const dbPath = join(dir, "broker.db");
     const first = new InspectableBrokerDB(dbPath);
     first.initialize();
-    const insert = first.raw().prepare(`INSERT INTO agent_lifecycle_events
+    const raw = first.raw();
+    const insert = raw.prepare(`INSERT INTO agent_lifecycle_events
       (correlation_id, agent_id, from_state, to_state, lifecycle_version, reason, actor, outcome, created_at)
       VALUES (?, 'worker', 'idle', 'hibernating', ?, 'test', 'test', 'accepted', ?)`);
+    raw.exec("BEGIN");
     for (let index = 0; index < 10_005; index += 1)
       insert.run(`corr-${index}`, index, new Date(index).toISOString());
+    raw.exec("COMMIT");
     first.registerAgent(
       "worker",
       "Worker",

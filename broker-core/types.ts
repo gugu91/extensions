@@ -125,6 +125,8 @@ export interface AgentRuntimeSpec {
   cwd: string;
   repoRoot: string;
   worktreePath: string;
+  /** Runtime backend discriminant. Only tmux is supported until PR B. */
+  runtimeKind: "tmux";
   /** Canonical tmux server socket path recorded at launch; never searched for. */
   tmuxSocket: string;
   tmuxSession: string;
