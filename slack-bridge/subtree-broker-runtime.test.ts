@@ -91,19 +91,23 @@ function createTmuxHarness(): {
   run: (args: string[]) => Promise<void>;
   liveSessions: Set<string>;
   killedSessions: string[];
+  commands: string[][];
   setOnLaunch: (callback: ((facts: TmuxLaunchFacts) => void) | null) => void;
 } {
   const liveSessions = new Set<string>();
   const killedSessions: string[] = [];
+  const commands: string[][] = [];
   let onLaunch: ((facts: TmuxLaunchFacts) => void) | null = null;
 
   return {
     liveSessions,
     killedSessions,
+    commands,
     setOnLaunch: (callback) => {
       onLaunch = callback;
     },
     run: async (args) => {
+      commands.push(args);
       const newSessionIndex = args.indexOf("new-session");
       if (newSessionIndex >= 0) {
         const sessionName = args[args.indexOf("-s", newSessionIndex) + 1];
@@ -344,6 +348,59 @@ describe("subtree broker spawn lifecycle", () => {
 
     expect(tmux.killedSessions).toEqual([]);
     expect(tmux.liveSessions).toEqual(new Set([`${timeoutError.handle.tmuxSessionName}-extra`]));
+  });
+
+  it("uses the launch-time tmux socket when cleanup runs after the environment changes", async () => {
+    const tmux = createTmuxHarness();
+    const stableId = `launch-tmux-socket-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    const rootDir = buildSubtreeBrokerPaths(stableId).rootDir;
+    const launchSocketDir = `${rootDir}/launch-tmux`;
+    const cleanupSocketDir = `${rootDir}/cleanup-tmux`;
+    const launchSocketPath = `${launchSocketDir}/claude.sock`;
+    const cleanupSocketPath = `${cleanupSocketDir}/claude.sock`;
+    fs.mkdirSync(launchSocketDir, { recursive: true });
+    fs.mkdirSync(cleanupSocketDir, { recursive: true });
+    fs.writeFileSync(launchSocketPath, "");
+    fs.writeFileSync(cleanupSocketPath, "");
+    const originalTmux = process.env.TMUX;
+    const originalClaudeTmuxSocketDir = process.env.CLAUDE_TMUX_SOCKET_DIR;
+
+    try {
+      process.env.TMUX = `${launchSocketPath},1,0`;
+      process.env.CLAUDE_TMUX_SOCKET_DIR = launchSocketDir;
+      const { runtime } = createRuntime(() => false, stableId, { runTmuxCommand: tmux.run });
+
+      let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+      try {
+        await runtime.spawnWorker(ctx, {
+          task: "Never registers",
+          repo: ".",
+          waitForRegistrationMs: 5,
+        });
+      } catch (error) {
+        if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+        else throw error;
+      }
+      if (!timeoutError) throw new Error("expected registration timeout");
+
+      process.env.TMUX = `${cleanupSocketPath},2,0`;
+      process.env.CLAUDE_TMUX_SOCKET_DIR = cleanupSocketDir;
+      await runtime.cleanupSpawn(timeoutError.handle);
+
+      const cleanupCommands = tmux.commands.filter(
+        (args) => args.includes("has-session") || args.includes("kill-session"),
+      );
+      expect(cleanupCommands).toHaveLength(2);
+      for (const args of cleanupCommands) {
+        expect(args.slice(0, 2)).toEqual(["-S", launchSocketPath]);
+        expect(args).not.toContain(cleanupSocketPath);
+      }
+    } finally {
+      if (originalTmux === undefined) delete process.env.TMUX;
+      else process.env.TMUX = originalTmux;
+      if (originalClaudeTmuxSocketDir === undefined) delete process.env.CLAUDE_TMUX_SOCKET_DIR;
+      else process.env.CLAUDE_TMUX_SOCKET_DIR = originalClaudeTmuxSocketDir;
+    }
   });
 
   it("rejects a cleanup handle without a live launch record", async () => {
