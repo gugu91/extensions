@@ -325,6 +325,14 @@ export class BrokerSocketServer {
     this.agentRegistrationResolver = resolver;
   }
 
+  disconnectAgentConnections(agentId: string): void {
+    for (const [socket, state] of this.connections) {
+      if (state.agentId !== agentId) continue;
+      state.agentId = null;
+      socket.destroy();
+    }
+  }
+
   /**
    * Register a handler invoked when an authenticated local client requests a
    * graceful broker shutdown via the `admin.shutdown` RPC (used by
