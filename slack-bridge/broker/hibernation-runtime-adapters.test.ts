@@ -17,6 +17,7 @@ function makeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpec {
     cwd: "/repo/root",
     repoRoot: "/repo/root",
     worktreePath: "/repo/root",
+    runtimeKind: "tmux",
     tmuxSocket: "/tmp/tmux.sock",
     tmuxSession: "pinet-repo-worker-abcd",
     tmuxTarget: "pinet-repo-worker-abcd:0.0",
@@ -283,7 +284,12 @@ describe("HibernationProcessController generation-bound liveness + cleanup", () 
   it("fails closed when the handle carries no generation (foreign/degraded handle)", async () => {
     const { runner } = makeRunner({});
     const ctrl = createHibernationProcessController({ runner });
-    const bare: RuntimeAttemptHandle = { reservationNonce: "n", tmuxTarget: "t", pid: 999 };
+    const bare: RuntimeAttemptHandle = {
+      runtimeKind: "tmux",
+      reservationNonce: "n",
+      tmuxTarget: "t",
+      pid: 999,
+    };
     expect(await ctrl.stopLaunchedAttempt(bare)).toEqual({ stopped: false });
     expect(await ctrl.isLaunchedAttemptAlive(bare)).toBe(true);
   });

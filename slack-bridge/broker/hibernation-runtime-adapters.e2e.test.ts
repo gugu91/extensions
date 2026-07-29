@@ -86,6 +86,7 @@ suite("hibernation adapters — real disposable pi + tmux", () => {
     cwd: repoDir,
     repoRoot: repoDir,
     worktreePath: repoDir,
+    runtimeKind: "tmux",
     tmuxSocket,
     tmuxSession,
     tmuxTarget: tmuxSession,

@@ -88,6 +88,7 @@ function spec(agentId: string): AgentRuntimeSpecInput {
     cwd: "/repo/wt",
     repoRoot: "/repo",
     worktreePath: "/repo/wt",
+    runtimeKind: "tmux",
     tmuxSocket: "/private/tmp/tmux-501/default",
     tmuxSession: agentId,
     tmuxTarget: `${agentId}:0.0`,

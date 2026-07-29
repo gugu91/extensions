@@ -2703,6 +2703,7 @@ export class BrokerDB implements BrokerDBInterface {
       cwd: row.cwd,
       repoRoot: row.repo_root,
       worktreePath: row.worktree_path,
+      runtimeKind: "tmux",
       tmuxSocket: row.tmux_socket,
       tmuxSession: row.tmux_session,
       tmuxTarget: row.tmux_target,

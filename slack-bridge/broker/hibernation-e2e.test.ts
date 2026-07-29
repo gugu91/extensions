@@ -52,6 +52,7 @@ function runtimeSpec(agentId: string): AgentRuntimeSpecInput {
     cwd: "/repo/wt",
     repoRoot: "/repo",
     worktreePath: "/repo/wt",
+    runtimeKind: "tmux",
     tmuxSocket: "/private/tmp/tmux-501/default",
     tmuxSession: "worker-e2e",
     tmuxTarget: "worker-e2e:0.0",
@@ -155,7 +156,12 @@ class E2eTmux implements HibernationTmuxController {
       );
       return {
         launched: true,
-        handle: { reservationNonce: ctx.reservationNonce, tmuxTarget: ctx.spec.tmuxTarget, pid: 0 },
+        handle: {
+          runtimeKind: "tmux",
+          reservationNonce: ctx.reservationNonce,
+          tmuxTarget: ctx.spec.tmuxTarget,
+          pid: 0,
+        },
       };
     } catch {
       // Rejected wake fence: registration threw. The runtime failed to revive.

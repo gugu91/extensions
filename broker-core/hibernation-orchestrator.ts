@@ -47,6 +47,8 @@ export interface RuntimeLaunchContext {
  * (whose recorded PID generation is already dead) nor a different attempt.
  */
 export interface RuntimeAttemptHandle {
+  /** Runtime backend discriminant. Only tmux is supported until PR B. */
+  readonly runtimeKind: "tmux";
   /** The reservation nonce of the launching attempt (binds the handle to it). */
   readonly reservationNonce: string;
   /** The tmux pane the attempt launched into (a real adapter locates the PID). */

@@ -218,6 +218,7 @@ export function buildRuntimeSpecInput(
     cwd: facts.cwd || facts.repoRoot,
     repoRoot: facts.repoRoot,
     worktreePath: facts.worktreePath || facts.repoRoot,
+    runtimeKind: "tmux",
     tmuxSocket: facts.tmuxSocket,
     tmuxSession: facts.tmuxSession,
     tmuxTarget: facts.tmuxTarget,
