@@ -151,7 +151,6 @@ class FakeTmux implements HibernationTmuxController {
     this.onRespawn?.(ctx);
     if (!this.launched) return { launched: false, handle: null };
     const handle: RuntimeAttemptHandle = {
-      runtimeKind: "tmux",
       reservationNonce: ctx.reservationNonce,
       tmuxTarget: ctx.spec.tmuxTarget,
       pid: 5555,

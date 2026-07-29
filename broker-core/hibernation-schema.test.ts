@@ -137,7 +137,7 @@ function spec(agentId: string): AgentRuntimeSpecInput {
 }
 
 describe("runtime spec persistence", () => {
-  it("creates fresh databases with a tmux runtime discriminant and nullable tmux payload", () => {
+  it("creates fresh databases with a tmux runtime discriminant and required tmux payload", () => {
     const path = dbPath();
     const db = new BrokerDB(path);
     db.initialize();
@@ -156,9 +156,9 @@ describe("runtime spec persistence", () => {
         notnull: 1,
         dflt_value: "'tmux'",
       });
-      expect(columns.find((column) => column.name === "tmux_socket")?.notnull).toBe(0);
-      expect(columns.find((column) => column.name === "tmux_session")?.notnull).toBe(0);
-      expect(columns.find((column) => column.name === "tmux_target")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "tmux_socket")?.notnull).toBe(1);
+      expect(columns.find((column) => column.name === "tmux_session")?.notnull).toBe(1);
+      expect(columns.find((column) => column.name === "tmux_target")?.notnull).toBe(1);
     } finally {
       sqlite.close();
       db.close();

@@ -587,7 +587,6 @@ export function createHibernationTmuxController(
         const pid = await panePid(runner, addr);
         const generationToken = pid != null ? await readGenerationToken(runner, pid) : null;
         const base: RuntimeAttemptHandle = {
-          runtimeKind: "tmux",
           reservationNonce: ctx.reservationNonce,
           tmuxTarget: spec.tmuxTarget,
           pid,

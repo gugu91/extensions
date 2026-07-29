@@ -452,7 +452,6 @@ class FakeTmux implements HibernationTmuxController {
     ctx: RuntimeLaunchContext,
   ): Promise<{ launched: boolean; handle: RuntimeAttemptHandle | null }> {
     const handle: RuntimeAttemptHandle = {
-      runtimeKind: "tmux",
       reservationNonce: ctx.reservationNonce,
       tmuxTarget: ctx.spec.tmuxTarget,
       pid: 5555,

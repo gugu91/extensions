@@ -72,7 +72,6 @@ interface WorkerRuntimeController {
   createLaunchSpec: (sessionName: string) => WorkerRuntimeSpec;
   monitorCommand: (spec: WorkerRuntimeSpec) => string;
   launch: (spec: WorkerRuntimeSpec, launcherPath: string) => Promise<void>;
-  probe: (spec: WorkerRuntimeSpec) => Promise<boolean>;
   cleanup: (spec: WorkerRuntimeSpec) => Promise<void>;
 }
 
@@ -378,23 +377,6 @@ function isMissingTmuxTarget(error: Error): boolean {
 function createTmuxWorkerRuntimeController(
   runTmuxCommand: (args: string[]) => Promise<void>,
 ): WorkerRuntimeController {
-  // agent-standards-ignore prefer-inline-single-use-helper: shared controller probe contract
-  const probe = async (spec: WorkerRuntimeSpec): Promise<boolean> => {
-    const exactTarget = `=${spec.sessionName}`;
-    try {
-      await runTmuxCommand([
-        ...buildTmuxBaseArgs(spec.tmuxSocketPath),
-        "has-session",
-        "-t",
-        exactTarget,
-      ]);
-      return true;
-    } catch (error) {
-      if (error instanceof Error && isMissingTmuxTarget(error)) return false;
-      throw error;
-    }
-  };
-
   return {
     createLaunchSpec: (sessionName) => ({
       runtimeKind: "tmux",
@@ -412,15 +394,25 @@ function createTmuxWorkerRuntimeController(
         launcherPath,
       ]);
     },
-    probe,
     cleanup: async (spec) => {
-      if (!(await probe(spec))) return;
+      const exactTarget = `=${spec.sessionName}`;
+      try {
+        await runTmuxCommand([
+          ...buildTmuxBaseArgs(spec.tmuxSocketPath),
+          "has-session",
+          "-t",
+          exactTarget,
+        ]);
+      } catch (error) {
+        if (error instanceof Error && isMissingTmuxTarget(error)) return;
+        throw error;
+      }
       try {
         await runTmuxCommand([
           ...buildTmuxBaseArgs(spec.tmuxSocketPath),
           "kill-session",
           "-t",
-          `=${spec.sessionName}`,
+          exactTarget,
         ]);
       } catch (error) {
         if (!(error instanceof Error) || !isMissingTmuxTarget(error)) throw error;

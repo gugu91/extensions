@@ -156,12 +156,7 @@ class E2eTmux implements HibernationTmuxController {
       );
       return {
         launched: true,
-        handle: {
-          runtimeKind: "tmux",
-          reservationNonce: ctx.reservationNonce,
-          tmuxTarget: ctx.spec.tmuxTarget,
-          pid: 0,
-        },
+        handle: { reservationNonce: ctx.reservationNonce, tmuxTarget: ctx.spec.tmuxTarget, pid: 0 },
       };
     } catch {
       // Rejected wake fence: registration threw. The runtime failed to revive.

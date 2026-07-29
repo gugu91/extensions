@@ -284,12 +284,7 @@ describe("HibernationProcessController generation-bound liveness + cleanup", () 
   it("fails closed when the handle carries no generation (foreign/degraded handle)", async () => {
     const { runner } = makeRunner({});
     const ctrl = createHibernationProcessController({ runner });
-    const bare: RuntimeAttemptHandle = {
-      runtimeKind: "tmux",
-      reservationNonce: "n",
-      tmuxTarget: "t",
-      pid: 999,
-    };
+    const bare: RuntimeAttemptHandle = { reservationNonce: "n", tmuxTarget: "t", pid: 999 };
     expect(await ctrl.stopLaunchedAttempt(bare)).toEqual({ stopped: false });
     expect(await ctrl.isLaunchedAttemptAlive(bare)).toBe(true);
   });
