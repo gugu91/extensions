@@ -169,6 +169,7 @@ export interface SubtreeBrokerRuntimeDeps {
     fallback?: "broker" | "worker",
   ) => "broker" | "worker";
   pushInboxMessages: (messages: InboxMessage[]) => void;
+  discardQueuedInboxMessages: () => void;
   updateBadge: () => void;
   maybeDrainInboxIfIdle: (ctx: ExtensionContext) => boolean;
   deliverSteeringMessage: (text: string, ctx: ExtensionContext) => boolean;
@@ -205,6 +206,7 @@ export interface SubtreeBrokerRuntime {
   stop: (options?: { releaseIdentity?: boolean; stopChildren?: boolean }) => Promise<void>;
   getStatus: () => SubtreeBrokerStatus;
   drainInbox: (ctx: ExtensionContext) => void;
+  markDelivered: (inboxIds: number[]) => void;
   readInbox: (options?: PinetReadOptions) => PinetReadResult | null;
   sendMessage: (
     target: string,
@@ -463,6 +465,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   let brokerStartPromise: Promise<SubtreeBrokerStatus> | null = null;
   const spawnedWorkers = new Map<string, SubtreeWorkerRecord>();
   const fencedLaunchIds = new Set<string>();
+  const pendingInboxIds = new Set<number>();
   const runTmuxCommand =
     deps.runTmuxCommand ??
     (async (args: string[]): Promise<void> => {
@@ -523,7 +526,10 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   }
 
   function drainSelfInbox(ctx: ExtensionContext, broker: Broker, agentId: string): void {
-    const entries = broker.db.getInbox(agentId).map(toFollowerInboxEntry);
+    const entries = broker.db
+      .getInbox(agentId)
+      .filter((item) => !pendingInboxIds.has(item.entry.id))
+      .map(toFollowerInboxEntry);
     if (entries.length === 0) return;
 
     const synced = syncBrokerInboxEntries(entries);
@@ -562,7 +568,14 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     }
 
     if (synced.inboxMessages.length === 0) return;
-    deps.pushInboxMessages(synced.inboxMessages);
+    const inboxMessages = synced.inboxMessages.map((message) => ({
+      ...message,
+      brokerInboxOrigin: "subtree" as const,
+    }));
+    deps.pushInboxMessages(inboxMessages);
+    for (const message of inboxMessages) {
+      if (message.brokerInboxId != null) pendingInboxIds.add(message.brokerInboxId);
+    }
     deps.updateBadge();
     deps.maybeDrainInboxIfIdle(ctx);
   }
@@ -570,6 +583,12 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   function drainInbox(ctx: ExtensionContext): void {
     if (!activeBroker || !selfAgentId) return;
     drainSelfInbox(ctx, activeBroker, selfAgentId);
+  }
+
+  function markDelivered(inboxIds: number[]): void {
+    if (!activeBroker || !selfAgentId) return;
+    activeBroker.db.markDelivered(inboxIds, selfAgentId);
+    for (const inboxId of inboxIds) pendingInboxIds.delete(inboxId);
   }
 
   function readInbox(options: PinetReadOptions = {}): PinetReadResult | null {
@@ -747,6 +766,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       activePaths = null;
       spawnedWorkers.clear();
       fencedLaunchIds.clear();
+      deps.discardQueuedInboxMessages();
+      pendingInboxIds.clear();
+      deps.updateBadge();
     }
   }
 
@@ -844,18 +866,26 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         drainSelfInbox(ctx, broker, selfAgent.id);
       });
 
-      broker.db.recoverPendingTargetedBacklog(selfAgent.id);
-      drainSelfInbox(ctx, broker, selfAgent.id);
-      broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
-      broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
-
       activeBroker = broker;
       selfAgentId = selfAgent.id;
       startedAt = new Date().toISOString();
       activePaths = paths;
       startHeartbeat(broker, selfAgent.id);
+
+      broker.db.recoverPendingTargetedBacklog(selfAgent.id);
+      drainSelfInbox(ctx, broker, selfAgent.id);
+      broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
+      broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
       return getStatus();
     } catch (error) {
+      stopHeartbeat();
+      activeBroker = null;
+      selfAgentId = null;
+      startedAt = null;
+      activePaths = null;
+      deps.discardQueuedInboxMessages();
+      pendingInboxIds.clear();
+      deps.updateBadge();
       await broker.stop().catch(() => undefined);
       throw error;
     }
@@ -1043,6 +1073,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     stop,
     getStatus,
     drainInbox,
+    markDelivered,
     readInbox,
     sendMessage,
     listAgents,

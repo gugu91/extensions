@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrokerClient } from "./broker/client.js";
-import type { PinetControlCommand, SlackBridgeSettings } from "./helpers.js";
+import type { InboxMessage, PinetControlCommand, SlackBridgeSettings } from "./helpers.js";
 import {
   buildSubtreeBrokerPaths,
   createSubtreeBrokerRuntime,
@@ -33,6 +33,7 @@ function createRuntime(
     getAgentMetadata: async () => ({}),
     getMeshRoleFromMetadata: (_metadata, fallback) => fallback ?? "worker",
     pushInboxMessages: () => {},
+    discardQueuedInboxMessages: () => {},
     updateBadge: () => {},
     maybeDrainInboxIfIdle: () => false,
     deliverSteeringMessage,
@@ -81,6 +82,55 @@ afterEach(async () => {
       .map((runtime) => runtime.stop({ releaseIdentity: true, stopChildren: false })),
   );
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("subtree broker inbox delivery", () => {
+  it("queues each regular inbox entry once and recovers it across restart", async () => {
+    const queuedInbox: InboxMessage[] = [];
+    const deliveryDeps = {
+      pushInboxMessages: (messages: InboxMessage[]) => queuedInbox.push(...messages),
+      discardQueuedInboxMessages: () => {
+        for (let index = queuedInbox.length - 1; index >= 0; index -= 1) {
+          if (queuedInbox[index]?.brokerInboxOrigin === "subtree") queuedInbox.splice(index, 1);
+        }
+      },
+    };
+    const first = createRuntime(() => false, undefined, deliveryDeps);
+    await first.runtime.start(ctx);
+    const control = first.runtime.getHibernationRuntimeControl();
+    if (!control) throw new Error("subtree broker did not start");
+    const selfId = first.runtime.getStatus().selfAgentId;
+    if (!selfId) throw new Error("subtree broker has no self id");
+    const threadId = `a2a:sender:${selfId}`;
+    control.db.createThread(threadId, "agent", "", selfId);
+    control.db.insertMessage(threadId, "agent", "inbound", "sender", "finished the task", [selfId]);
+
+    first.runtime.drainInbox(ctx);
+    first.runtime.drainInbox(ctx);
+
+    expect(queuedInbox).toHaveLength(1);
+    expect(queuedInbox[0]?.brokerInboxOrigin).toBe("subtree");
+    expect(control.db.getPendingInboxCount(selfId)).toBe(1);
+
+    await first.runtime.stop({ releaseIdentity: true, stopChildren: false });
+    expect(queuedInbox).toHaveLength(0);
+
+    const second = createRuntime(() => false, first.stableId, {
+      ...deliveryDeps,
+      maybeDrainInboxIfIdle: () => {
+        const inboxIds = queuedInbox.flatMap((message) =>
+          message.brokerInboxId == null ? [] : [message.brokerInboxId],
+        );
+        second.runtime.markDelivered(inboxIds);
+        queuedInbox.length = 0;
+        return true;
+      },
+    });
+    await second.runtime.start(ctx);
+
+    expect(queuedInbox).toHaveLength(0);
+    expect(second.runtime.getHibernationRuntimeControl()?.db.getPendingInboxCount(selfId)).toBe(0);
+  });
 });
 
 interface TmuxLaunchFacts {
