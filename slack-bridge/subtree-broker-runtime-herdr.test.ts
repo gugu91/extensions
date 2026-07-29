@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createHerdrWorkerRuntimeController,
   type HerdrCommandOptions,
@@ -112,6 +112,61 @@ describe("Herdr worker runtime controller", () => {
       herdrPaneId: "w1:p2",
       herdrShellPid: 4242,
     });
+  });
+
+  it("rolls back a created pane when PID capture fails", async () => {
+    const calls: string[][] = [];
+    const configDir = tempConfigDir();
+    const processError = new Error("process info unavailable");
+    const runHerdrCommand: HerdrCommandRunner = async (args) => {
+      calls.push(args);
+      if (args.includes("create")) return workspaceCreated("w1:p3");
+      if (args.includes("process-info")) throw processError;
+      return "{}";
+    };
+    const controller = createHerdrWorkerRuntimeController(runHerdrCommand, {
+      herdrSession: "pinet-workers",
+      herdrConfigDir: configDir,
+    });
+    const spec = controller.createLaunchSpec("worker-rollback");
+
+    await expect(controller.launch(spec, "/tmp/worker-rollback.sh", {})).rejects.toBe(processError);
+    expect(calls.at(-1)).toEqual(["--session", "pinet-workers", "pane", "close", "w1:p3"]);
+    expect(spec).toMatchObject({ herdrPaneId: null, herdrShellPid: null });
+    await expect(controller.cleanup(spec)).resolves.toBeUndefined();
+  });
+
+  it("surfaces the pane id when rollback before PID capture fails", async () => {
+    const configDir = tempConfigDir();
+    const runHerdrCommand: HerdrCommandRunner = async (args) => {
+      if (args.includes("create")) return workspaceCreated("w1:p5");
+      if (args.includes("process-info")) throw new Error("process info unavailable");
+      if (args.includes("close")) throw new Error("close transport unavailable");
+      return "{}";
+    };
+    const controller = createHerdrWorkerRuntimeController(runHerdrCommand, {
+      herdrSession: "pinet-workers",
+      herdrConfigDir: configDir,
+    });
+    const spec = controller.createLaunchSpec("worker-rollback-failure");
+
+    await expect(controller.launch(spec, "/tmp/worker-rollback-failure.sh", {})).rejects.toThrow(
+      "pane w1:p5, and rollback failed: close transport unavailable",
+    );
+    expect(spec).toMatchObject({ herdrPaneId: "w1:p5", herdrShellPid: null });
+  });
+
+  it("treats cleanup with no recorded pane generation as a no-op", async () => {
+    const runHerdrCommand = vi.fn<HerdrCommandRunner>();
+    const controller = createHerdrWorkerRuntimeController(runHerdrCommand, {
+      herdrSession: "pinet-workers",
+      herdrConfigDir: tempConfigDir(),
+    });
+
+    await expect(
+      controller.cleanup(controller.createLaunchSpec("never-launched")),
+    ).resolves.toBeUndefined();
+    expect(runHerdrCommand).not.toHaveBeenCalled();
   });
 
   it("propagates a launch failure after capturing the pane generation", async () => {

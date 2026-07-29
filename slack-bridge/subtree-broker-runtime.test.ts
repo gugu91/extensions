@@ -355,6 +355,122 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmuxRun).not.toHaveBeenCalled();
   });
 
+  it("retries a Herdr launch that failed before workspace creation", async () => {
+    const unavailable = Object.assign(new Error("spawn herdr ENOENT"), { code: "ENOENT" });
+    let available = false;
+    let launchId = "";
+    const runHerdrCommand = async (args: string[]): Promise<string> => {
+      if (!available) throw unavailable;
+      if (args.includes("create")) {
+        launchId =
+          args
+            .find((value) => value.startsWith("PINET_LAUNCH_ID="))
+            ?.slice("PINET_LAUNCH_ID=".length) ?? "";
+        return JSON.stringify({ result: { root_pane: { pane_id: "w1:p6" } } });
+      }
+      if (args.includes("process-info")) {
+        return JSON.stringify({ result: { process_info: { shell_pid: 6006 } } });
+      }
+      if (args.includes("run")) {
+        const control = runtime.getHibernationRuntimeControl();
+        const parentAgentId = runtime.getStatus().selfAgentId;
+        if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
+        control.db.registerAgent("retry-before-create", "Retry Child", "🌱", process.pid, {
+          parentAgentId,
+          launchId,
+        });
+      }
+      return "{}";
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `retry-before-create-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runHerdrCommand,
+      },
+    );
+
+    let launchError: SubtreeSpawnLaunchError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, { task: "First attempt", repo: "." });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnLaunchError) launchError = error;
+      else throw error;
+    }
+    if (!launchError) throw new Error("expected launch error");
+    available = true;
+
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Retry",
+        repo: ".",
+        cleanupHandle: launchError.handle,
+      }),
+    ).resolves.toMatchObject({ agentId: "retry-before-create", runtimeKind: "herdr" });
+  });
+
+  it("rolls back and retries a Herdr launch that failed after workspace creation", async () => {
+    const calls: string[][] = [];
+    let createCount = 0;
+    let launchId = "";
+    const processError = new Error("process info unavailable");
+    const runHerdrCommand = async (args: string[]): Promise<string> => {
+      calls.push(args);
+      if (args.includes("create")) {
+        createCount += 1;
+        launchId =
+          args
+            .find((value) => value.startsWith("PINET_LAUNCH_ID="))
+            ?.slice("PINET_LAUNCH_ID=".length) ?? "";
+        return JSON.stringify({
+          result: { root_pane: { pane_id: createCount === 1 ? "w1:p-old" : "w1:p-new" } },
+        });
+      }
+      if (args.includes("process-info")) {
+        if (createCount === 1) throw processError;
+        return JSON.stringify({ result: { process_info: { shell_pid: 7007 } } });
+      }
+      if (args.includes("run")) {
+        const control = runtime.getHibernationRuntimeControl();
+        const parentAgentId = runtime.getStatus().selfAgentId;
+        if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
+        control.db.registerAgent("retry-after-create", "Retry Child", "🌱", process.pid, {
+          parentAgentId,
+          launchId,
+        });
+      }
+      return "{}";
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `retry-after-create-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runHerdrCommand,
+      },
+    );
+
+    let launchError: SubtreeSpawnLaunchError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, { task: "First attempt", repo: "." });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnLaunchError) launchError = error;
+      else throw error;
+    }
+    if (!launchError) throw new Error("expected launch error");
+    expect(calls).toContainEqual(["--session", "pinet-workers", "pane", "close", "w1:p-old"]);
+
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Retry",
+        repo: ".",
+        cleanupHandle: launchError.handle,
+      }),
+    ).resolves.toMatchObject({ agentId: "retry-after-create", runtimeKind: "herdr" });
+    expect(createCount).toBe(2);
+  });
+
   it("keeps tmux and Herdr workers isolated under one broker", async () => {
     const originalActivation = process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION;
     process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION = "1";

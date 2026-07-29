@@ -570,20 +570,42 @@ export function createHerdrWorkerRuntimeController(
       }
       spec.herdrPaneId = paneId;
 
-      const processOutput = await runHerdrSessionCommand(runHerdrCommand, spec, [
-        "pane",
-        "process-info",
-        "--pane",
-        paneId,
-      ]);
-      const processResponse = JSON.parse(processOutput) as {
-        result?: { process_info?: { shell_pid?: number } };
-      };
-      const shellPid = processResponse.result?.process_info?.shell_pid;
-      if (!Number.isInteger(shellPid) || (shellPid ?? 0) <= 0) {
-        throw new Error(`Herdr pane ${paneId} returned no shell PID`);
+      try {
+        const processOutput = await runHerdrSessionCommand(runHerdrCommand, spec, [
+          "pane",
+          "process-info",
+          "--pane",
+          paneId,
+        ]);
+        const processResponse = JSON.parse(processOutput) as {
+          result?: { process_info?: { shell_pid?: number } };
+        };
+        const shellPid = processResponse.result?.process_info?.shell_pid;
+        if (!Number.isInteger(shellPid) || (shellPid ?? 0) <= 0) {
+          throw new Error(`Herdr pane ${paneId} returned no shell PID`);
+        }
+        spec.herdrShellPid = shellPid ?? null;
+      } catch (launchError) {
+        try {
+          await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "close", paneId]);
+          spec.herdrPaneId = null;
+        } catch (rollbackError) {
+          if (
+            rollbackError instanceof Error &&
+            (isMissingHerdrPane(rollbackError) || isMissingHerdrSession(rollbackError))
+          ) {
+            spec.herdrPaneId = null;
+          } else {
+            const rollbackMessage =
+              rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+            throw new Error(
+              `Herdr launch failed before PID capture for pane ${paneId}, and rollback failed: ${rollbackMessage}`,
+              { cause: launchError },
+            );
+          }
+        }
+        throw launchError;
       }
-      spec.herdrShellPid = shellPid ?? null;
 
       await runHerdrSessionCommand(runHerdrCommand, spec, [
         "pane",
@@ -595,8 +617,9 @@ export function createHerdrWorkerRuntimeController(
     cleanup: async (spec) => {
       const paneId = spec.herdrPaneId;
       const recordedShellPid = spec.herdrShellPid;
+      if (!paneId && recordedShellPid === null) return;
       if (!paneId || recordedShellPid === null) {
-        throw new Error(`Herdr runtime ${spec.sessionName} has no recorded pane generation`);
+        throw new Error(`Herdr runtime ${spec.sessionName} has an incomplete pane generation`);
       }
 
       try {
