@@ -791,10 +791,20 @@ export class BrokerSocketServer {
     const requestedEmoji = typeof params.emoji === "string" ? params.emoji : "";
     const pid = typeof params.pid === "number" ? params.pid : 0;
     const stableId = typeof params.stableId === "string" ? params.stableId : undefined;
-    const metadata =
+    const rawMetadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
         : undefined;
+    const legacyTmuxSession =
+      typeof rawMetadata?.tmuxSession === "string" ? rawMetadata.tmuxSession.trim() : "";
+    const metadata =
+      legacyTmuxSession && typeof rawMetadata?.runtimeLocator !== "string"
+        ? {
+            ...rawMetadata,
+            runtimeKind: "tmux",
+            runtimeLocator: legacyTmuxSession,
+          }
+        : rawMetadata;
 
     if (stableId) {
       const liveStableIdConflict = this.findLiveStableIdConflict(stableId, socket);
@@ -1242,6 +1252,9 @@ export class BrokerSocketServer {
       ...(typeof params.threadId === "string" ? { threadId: params.threadId } : {}),
       ...(typeof params.repo === "string" ? { repo: params.repo } : {}),
       ...(typeof params.worktreePath === "string" ? { worktreePath: params.worktreePath } : {}),
+      ...(typeof params.runtimeLocator === "string"
+        ? { runtimeLocator: params.runtimeLocator }
+        : {}),
       ...(typeof params.tmuxSession === "string" ? { tmuxSession: params.tmuxSession } : {}),
       ...(typeof params.since === "string" ? { since: params.since } : {}),
       ...(typeof params.until === "string" ? { until: params.until } : {}),

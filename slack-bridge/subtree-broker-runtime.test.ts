@@ -144,12 +144,12 @@ function createTmuxHarness(): {
   liveSessions: Set<string>;
   killedSessions: string[];
   commands: string[][];
-  setOnLaunch: (callback: ((facts: TmuxLaunchFacts) => void) | null) => void;
+  setOnLaunch: (callback: ((facts: TmuxLaunchFacts) => void | Promise<void>) | null) => void;
 } {
   const liveSessions = new Set<string>();
   const killedSessions: string[] = [];
   const commands: string[][] = [];
-  let onLaunch: ((facts: TmuxLaunchFacts) => void) | null = null;
+  let onLaunch: ((facts: TmuxLaunchFacts) => void | Promise<void>) | null = null;
 
   return {
     liveSessions,
@@ -170,7 +170,7 @@ function createTmuxHarness(): {
           .match(/^export PINET_LAUNCH_ID='([^']+)'$/m)?.[1];
         if (!launchId) throw new Error("launcher has no launch id");
         liveSessions.add(sessionName);
-        onLaunch?.({ launchId, sessionName });
+        await onLaunch?.({ launchId, sessionName });
         return;
       }
 
@@ -330,9 +330,29 @@ describe("subtree broker spawn lifecycle", () => {
     try {
       const tmux = createTmuxHarness();
       const herdrCommands: string[][] = [];
+      const meshSecret = "mixed-fleet-secret";
       let configuredRuntime: "tmux" | "herdr" = "tmux";
       let herdrLaunchId = "";
       let herdrSessionName = "";
+      const childClients: BrokerClient[] = [];
+      const registerMixedChild = async (
+        agentId: string,
+        name: string,
+        launchId: string,
+        metadata: Record<string, unknown>,
+      ): Promise<void> => {
+        const socketPath = runtime.getStatus().paths?.socketPath;
+        if (!socketPath) throw new Error("subtree broker did not start");
+        const child = new BrokerClient({ path: socketPath, meshSecret });
+        childClients.push(child);
+        await child.connect();
+        await child.register(
+          name,
+          "🌱",
+          { ...metadata, launchId },
+          `test:session:/tmp/${agentId}.jsonl`,
+        );
+      };
       const runHerdrCommand = async (args: string[]): Promise<string> => {
         herdrCommands.push(args);
         if (args.includes("create")) {
@@ -347,19 +367,11 @@ describe("subtree broker spawn lifecycle", () => {
           return JSON.stringify({ result: { process_info: { shell_pid: 2323 } } });
         }
         if (args.includes("run")) {
-          const control = runtime.getHibernationRuntimeControl();
           const parentAgentId = runtime.getStatus().selfAgentId;
-          if (!control || !parentAgentId || !herdrLaunchId) {
-            throw new Error("missing Herdr launch facts");
-          }
-          control.db.registerAgent(
-            "mixed-herdr-child",
-            "Mixed Herdr Child",
-            "🌱",
-            process.pid,
-            { parentAgentId, launchId: herdrLaunchId },
-            "test:session:/tmp/mixed-herdr-child.jsonl",
-          );
+          if (!parentAgentId || !herdrLaunchId) throw new Error("missing Herdr launch facts");
+          await registerMixedChild("mixed-herdr-child", "Mixed Herdr Child", herdrLaunchId, {
+            parentAgentId,
+          });
         }
         return "{}";
       };
@@ -367,27 +379,18 @@ describe("subtree broker spawn lifecycle", () => {
         () => false,
         `mixed-fleet-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
         {
-          getSettings: () => ({ subtreeWorkerRuntime: configuredRuntime }),
+          getSettings: () => ({ subtreeWorkerRuntime: configuredRuntime, meshSecret }),
           runTmuxCommand: tmux.run,
           runHerdrCommand,
         },
       );
-      tmux.setOnLaunch((facts) => {
-        const control = runtime.getHibernationRuntimeControl();
+      tmux.setOnLaunch(async (facts) => {
         const parentAgentId = runtime.getStatus().selfAgentId;
-        if (!control || !parentAgentId) throw new Error("subtree broker did not start");
-        control.db.registerAgent(
-          "mixed-tmux-child",
-          "Mixed tmux Child",
-          "🌱",
-          process.pid,
-          {
-            parentAgentId,
-            launchId: facts.launchId,
-            tmuxSession: facts.sessionName,
-          },
-          "test:session:/tmp/mixed-tmux-child.jsonl",
-        );
+        if (!parentAgentId) throw new Error("subtree broker did not start");
+        await registerMixedChild("mixed-tmux-child", "Mixed tmux Child", facts.launchId, {
+          parentAgentId,
+          tmuxSession: facts.sessionName,
+        });
       });
 
       const tmuxResult = await runtime.spawnWorker(ctx, { task: "Run in tmux", repo: "." });
@@ -397,17 +400,19 @@ describe("subtree broker spawn lifecycle", () => {
       if (!control) throw new Error("subtree broker did not start");
       const tmuxSpec = control.db.getAgentRuntimeSpec(tmuxResult.agentId);
       const herdrSpec = control.db.getAgentRuntimeSpec(herdrResult.agentId);
+      const tmuxMetadata = control.db.getAgentById(tmuxResult.agentId)?.metadata;
+      const herdrMetadata = control.db.getAgentById(herdrResult.agentId)?.metadata;
       const workerRecords = runtime.getStatus().spawnedWorkers;
 
       await runtime.stop();
 
       expect(tmuxResult).toMatchObject({
-        agentId: "mixed-tmux-child",
+        agentName: "Mixed tmux Child",
         runtimeKind: "tmux",
       });
       expect(tmuxResult.monitorCommand).toContain("tmux ");
       expect(herdrResult).toMatchObject({
-        agentId: "mixed-herdr-child",
+        agentName: "Mixed Herdr Child",
         runtimeKind: "herdr",
         sessionName: herdrSessionName,
       });
@@ -438,12 +443,23 @@ describe("subtree broker spawn lifecycle", () => {
         herdrPaneId: "w1:p23",
         herdrShellPid: 2323,
       });
+      expect(tmuxMetadata).toMatchObject({
+        runtimeKind: "tmux",
+        runtimeLocator: tmuxResult.sessionName,
+        tmuxSession: tmuxResult.sessionName,
+      });
+      expect(herdrMetadata).toMatchObject({
+        runtimeKind: "herdr",
+        runtimeLocator: "w1:p23",
+      });
+      expect(herdrMetadata).not.toHaveProperty("tmuxSession");
       expect(tmux.killedSessions).toEqual([tmuxResult.sessionName]);
-      expect(
-        herdrCommands.filter((args) => args.includes("close")),
-      ).toEqual([["--session", "pinet-workers", "pane", "close", "w1:p23"]]);
+      expect(herdrCommands.filter((args) => args.includes("close"))).toEqual([
+        ["--session", "pinet-workers", "pane", "close", "w1:p23"],
+      ]);
       expect(tmux.commands.flat()).not.toContain("w1:p23");
       expect(herdrCommands.flat()).not.toContain(tmuxResult.sessionName);
+      for (const child of childClients) child.disconnect();
     } finally {
       if (originalActivation === undefined) {
         delete process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION;

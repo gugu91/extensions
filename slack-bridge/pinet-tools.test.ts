@@ -112,6 +112,8 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
         repoRoot: "/Users/alice/projects/extensions",
         worktreePath: "/Users/alice/projects/extensions/.worktrees/issue-719",
         branch: "fix/pinet-worker-session-lookup-719",
+        runtimeKind: "tmux",
+        runtimeLocator: "pinet-extensions-worker",
         tmuxSession: "pinet-extensions-worker",
         brokerManaged: true,
         brokerManagedBy: "broker-1",

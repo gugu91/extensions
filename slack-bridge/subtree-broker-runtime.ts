@@ -981,10 +981,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         );
       if (agent) return agent;
 
-      if (
-        input.runtimeSpec.runtimeKind === "tmux" &&
-        Date.now() - lastFollowAttemptAt > 6_000
-      ) {
+      if (input.runtimeSpec.runtimeKind === "tmux" && Date.now() - lastFollowAttemptAt > 6_000) {
         lastFollowAttemptAt = Date.now();
         await sendFollowCommand(
           input.runtimeSpec.sessionName,
@@ -1170,11 +1167,21 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         }
         const role = deps.getMeshRoleFromMetadata(registration.metadata, "worker");
         const identity = generateAgentName(registration.stableId ?? registration.agentId, role);
+        const worker = launchId ? spawnedWorkers.get(launchId) : undefined;
         return {
           name: registration.name || identity.name,
           emoji: registration.emoji || identity.emoji,
           metadata: {
             ...(registration.metadata ?? {}),
+            ...(worker
+              ? {
+                  runtimeKind: worker.runtimeKind,
+                  runtimeLocator:
+                    worker.runtimeKind === "tmux"
+                      ? worker.sessionName
+                      : (worker.herdrPaneId ?? worker.sessionName),
+                }
+              : {}),
             subtreeBrokerAgentId: selfAgent.id,
             subtreeRootAgentId: selfAgent.id,
           },

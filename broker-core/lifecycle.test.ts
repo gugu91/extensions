@@ -160,6 +160,16 @@ describe("agent hibernation lifecycle", () => {
       eligible: true,
       reason: "eligible",
     });
+    const neutralLocator = eligibleAgent();
+    neutralLocator.metadata = {
+      ...neutralLocator.metadata,
+      tmuxSession: undefined,
+      runtimeLocator: "worker-1",
+    };
+    expect(evaluateHibernateEligibility(neutralLocator)).toEqual({
+      eligible: true,
+      reason: "eligible",
+    });
     const unsafe = eligibleAgent();
     unsafe.metadata = { ...unsafe.metadata, hibernateSafe: false };
     expect(evaluateHibernateEligibility(unsafe)).toEqual({

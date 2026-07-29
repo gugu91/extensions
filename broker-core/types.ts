@@ -358,6 +358,8 @@ export interface AgentSessionSearchOptions {
   threadId?: string;
   repo?: string;
   worktreePath?: string;
+  runtimeLocator?: string;
+  /** Legacy tmux-only locator filter retained for wire compatibility. */
   tmuxSession?: string;
   since?: string;
   until?: string;
@@ -383,6 +385,9 @@ export interface AgentSessionSearchInfo {
   repoRoot: string | null;
   worktreePath: string | null;
   branch: string | null;
+  runtimeKind: AgentRuntimeSpec["runtimeKind"] | null;
+  runtimeLocator: string | null;
+  /** Legacy tmux-only locator retained for wire compatibility. */
   tmuxSession: string | null;
   brokerManaged: boolean;
   brokerManagedBy: string | null;

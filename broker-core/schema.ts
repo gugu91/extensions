@@ -716,6 +716,8 @@ function agentSessionOverlapsRange(
 function getAgentSessionMatchedBy(input: {
   agent: AgentInfo;
   metadata: Record<string, unknown> | null;
+  runtimeKind: AgentSessionSearchInfo["runtimeKind"];
+  runtimeLocator: string | null;
   relatedThreadIds: string[];
   options: AgentSessionSearchOptions;
 }): string[] {
@@ -725,6 +727,7 @@ function getAgentSessionMatchedBy(input: {
   const threadId = normalizeSessionSearchNeedle(input.options.threadId);
   const repo = normalizeSessionSearchNeedle(input.options.repo);
   const worktreePath = normalizeSessionSearchNeedle(input.options.worktreePath);
+  const runtimeLocator = normalizeSessionSearchNeedle(input.options.runtimeLocator);
   const tmuxSession = normalizeSessionSearchNeedle(input.options.tmuxSession);
 
   if (agentName && matchesSessionSearchNeedle(input.agent.name, agentName)) {
@@ -761,8 +764,14 @@ function getAgentSessionMatchedBy(input: {
     matchedBy.push("worktree_path");
   }
 
-  const tmux = getOptionalNestedMetadataString(input.metadata, ["tmuxSession", "tmux"]);
-  if (tmuxSession && matchesSessionSearchNeedle(tmux, tmuxSession)) {
+  if (runtimeLocator && matchesSessionSearchNeedle(input.runtimeLocator, runtimeLocator)) {
+    matchedBy.push("runtime_locator");
+  }
+  if (
+    tmuxSession &&
+    input.runtimeKind === "tmux" &&
+    matchesSessionSearchNeedle(input.runtimeLocator, tmuxSession)
+  ) {
     matchedBy.push("tmux_session");
   }
 
@@ -3765,6 +3774,7 @@ export class BrokerDB implements BrokerDBInterface {
     const threadId = normalizeSessionSearchNeedle(options.threadId);
     const repo = normalizeSessionSearchNeedle(options.repo);
     const worktreePath = normalizeSessionSearchNeedle(options.worktreePath);
+    const runtimeLocator = normalizeSessionSearchNeedle(options.runtimeLocator);
     const tmuxSession = normalizeSessionSearchNeedle(options.tmuxSession);
     const sinceMs = parseSessionSearchTime(options.since);
     const untilMs = parseSessionSearchTime(options.until);
@@ -3773,17 +3783,41 @@ export class BrokerDB implements BrokerDBInterface {
     const results = this.getAllAgents()
       .map((agent) => {
         const metadata = agent.metadata ?? null;
+        const runtimeSpec = this.getAgentRuntimeSpec(agent.id);
+        const metadataRuntimeKind = getOptionalNestedMetadataString(metadata, ["runtimeKind"]);
+        const runtimeKind =
+          runtimeSpec?.runtimeKind ??
+          (metadataRuntimeKind === "tmux" || metadataRuntimeKind === "herdr"
+            ? metadataRuntimeKind
+            : getOptionalNestedMetadataString(metadata, ["tmuxSession", "tmux"])
+              ? "tmux"
+              : null);
+        const runtimeLocator = runtimeSpec
+          ? runtimeSpec.runtimeKind === "tmux"
+            ? runtimeSpec.tmuxSession
+            : runtimeSpec.herdrPaneId
+          : (getOptionalNestedMetadataString(metadata, ["runtimeLocator"]) ??
+            getOptionalNestedMetadataString(metadata, ["tmuxSession", "tmux"]));
         const relatedThreadIds = this.getAgentRelatedThreadIds(agent.id);
-        const matchedBy = getAgentSessionMatchedBy({ agent, metadata, relatedThreadIds, options });
+        const matchedBy = getAgentSessionMatchedBy({
+          agent,
+          metadata,
+          runtimeKind,
+          runtimeLocator,
+          relatedThreadIds,
+          options,
+        });
         return {
           agent,
           metadata,
+          runtimeKind,
+          runtimeLocator,
           relatedThreadIds,
           matchedBy,
           lastSeenMs: Date.parse(agent.lastSeen || agent.lastHeartbeat || agent.connectedAt),
         };
       })
-      .filter(({ agent, metadata, relatedThreadIds }) => {
+      .filter(({ agent, metadata, runtimeKind, runtimeLocator: locator, relatedThreadIds }) => {
         if (agentName && !matchesSessionSearchNeedle(agent.name, agentName)) return false;
         if (agentId && !matchesSessionSearchPrefixOrExact(agent.id, agentId)) return false;
         if (
@@ -3810,9 +3844,12 @@ export class BrokerDB implements BrokerDBInterface {
             return false;
           }
         }
-        if (tmuxSession) {
-          const tmux = getOptionalNestedMetadataString(metadata, ["tmuxSession", "tmux"]);
-          if (!matchesSessionSearchNeedle(tmux, tmuxSession)) return false;
+        if (runtimeLocator && !matchesSessionSearchNeedle(locator, runtimeLocator)) return false;
+        if (
+          tmuxSession &&
+          (runtimeKind !== "tmux" || !matchesSessionSearchNeedle(locator, tmuxSession))
+        ) {
+          return false;
         }
         return agentSessionOverlapsRange(agent, sinceMs, untilMs);
       })
@@ -3826,7 +3863,7 @@ export class BrokerDB implements BrokerDBInterface {
         return left.agent.name.localeCompare(right.agent.name);
       })
       .slice(0, limit)
-      .map(({ agent, metadata, relatedThreadIds, matchedBy }) => ({
+      .map(({ agent, metadata, runtimeKind, runtimeLocator, relatedThreadIds, matchedBy }) => ({
         agentId: agent.id,
         agentName: agent.name,
         emoji: agent.emoji,
@@ -3845,7 +3882,9 @@ export class BrokerDB implements BrokerDBInterface {
         repoRoot: getOptionalNestedMetadataString(metadata, ["repoRoot"]),
         worktreePath: getOptionalNestedMetadataString(metadata, ["worktreePath"]),
         branch: getOptionalNestedMetadataString(metadata, ["branch"]),
-        tmuxSession: getOptionalNestedMetadataString(metadata, ["tmuxSession", "tmux"]),
+        runtimeKind,
+        runtimeLocator,
+        tmuxSession: runtimeKind === "tmux" ? runtimeLocator : null,
         brokerManaged: metadata?.brokerManaged === true,
         brokerManagedBy: getOptionalNestedMetadataString(metadata, ["brokerManagedBy"]),
         launchSource: getOptionalNestedMetadataString(metadata, ["launchSource"]),
