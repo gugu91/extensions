@@ -196,6 +196,47 @@ describe("registerPinetCommands", () => {
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("/pinet-start"), "info");
   });
 
+  it("keeps /pinet follow as a no-op for a connected follower", async () => {
+    const reloadPinetRuntime = vi.fn(async () => {});
+    const commands = registerCommands(
+      createDeps({
+        runtimeMode: () => "follower",
+        runtimeConnected: () => true,
+        reloadPinetRuntime,
+      }),
+    );
+    const { ctx, notify } = createContext();
+
+    await commands.get("pinet")?.handler("follow", ctx);
+
+    expect(reloadPinetRuntime).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith("Pinet already running (follower)", "info");
+  });
+
+  it("reconnects a disconnected follower when /pinet follow is retried", async () => {
+    const connectAsFollower = vi.fn(async () => {});
+    const reloadPinetRuntime = vi.fn(async () => {});
+    const commands = registerCommands(
+      createDeps({
+        runtimeMode: () => "follower",
+        runtimeConnected: () => false,
+        connectAsFollower,
+        reloadPinetRuntime,
+      }),
+    );
+    const { ctx, notify } = createContext();
+    const abort = vi.fn();
+    Object.assign(ctx, { isIdle: () => false, abort });
+
+    await commands.get("pinet")?.handler("follow", ctx);
+
+    expect(abort).toHaveBeenCalled();
+    expect(connectAsFollower).not.toHaveBeenCalled();
+    expect(reloadPinetRuntime).toHaveBeenCalledWith(ctx);
+    expect(notify).toHaveBeenCalledWith("Pinet follower disconnected — reconnecting...", "info");
+    expect(notify).toHaveBeenCalledWith("🦦 Slate Chalk Otter — following broker", "info");
+  });
+
   it("routes /pinet reload through the existing remote-control message path", async () => {
     const sendPinetAgentMessage = vi.fn(async (target: string, body: string) => ({
       messageId: 42,
