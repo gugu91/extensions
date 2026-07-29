@@ -866,18 +866,23 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         drainSelfInbox(ctx, broker, selfAgent.id);
       });
 
-      broker.db.recoverPendingTargetedBacklog(selfAgent.id);
-      drainSelfInbox(ctx, broker, selfAgent.id);
-      broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
-      broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
-
       activeBroker = broker;
       selfAgentId = selfAgent.id;
       startedAt = new Date().toISOString();
       activePaths = paths;
       startHeartbeat(broker, selfAgent.id);
+
+      broker.db.recoverPendingTargetedBacklog(selfAgent.id);
+      drainSelfInbox(ctx, broker, selfAgent.id);
+      broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
+      broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
       return getStatus();
     } catch (error) {
+      stopHeartbeat();
+      activeBroker = null;
+      selfAgentId = null;
+      startedAt = null;
+      activePaths = null;
       await broker.stop().catch(() => undefined);
       throw error;
     }

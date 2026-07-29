@@ -115,16 +115,21 @@ describe("subtree broker inbox delivery", () => {
     await first.runtime.stop({ releaseIdentity: true, stopChildren: false });
     expect(queuedInbox).toHaveLength(0);
 
-    const { runtime: restarted } = createRuntime(() => false, first.stableId, deliveryDeps);
-    await restarted.start(ctx);
-    restarted.drainInbox(ctx);
-    expect(queuedInbox).toHaveLength(1);
+    const second = createRuntime(() => false, first.stableId, {
+      ...deliveryDeps,
+      maybeDrainInboxIfIdle: () => {
+        const inboxIds = queuedInbox.flatMap((message) =>
+          message.brokerInboxId == null ? [] : [message.brokerInboxId],
+        );
+        second.runtime.markDelivered(inboxIds);
+        queuedInbox.length = 0;
+        return true;
+      },
+    });
+    await second.runtime.start(ctx);
 
-    const inboxId = queuedInbox[0]?.brokerInboxId;
-    if (inboxId == null) throw new Error("queued message has no inbox id");
-    restarted.markDelivered([inboxId]);
-
-    expect(restarted.getHibernationRuntimeControl()?.db.getPendingInboxCount(selfId)).toBe(0);
+    expect(queuedInbox).toHaveLength(0);
+    expect(second.runtime.getHibernationRuntimeControl()?.db.getPendingInboxCount(selfId)).toBe(0);
   });
 });
 
