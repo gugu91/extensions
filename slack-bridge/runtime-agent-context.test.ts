@@ -679,6 +679,16 @@ describe("createRuntimeAgentContext", () => {
       });
       expect(typeof workerMetadata.brokerManagedAt).toBe("string");
       expect(brokerMetadata).not.toHaveProperty("brokerManaged");
+
+      process.env.PINET_LAUNCH_SOURCE = "broker-herdr";
+      delete process.env.PINET_TMUX_SESSION;
+      const herdrWorkerMetadata = await runtimeAgentContext.getAgentMetadata("worker");
+      expect(herdrWorkerMetadata).toMatchObject({
+        brokerManaged: true,
+        brokerManagedBy: "broker-1",
+        launchSource: "broker-herdr",
+      });
+      expect(herdrWorkerMetadata).not.toHaveProperty("tmuxSession");
     } finally {
       if (originalManaged === undefined) delete process.env.PINET_BROKER_MANAGED;
       else process.env.PINET_BROKER_MANAGED = originalManaged;

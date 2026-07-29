@@ -286,7 +286,13 @@ function buildSelfAgentId(stableId: string): string {
 function buildChildLaunchEnv(
   paths: SubtreeBrokerPaths,
   selfAgentId: string,
-  input: { launchId?: string; role?: string; laneId?: string; tmuxSession?: string } = {},
+  input: {
+    launchId?: string;
+    role?: string;
+    laneId?: string;
+    runtimeKind?: WorkerRuntimeSpec["runtimeKind"];
+    tmuxSession?: string;
+  } = {},
 ): Record<string, string> {
   return {
     PINET_SOCKET_PATH: paths.socketPath,
@@ -294,7 +300,7 @@ function buildChildLaunchEnv(
     PINET_PARENT_AGENT_ID: selfAgentId,
     PINET_ROOT_AGENT_ID: selfAgentId,
     PINET_SPAWNED_BY_AGENT_ID: selfAgentId,
-    PINET_LAUNCH_SOURCE: "subtree-broker-tmux",
+    PINET_LAUNCH_SOURCE: input.runtimeKind === "herdr" ? "broker-herdr" : "subtree-broker-tmux",
     ...(input.launchId ? { PINET_LAUNCH_ID: input.launchId } : {}),
     ...(input.role ? { PINET_SUBTREE_ROLE: input.role } : {}),
     ...(input.laneId ? { PINET_LANE_ID: input.laneId } : {}),
@@ -1258,8 +1264,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const childLaunchEnv = buildChildLaunchEnv(activePaths, selfAgentId, {
       launchId,
       role,
+      runtimeKind: runtimeSpec.runtimeKind,
       ...(input.laneId ? { laneId: input.laneId } : {}),
-      tmuxSession: sessionName,
+      ...(runtimeSpec.runtimeKind === "tmux" ? { tmuxSession: sessionName } : {}),
     });
     const launchersDir = path.join(activePaths.rootDir, "launchers");
     fs.mkdirSync(launchersDir, { recursive: true });
@@ -1336,7 +1343,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         envAllowlist: Object.keys(childLaunchEnv),
         configFingerprint: `subtree-broker-${workerRecord.runtimeKind}`,
         expectedUser: os.userInfo().username,
-        launchSource: `subtree-broker-${workerRecord.runtimeKind}`,
+        launchSource: childLaunchEnv.PINET_LAUNCH_SOURCE,
       };
       if (workerRecord.runtimeKind === "tmux") {
         await persistSpawnedRuntimeSpec(activeBroker.db, {

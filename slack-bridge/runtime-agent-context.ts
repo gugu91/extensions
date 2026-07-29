@@ -409,7 +409,9 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
           brokerManaged: true,
           brokerManagedBy: process.env.PINET_BROKER_AGENT_ID?.trim() || undefined,
           launchSource: process.env.PINET_LAUNCH_SOURCE?.trim() || "broker-tmux",
-          tmuxSession: process.env.PINET_TMUX_SESSION?.trim() || undefined,
+          ...(process.env.PINET_TMUX_SESSION?.trim()
+            ? { tmuxSession: process.env.PINET_TMUX_SESSION.trim() }
+            : {}),
           brokerManagedAt: new Date().toISOString(),
           ...(parentAgentId ? { parentAgentId, pinetParentAgentId: parentAgentId } : {}),
           ...(process.env.PINET_ROOT_AGENT_ID?.trim()

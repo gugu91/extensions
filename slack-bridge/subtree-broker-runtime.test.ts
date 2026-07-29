@@ -289,6 +289,8 @@ describe("subtree broker spawn lifecycle", () => {
 
     expect(result.agentId).toBe("herdr-child");
     expect(result.sessionName).toBe(sessionName);
+    expect(result.childLaunchEnv.PINET_LAUNCH_SOURCE).toBe("broker-herdr");
+    expect(result.childLaunchEnv).not.toHaveProperty("PINET_TMUX_SESSION");
     expect(result.monitorCommand).toContain("herdr session attach");
     expect(runtime.getStatus().spawnedWorkers[0]).toMatchObject({
       runtimeKind: "herdr",
