@@ -559,6 +559,7 @@ export class SlackSocketModeClient {
   private readonly config: SlackSocketModeClientConfig;
   private botUserId: string | null = null;
   private ws: WebSocket | null = null;
+  private pendingSocket: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connecting = false;
   private shuttingDown = false;
@@ -592,10 +593,12 @@ export class SlackSocketModeClient {
     }
     try {
       this.ws?.close();
+      this.pendingSocket?.close();
     } catch {
       /* ignore close errors */
     }
     this.ws = null;
+    this.pendingSocket = null;
     await this.config.abortAndWait?.();
   }
 
@@ -610,21 +613,29 @@ export class SlackSocketModeClient {
 
       const previous = this.ws;
       const socket = new WebSocket(response.url as string);
-      this.ws = socket;
-      previous?.close();
+      this.pendingSocket = socket;
 
       socket.addEventListener("open", () => {
+        if (this.pendingSocket !== socket || this.shuttingDown) return;
+        this.pendingSocket = null;
+        this.ws = socket;
+        previous?.close();
         this.config.onOpen?.();
       });
 
       socket.addEventListener("message", (event) => {
         void this.handleFrame(socket, String(event.data)).catch((error) => {
-          this.config.onError?.(error);
+          if (!this.shuttingDown) {
+            this.config.onError?.(error);
+          }
         });
       });
 
       socket.addEventListener("close", () => {
-        if (this.ws === socket && !this.shuttingDown) {
+        if (this.pendingSocket === socket) {
+          this.pendingSocket = null;
+          this.scheduleReconnect();
+        } else if (this.ws === socket) {
           this.ws = null;
           this.scheduleReconnect();
         }
@@ -634,10 +645,10 @@ export class SlackSocketModeClient {
         /* close fires after error — handled there */
       });
     } catch (error) {
-      if (!isAbortError(error)) {
+      if (!this.shuttingDown && !isAbortError(error)) {
         this.config.onError?.(error);
       }
-      shouldReconnect = true;
+      shouldReconnect = !this.shuttingDown;
     } finally {
       this.connecting = false;
     }
@@ -740,7 +751,7 @@ export class SlackSocketModeClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.shuttingDown || this.connecting || this.reconnectTimer) return;
+    if (this.shuttingDown || this.connecting || this.pendingSocket || this.reconnectTimer) return;
     this.config.onReconnectScheduled?.();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

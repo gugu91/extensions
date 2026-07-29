@@ -45,7 +45,7 @@ export interface SlackPinetRuntimeAdapterDeps {
   getAppToken: () => string;
   getAllowedUsers: () => Set<string> | null;
   shouldAllowAllWorkspaceUsers: () => boolean;
-  setExtStatus: (ctx: ExtensionContext, state: "ok" | "error") => void;
+  setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error") => void;
   onAppHomeOpened: (userId: string, ctx: ExtensionContext) => Promise<void> | void;
   onSlashCommand?: (
     event: ParsedSlashCommand,
@@ -124,6 +124,7 @@ export function createSlackPinetRuntimeAdapterFactory(
         await deps.onAppHomeOpened(userId, ctx);
       },
       onSocketOpen: () => deps.setExtStatus(ctx, "ok"),
+      onSocketReconnectScheduled: () => deps.setExtStatus(ctx, "reconnecting"),
       onSocketError: () => deps.setExtStatus(ctx, "error"),
       onSlashCommand: deps.onSlashCommand
         ? (event) => deps.onSlashCommand?.(event, ctx) ?? null

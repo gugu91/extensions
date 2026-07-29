@@ -1463,6 +1463,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Commands ───────────────────────────────────────
 
   async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
+    setExtStatus(ctx, "reconnecting");
     refreshSettings();
     maybeWarnSlackUserAccess(ctx);
     maybeWarnSlackGuardrailPosture(ctx);
@@ -1540,7 +1541,6 @@ export default function (pi: ExtensionAPI) {
     }
 
     brokerRuntime.startObservability(ctx);
-    setExtStatus(ctx, "ok");
     brokerRuntime.logActivity({
       kind: "broker_started",
       level: "actions",

@@ -101,6 +101,7 @@ export interface SlackAdapterConfig {
   /** Best-effort callback for Slack slash commands handled by the broker process. */
   onSlashCommand?: (event: ParsedSlashCommand) => Promise<string | null> | string | null;
   onSocketOpen?: () => void;
+  onSocketReconnectScheduled?: () => void;
   onSocketError?: (message: string) => void;
 }
 
@@ -183,6 +184,7 @@ export class SlackAdapter implements MessageAdapter {
       dedup: this.processedSocketDeliveries,
       abortAndWait: () => this.slackRequests.abortAndWait(),
       onOpen: () => this.config.onSocketOpen?.(),
+      onReconnectScheduled: () => this.config.onSocketReconnectScheduled?.(),
       onThreadStarted: (event) => this.onThreadStarted(event),
       onThreadContextChanged: (event) => this.onContextChanged(event),
       onMessage: (event) => this.onMessage(event),

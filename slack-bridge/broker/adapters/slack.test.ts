@@ -3320,7 +3320,7 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     static instances: FakeWebSocket[] = [];
 
     readonly url: string;
-    readyState = FakeWebSocket.OPEN;
+    readyState = FakeWebSocket.CONNECTING;
     sent: string[] = [];
     private readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
 
@@ -3342,6 +3342,11 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
       if (this.readyState !== FakeWebSocket.CLOSED) {
         this.sent.push(String(data));
       }
+    }
+
+    open(): void {
+      this.readyState = FakeWebSocket.OPEN;
+      this.emit("open", {});
     }
 
     close(): void {
@@ -3393,22 +3398,23 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
 
       await client.connect();
       const previous = FakeWebSocket.instances[0]!;
+      previous.open();
       previous.emit("message", { data: JSON.stringify({ type: "disconnect" }) });
       await vi.runOnlyPendingTimersAsync();
 
       expect(FakeWebSocket.instances).toHaveLength(2);
       const replacement = FakeWebSocket.instances[1]!;
-      replacement.readyState = FakeWebSocket.CONNECTING;
+      expect(previous.readyState).toBe(FakeWebSocket.OPEN);
       previous.emit("message", {
         data: JSON.stringify({ envelope_id: "env-late", type: "hello" }),
       });
       await Promise.resolve();
 
-      expect(previous.sent).toEqual([]);
+      expect(previous.sent).toEqual([JSON.stringify({ envelope_id: "env-late" })]);
       expect(replacement.sent).toEqual([]);
       expect(onError).not.toHaveBeenCalled();
 
-      previous.close();
+      replacement.open();
       await vi.runOnlyPendingTimersAsync();
       expect(previous.readyState).toBe(FakeWebSocket.CLOSED);
       expect(FakeWebSocket.instances).toHaveLength(2);
@@ -3439,6 +3445,7 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
 
       await client.connect();
       const previous = FakeWebSocket.instances[0]!;
+      previous.open();
       previous.emit("message", { data: JSON.stringify({ type: "disconnect" }) });
       await vi.runOnlyPendingTimersAsync();
       expect(connectionCount).toBe(2);
@@ -3446,6 +3453,46 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
       previous.close();
       await vi.runOnlyPendingTimersAsync();
       expect(connectionCount).toBe(2);
+
+      await client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the active socket while a replacement handshake fails", async () => {
+    vi.useFakeTimers();
+    try {
+      let connectionCount = 0;
+      const onReconnectScheduled = vi.fn();
+      const client = new SlackSocketModeClient({
+        slack: vi.fn(async (method: string) => {
+          if (method !== "apps.connections.open") return {};
+          connectionCount += 1;
+          return { url: `wss://slack.test/socket-${connectionCount}` };
+        }),
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        resolveBotUserIdOnConnect: false,
+        reconnectDelayMs: 0,
+        onReconnectScheduled,
+      });
+
+      await client.connect();
+      const active = FakeWebSocket.instances[0]!;
+      active.open();
+      active.emit("message", { data: JSON.stringify({ type: "disconnect" }) });
+      await vi.runOnlyPendingTimersAsync();
+
+      const failedReplacement = FakeWebSocket.instances[1]!;
+      failedReplacement.close();
+      expect(active.readyState).toBe(FakeWebSocket.OPEN);
+      expect(onReconnectScheduled).toHaveBeenCalledTimes(2);
+
+      await vi.runOnlyPendingTimersAsync();
+      const replacement = FakeWebSocket.instances[2]!;
+      replacement.open();
+      expect(active.readyState).toBe(FakeWebSocket.CLOSED);
 
       await client.disconnect();
     } finally {
@@ -3474,6 +3521,29 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
 
     await adapter.connect();
     expect(onSocketError).toHaveBeenCalledWith(expect.stringContaining("socket_unavailable"));
+    await adapter.disconnect();
+  });
+
+  it("routes Socket Mode reconnects through the adapter callback", async () => {
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ ok: true, user_id: "U_BOT", url: "wss://slack.test/socket" }),
+        ),
+    );
+    const onSocketReconnectScheduled = vi.fn();
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      onSocketReconnectScheduled,
+    });
+
+    await adapter.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.close();
+
+    expect(onSocketReconnectScheduled).toHaveBeenCalledTimes(1);
     await adapter.disconnect();
   });
 
@@ -3538,6 +3608,7 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
     const ws = FakeWebSocket.instances[0]!;
     expect(ws.url).toBe("wss://slack.test/socket");
+    ws.open();
 
     ws.emit("message", {
       data: JSON.stringify({
@@ -3648,6 +3719,7 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     await adapter.connect();
 
     const ws = FakeWebSocket.instances[0]!;
+    ws.open();
     ws.emit("message", {
       data: JSON.stringify({
         envelope_id: "env-2",
