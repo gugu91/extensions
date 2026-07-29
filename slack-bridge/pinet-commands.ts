@@ -150,7 +150,7 @@ const PINET_SECONDARY_COMMANDS: Array<{
 
 // ─── Registration ────────────────────────────────────────
 
-function abortCurrentTurnBeforeBrokerReload(ctx: ExtensionContext): void {
+function abortCurrentTurnBeforeRuntimeReload(ctx: ExtensionContext): void {
   if (ctx.isIdle?.() ?? true) {
     return;
   }
@@ -336,7 +336,7 @@ async function runPinetStart(
 
   if (deps.runtimeMode() === "broker") {
     try {
-      abortCurrentTurnBeforeBrokerReload(ctx);
+      abortCurrentTurnBeforeRuntimeReload(ctx);
       ctx.ui.notify("Pinet broker already running — reloading current runtime", "info");
       await deps.reloadPinetRuntime(ctx);
     } catch (err) {
@@ -382,14 +382,20 @@ async function runPinetFollow(deps: PinetCommandsDeps, ctx: ExtensionContext): P
     ctx.ui.notify(deps.getPinetRegistrationBlockReason(), "warning");
     return;
   }
-  if (deps.runtimeMode() === "follower") {
+  if (deps.runtimeMode() === "follower" && deps.runtimeConnected()) {
     ctx.ui.notify("Pinet already running (follower)", "info");
     return;
   }
   deps.setExtCtx(ctx);
 
   try {
-    await deps.connectAsFollower(ctx);
+    if (deps.runtimeMode() === "follower") {
+      abortCurrentTurnBeforeRuntimeReload(ctx);
+      ctx.ui.notify("Pinet follower disconnected — reconnecting...", "info");
+      await deps.reloadPinetRuntime(ctx);
+    } else {
+      await deps.connectAsFollower(ctx);
+    }
     ctx.ui.notify(`${deps.agentEmoji()} ${deps.agentName()} — following broker`, "info");
   } catch (err) {
     ctx.ui.notify(`Pinet follow failed: ${errorMsg(err)}`, "error");
