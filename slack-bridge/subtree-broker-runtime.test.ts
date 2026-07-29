@@ -6,6 +6,7 @@ import type { PinetControlCommand, SlackBridgeSettings } from "./helpers.js";
 import {
   buildSubtreeBrokerPaths,
   createSubtreeBrokerRuntime,
+  SubtreeSpawnLaunchError,
   SubtreeSpawnRegistrationTimeoutError,
   type SubtreeBrokerRuntime,
   type SubtreeBrokerRuntimeDeps,
@@ -254,102 +255,6 @@ describe("subtree broker spawn lifecycle", () => {
     expect(getAgentMetadata).toHaveBeenCalledTimes(2);
   });
 
-  it("returns a durable timeout handle and cleans up only its tmux session", async () => {
-    const tmux = createTmuxHarness();
-    const { runtime } = createRuntime(
-      () => false,
-      `timeout-handle-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
-      { runTmuxCommand: tmux.run },
-    );
-
-    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
-    try {
-      await runtime.spawnWorker(ctx, {
-        task: "Never registers",
-        repo: ".",
-        waitForRegistrationMs: 5,
-      });
-    } catch (error) {
-      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
-      else throw error;
-    }
-
-    expect(timeoutError?.handle).toMatchObject({
-      launchId: expect.any(String),
-      tmuxSessionName: expect.any(String),
-      socketPath: expect.stringContaining("pinet.sock"),
-      state: "launched_unregistered",
-    });
-    tmux.liveSessions.add("unrelated-session");
-    if (!timeoutError) throw new Error("expected registration timeout");
-    await runtime.cleanupSpawn(timeoutError.handle);
-    expect(tmux.killedSessions).toEqual([timeoutError.handle.tmuxSessionName]);
-    expect(tmux.liveSessions).toEqual(new Set(["unrelated-session"]));
-  });
-
-  it("keeps the launch-time Pinet socket in a timeout handle if the broker stops", async () => {
-    const tmux = createTmuxHarness();
-    let launchSocketPath = "";
-    let stopped = false;
-    const runTmuxCommand = async (args: string[]): Promise<void> => {
-      await tmux.run(args);
-      if (!stopped && args.includes("send-keys") && args.at(-1) === "Enter") {
-        stopped = true;
-        launchSocketPath = runtime.getStatus().paths?.socketPath ?? "";
-        await runtime.stop({ stopChildren: false });
-      }
-    };
-    const { runtime } = createRuntime(
-      () => false,
-      `stopped-timeout-handle-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
-      { runTmuxCommand },
-    );
-
-    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
-    try {
-      await runtime.spawnWorker(ctx, {
-        task: "Broker stops while waiting",
-        repo: ".",
-        waitForRegistrationMs: 5,
-      });
-    } catch (error) {
-      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
-      else throw error;
-    }
-
-    expect(launchSocketPath).toContain("pinet.sock");
-    expect(timeoutError?.handle.socketPath).toBe(launchSocketPath);
-  });
-
-  it("uses an exact tmux target so cleanup cannot kill a prefix-related session", async () => {
-    const tmux = createTmuxHarness();
-    const { runtime } = createRuntime(
-      () => false,
-      `exact-cleanup-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
-      { runTmuxCommand: tmux.run },
-    );
-
-    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
-    try {
-      await runtime.spawnWorker(ctx, {
-        task: "Never registers",
-        repo: ".",
-        waitForRegistrationMs: 5,
-      });
-    } catch (error) {
-      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
-      else throw error;
-    }
-    if (!timeoutError) throw new Error("expected registration timeout");
-
-    tmux.liveSessions.delete(timeoutError.handle.tmuxSessionName);
-    tmux.liveSessions.add(`${timeoutError.handle.tmuxSessionName}-extra`);
-    await runtime.cleanupSpawn(timeoutError.handle);
-
-    expect(tmux.killedSessions).toEqual([]);
-    expect(tmux.liveSessions).toEqual(new Set([`${timeoutError.handle.tmuxSessionName}-extra`]));
-  });
-
   it("uses the launch-time tmux socket when cleanup runs after the environment changes", async () => {
     const tmux = createTmuxHarness();
     const stableId = `launch-tmux-socket-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
@@ -383,9 +288,14 @@ describe("subtree broker spawn lifecycle", () => {
       }
       if (!timeoutError) throw new Error("expected registration timeout");
 
+      tmux.setOnLaunch((facts) => registerChild(runtime, facts, "replacement-child"));
       process.env.TMUX = `${cleanupSocketPath},2,0`;
       process.env.CLAUDE_TMUX_SOCKET_DIR = cleanupSocketDir;
-      await runtime.cleanupSpawn(timeoutError.handle);
+      await runtime.spawnWorker(ctx, {
+        task: "Retry",
+        repo: ".",
+        cleanupHandle: timeoutError.handle,
+      });
 
       const cleanupCommands = tmux.commands.filter(
         (args) => args.includes("has-session") || args.includes("kill-session"),
@@ -416,40 +326,18 @@ describe("subtree broker spawn lifecycle", () => {
     tmux.liveSessions.add("caller-controlled");
 
     await expect(
-      runtime.cleanupSpawn({
-        launchId: "unknown-launch",
-        tmuxSessionName: "caller-controlled",
-        socketPath,
-        state: "launched_unregistered",
+      runtime.spawnWorker(ctx, {
+        task: "Do not launch",
+        repo: ".",
+        cleanupHandle: {
+          launchId: "unknown-launch",
+          tmuxSessionName: "caller-controlled",
+          socketPath,
+          state: "launched_unregistered",
+        },
       }),
     ).rejects.toThrow("spawn cleanup handle does not belong to this subtree broker");
     expect(tmux.liveSessions).toEqual(new Set(["caller-controlled"]));
-  });
-
-  it("adopts a child that registers after the observer timeout", async () => {
-    const tmux = createTmuxHarness();
-    const { runtime } = createRuntime(
-      () => false,
-      `late-adoption-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
-      { runTmuxCommand: tmux.run },
-    );
-    tmux.setOnLaunch((facts) => {
-      setTimeout(() => registerChild(runtime, facts, "late-child"), 15);
-    });
-
-    await expect(
-      runtime.spawnWorker(ctx, {
-        task: "Registers late",
-        repo: ".",
-        waitForRegistrationMs: 5,
-      }),
-    ).rejects.toBeInstanceOf(SubtreeSpawnRegistrationTimeoutError);
-    expect(runtime.listAgents()?.some((agent) => agent.id === "late-child")).toBe(false);
-
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const lateChild = runtime.listAgents()?.find((agent) => agent.id === "late-child");
-    expect(lateChild).toMatchObject({ id: "late-child", parentAgentId: expect.any(String) });
-    expect(runtime.getStatus().spawnedWorkers[0]?.agentId).toBe("late-child");
   });
 
   it("cleans up a timed-out launch by handle before retrying", async () => {
@@ -489,13 +377,129 @@ describe("subtree broker spawn lifecycle", () => {
     expect(runtime.listAgents()?.filter((agent) => agent.parentAgentId)).toHaveLength(1);
     expect(retried.agentId).toBe("retry-child");
 
-    const repeatedRetry = await runtime.spawnWorker(ctx, {
-      task: "Retry me",
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Retry me",
+        repo: ".",
+        cleanupHandle: timeoutError.handle,
+      }),
+    ).rejects.toThrow("spawn cleanup handle has already been consumed");
+    expect(launchCount).toBe(2);
+  });
+
+  it("does not kill a prefix-related session when the timed-out session already exited", async () => {
+    const tmux = createTmuxHarness();
+    const { runtime } = createRuntime(
+      () => false,
+      `exact-cleanup-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand: tmux.run },
+    );
+
+    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Never registers",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+      else throw error;
+    }
+    if (!timeoutError) throw new Error("expected registration timeout");
+
+    tmux.liveSessions.delete(timeoutError.handle.tmuxSessionName);
+    const prefixSession = `${timeoutError.handle.tmuxSessionName}-extra`;
+    tmux.liveSessions.add(prefixSession);
+    tmux.setOnLaunch((facts) => registerChild(runtime, facts, "replacement-child"));
+    const replacement = await runtime.spawnWorker(ctx, {
+      task: "Retry",
       repo: ".",
       cleanupHandle: timeoutError.handle,
     });
-    expect(repeatedRetry).toEqual(retried);
-    expect(launchCount).toBe(2);
+
+    expect(tmux.killedSessions).toEqual([]);
+    expect(tmux.liveSessions).toEqual(new Set([prefixSession, replacement.sessionName]));
+  });
+
+  it("retries when the timed-out session was the last session on the tmux server", async () => {
+    const tmux = createTmuxHarness();
+    let serverMissing = false;
+    const runTmuxCommand = async (args: string[]): Promise<void> => {
+      if (serverMissing && args.includes("has-session")) {
+        throw Object.assign(new Error("no server running on /tmp/tmux.sock"), {
+          stderr: "no server running on /tmp/tmux.sock",
+        });
+      }
+      if (args.includes("new-session")) serverMissing = false;
+      await tmux.run(args);
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `missing-tmux-server-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand },
+    );
+
+    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Never registers",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+      else throw error;
+    }
+    if (!timeoutError) throw new Error("expected registration timeout");
+
+    tmux.liveSessions.clear();
+    serverMissing = true;
+    tmux.setOnLaunch((facts) => registerChild(runtime, facts, "replacement-child"));
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Retry",
+        repo: ".",
+        cleanupHandle: timeoutError.handle,
+      }),
+    ).resolves.toMatchObject({ agentId: "replacement-child" });
+  });
+
+  it("returns a cleanup handle when tmux reports an ambiguous launch failure", async () => {
+    const tmux = createTmuxHarness();
+    let failLaunch = true;
+    const runTmuxCommand = async (args: string[]): Promise<void> => {
+      await tmux.run(args);
+      if (failLaunch && args.includes("new-session")) {
+        failLaunch = false;
+        throw new Error("tmux transport closed");
+      }
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `ambiguous-launch-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand },
+    );
+
+    let launchError: SubtreeSpawnLaunchError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, { task: "Launch ambiguously", repo: "." });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnLaunchError) launchError = error;
+      else throw error;
+    }
+    if (!launchError) throw new Error("expected ambiguous launch failure");
+    expect(tmux.liveSessions).toEqual(new Set([launchError.handle.tmuxSessionName]));
+
+    tmux.setOnLaunch((facts) => registerChild(runtime, facts, "replacement-child"));
+    const replacement = await runtime.spawnWorker(ctx, {
+      task: "Retry",
+      repo: ".",
+      cleanupHandle: launchError.handle,
+    });
+
+    expect(tmux.killedSessions).toEqual([launchError.handle.tmuxSessionName]);
+    expect(tmux.liveSessions).toEqual(new Set([replacement.sessionName]));
   });
 
   it("keeps a retry handle consumed when its replacement also times out", async () => {
@@ -544,7 +548,7 @@ describe("subtree broker spawn lifecycle", () => {
         repo: ".",
         cleanupHandle: originalTimeout.handle,
       }),
-    ).rejects.toBe(replacementTimeout);
+    ).rejects.toThrow("spawn cleanup handle has already been consumed");
     expect(launchCount).toBe(2);
     expect(tmux.liveSessions).toEqual(new Set([replacementTimeout.handle.tmuxSessionName]));
 
@@ -602,31 +606,87 @@ describe("subtree broker spawn lifecycle", () => {
     ).rejects.toThrow("tmux transport unavailable");
     expect(launchCount).toBe(1);
     expect(tmux.liveSessions).toEqual(new Set([timeoutError.handle.tmuxSessionName]));
+
+    failProbe = false;
+    tmux.setOnLaunch((facts) => {
+      launchCount += 1;
+      registerChild(runtime, facts, "retry-child");
+    });
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Retry after transport recovery",
+        repo: ".",
+        cleanupHandle: timeoutError.handle,
+      }),
+    ).resolves.toMatchObject({ agentId: "retry-child" });
+    expect(launchCount).toBe(2);
   });
 
-  it("fences an old launch before cleanup so an in-flight registration cannot survive retry", async () => {
+  it("disconnects a child accepted after the final timeout lookup", async () => {
     const tmux = createTmuxHarness();
-    const meshSecret = "fenced-retry-secret";
-    let firstLaunch: TmuxLaunchFacts | null = null;
-    let launchCount = 0;
+    const meshSecret = "timeout-race-secret";
+    let launchFacts: TmuxLaunchFacts | null = null;
+    const racingClients: BrokerClient[] = [];
     const runTmuxCommand = async (args: string[]): Promise<void> => {
       await tmux.run(args);
-      if (args.includes("kill-session") && firstLaunch) {
-        registerChild(runtime, firstLaunch, "late-old-child");
+      if (args.includes("send-keys") && args.at(-1) === "Enter" && launchFacts) {
+        const socketPath = runtime.getStatus().paths?.socketPath;
+        if (!socketPath) throw new Error("subtree broker did not start");
+        const racingClient = new BrokerClient({ path: socketPath, meshSecret });
+        racingClients.push(racingClient);
+        await racingClient.connect();
+        await racingClient.register("Racing Child", "🌱", {
+          parentAgentId: runtime.getStatus().selfAgentId,
+          launchId: launchFacts.launchId,
+          tmuxSession: launchFacts.sessionName,
+        });
       }
     };
     const { runtime } = createRuntime(
       () => false,
-      `fenced-retry-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      `timeout-race-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
       {
         getSettings: () => ({ meshSecret }) as SlackBridgeSettings,
         runTmuxCommand,
       },
     );
     tmux.setOnLaunch((facts) => {
+      launchFacts = facts;
+    });
+
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Race the timeout",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      }),
+    ).rejects.toBeInstanceOf(SubtreeSpawnRegistrationTimeoutError);
+    const racingClient = racingClients[0];
+    if (!racingClient) throw new Error("racing client did not register");
+    await expect(racingClient.heartbeat()).rejects.toThrow();
+
+    const db = runtime.getHibernationRuntimeControl()?.db;
+    const racingAgent = db
+      ?.getAllAgents()
+      .find((agent) => agent.metadata?.launchId === launchFacts?.launchId);
+    expect(racingAgent?.disconnectedAt).not.toBeNull();
+  });
+
+  it("fences a launch when it times out so late registration cannot survive retry", async () => {
+    const tmux = createTmuxHarness();
+    const meshSecret = "fenced-retry-secret";
+    let launchCount = 0;
+    const { runtime } = createRuntime(
+      () => false,
+      `fenced-retry-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      {
+        getSettings: () => ({ meshSecret }) as SlackBridgeSettings,
+        runTmuxCommand: tmux.run,
+      },
+    );
+    tmux.setOnLaunch((facts) => {
       launchCount += 1;
-      if (launchCount === 1) firstLaunch = facts;
-      else registerChild(runtime, facts, "replacement-child");
+      if (launchCount === 2) registerChild(runtime, facts, "replacement-child");
     });
 
     let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
@@ -642,12 +702,6 @@ describe("subtree broker spawn lifecycle", () => {
     }
     if (!timeoutError) throw new Error("expected registration timeout");
 
-    const replacement = await runtime.spawnWorker(ctx, {
-      task: "Retry racing registration",
-      repo: ".",
-      cleanupHandle: timeoutError.handle,
-    });
-
     const lateClient = new BrokerClient({ path: timeoutError.handle.socketPath, meshSecret });
     await lateClient.connect();
     await expect(
@@ -659,14 +713,13 @@ describe("subtree broker spawn lifecycle", () => {
     ).rejects.toThrow("spawn launch has already been cleaned up");
     lateClient.disconnect();
 
+    const replacement = await runtime.spawnWorker(ctx, {
+      task: "Retry racing registration",
+      repo: ".",
+      cleanupHandle: timeoutError.handle,
+    });
     const db = runtime.getHibernationRuntimeControl()?.db;
-    const oldHistoricalAgent = db?.getAllAgents().find((agent) => agent.id === "late-old-child");
     expect(replacement.agentId).toBe("replacement-child");
-    // Cleanup preserves the direct-DB race as disconnected history, but no old launch remains live.
-    expect(oldHistoricalAgent?.disconnectedAt).not.toBeNull();
-    expect(
-      db?.getAgents().some((agent) => agent.metadata?.launchId === timeoutError.handle.launchId),
-    ).toBe(false);
     expect(db?.getAgents().filter((agent) => agent.parentAgentId)).toHaveLength(1);
     expect(tmux.liveSessions).toEqual(new Set([replacement.sessionName]));
   });

@@ -115,6 +115,22 @@ export class SubtreeSpawnRegistrationTimeoutError extends Error {
   }
 }
 
+export class SubtreeSpawnLaunchError extends Error {
+  readonly handle: SubtreeSpawnLaunchHandle;
+
+  constructor(error: Error, handle: SubtreeSpawnLaunchHandle) {
+    const message = error.message;
+    super(
+      `subtree worker session ${handle.tmuxSessionName} may have started after tmux reported: ${message}; ` +
+        `launchId=${handle.launchId}; tmuxSessionName=${handle.tmuxSessionName}; ` +
+        `socketPath=${handle.socketPath}; state=${handle.state}`,
+      { cause: error },
+    );
+    this.name = "SubtreeSpawnLaunchError";
+    this.handle = handle;
+  }
+}
+
 export interface SubtreeSpawnInput {
   task: string;
   repo: string;
@@ -196,7 +212,6 @@ export interface SubtreeBrokerRuntime {
     metadata?: Record<string, unknown>,
   ) => Promise<{ messageId: number; target: string; threadId: string } | null>;
   listAgents: (includeGhosts?: boolean) => SubtreeAgentRecord[] | null;
-  cleanupSpawn: (handle: SubtreeSpawnLaunchHandle) => Promise<void>;
   spawnWorker: (ctx: ExtensionContext, input: SubtreeSpawnInput) => Promise<SubtreeSpawnResult>;
   isActive: () => boolean;
 }
@@ -334,9 +349,11 @@ function buildTmuxMonitorCommand(sessionName: string, socketPath: string | null)
   return `tmux ${socketArgs}attach -t ${quoteShellValue(sessionName)}`;
 }
 
-function isMissingExactTmuxTarget(error: Error): boolean {
+function isMissingTmuxTarget(error: Error): boolean {
   const stderr = "stderr" in error && typeof error.stderr === "string" ? error.stderr : "";
-  return /can't find session:/i.test(`${error.message}\n${stderr}`);
+  return /can't find session:|no server running|error connecting to .*\(no such file or directory\)/i.test(
+    `${error.message}\n${stderr}`,
+  );
 }
 
 export function getExtensionEntryPath(): string {
@@ -446,7 +463,6 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   let brokerStartPromise: Promise<SubtreeBrokerStatus> | null = null;
   const spawnedWorkers = new Map<string, SubtreeWorkerRecord>();
   const fencedLaunchIds = new Set<string>();
-  const retrySpawns = new Map<string, Promise<SubtreeSpawnResult>>();
   const runTmuxCommand =
     deps.runTmuxCommand ??
     (async (args: string[]): Promise<void> => {
@@ -471,30 +487,21 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     heartbeatTimer.unref?.();
   }
 
-  function adoptRegisteredWorkers(agents: AgentInfo[]): AgentInfo[] {
-    const accepted: AgentInfo[] = [];
-    for (const agent of agents) {
-      const launchId = metadataString(agent.metadata, "launchId");
-      if (launchId && fencedLaunchIds.has(launchId)) {
-        activeBroker?.db.unregisterAgent(agent.id);
-        continue;
+  function fenceLaunch(broker: Broker, launchId: string): void {
+    fencedLaunchIds.add(launchId);
+    for (const agent of broker.db.getAllAgents()) {
+      if (metadataString(agent.metadata, "launchId") === launchId) {
+        broker.server.disconnectAgentConnections(agent.id);
+        broker.db.unregisterAgent(agent.id);
       }
-      const worker = launchId ? spawnedWorkers.get(launchId) : undefined;
-      if (launchId && worker && worker.agentId !== agent.id) {
-        spawnedWorkers.set(launchId, { ...worker, agentId: agent.id });
-      }
-      accepted.push(agent);
     }
-    return accepted;
   }
 
   function currentChildren(): AgentInfo[] {
     const broker = activeBroker;
     const agentId = selfAgentId;
     if (!broker || !agentId) return [];
-    return adoptRegisteredWorkers(
-      broker.db.getAllAgents().filter((agent) => isSubtreeChildAgent(agent, agentId)),
-    );
+    return broker.db.getAllAgents().filter((agent) => isSubtreeChildAgent(agent, agentId));
   }
 
   function getStatus(): SubtreeBrokerStatus {
@@ -616,7 +623,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   function listAgents(includeGhosts = false): SubtreeAgentRecord[] | null {
     const broker = activeBroker;
     if (!broker) return null;
-    const agents = adoptRegisteredWorkers(broker.db.getAllAgents());
+    const agents = broker.db.getAllAgents();
     const filtered = includeGhosts ? agents : agents.filter((agent) => !agent.disconnectedAt);
     return filtered.map((agent) => toSubtreeAgentRecord(broker.db, agent));
   }
@@ -636,9 +643,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
 
   async function waitForSpawnedAgent(input: {
     broker: Broker;
-    launchId: string;
-    sessionName: string;
-    socketPath: string;
+    handle: SubtreeSpawnLaunchHandle;
     tmuxBaseArgs: string[];
     timeoutMs: number;
   }): Promise<AgentInfo> {
@@ -648,12 +653,14 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     while (Date.now() < deadline) {
       const agent = input.broker.db
         .getAllAgents()
-        .find((candidate) => metadataString(candidate.metadata, "launchId") === input.launchId);
+        .find(
+          (candidate) => metadataString(candidate.metadata, "launchId") === input.handle.launchId,
+        );
       if (agent) return agent;
 
       if (Date.now() - lastFollowAttemptAt > 6_000) {
         lastFollowAttemptAt = Date.now();
-        await sendFollowCommand(input.sessionName, input.tmuxBaseArgs).catch(() => {
+        await sendFollowCommand(input.handle.tmuxSessionName, input.tmuxBaseArgs).catch(() => {
           // The session may still be starting; the loop retries until timeout.
         });
       }
@@ -661,12 +668,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       await sleep(Math.min(1_000, Math.max(1, deadline - Date.now())));
     }
 
-    throw new SubtreeSpawnRegistrationTimeoutError(input.timeoutMs, {
-      launchId: input.launchId,
-      tmuxSessionName: input.sessionName,
-      socketPath: input.socketPath,
-      state: "launched_unregistered",
-    });
+    fenceLaunch(input.broker, input.handle.launchId);
+    throw new SubtreeSpawnRegistrationTimeoutError(input.timeoutMs, input.handle);
   }
 
   async function requestChildExit(agent: AgentInfo): Promise<void> {
@@ -678,43 +681,14 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     try {
       await runTmuxCommand([...tmuxBaseArgs, "has-session", "-t", exactTarget]);
     } catch (error) {
-      if (error instanceof Error && isMissingExactTmuxTarget(error)) return;
+      if (error instanceof Error && isMissingTmuxTarget(error)) return;
       throw error;
     }
     try {
       await runTmuxCommand([...tmuxBaseArgs, "kill-session", "-t", exactTarget]);
     } catch (error) {
-      if (!(error instanceof Error) || !isMissingExactTmuxTarget(error)) throw error;
+      if (!(error instanceof Error) || !isMissingTmuxTarget(error)) throw error;
     }
-  }
-
-  async function cleanupSpawn(handle: SubtreeSpawnLaunchHandle): Promise<void> {
-    if (!activePaths || handle.socketPath !== activePaths.socketPath) {
-      throw new Error("spawn cleanup handle does not belong to this subtree broker");
-    }
-    const worker = spawnedWorkers.get(handle.launchId);
-    if (!worker) {
-      if (fencedLaunchIds.has(handle.launchId)) return;
-      throw new Error("spawn cleanup handle does not belong to this subtree broker");
-    }
-    if (worker.sessionName !== handle.tmuxSessionName) {
-      throw new Error("spawn cleanup handle does not match its recorded tmux session");
-    }
-
-    fencedLaunchIds.add(handle.launchId);
-    const tmuxBaseArgs = buildTmuxBaseArgs(worker.tmuxSocketPath);
-    await killTmuxSession(handle.tmuxSessionName, tmuxBaseArgs);
-
-    const broker = activeBroker;
-    const agentId = selfAgentId;
-    if (broker && agentId) {
-      for (const agent of broker.db.getAllAgents()) {
-        if (metadataString(agent.metadata, "launchId") === handle.launchId) {
-          broker.db.unregisterAgent(agent.id);
-        }
-      }
-    }
-    spawnedWorkers.delete(handle.launchId);
   }
 
   function childTmuxSessions(broker: Broker, agentId: string): string[] {
@@ -773,10 +747,10 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       activePaths = null;
       spawnedWorkers.clear();
       fencedLaunchIds.clear();
-      retrySpawns.clear();
     }
   }
 
+  // agent-standards-ignore prefer-inline-single-use-helper: single-flight start implementation
   async function startOnce(ctx: ExtensionContext): Promise<SubtreeBrokerStatus> {
     if (activeBroker) return getStatus();
 
@@ -897,23 +871,41 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     return brokerStartPromise;
   }
 
-  async function ensureSubtreeBroker(ctx: ExtensionContext): Promise<void> {
-    await start(ctx);
-  }
-
-  async function spawnWorkerOnce(
+  async function spawnWorker(
     ctx: ExtensionContext,
     input: SubtreeSpawnInput,
-    onLaunchAttempt?: () => void,
   ): Promise<SubtreeSpawnResult> {
     if (!input.task.trim()) throw new Error("spawn requires task");
     if (!input.repo.trim()) throw new Error("spawn requires repo");
-    await ensureSubtreeBroker(ctx);
+    await start(ctx);
     if (!activeBroker || !activePaths || !selfAgentId) {
       throw new Error("Subtree broker is not running.");
     }
     if (input.cleanupHandle) {
-      await cleanupSpawn(input.cleanupHandle);
+      const handle = input.cleanupHandle;
+      if (!activePaths || handle.socketPath !== activePaths.socketPath) {
+        throw new Error("spawn cleanup handle does not belong to this subtree broker");
+      }
+      const worker = spawnedWorkers.get(handle.launchId);
+      if (!worker) {
+        throw new Error(
+          fencedLaunchIds.has(handle.launchId)
+            ? "spawn cleanup handle has already been consumed"
+            : "spawn cleanup handle does not belong to this subtree broker",
+        );
+      }
+      if (worker.sessionName !== handle.tmuxSessionName) {
+        throw new Error("spawn cleanup handle does not match its recorded tmux session");
+      }
+
+      fenceLaunch(activeBroker, handle.launchId);
+      spawnedWorkers.delete(handle.launchId);
+      try {
+        await killTmuxSession(handle.tmuxSessionName, buildTmuxBaseArgs(worker.tmuxSocketPath));
+      } catch (error) {
+        spawnedWorkers.set(handle.launchId, worker);
+        throw error;
+      }
     }
 
     const socketPath = activePaths.socketPath;
@@ -944,8 +936,6 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       { mode: 0o700 },
     );
 
-    onLaunchAttempt?.();
-    await runTmuxCommand([...tmuxBaseArgs, "new-session", "-d", "-s", sessionName, launcherPath]);
     const workerRecord: SubtreeWorkerRecord = {
       launchId,
       sessionName,
@@ -957,13 +947,26 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       monitorCommand,
       tmuxSocketPath,
     };
+    const launchHandle: SubtreeSpawnLaunchHandle = {
+      launchId,
+      tmuxSessionName: sessionName,
+      socketPath,
+      state: "launched_unregistered",
+    };
     spawnedWorkers.set(launchId, workerRecord);
+    try {
+      await runTmuxCommand([...tmuxBaseArgs, "new-session", "-d", "-s", sessionName, launcherPath]);
+    } catch (error) {
+      fenceLaunch(activeBroker, launchId);
+      throw new SubtreeSpawnLaunchError(
+        error instanceof Error ? error : new Error(String(error)),
+        launchHandle,
+      );
+    }
 
     const agent = await waitForSpawnedAgent({
       broker: activeBroker,
-      launchId,
-      sessionName,
-      socketPath,
+      handle: launchHandle,
       tmuxBaseArgs,
       timeoutMs: input.waitForRegistrationMs ?? DEFAULT_SPAWN_REGISTRATION_TIMEOUT_MS,
     });
@@ -1025,29 +1028,6 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     };
   }
 
-  function spawnWorker(
-    ctx: ExtensionContext,
-    input: SubtreeSpawnInput,
-  ): Promise<SubtreeSpawnResult> {
-    const cleanupHandle = input.cleanupHandle;
-    if (!cleanupHandle) return spawnWorkerOnce(ctx, input);
-
-    const existingRetry = retrySpawns.get(cleanupHandle.launchId);
-    if (existingRetry) return existingRetry;
-
-    let replacementMayHaveLaunched = false;
-    const retry = spawnWorkerOnce(ctx, input, () => {
-      replacementMayHaveLaunched = true;
-    });
-    retrySpawns.set(cleanupHandle.launchId, retry);
-    void retry.catch(() => {
-      if (!replacementMayHaveLaunched && retrySpawns.get(cleanupHandle.launchId) === retry) {
-        retrySpawns.delete(cleanupHandle.launchId);
-      }
-    });
-    return retry;
-  }
-
   function getHibernationRuntimeControl(): SubtreeHibernationRuntimeControl | null {
     if (!activeBroker || !selfAgentId || !activePaths) return null;
     return {
@@ -1066,7 +1046,6 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     readInbox,
     sendMessage,
     listAgents,
-    cleanupSpawn,
     spawnWorker,
     isActive: () => activeBroker !== null,
   };

@@ -47,6 +47,7 @@ import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import type { RalphSnoozeStatus } from "./ralph-loop.js";
 import {
+  SubtreeSpawnLaunchError,
   SubtreeSpawnRegistrationTimeoutError,
   type SubtreeSpawnLaunchHandle,
 } from "./subtree-broker-runtime.js";
@@ -163,7 +164,6 @@ export interface RegisterPinetToolsDeps {
   searchPinetSessions: (options: AgentSessionSearchOptions) => Promise<AgentSessionSearchInfo[]>;
   listSubtreeAgents?: (includeGhosts: boolean) => PinetToolsAgentRecord[] | null;
   getSubtreeSelfAgentId?: () => string | null;
-  subtreeSpawnReady?: () => boolean;
   spawnSubtreeWorker?: (input: PinetSubtreeSpawnInput) => Promise<PinetSubtreeSpawnResult>;
   listPinetLanes: (options: PinetLaneListOptions) => Promise<PinetLaneInfo[]>;
   upsertPinetLane: (input: PinetLaneUpsertInput) => Promise<PinetLaneInfo>;
@@ -1249,20 +1249,12 @@ function runPinetSpawnAction(
   output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
-    // Check cheap runtime state before reading or formatting the delegation
-    // payload. An ordinary, uninitialized Pi session should fail immediately
-    // with the action needed to make spawn available.
     if (!deps.pinetEnabled()) {
       throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
     if (deps.brokerRole() !== "follower") {
       throw new Error(
         "spawn is worker-only; the broker should launch top-level followers, not own subtrees.",
-      );
-    }
-    if (deps.subtreeSpawnReady && !deps.subtreeSpawnReady()) {
-      throw new Error(
-        "Subtree spawn runtime is not initialized. Start or resume an active Pi session and retry.",
       );
     }
     if (!deps.spawnSubtreeWorker) {
@@ -2918,7 +2910,10 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
         }
         const message = getErrorMessage(error);
         const launchHandle =
-          error instanceof SubtreeSpawnRegistrationTimeoutError ? error.handle : null;
+          error instanceof SubtreeSpawnRegistrationTimeoutError ||
+          error instanceof SubtreeSpawnLaunchError
+            ? error.handle
+            : null;
         return wrapDispatcherEnvelope(
           buildPinetDispatcherEnvelope(
             "failed",

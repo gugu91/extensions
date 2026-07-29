@@ -9,7 +9,10 @@ import {
   type RegisterPinetToolsDeps,
 } from "./pinet-tools.js";
 import type { AgentLifecycleStatus } from "@pinet/broker-core";
-import { SubtreeSpawnRegistrationTimeoutError } from "./subtree-broker-runtime.js";
+import {
+  SubtreeSpawnLaunchError,
+  SubtreeSpawnRegistrationTimeoutError,
+} from "./subtree-broker-runtime.js";
 
 interface MinimalRenderTheme {
   fg: (_color: string, text: string) => string;
@@ -1708,34 +1711,28 @@ describe("registerPinetTools", () => {
     expect(result.details.errors[0]?.retryable).toBe(true);
   });
 
-  it("checks Pinet initialization before reading a spawn payload", async () => {
-    const taskGetter = vi.fn(() => {
-      throw new Error("payload was read");
+  it("returns ambiguous launch handles in structured error details", async () => {
+    const handle = {
+      launchId: "subtree-launch-1",
+      tmuxSessionName: "pinet-extensions-reviewer-launch-1",
+      socketPath: "/tmp/pinet-subtrees/worker-1/pinet.sock",
+      state: "launched_unregistered" as const,
+    };
+    const spawnSubtreeWorker = vi.fn(async () => {
+      throw new SubtreeSpawnLaunchError(new Error("tmux transport closed"), handle);
     });
-    const args = { repo: "extensions" };
-    Object.defineProperty(args, "task", { enumerable: true, get: taskGetter });
-    const requireToolPolicy = vi.fn();
-    const spawnSubtreeWorker = vi.fn(createDeps().spawnSubtreeWorker);
     const tools = registerWithDeps(
-      createDeps({
-        pinetEnabled: () => false,
-        brokerRole: () => "follower",
-        requireToolPolicy,
-        spawnSubtreeWorker,
-      }),
+      createDeps({ brokerRole: () => "follower", spawnSubtreeWorker }),
     );
 
-    const result = (await tools.get("pinet")?.execute("tool-call-spawn-uninitialized", {
+    const result = (await tools.get("pinet")?.execute("tool-call-spawn-launch-error", {
       action: "spawn",
-      args,
-    })) as { content: Array<{ text: string }> };
+      args: { task: "Review PR #761", repo: "extensions", full: true },
+    })) as {
+      details: { data: { details: { launchHandle: typeof handle } } };
+    };
 
-    expect(result.content[0]?.text).toContain(
-      "Pinet is not running. Use /pinet start or /pinet follow first.",
-    );
-    expect(taskGetter).not.toHaveBeenCalled();
-    expect(requireToolPolicy).not.toHaveBeenCalled();
-    expect(spawnSubtreeWorker).not.toHaveBeenCalled();
+    expect(result.details.data.details.launchHandle).toEqual(handle);
   });
 
   it("forwards a timeout handle so retry cleanup precedes relaunch", async () => {
