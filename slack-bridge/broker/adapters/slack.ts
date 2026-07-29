@@ -13,6 +13,7 @@ import {
   resolveSlackUserName,
   setSlackSuggestedPrompts,
   SlackSocketModeClient,
+  type SlackSocketErrorSource,
   type ParsedAppHomeOpened,
   type ParsedSlashCommand,
   type ParsedThreadContextChanged,
@@ -102,7 +103,7 @@ export interface SlackAdapterConfig {
   onSlashCommand?: (event: ParsedSlashCommand) => Promise<string | null> | string | null;
   onSocketOpen?: () => void;
   onSocketReconnectScheduled?: () => void;
-  onSocketError?: (message: string) => void;
+  onSocketError?: (message: string, source: SlackSocketErrorSource) => void;
 }
 
 interface SlackThreadInfo {
@@ -193,9 +194,9 @@ export class SlackAdapter implements MessageAdapter {
       onAppHomeOpened: (event) => this.onAppHomeOpened(event),
       onInteractive: (event) => this.emitInteractiveInbound(event),
       onSlashCommand: (event) => this.onSlashCommand(event),
-      onError: (error) => {
+      onError: (error, source) => {
         if (!isAbortError(error)) {
-          this.config.onSocketError?.(errorMsg(error));
+          this.config.onSocketError?.(errorMsg(error), source);
         }
       },
     });

@@ -27,6 +27,13 @@ async function waitForAssertion(assertion: () => void, attempts = 50): Promise<v
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+function createOpenSocket(): WebSocket {
+  const socket: WebSocket = Object.create(null);
+  Object.defineProperty(socket, "readyState", { value: WebSocket.OPEN });
+  socket.send = vi.fn();
+  return socket;
+}
+
 // ─── parseSocketFrame ────────────────────────────────────
 
 describe("parseSocketFrame", () => {
@@ -1196,16 +1203,17 @@ describe("SlackAdapter", () => {
       },
     });
 
+    const socket = createOpenSocket();
     await (
       client as unknown as {
-        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket, raw: string) => Promise<void>;
       }
-    ).handleFrame(null, firstFrame);
+    ).handleFrame(socket, firstFrame);
     await (
       client as unknown as {
-        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket, raw: string) => Promise<void>;
       }
-    ).handleFrame(null, secondFrame);
+    ).handleFrame(socket, secondFrame);
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(resolveUserSpy).toHaveBeenCalledTimes(1);
@@ -1244,12 +1252,13 @@ describe("SlackAdapter", () => {
         ).emitInteractiveInbound(event),
     });
 
+    const socket = createOpenSocket();
     await (
       client as unknown as {
-        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket, raw: string) => Promise<void>;
       }
     ).handleFrame(
-      null,
+      socket,
       JSON.stringify({
         envelope_id: "env-1",
         type: "interactive",
@@ -1361,12 +1370,13 @@ describe("SlackAdapter", () => {
         ).emitInteractiveInbound(event),
     });
 
+    const socket = createOpenSocket();
     await (
       client as unknown as {
-        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket, raw: string) => Promise<void>;
       }
     ).handleFrame(
-      null,
+      socket,
       JSON.stringify({
         envelope_id: "env-1",
         type: "interactive",
@@ -3520,7 +3530,10 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     });
 
     await adapter.connect();
-    expect(onSocketError).toHaveBeenCalledWith(expect.stringContaining("socket_unavailable"));
+    expect(onSocketError).toHaveBeenCalledWith(
+      expect.stringContaining("socket_unavailable"),
+      "connection",
+    );
     await adapter.disconnect();
   });
 

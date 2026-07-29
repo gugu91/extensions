@@ -125,7 +125,13 @@ export function createSlackPinetRuntimeAdapterFactory(
       },
       onSocketOpen: () => deps.setExtStatus(ctx, "ok"),
       onSocketReconnectScheduled: () => deps.setExtStatus(ctx, "reconnecting"),
-      onSocketError: () => deps.setExtStatus(ctx, "error"),
+      onSocketError: (message, source) => {
+        if (source === "connection") {
+          deps.setExtStatus(ctx, "error");
+        } else {
+          ctx.ui.notify(`Slack event failed: ${message}`, "error");
+        }
+      },
       onSlashCommand: deps.onSlashCommand
         ? (event) => deps.onSlashCommand?.(event, ctx) ?? null
         : undefined,

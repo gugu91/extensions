@@ -534,6 +534,8 @@ export async function resolveSlackThreadOwnerHint(
 
 export const RECONNECT_DELAY_MS = 5000;
 
+export type SlackSocketErrorSource = "connection" | "event";
+
 export interface SlackSocketModeClientConfig {
   slack: SlackCall;
   botToken: string;
@@ -544,7 +546,7 @@ export interface SlackSocketModeClientConfig {
   abortAndWait?: () => Promise<void>;
   onOpen?: () => void;
   onReconnectScheduled?: () => void;
-  onError?: (error: unknown) => void;
+  onError?: (error: unknown, source: SlackSocketErrorSource) => void;
   onThreadStarted?: (event: ParsedThreadStarted) => Promise<void> | void;
   onThreadContextChanged?: (event: ParsedThreadContextChanged) => Promise<void> | void;
   onMessage?: (event: Record<string, unknown>) => Promise<void> | void;
@@ -626,7 +628,7 @@ export class SlackSocketModeClient {
       socket.addEventListener("message", (event) => {
         void this.handleFrame(socket, String(event.data)).catch((error) => {
           if (!this.shuttingDown) {
-            this.config.onError?.(error);
+            this.config.onError?.(error, "event");
           }
         });
       });
@@ -646,7 +648,7 @@ export class SlackSocketModeClient {
       });
     } catch (error) {
       if (!this.shuttingDown && !isAbortError(error)) {
-        this.config.onError?.(error);
+        this.config.onError?.(error, "connection");
       }
       shouldReconnect = !this.shuttingDown;
     } finally {
@@ -658,14 +660,14 @@ export class SlackSocketModeClient {
     }
   }
 
-  private async handleFrame(socket: WebSocket | null, raw: string): Promise<void> {
+  private async handleFrame(socket: WebSocket, raw: string): Promise<void> {
     if (this.shuttingDown) return;
 
     const envelope = parseSocketFrame(raw);
     if (!envelope) return;
 
-    if (envelope.envelopeId) {
-      socket?.send(JSON.stringify({ envelope_id: envelope.envelopeId }));
+    if (envelope.envelopeId && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ envelope_id: envelope.envelopeId }));
     }
 
     const dedupKey = envelope.dedupKey ?? null;
