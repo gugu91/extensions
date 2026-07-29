@@ -1004,7 +1004,11 @@ describe("registerPinetTools", () => {
         expect.objectContaining({ action: "schedule", guardrail_tool: "pinet:schedule" }),
         expect.objectContaining({ action: "agents", guardrail_tool: "pinet:agents" }),
         expect.objectContaining({ action: "sessions", guardrail_tool: "pinet:sessions" }),
-        expect.objectContaining({ action: "lanes", guardrail_tool: "pinet:lanes" }),
+        expect.objectContaining({
+          action: "lanes",
+          guardrail_tool: "pinet:lanes",
+          description: expect.stringContaining("pinet:lanes:write"),
+        }),
         expect.objectContaining({ action: "ports", guardrail_tool: "pinet:ports" }),
       ]),
     );

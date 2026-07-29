@@ -2666,7 +2666,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   registerAction({
     name: "lanes",
     description:
-      "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility.",
+      "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility. Upsert and participant operations additionally require guardrail policy pinet:lanes:write.",
     parameters: Type.Object({
       op: Type.Optional(Type.String({ description: "Operation: list, upsert, or participant" })),
       lane_id: Type.Optional(Type.String({ description: "Stable lane id, e.g. issue-688" })),
