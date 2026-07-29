@@ -350,6 +350,61 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmux.liveSessions).toEqual(new Set([retried.sessionName]));
     expect(runtime.listAgents()?.filter((agent) => agent.parentAgentId)).toHaveLength(1);
     expect(retried.agentId).toBe("retry-child");
+
+    const repeatedRetry = await runtime.spawnWorker(ctx, {
+      task: "Retry me",
+      repo: ".",
+      cleanupHandle: timeoutError.handle,
+    });
+    expect(repeatedRetry).toEqual(retried);
+    expect(launchCount).toBe(2);
+  });
+
+  it("fences an old launch before cleanup so an in-flight registration cannot survive retry", async () => {
+    const tmux = createTmuxHarness();
+    let firstLaunch: TmuxLaunchFacts | null = null;
+    let launchCount = 0;
+    const runTmuxCommand = async (args: string[]): Promise<void> => {
+      await tmux.run(args);
+      if (args.includes("kill-session") && firstLaunch) {
+        registerChild(runtime, firstLaunch, "late-old-child");
+      }
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `fenced-retry-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand },
+    );
+    tmux.setOnLaunch((facts) => {
+      launchCount += 1;
+      if (launchCount === 1) firstLaunch = facts;
+      else registerChild(runtime, facts, "replacement-child");
+    });
+
+    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Retry racing registration",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+      else throw error;
+    }
+    if (!timeoutError) throw new Error("expected registration timeout");
+
+    const replacement = await runtime.spawnWorker(ctx, {
+      task: "Retry racing registration",
+      repo: ".",
+      cleanupHandle: timeoutError.handle,
+    });
+
+    const agents = runtime.getHibernationRuntimeControl()?.db.getAgents() ?? [];
+    expect(replacement.agentId).toBe("replacement-child");
+    expect(agents.some((agent) => agent.id === "late-old-child")).toBe(false);
+    expect(agents.filter((agent) => agent.parentAgentId)).toHaveLength(1);
+    expect(tmux.liveSessions).toEqual(new Set([replacement.sessionName]));
   });
 });
 

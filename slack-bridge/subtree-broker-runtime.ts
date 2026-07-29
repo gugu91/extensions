@@ -440,6 +440,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let brokerStartPromise: Promise<SubtreeBrokerStatus> | null = null;
   const spawnedWorkers = new Map<string, SubtreeWorkerRecord>();
+  const fencedLaunchIds = new Set<string>();
+  const retrySpawns = new Map<string, Promise<SubtreeSpawnResult>>();
   const runTmuxCommand =
     deps.runTmuxCommand ??
     (async (args: string[]): Promise<void> => {
@@ -464,28 +466,30 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     heartbeatTimer.unref?.();
   }
 
-  function adoptRegisteredWorkers(agents: AgentInfo[]): void {
+  function adoptRegisteredWorkers(agents: AgentInfo[]): AgentInfo[] {
+    const accepted: AgentInfo[] = [];
     for (const agent of agents) {
       const launchId = metadataString(agent.metadata, "launchId");
+      if (launchId && fencedLaunchIds.has(launchId)) {
+        activeBroker?.db.unregisterAgent(agent.id);
+        continue;
+      }
       const worker = launchId ? spawnedWorkers.get(launchId) : undefined;
       if (launchId && worker && worker.agentId !== agent.id) {
         spawnedWorkers.set(launchId, { ...worker, agentId: agent.id });
       }
+      accepted.push(agent);
     }
+    return accepted;
   }
 
   function currentChildren(): AgentInfo[] {
     const broker = activeBroker;
     const agentId = selfAgentId;
     if (!broker || !agentId) return [];
-    const children = broker.db
-      .getAllAgents()
-      .filter((agent) => isSubtreeChildAgent(agent, agentId));
-    // Adopt late registrations rather than fence them. A child that reached the
-    // authoritative broker is real, useful work; killing it after an observer
-    // timeout would be more destructive than surfacing it in the roster.
-    adoptRegisteredWorkers(children);
-    return children;
+    return adoptRegisteredWorkers(
+      broker.db.getAllAgents().filter((agent) => isSubtreeChildAgent(agent, agentId)),
+    );
   }
 
   function getStatus(): SubtreeBrokerStatus {
@@ -607,8 +611,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   function listAgents(includeGhosts = false): SubtreeAgentRecord[] | null {
     const broker = activeBroker;
     if (!broker) return null;
-    const agents = broker.db.getAllAgents();
-    adoptRegisteredWorkers(agents);
+    const agents = adoptRegisteredWorkers(broker.db.getAllAgents());
     const filtered = includeGhosts ? agents : agents.filter((agent) => !agent.disconnectedAt);
     return filtered.map((agent) => toSubtreeAgentRecord(broker.db, agent));
   }
@@ -678,12 +681,14 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     }
     const worker = spawnedWorkers.get(handle.launchId);
     if (!worker) {
+      if (fencedLaunchIds.has(handle.launchId)) return;
       throw new Error("spawn cleanup handle does not belong to this subtree broker");
     }
     if (worker.sessionName !== handle.tmuxSessionName) {
       throw new Error("spawn cleanup handle does not match its recorded tmux session");
     }
 
+    fencedLaunchIds.add(handle.launchId);
     const tmuxBaseArgs = buildTmuxBaseArgs(worker.tmuxSocketPath);
     await killTmuxSession(handle.tmuxSessionName, tmuxBaseArgs).catch((error) => {
       if (!(error instanceof Error) || error.message !== "missing") throw error;
@@ -693,10 +698,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const agentId = selfAgentId;
     if (broker && agentId) {
       for (const agent of broker.db.getAllAgents()) {
-        if (
-          isSubtreeChildAgent(agent, agentId) &&
-          metadataString(agent.metadata, "launchId") === handle.launchId
-        ) {
+        if (metadataString(agent.metadata, "launchId") === handle.launchId) {
           broker.db.unregisterAgent(agent.id);
         }
       }
@@ -759,6 +761,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       startedAt = null;
       activePaths = null;
       spawnedWorkers.clear();
+      fencedLaunchIds.clear();
+      retrySpawns.clear();
     }
   }
 
@@ -833,6 +837,10 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       );
 
       broker.server.setAgentRegistrationResolver((registration) => {
+        const launchId = metadataString(registration.metadata, "launchId");
+        if (launchId && fencedLaunchIds.has(launchId)) {
+          throw new Error("spawn launch has already been cleaned up");
+        }
         const role = deps.getMeshRoleFromMetadata(registration.metadata, "worker");
         const identity = generateAgentName(registration.stableId ?? registration.agentId, role);
         return {
@@ -878,7 +886,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     await brokerStartPromise;
   }
 
-  async function spawnWorker(
+  async function spawnWorkerOnce(
     ctx: ExtensionContext,
     input: SubtreeSpawnInput,
   ): Promise<SubtreeSpawnResult> {
@@ -996,6 +1004,26 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       dbPath: activePaths.dbPath,
       childLaunchEnv,
     };
+  }
+
+  function spawnWorker(
+    ctx: ExtensionContext,
+    input: SubtreeSpawnInput,
+  ): Promise<SubtreeSpawnResult> {
+    const cleanupHandle = input.cleanupHandle;
+    if (!cleanupHandle) return spawnWorkerOnce(ctx, input);
+
+    const existingRetry = retrySpawns.get(cleanupHandle.launchId);
+    if (existingRetry) return existingRetry;
+
+    const retry = spawnWorkerOnce(ctx, input);
+    retrySpawns.set(cleanupHandle.launchId, retry);
+    void retry.catch(() => {
+      if (retrySpawns.get(cleanupHandle.launchId) === retry) {
+        retrySpawns.delete(cleanupHandle.launchId);
+      }
+    });
+    return retry;
   }
 
   function getHibernationRuntimeControl(): SubtreeHibernationRuntimeControl | null {
