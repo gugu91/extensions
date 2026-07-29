@@ -145,6 +145,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("pinet:send")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:schedule")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:snooze")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:spawn")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:free")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:ports")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:reload")).toBe(true);
@@ -171,6 +172,8 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("pinet:send", g)).toBe(true);
     expect(isToolBlocked("pinet:snooze", g)).toBe(true);
     expect(isToolBlocked("pinet_snooze", g)).toBe(true);
+    expect(isToolBlocked("pinet:spawn", g)).toBe(true);
+    expect(isToolBlocked("pinet_spawn", g)).toBe(true);
     expect(isToolBlocked("pinet:ports", g)).toBe(true);
     expect(isToolBlocked("pinet:reload", g)).toBe(true);
     expect(isToolBlocked("pinet:exit", g)).toBe(true);
@@ -179,13 +182,6 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("pinet_send", g)).toBe(true);
     expect(isToolBlocked("pinet:read", g)).toBe(false);
     expect(isToolBlocked("pinet_read", g)).toBe(false);
-  });
-
-  it("blocks Pinet spawn aliases only in readOnly mode", () => {
-    expect(isToolBlocked("pinet:spawn", { readOnly: true })).toBe(true);
-    expect(isToolBlocked("pinet_spawn", { readOnly: true })).toBe(true);
-    expect(isToolBlocked("pinet:spawn", { readOnly: false })).toBe(false);
-    expect(isToolBlocked("pinet:snooze", { readOnly: true })).toBe(true);
   });
 
   it("combines readOnly and blockedTools", () => {
