@@ -83,6 +83,7 @@ export interface Broker {
   lock: LeaderLock;
   adapters: MessageAdapter[];
   addAdapter(adapter: MessageAdapter): void;
+  removeAdapters(adapters: readonly MessageAdapter[]): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -189,18 +190,40 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
       server.setOutboundMessageAdapters(adapters);
     },
 
-    async stop(): Promise<void> {
-      for (const adapter of adapters) {
+    async removeAdapters(removedAdapters: readonly MessageAdapter[]): Promise<void> {
+      const removed = new Set(removedAdapters);
+      const retained = adapters.filter((adapter) => !removed.has(adapter));
+      adapters.length = 0;
+      adapters.push(...retained);
+      server.setOutboundMessageAdapters(adapters);
+
+      const disconnectErrors: Error[] = [];
+      for (const adapter of removedAdapters) {
         try {
           await adapter.disconnect();
-        } catch {
-          // best effort
+        } catch (error) {
+          disconnectErrors.push(error instanceof Error ? error : new Error(String(error)));
         }
       }
-      adapters.length = 0;
-      await server.stop();
-      db.close();
-      lock.release();
+      if (disconnectErrors.length > 0) {
+        throw new AggregateError(disconnectErrors, "Failed to disconnect broker adapters");
+      }
+    },
+
+    async stop(): Promise<void> {
+      try {
+        await this.removeAdapters([...adapters]);
+      } finally {
+        try {
+          await server.stop();
+        } finally {
+          try {
+            db.close();
+          } finally {
+            lock.release();
+          }
+        }
+      }
     },
   };
 
