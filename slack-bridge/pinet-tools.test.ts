@@ -13,6 +13,7 @@ import {
   SubtreeSpawnLaunchError,
   SubtreeSpawnRegistrationTimeoutError,
 } from "./subtree-broker-runtime.js";
+import { isToolBlocked } from "./guardrails.js";
 
 interface MinimalRenderTheme {
   fg: (_color: string, text: string) => string;
@@ -1359,6 +1360,59 @@ describe("registerPinetTools", () => {
       "Pinet wake-up scheduled for 2026-04-14T12:05:00.000Z (id 7).",
     );
     expect(result.details.data.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
+  });
+
+  it("blocks lane mutations but permits lane listing with read-only guardrails", async () => {
+    const requireToolPolicy = vi.fn(
+      (toolName: string, _threadTs: string | undefined, _context: string) => {
+        if (isToolBlocked(toolName, { readOnly: true })) {
+          throw new Error(`Tool "${toolName}" is blocked by read-only guardrails.`);
+        }
+      },
+    );
+    const listPinetLanes = vi.fn(createDeps().listPinetLanes);
+    const upsertPinetLane = vi.fn(createDeps().upsertPinetLane);
+    const setPinetLaneParticipant = vi.fn(createDeps().setPinetLaneParticipant);
+    const tools = registerWithDeps(
+      createDeps({
+        requireToolPolicy,
+        listPinetLanes,
+        upsertPinetLane,
+        setPinetLaneParticipant,
+      }),
+    );
+
+    const listResult = (await tools.get("pinet")?.execute("tool-call-lane-list-read-only", {
+      action: "lanes",
+      args: { op: "list" },
+    })) as { details: { status: string } };
+    const upsertResult = (await tools.get("pinet")?.execute("tool-call-lane-upsert-read-only", {
+      action: "lanes",
+      args: { op: "upsert", lane_id: "issue-965" },
+    })) as { details: { status: string } };
+    const participantResult = (await tools
+      .get("pinet")
+      ?.execute("tool-call-lane-participant-read-only", {
+        action: "lanes",
+        args: { op: "participant", lane_id: "issue-965", agent_id: "worker-1" },
+      })) as { details: { status: string } };
+
+    expect(listResult.details.status).toBe("succeeded");
+    expect(upsertResult.details.status).toBe("failed");
+    expect(participantResult.details.status).toBe("failed");
+    expect(listPinetLanes).toHaveBeenCalledOnce();
+    expect(upsertPinetLane).not.toHaveBeenCalled();
+    expect(setPinetLaneParticipant).not.toHaveBeenCalled();
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "pinet:lanes:write",
+      undefined,
+      "op=upsert | format=cli",
+    );
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "pinet:lanes:write",
+      undefined,
+      "op=participant | format=cli",
+    );
   });
 
   it("updates durable PM lane metadata through the lanes dispatcher", async () => {

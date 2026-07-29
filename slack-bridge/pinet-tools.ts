@@ -1951,7 +1951,11 @@ function runPinetLanesAction(
 ): Promise<PinetToolResult> {
   return (async () => {
     const op = getMaybeString(params, "op")?.toLowerCase() ?? "list";
-    deps.requireToolPolicy(toolName, undefined, `op=${op} | format=${output.format}`);
+    const policyContext = `op=${op} | format=${output.format}`;
+    deps.requireToolPolicy(toolName, undefined, policyContext);
+    if (op === "upsert" || op === "participant") {
+      deps.requireToolPolicy(`${toolName}:write`, undefined, policyContext);
+    }
     if (!deps.pinetEnabled()) {
       throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
