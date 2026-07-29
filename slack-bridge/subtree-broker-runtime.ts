@@ -810,52 +810,57 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         : {}),
     });
 
-    const { name, emoji } = deps.getAgentIdentity();
-    const metadata = {
-      ...(await deps.getAgentMetadata("broker")),
-      subtreeBroker: true,
-      upstreamAgentId: deps.getCentralAgentId(),
-      subtreeSocketPath: paths.socketPath,
-    };
-    const selfAgent = broker.db.registerAgent(
-      selfId,
-      name ? `Subtree Broker ${name}` : "Subtree Broker",
-      emoji || "🌳",
-      process.pid,
-      metadata,
-      `${stableId}:subtree-broker`,
-    );
-
-    broker.server.setAgentRegistrationResolver((registration) => {
-      const role = deps.getMeshRoleFromMetadata(registration.metadata, "worker");
-      const identity = generateAgentName(registration.stableId ?? registration.agentId, role);
-      return {
-        name: registration.name || identity.name,
-        emoji: registration.emoji || identity.emoji,
-        metadata: {
-          ...(registration.metadata ?? {}),
-          subtreeBrokerAgentId: selfAgent.id,
-          subtreeRootAgentId: selfAgent.id,
-        },
+    try {
+      const { name, emoji } = deps.getAgentIdentity();
+      const metadata = {
+        ...(await deps.getAgentMetadata("broker")),
+        subtreeBroker: true,
+        upstreamAgentId: deps.getCentralAgentId(),
+        subtreeSocketPath: paths.socketPath,
       };
-    });
+      const selfAgent = broker.db.registerAgent(
+        selfId,
+        name ? `Subtree Broker ${name}` : "Subtree Broker",
+        emoji || "🌳",
+        process.pid,
+        metadata,
+        `${stableId}:subtree-broker`,
+      );
 
-    broker.server.onAgentMessage((targetAgentId: string) => {
-      if (targetAgentId !== selfAgent.id) return;
+      broker.server.setAgentRegistrationResolver((registration) => {
+        const role = deps.getMeshRoleFromMetadata(registration.metadata, "worker");
+        const identity = generateAgentName(registration.stableId ?? registration.agentId, role);
+        return {
+          name: registration.name || identity.name,
+          emoji: registration.emoji || identity.emoji,
+          metadata: {
+            ...(registration.metadata ?? {}),
+            subtreeBrokerAgentId: selfAgent.id,
+            subtreeRootAgentId: selfAgent.id,
+          },
+        };
+      });
+
+      broker.server.onAgentMessage((targetAgentId: string) => {
+        if (targetAgentId !== selfAgent.id) return;
+        drainSelfInbox(ctx, broker, selfAgent.id);
+      });
+
+      broker.db.recoverPendingTargetedBacklog(selfAgent.id);
       drainSelfInbox(ctx, broker, selfAgent.id);
-    });
+      broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
+      broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
 
-    activeBroker = broker;
-    selfAgentId = selfAgent.id;
-    startedAt = new Date().toISOString();
-    activePaths = paths;
-    startHeartbeat(broker, selfAgent.id);
-    broker.db.recoverPendingTargetedBacklog(selfAgent.id);
-    drainSelfInbox(ctx, broker, selfAgent.id);
-    broker.db.setSetting("pinet.subtreeBrokerParentStableId", deps.getAgentStableId());
-    broker.db.setSetting("pinet.subtreeBrokerOwnerToken", buildPinetOwnerToken(stableId));
-
-    return getStatus();
+      activeBroker = broker;
+      selfAgentId = selfAgent.id;
+      startedAt = new Date().toISOString();
+      activePaths = paths;
+      startHeartbeat(broker, selfAgent.id);
+      return getStatus();
+    } catch (error) {
+      await broker.stop().catch(() => undefined);
+      throw error;
+    }
   }
 
   async function ensureSubtreeBroker(ctx: ExtensionContext): Promise<void> {

@@ -171,6 +171,29 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmux.liveSessions.size).toBe(3);
   });
 
+  it("stops a broker when post-listen initialization fails so startup can retry", async () => {
+    const tmux = createTmuxHarness();
+    const getAgentMetadata = vi
+      .fn<SubtreeBrokerRuntimeDeps["getAgentMetadata"]>()
+      .mockRejectedValueOnce(new Error("metadata unavailable"))
+      .mockResolvedValue({});
+    const { runtime } = createRuntime(
+      () => false,
+      `startup-rollback-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { getAgentMetadata, runTmuxCommand: tmux.run },
+    );
+
+    await expect(runtime.start(ctx)).rejects.toThrow("metadata unavailable");
+    tmux.setOnLaunch((facts) => registerChild(runtime, facts, "retry-child"));
+
+    await expect(
+      runtime.spawnWorker(ctx, { task: "Retry startup", repo: "." }),
+    ).resolves.toMatchObject({
+      agentId: "retry-child",
+    });
+    expect(getAgentMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a durable timeout handle and cleans up only its tmux session", async () => {
     const tmux = createTmuxHarness();
     const { runtime } = createRuntime(
