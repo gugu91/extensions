@@ -168,9 +168,11 @@ describe("persistSpawnedRuntimeSpec — Seam 2 (durable spec + git-remote VCS id
     expect(readBack?.sessionResumeRef).toBe(`session:${join(repo, "session.jsonl")}`);
     expect(readBack?.expectedHost).toBe("host-a");
     // Tmux locators + env allowlist NAMES (never values) round-trip.
-    expect(readBack?.tmuxSocket).toBe("/private/tmp/tmux-501/default");
-    expect(readBack?.tmuxTarget).toBe("worker-1:0.0");
-    expect(readBack?.envAllowlist).toEqual(["PI_SETTINGS_PATH", "PINET_MESH_SECRET"]);
+    expect(readBack?.runtimeKind).toBe("tmux");
+    if (readBack?.runtimeKind !== "tmux") throw new Error("expected tmux runtime spec");
+    expect(readBack.tmuxSocket).toBe("/private/tmp/tmux-501/default");
+    expect(readBack.tmuxTarget).toBe("worker-1:0.0");
+    expect(readBack.envAllowlist).toEqual(["PI_SETTINGS_PATH", "PINET_MESH_SECRET"]);
     expect(readBack?.argv).toEqual([
       "-e",
       "/opt/ext/index.js",

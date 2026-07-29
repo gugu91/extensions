@@ -11,7 +11,9 @@ import {
 } from "./hibernation-status.js";
 import type { AgentCheckpointReceipt, AgentRuntimeSpec, AgentWakeQueueEntry } from "./types.js";
 
-function runtimeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpec {
+function runtimeSpec(
+  overrides: Partial<Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }>> = {},
+): Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }> {
   return {
     agentId: "agent-a",
     stableId: "stable-a",

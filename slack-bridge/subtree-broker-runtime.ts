@@ -534,10 +534,12 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     (async (args: string[]): Promise<void> => {
       await execFileAsync("tmux", args);
     });
-  const workerRuntimeControllers: Record<AgentRuntimeSpec["runtimeKind"], WorkerRuntimeController> =
-    {
-      tmux: createTmuxWorkerRuntimeController(runTmuxCommand),
-    };
+  const tmuxWorkerRuntimeController = createTmuxWorkerRuntimeController(runTmuxCommand);
+  const workerRuntimeControllers: Partial<
+    Record<AgentRuntimeSpec["runtimeKind"], WorkerRuntimeController>
+  > = {
+    tmux: tmuxWorkerRuntimeController,
+  };
 
   function stopHeartbeat(): void {
     if (!heartbeatTimer) return;
@@ -787,7 +789,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const tmuxSocketPath = findTmuxSocketPath();
     await Promise.all(
       childTmuxSessions(broker, agentId).map((sessionName) =>
-        workerRuntimeControllers.tmux
+        tmuxWorkerRuntimeController
           .cleanup({ runtimeKind: "tmux", sessionName, tmuxSocketPath })
           .catch(() => undefined),
       ),
@@ -984,7 +986,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       fenceLaunch(activeBroker, handle.launchId);
       spawnedWorkers.delete(handle.launchId);
       try {
-        await workerRuntimeControllers[worker.runtimeKind].cleanup(worker);
+        const controller = workerRuntimeControllers[worker.runtimeKind];
+        if (!controller) throw new Error(`Unsupported worker runtime: ${worker.runtimeKind}`);
+        await controller.cleanup(worker);
       } catch (error) {
         spawnedWorkers.set(handle.launchId, worker);
         throw error;
@@ -996,7 +1000,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
     const sessionName = buildTmuxSessionName(repoPath, role, launchId);
-    const runtimeController = workerRuntimeControllers.tmux;
+    const runtimeController = tmuxWorkerRuntimeController;
     const runtimeSpec = runtimeController.createLaunchSpec(sessionName);
     const monitorCommand = runtimeController.monitorCommand(runtimeSpec);
     const childLaunchEnv = buildChildLaunchEnv(activePaths, selfAgentId, {

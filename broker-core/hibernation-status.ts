@@ -89,7 +89,7 @@ export function redactRuntimeSpec(spec: AgentRuntimeSpec): RedactedAgentRuntimeS
     },
     repo,
     hasWorktree: Boolean(spec.worktreePath),
-    hasTmuxSession: Boolean(spec.tmuxSession),
+    hasTmuxSession: spec.runtimeKind === "tmux" && Boolean(spec.tmuxSession),
     configFingerprint: sanitizeSpecFacet(spec.configFingerprint),
     expectedHost,
     launchSource: sanitizeSpecFacet(spec.launchSource),

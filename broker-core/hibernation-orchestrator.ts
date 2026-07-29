@@ -253,6 +253,12 @@ export class HibernationOrchestrator {
     let agent = this.db.getAgentById(agentId);
     if (!agent) return { ready: false, state: "live", reason: "unknown_agent" };
 
+    const runtimeSpec = this.db.getAgentRuntimeSpec(agentId);
+    if (runtimeSpec?.runtimeKind === "herdr") {
+      const unsupported = "hibernation unsupported on this runtime";
+      this.recordRefusal(agentId, "prepare_refused", unsupported, actor, correlationId);
+      return { ready: false, state: agent.lifecycleState ?? "live", reason: unsupported };
+    }
     const eligibility = evaluateHibernateEligibility(agent);
     if (!eligibility.eligible) {
       this.recordRefusal(agentId, "prepare_refused", eligibility.reason, actor, correlationId);
@@ -310,6 +316,16 @@ export class HibernationOrchestrator {
     const agent = this.db.getAgentById(agentId);
     if (!agent) return this.refuseHibernate(agentId, correlationId, "live", "unknown_agent", actor);
 
+    const runtimeSpec = this.db.getAgentRuntimeSpec(agentId);
+    if (runtimeSpec?.runtimeKind === "herdr") {
+      return this.refuseHibernate(
+        agentId,
+        correlationId,
+        agent.lifecycleState ?? "live",
+        "hibernation unsupported on this runtime",
+        actor,
+      );
+    }
     const eligibility = evaluateHibernateEligibility(agent);
     if (!eligibility.eligible) {
       return this.refuseHibernate(
@@ -329,7 +345,7 @@ export class HibernationOrchestrator {
         actor,
       );
     }
-    const spec = this.db.getAgentRuntimeSpec(agentId);
+    const spec = runtimeSpec;
     if (!spec) {
       return this.refuseHibernate(agentId, correlationId, "idle", "missing_runtime_spec", actor);
     }
@@ -581,6 +597,15 @@ export class HibernationOrchestrator {
     const spec = this.db.getAgentRuntimeSpec(agentId);
     if (!spec) {
       return this.refuseWake(agentId, correlationId, "hibernated", "missing_runtime_spec", actor);
+    }
+    if (spec.runtimeKind !== "tmux") {
+      return this.refuseWake(
+        agentId,
+        correlationId,
+        "hibernated",
+        "hibernation unsupported on this runtime",
+        actor,
+      );
     }
 
     const lease = this.db.acquireAgentLifecycleLease({

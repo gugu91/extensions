@@ -151,6 +151,14 @@ function launchedGenerationOf(handle: RuntimeAttemptHandle): AttemptGeneration |
   return (handle as Partial<LaunchedAttemptHandle>).generation ?? null;
 }
 
+function assertTmuxRuntimeSpec(
+  spec: AgentRuntimeSpec,
+): asserts spec is Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }> {
+  if (spec.runtimeKind !== "tmux") {
+    throw new Error("hibernation unsupported on this runtime");
+  }
+}
+
 function tmuxSocketArgs(socket: string): string[] {
   return socket ? ["-S", socket] : [];
 }
@@ -349,6 +357,7 @@ export function createHibernationProcessController(
   async function runtimeAlive(
     spec: AgentRuntimeSpec,
   ): Promise<{ alive: boolean; generation: ProcessGeneration | null }> {
+    assertTmuxRuntimeSpec(spec);
     const addr: PaneAddress = { tmuxSocket: spec.tmuxSocket, tmuxTarget: spec.tmuxTarget };
     const current = await readPaneGeneration(d.runner, addr);
     const alive =
@@ -396,6 +405,7 @@ export function createHibernationProcessController(
     async stopRuntime(
       spec: AgentRuntimeSpec,
     ): Promise<{ stopped: boolean; rssBytes: number | null }> {
+      assertTmuxRuntimeSpec(spec);
       const addr: PaneAddress = { tmuxSocket: spec.tmuxSocket, tmuxTarget: spec.tmuxTarget };
       // Capture the live generation to stop BEFORE any mutation; if the pane is
       // already dead / has no live generation there is nothing to stop.
@@ -503,6 +513,7 @@ export function createHibernationTmuxController(
 
   return {
     async isSessionAttachable(spec: AgentRuntimeSpec): Promise<boolean> {
+      assertTmuxRuntimeSpec(spec);
       const result = await runner.run("tmux", [
         ...tmuxSocketArgs(spec.tmuxSocket),
         "has-session",
@@ -516,6 +527,7 @@ export function createHibernationTmuxController(
       ctx: RuntimeLaunchContext,
     ): Promise<{ launched: boolean; handle: RuntimeAttemptHandle | null }> {
       const spec = ctx.spec;
+      assertTmuxRuntimeSpec(spec);
       const resumePath = resumePathFromSessionRef(spec.sessionResumeRef);
       // Unresumable spec ⇒ no session to bring back; fail closed (no handle).
       if (!resumePath) return { launched: false, handle: null };

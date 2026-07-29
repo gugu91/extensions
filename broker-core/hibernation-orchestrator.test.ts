@@ -146,6 +146,9 @@ class FakeTmux implements HibernationTmuxController {
   async respawnRuntime(
     ctx: RuntimeLaunchContext,
   ): Promise<{ launched: boolean; handle: RuntimeAttemptHandle | null }> {
+    if (ctx.spec.runtimeKind !== "tmux") {
+      throw new Error("hibernation unsupported on this runtime");
+    }
     this.respawnCalls.push(ctx);
     if (this.throwOnRespawn) throw new Error("respawnRuntime boom");
     this.onRespawn?.(ctx);

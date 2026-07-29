@@ -138,6 +138,9 @@ class E2eTmux implements HibernationTmuxController {
   async respawnRuntime(
     ctx: RuntimeLaunchContext,
   ): Promise<{ launched: boolean; handle: RuntimeAttemptHandle | null }> {
+    if (ctx.spec.runtimeKind !== "tmux") {
+      throw new Error("hibernation unsupported on this runtime");
+    }
     const client = await this.connect();
     this.launched.push(client);
     const fence = this.mutateFence?.(ctx) ?? {

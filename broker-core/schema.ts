@@ -948,7 +948,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 23;
+export const CURRENT_BROKER_SCHEMA_VERSION = 24;
 
 /**
  * Lifecycle states whose durable identity, inbox, thread ownership, and runtime
@@ -1729,13 +1729,25 @@ function createAgentHibernationTables(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS agent_runtime_specs (
       agent_id TEXT PRIMARY KEY NOT NULL, stable_id TEXT NOT NULL, broker_owner_id TEXT NOT NULL,
       cwd TEXT NOT NULL, repo_root TEXT NOT NULL, worktree_path TEXT NOT NULL,
-      runtime_kind TEXT NOT NULL DEFAULT 'tmux' CHECK(runtime_kind IN ('tmux')),
-      tmux_socket TEXT NOT NULL, tmux_session TEXT NOT NULL, tmux_target TEXT NOT NULL,
+      runtime_kind TEXT NOT NULL DEFAULT 'tmux' CHECK(runtime_kind IN ('tmux','herdr')),
+      tmux_socket TEXT, tmux_session TEXT, tmux_target TEXT,
+      herdr_session TEXT, herdr_config_dir TEXT, herdr_pane_id TEXT, herdr_shell_pid INTEGER,
       executable TEXT NOT NULL, argv_json TEXT NOT NULL, env_allowlist_json TEXT NOT NULL,
       session_resume_ref TEXT NOT NULL, config_fingerprint TEXT NOT NULL,
       expected_host TEXT NOT NULL, expected_user TEXT NOT NULL, launch_source TEXT NOT NULL,
       vcs_identity TEXT,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      CHECK(
+        (runtime_kind = 'tmux'
+          AND tmux_socket IS NOT NULL AND tmux_session IS NOT NULL AND tmux_target IS NOT NULL
+          AND herdr_session IS NULL AND herdr_config_dir IS NULL
+          AND herdr_pane_id IS NULL AND herdr_shell_pid IS NULL)
+        OR
+        (runtime_kind = 'herdr'
+          AND tmux_socket IS NULL AND tmux_session IS NULL AND tmux_target IS NULL
+          AND herdr_session IS NOT NULL AND herdr_config_dir IS NOT NULL
+          AND herdr_pane_id IS NOT NULL AND herdr_shell_pid IS NOT NULL)
+      )
     );
     CREATE TABLE IF NOT EXISTS agent_lifecycle_leases (
       agent_id TEXT PRIMARY KEY NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('hibernate','wake')),
@@ -1871,6 +1883,54 @@ function addRuntimeSpecKindColumn(db: DatabaseSync): void {
   );
 }
 
+/** Rebuild the runtime table so its persisted shape exactly matches the runtime union. */
+// agent-standards-ignore prefer-inline-single-use-helper: one-function-per-
+// migration-case is the established schema-migration seam; keeps the version
+// switch a readable index.
+function widenRuntimeSpecPayload(db: DatabaseSync): void {
+  db.exec(`
+    ALTER TABLE agent_runtime_specs RENAME TO agent_runtime_specs_v23;
+    CREATE TABLE agent_runtime_specs (
+      agent_id TEXT PRIMARY KEY NOT NULL, stable_id TEXT NOT NULL, broker_owner_id TEXT NOT NULL,
+      cwd TEXT NOT NULL, repo_root TEXT NOT NULL, worktree_path TEXT NOT NULL,
+      runtime_kind TEXT NOT NULL DEFAULT 'tmux' CHECK(runtime_kind IN ('tmux','herdr')),
+      tmux_socket TEXT, tmux_session TEXT, tmux_target TEXT,
+      herdr_session TEXT, herdr_config_dir TEXT, herdr_pane_id TEXT, herdr_shell_pid INTEGER,
+      executable TEXT NOT NULL, argv_json TEXT NOT NULL, env_allowlist_json TEXT NOT NULL,
+      session_resume_ref TEXT NOT NULL, config_fingerprint TEXT NOT NULL,
+      expected_host TEXT NOT NULL, expected_user TEXT NOT NULL, launch_source TEXT NOT NULL,
+      vcs_identity TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      CHECK(
+        (runtime_kind = 'tmux'
+          AND tmux_socket IS NOT NULL AND tmux_session IS NOT NULL AND tmux_target IS NOT NULL
+          AND herdr_session IS NULL AND herdr_config_dir IS NULL
+          AND herdr_pane_id IS NULL AND herdr_shell_pid IS NULL)
+        OR
+        (runtime_kind = 'herdr'
+          AND tmux_socket IS NULL AND tmux_session IS NULL AND tmux_target IS NULL
+          AND herdr_session IS NOT NULL AND herdr_config_dir IS NOT NULL
+          AND herdr_pane_id IS NOT NULL AND herdr_shell_pid IS NOT NULL)
+      )
+    );
+    INSERT INTO agent_runtime_specs (
+      agent_id, stable_id, broker_owner_id, cwd, repo_root, worktree_path, runtime_kind,
+      tmux_socket, tmux_session, tmux_target,
+      herdr_session, herdr_config_dir, herdr_pane_id, herdr_shell_pid,
+      executable, argv_json, env_allowlist_json, session_resume_ref, config_fingerprint,
+      expected_host, expected_user, launch_source, vcs_identity, created_at, updated_at
+    )
+    SELECT
+      agent_id, stable_id, broker_owner_id, cwd, repo_root, worktree_path, runtime_kind,
+      tmux_socket, tmux_session, tmux_target,
+      NULL, NULL, NULL, NULL,
+      executable, argv_json, env_allowlist_json, session_resume_ref, config_fingerprint,
+      expected_host, expected_user, launch_source, vcs_identity, created_at, updated_at
+    FROM agent_runtime_specs_v23;
+    DROP TABLE agent_runtime_specs_v23;
+  `);
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -1953,6 +2013,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 23:
           addRuntimeSpecKindColumn(db);
+          break;
+        case 24:
+          widenRuntimeSpecPayload(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -2639,18 +2702,51 @@ export class BrokerDB implements BrokerDBInterface {
         .prepare("SELECT created_at FROM agent_runtime_specs WHERE agent_id = ?")
         .get(input.agentId) as { created_at: string } | undefined;
       const createdAt = existing?.created_at ?? now;
+      let tmuxSocket: string | null = null;
+      let tmuxSession: string | null = null;
+      let tmuxTarget: string | null = null;
+      let herdrSession: string | null = null;
+      let herdrConfigDir: string | null = null;
+      let herdrPaneId: string | null = null;
+      let herdrShellPid: number | null = null;
+      if (input.runtimeKind === "tmux") {
+        if (!input.tmuxSocket || !input.tmuxSession || !input.tmuxTarget) {
+          throw new Error(`Invalid tmux runtime payload for agent ${input.agentId}`);
+        }
+        tmuxSocket = input.tmuxSocket;
+        tmuxSession = input.tmuxSession;
+        tmuxTarget = input.tmuxTarget;
+      } else {
+        if (
+          !input.herdrSession ||
+          !input.herdrConfigDir ||
+          !input.herdrPaneId ||
+          !Number.isInteger(input.herdrShellPid) ||
+          input.herdrShellPid <= 0
+        ) {
+          throw new Error(`Invalid Herdr runtime payload for agent ${input.agentId}`);
+        }
+        herdrSession = input.herdrSession;
+        herdrConfigDir = input.herdrConfigDir;
+        herdrPaneId = input.herdrPaneId;
+        herdrShellPid = input.herdrShellPid;
+      }
       db.prepare(
         `INSERT INTO agent_runtime_specs
          (agent_id, stable_id, broker_owner_id, cwd, repo_root, worktree_path, runtime_kind,
-          tmux_socket, tmux_session, tmux_target, executable, argv_json, env_allowlist_json,
+          tmux_socket, tmux_session, tmux_target,
+          herdr_session, herdr_config_dir, herdr_pane_id, herdr_shell_pid,
+          executable, argv_json, env_allowlist_json,
           session_resume_ref, config_fingerprint, expected_host, expected_user, launch_source,
           vcs_identity, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(agent_id) DO UPDATE SET stable_id=excluded.stable_id,
            broker_owner_id=excluded.broker_owner_id, cwd=excluded.cwd, repo_root=excluded.repo_root,
            worktree_path=excluded.worktree_path, runtime_kind=excluded.runtime_kind,
-           tmux_socket=excluded.tmux_socket,
-           tmux_session=excluded.tmux_session, tmux_target=excluded.tmux_target,
+           tmux_socket=excluded.tmux_socket, tmux_session=excluded.tmux_session,
+           tmux_target=excluded.tmux_target, herdr_session=excluded.herdr_session,
+           herdr_config_dir=excluded.herdr_config_dir, herdr_pane_id=excluded.herdr_pane_id,
+           herdr_shell_pid=excluded.herdr_shell_pid,
            executable=excluded.executable, argv_json=excluded.argv_json,
            env_allowlist_json=excluded.env_allowlist_json,
            session_resume_ref=excluded.session_resume_ref,
@@ -2666,9 +2762,13 @@ export class BrokerDB implements BrokerDBInterface {
         input.repoRoot,
         input.worktreePath,
         input.runtimeKind,
-        input.tmuxSocket,
-        input.tmuxSession,
-        input.tmuxTarget,
+        tmuxSocket,
+        tmuxSession,
+        tmuxTarget,
+        herdrSession,
+        herdrConfigDir,
+        herdrPaneId,
+        herdrShellPid,
         input.executable,
         JSON.stringify(input.argv),
         JSON.stringify(input.envAllowlist),
@@ -2698,10 +2798,14 @@ export class BrokerDB implements BrokerDBInterface {
           cwd: string;
           repo_root: string;
           worktree_path: string;
-          runtime_kind: "tmux";
-          tmux_socket: string;
-          tmux_session: string;
-          tmux_target: string;
+          runtime_kind: string;
+          tmux_socket: string | null;
+          tmux_session: string | null;
+          tmux_target: string | null;
+          herdr_session: string | null;
+          herdr_config_dir: string | null;
+          herdr_pane_id: string | null;
+          herdr_shell_pid: number | null;
           executable: string;
           argv_json: string;
           env_allowlist_json: string;
@@ -2716,17 +2820,13 @@ export class BrokerDB implements BrokerDBInterface {
         }
       | undefined;
     if (!row) return null;
-    return {
+    const common = {
       agentId: row.agent_id,
       stableId: row.stable_id,
       brokerOwnerId: row.broker_owner_id,
       cwd: row.cwd,
       repoRoot: row.repo_root,
       worktreePath: row.worktree_path,
-      runtimeKind: row.runtime_kind,
-      tmuxSocket: row.tmux_socket,
-      tmuxSession: row.tmux_session,
-      tmuxTarget: row.tmux_target,
       executable: row.executable,
       argv: parseStringArray(row.argv_json),
       envAllowlist: parseStringArray(row.env_allowlist_json),
@@ -2739,6 +2839,50 @@ export class BrokerDB implements BrokerDBInterface {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+    if (row.runtime_kind === "tmux") {
+      if (
+        row.tmux_socket === null ||
+        row.tmux_session === null ||
+        row.tmux_target === null ||
+        row.herdr_session !== null ||
+        row.herdr_config_dir !== null ||
+        row.herdr_pane_id !== null ||
+        row.herdr_shell_pid !== null
+      ) {
+        throw new Error(`Invalid tmux runtime payload for agent ${agentId}`);
+      }
+      return {
+        ...common,
+        runtimeKind: "tmux",
+        tmuxSocket: row.tmux_socket,
+        tmuxSession: row.tmux_session,
+        tmuxTarget: row.tmux_target,
+      };
+    }
+    if (row.runtime_kind === "herdr") {
+      if (
+        row.herdr_session === null ||
+        row.herdr_config_dir === null ||
+        row.herdr_pane_id === null ||
+        row.herdr_shell_pid === null ||
+        !Number.isInteger(row.herdr_shell_pid) ||
+        row.herdr_shell_pid <= 0 ||
+        row.tmux_socket !== null ||
+        row.tmux_session !== null ||
+        row.tmux_target !== null
+      ) {
+        throw new Error(`Invalid Herdr runtime payload for agent ${agentId}`);
+      }
+      return {
+        ...common,
+        runtimeKind: "herdr",
+        herdrSession: row.herdr_session,
+        herdrConfigDir: row.herdr_config_dir,
+        herdrPaneId: row.herdr_pane_id,
+        herdrShellPid: row.herdr_shell_pid,
+      };
+    }
+    throw new Error(`Invalid runtime kind for agent ${agentId}`);
   }
 
   deleteAgentRuntimeSpec(agentId: string): void {
