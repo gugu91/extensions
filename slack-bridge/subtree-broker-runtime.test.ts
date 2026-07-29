@@ -310,6 +310,30 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmuxRun).not.toHaveBeenCalled();
   });
 
+  it.each(["tmuux", 7, { runtime: "herdr" }])(
+    "rejects invalid subtree worker runtime setting %j instead of guessing",
+    async (invalidRuntime) => {
+      const tmuxRun = vi.fn(async () => {});
+      const herdrRun = vi.fn(async () => "{}");
+      const { runtime } = createRuntime(
+        () => false,
+        `invalid-runtime-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+        {
+          getSettings: () =>
+            ({ subtreeWorkerRuntime: invalidRuntime }) as unknown as SlackBridgeSettings,
+          runTmuxCommand: tmuxRun,
+          runHerdrCommand: herdrRun,
+        },
+      );
+
+      await expect(runtime.spawnWorker(ctx, { task: "Do not launch", repo: "." })).rejects.toThrow(
+        `Invalid subtreeWorkerRuntime setting ${JSON.stringify(invalidRuntime)}; valid options are "tmux" and "herdr".`,
+      );
+      expect(tmuxRun).not.toHaveBeenCalled();
+      expect(herdrRun).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails clearly instead of substituting tmux when configured Herdr is unavailable", async () => {
     const tmuxRun = vi.fn(async () => {});
     const unavailable = Object.assign(new Error("spawn herdr ENOENT"), { code: "ENOENT" });

@@ -1288,9 +1288,16 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
     const sessionName = buildTmuxSessionName(repoPath, role, launchId);
-    const configuredRuntime = deps.getSettings().subtreeWorkerRuntime ?? "tmux";
+    const configuredRuntime: unknown = deps.getSettings().subtreeWorkerRuntime;
+    const runtimeKind = configuredRuntime === undefined ? "tmux" : configuredRuntime;
+    if (runtimeKind !== "tmux" && runtimeKind !== "herdr") {
+      const invalidValue = JSON.stringify(runtimeKind) ?? String(runtimeKind);
+      throw new Error(
+        `Invalid subtreeWorkerRuntime setting ${invalidValue}; valid options are "tmux" and "herdr".`,
+      );
+    }
     const runtimeSpec: WorkerRuntimeSpec =
-      configuredRuntime === "tmux"
+      runtimeKind === "tmux"
         ? workerRuntimeControllers.tmux.createLaunchSpec(sessionName)
         : workerRuntimeControllers.herdr.createLaunchSpec(sessionName);
     const monitorCommand =
