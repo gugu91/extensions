@@ -1408,6 +1408,21 @@ describe("registerPinetTools", () => {
     expect(upsertPinetLane).not.toHaveBeenCalled();
     expect(setPinetLaneParticipant).not.toHaveBeenCalled();
     expect(requireToolPolicy).toHaveBeenCalledWith(
+      "pinet:lanes",
+      undefined,
+      "op=list | format=cli",
+    );
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "pinet:lanes",
+      undefined,
+      "op=upsert | format=cli",
+    );
+    expect(requireToolPolicy).toHaveBeenCalledWith(
+      "pinet:lanes",
+      undefined,
+      "op=participant | format=cli",
+    );
+    expect(requireToolPolicy).toHaveBeenCalledWith(
       "pinet:lanes:write",
       undefined,
       "op=upsert | format=cli",
