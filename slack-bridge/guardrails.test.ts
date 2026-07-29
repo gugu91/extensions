@@ -181,6 +181,13 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("pinet_read", g)).toBe(false);
   });
 
+  it("blocks Pinet spawn aliases only in readOnly mode", () => {
+    expect(isToolBlocked("pinet:spawn", { readOnly: true })).toBe(true);
+    expect(isToolBlocked("pinet_spawn", { readOnly: true })).toBe(true);
+    expect(isToolBlocked("pinet:spawn", { readOnly: false })).toBe(false);
+    expect(isToolBlocked("pinet:snooze", { readOnly: true })).toBe(true);
+  });
+
   it("combines readOnly and blockedTools", () => {
     const g: SecurityGuardrails = { readOnly: true, blockedTools: ["slack_create_channel"] };
     expect(isToolBlocked("bash", g)).toBe(true); // write tool + readOnly
