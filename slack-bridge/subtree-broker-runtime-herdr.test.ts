@@ -14,6 +14,7 @@ interface HerdrInvocation {
 }
 
 const tempDirs: string[] = [];
+const originalTmuxSession = process.env.PINET_TMUX_SESSION;
 
 function tempConfigDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pinet-herdr-controller-"));
@@ -44,10 +45,13 @@ function processInfo(paneId: string, shellPid: number): string {
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  if (originalTmuxSession === undefined) delete process.env.PINET_TMUX_SESSION;
+  else process.env.PINET_TMUX_SESSION = originalTmuxSession;
 });
 
 describe("Herdr worker runtime controller", () => {
-  it("starts the owned server and launches with env at pane creation", async () => {
+  it("starts the owned server and neutralizes an inherited tmux identity", async () => {
+    process.env.PINET_TMUX_SESSION = "parent-stale";
     const calls: HerdrInvocation[] = [];
     const configDir = tempConfigDir();
     let invocation = 0;
@@ -88,6 +92,8 @@ describe("Herdr worker runtime controller", () => {
         "PINET_SOCKET_PATH=/tmp/pinet.sock",
         "--env",
         "PINET_LAUNCH_ID=launch-1",
+        "--env",
+        "PINET_TMUX_SESSION=",
         "--no-focus",
       ],
       ["--session", "pinet-workers", "pane", "process-info", "--pane", "w1:p2"],
@@ -95,6 +101,9 @@ describe("Herdr worker runtime controller", () => {
     ]);
     expect(calls[1]?.options.detached).toBe(true);
     expect(calls.every((call) => call.options.env.XDG_CONFIG_HOME === configDir)).toBe(true);
+    expect(calls.every((call) => call.options.env.PINET_TMUX_SESSION === "parent-stale")).toBe(
+      true,
+    );
     expect(fs.readFileSync(path.join(configDir, "herdr", "config.toml"), "utf8")).toBe(
       "[experimental]\npane_history = true\n",
     );

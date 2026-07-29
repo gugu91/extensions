@@ -404,14 +404,16 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     const skinAssignment = resolveSkinAssignment(role, getIdentitySeedForRole(role));
     const brokerManaged = role === "worker" && process.env.PINET_BROKER_MANAGED === "1";
     const parentAgentId = process.env.PINET_PARENT_AGENT_ID?.trim() || undefined;
+    const launchSource = process.env.PINET_LAUNCH_SOURCE?.trim() || "broker-tmux";
+    const herdrLaunch = launchSource === "broker-herdr" || launchSource === "subtree-broker-herdr";
+    const tmuxSession = process.env.PINET_TMUX_SESSION?.trim() || undefined;
     const brokerManagedMetadata = brokerManaged
       ? {
           brokerManaged: true,
           brokerManagedBy: process.env.PINET_BROKER_AGENT_ID?.trim() || undefined,
-          launchSource: process.env.PINET_LAUNCH_SOURCE?.trim() || "broker-tmux",
-          ...(process.env.PINET_TMUX_SESSION?.trim()
-            ? { tmuxSession: process.env.PINET_TMUX_SESSION.trim() }
-            : {}),
+          launchSource,
+          runtimeKind: herdrLaunch ? "herdr" : "tmux",
+          ...(!herdrLaunch && tmuxSession ? { runtimeLocator: tmuxSession, tmuxSession } : {}),
           brokerManagedAt: new Date().toISOString(),
           ...(parentAgentId ? { parentAgentId, pinetParentAgentId: parentAgentId } : {}),
           ...(process.env.PINET_ROOT_AGENT_ID?.trim()

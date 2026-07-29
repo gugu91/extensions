@@ -305,7 +305,8 @@ function buildChildLaunchEnv(
     PINET_PARENT_AGENT_ID: selfAgentId,
     PINET_ROOT_AGENT_ID: selfAgentId,
     PINET_SPAWNED_BY_AGENT_ID: selfAgentId,
-    PINET_LAUNCH_SOURCE: input.runtimeKind === "herdr" ? "subtree-broker-herdr" : "subtree-broker-tmux",
+    PINET_LAUNCH_SOURCE:
+      input.runtimeKind === "herdr" ? "subtree-broker-herdr" : "subtree-broker-tmux",
     ...(input.launchId ? { PINET_LAUNCH_ID: input.launchId } : {}),
     ...(input.role ? { PINET_SUBTREE_ROLE: input.role } : {}),
     ...(input.laneId ? { PINET_LANE_ID: input.laneId } : {}),
@@ -556,6 +557,8 @@ export function createHerdrWorkerRuntimeController(
         "--label",
         spec.sessionName,
         ...Object.entries(launchEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+        "--env",
+        "PINET_TMUX_SESSION=",
         "--no-focus",
       ]);
       const createResponse = JSON.parse(createOutput) as {
@@ -690,6 +693,7 @@ function buildLauncherScript(input: {
     `cd ${quoteShellValue(input.repoPath)}`,
     ...inheritedExports,
     ...envExports,
+    ...(input.env.PINET_LAUNCH_SOURCE?.endsWith("-herdr") ? ["unset PINET_TMUX_SESSION"] : []),
     `export PI_NICKNAME=${quoteShellValue(nickname)}`,
     `exec pi -e ${quoteShellValue(input.extensionEntryPath)} ${quoteShellValue(input.startupPrompt)}`,
     "",
@@ -1031,6 +1035,20 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         continue;
       }
       const tmuxSession = metadataString(agent.metadata, "tmuxSession");
+      const metadataRuntimeKind = metadataString(agent.metadata, "runtimeKind");
+      const launchSource = metadataString(agent.metadata, "launchSource");
+      if (
+        metadataRuntimeKind === "herdr" ||
+        launchSource === "broker-herdr" ||
+        launchSource === "subtree-broker-herdr"
+      ) {
+        if (tmuxSession) {
+          console.warn(
+            `[slack-bridge] Ignoring inherited tmuxSession metadata for Herdr child ${agent.id}; no durable Herdr runtime spec is available for cleanup.`,
+          );
+        }
+        continue;
+      }
       if (tmuxSession) {
         specs.push({
           runtimeKind: "tmux",

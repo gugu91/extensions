@@ -16,6 +16,7 @@ import {
 const ctx = {} as ExtensionContext;
 const runtimes: SubtreeBrokerRuntime[] = [];
 const roots: string[] = [];
+const originalTmuxSession = process.env.PINET_TMUX_SESSION;
 
 function createRuntime(
   deliverSteeringMessage: SubtreeBrokerRuntimeDeps["deliverSteeringMessage"],
@@ -83,6 +84,8 @@ afterEach(async () => {
       .map((runtime) => runtime.stop({ releaseIdentity: true, stopChildren: false })),
   );
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  if (originalTmuxSession === undefined) delete process.env.PINET_TMUX_SESSION;
+  else process.env.PINET_TMUX_SESSION = originalTmuxSession;
 });
 
 describe("subtree broker inbox delivery", () => {
@@ -249,12 +252,14 @@ describe("subtree broker spawn lifecycle", () => {
     ).toBe(true);
   });
 
-  it("selects Herdr only when explicitly configured", async () => {
+  it("selects Herdr only when explicitly configured and unsets inherited tmux identity", async () => {
+    process.env.PINET_TMUX_SESSION = "parent-stale";
     const tmuxRun = vi.fn(async () => {});
     let launchId = "";
     let sessionName = "";
     const runHerdrCommand = vi.fn(async (args: string[]) => {
       if (args.includes("create")) {
+        expect(args).toContain("PINET_TMUX_SESSION=");
         launchId =
           args
             .find((value) => value.startsWith("PINET_LAUNCH_ID="))
@@ -266,6 +271,10 @@ describe("subtree broker spawn lifecycle", () => {
         return JSON.stringify({ result: { process_info: { shell_pid: 4242 } } });
       }
       if (args.includes("run")) {
+        const quotedLauncherPath = args.at(-1);
+        if (!quotedLauncherPath) throw new Error("missing launcher path");
+        const launcherPath = quotedLauncherPath.slice(1, -1);
+        expect(fs.readFileSync(launcherPath, "utf8")).toContain("unset PINET_TMUX_SESSION");
         const control = runtime.getHibernationRuntimeControl();
         const parentAgentId = runtime.getStatus().selfAgentId;
         if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
@@ -513,6 +522,41 @@ describe("subtree broker spawn lifecycle", () => {
       }
     },
   );
+
+  it("never dispatches Herdr metadata with an inherited tmux session to tmux cleanup", async () => {
+    const tmux = createTmuxHarness();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { runtime } = createRuntime(
+      () => false,
+      `herdr-metadata-fallback-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand: tmux.run },
+    );
+    await runtime.start(ctx);
+    const control = runtime.getHibernationRuntimeControl();
+    const parentAgentId = runtime.getStatus().selfAgentId;
+    if (!control || !parentAgentId) throw new Error("subtree broker did not start");
+    tmux.liveSessions.add("parent-session");
+    control.db.registerAgent("stale-herdr-child", "Herdr Child", "🌱", process.pid, {
+      parentAgentId,
+      runtimeKind: "herdr",
+      launchSource: "subtree-broker-herdr",
+      tmuxSession: "parent-session",
+    });
+
+    vi.useFakeTimers();
+    try {
+      const stop = runtime.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stop;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(tmux.killedSessions).toEqual([]);
+    expect(tmux.liveSessions).toEqual(new Set(["parent-session"]));
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("Ignoring inherited tmuxSession"));
+    warning.mockRestore();
+  });
 
   it("single-flights public start with automatic spawn startup", async () => {
     const tmux = createTmuxHarness();

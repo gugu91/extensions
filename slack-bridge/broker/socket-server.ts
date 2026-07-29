@@ -797,8 +797,14 @@ export class BrokerSocketServer {
         : undefined;
     const legacyTmuxSession =
       typeof rawMetadata?.tmuxSession === "string" ? rawMetadata.tmuxSession.trim() : "";
+    const launchSource =
+      typeof rawMetadata?.launchSource === "string" ? rawMetadata.launchSource.trim() : "";
+    const explicitlyHerdr =
+      rawMetadata?.runtimeKind === "herdr" ||
+      launchSource === "broker-herdr" ||
+      launchSource === "subtree-broker-herdr";
     const metadata =
-      legacyTmuxSession && typeof rawMetadata?.runtimeLocator !== "string"
+      legacyTmuxSession && !explicitlyHerdr && typeof rawMetadata?.runtimeLocator !== "string"
         ? {
             ...rawMetadata,
             runtimeKind: "tmux",
