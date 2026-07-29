@@ -168,7 +168,7 @@ function buildBrokerInPlaceSettingsSignature(settings: SlackBridgeSettings): str
   return JSON.stringify({
     meshSecretFingerprint,
     meshSecretPath: meshAuth.meshSecretPath ?? null,
-    imessage: settings.imessage ?? null,
+    imessageEnabled: settings.imessage?.enabled ?? false,
   });
 }
 
@@ -775,16 +775,27 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         activeRuntimeAdapters = nextAdapters;
         return result;
       } catch (error) {
-        await broker.removeAdapters(nextAdapters);
+        try {
+          await broker.removeAdapters(nextAdapters);
+        } catch {
+          /* preserve the adapter connection error */
+        }
         throw error;
       }
     },
 
     canReloadInPlace(): boolean {
-      return (
-        activeInPlaceSettingsSignature !== null &&
-        activeInPlaceSettingsSignature === buildBrokerInPlaceSettingsSignature(deps.getSettings())
-      );
+      try {
+        return (
+          activeInPlaceSettingsSignature !== null &&
+          activeInPlaceSettingsSignature === buildBrokerInPlaceSettingsSignature(deps.getSettings())
+        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Cannot reload Pinet broker because the mesh secret could not be read: ${detail}. The existing broker remains running; restore the secret and retry /pinet start.`,
+        );
+      }
     },
 
     async disconnect(options = {}): Promise<void> {

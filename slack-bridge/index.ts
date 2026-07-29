@@ -1191,7 +1191,7 @@ export default function (pi: ExtensionAPI) {
           /* transition from the restored runtime */
         });
       }
-      await stopPinetRuntime(ctx, { releaseIdentity: true });
+      await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: true }));
       // Runtime transitions keep the extension alive in-process, so restore a
       // fresh top-level Slack request tracker after tearing the prior runtime down.
       slackRequestRuntime.reset();
@@ -1279,14 +1279,13 @@ export default function (pi: ExtensionAPI) {
     }
 
     const reloadWork = runPinetLifecycle(async () => {
+      let reloadBrokerInPlace = false;
       const validateRefreshedState = () => {
         if (!botToken || !appToken) {
           throw new Error("Slack tokens are not configured after reload.");
         }
-        if (brokerRole === "broker" && !brokerRuntime.canReloadInPlace()) {
-          throw new Error(
-            "Pinet mesh authentication or iMessage settings changed and require a full broker restart.",
-          );
+        if (brokerRole === "broker") {
+          reloadBrokerInPlace = brokerRuntime.canReloadInPlace();
         }
       };
 
@@ -1301,8 +1300,17 @@ export default function (pi: ExtensionAPI) {
           },
           validateRefreshedState,
           reloadRuntime: async () => {
-            const result = await brokerRuntime.reloadAdapters(ctx);
-            botUserId = result.botUserId;
+            if (reloadBrokerInPlace) {
+              const result = await brokerRuntime.reloadAdapters(ctx);
+              botUserId = result.botUserId;
+              return;
+            }
+
+            await stopPinetRuntime(ctx, { releaseIdentity: false });
+            slackRequestRuntime.reset();
+            singlePlayerRuntime.resetShutdownState();
+            setExtStatus(ctx, "reconnecting");
+            await connectAsBroker(ctx, { refreshSettings: false });
           },
         });
         return;
@@ -1517,9 +1525,14 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Commands ───────────────────────────────────────
 
-  async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
+  async function connectAsBroker(
+    ctx: ExtensionContext,
+    options: { refreshSettings?: boolean } = {},
+  ): Promise<void> {
     setExtStatus(ctx, "reconnecting");
-    refreshSettings();
+    if (options.refreshSettings !== false) {
+      refreshSettings();
+    }
     maybeWarnSlackUserAccess(ctx);
     maybeWarnSlackGuardrailPosture(ctx);
 

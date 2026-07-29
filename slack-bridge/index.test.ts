@@ -726,6 +726,7 @@ describe("slack-bridge top-level shutdown", () => {
       pendingBacklogCount: db.getBacklogCount("pending"),
       anomalies: [],
     }));
+    let removeAdaptersCallCount = 0;
     const startBrokerSpy = vi.spyOn(brokerModule, "startBroker").mockImplementation(async () => {
       const db = new BrokerDB(dbPath);
       db.initialize();
@@ -748,7 +749,12 @@ describe("slack-bridge top-level shutdown", () => {
         },
         adapters: [],
         addAdapter: vi.fn(),
-        removeAdapters: vi.fn(async () => {}),
+        removeAdapters: vi.fn(async () => {
+          removeAdaptersCallCount += 1;
+          if (removeAdaptersCallCount === 2) {
+            throw new Error("failed adapter cleanup");
+          }
+        }),
         stop,
       } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
     });
@@ -788,6 +794,10 @@ describe("slack-bridge top-level shutdown", () => {
     );
     expect(notify).toHaveBeenCalledWith(
       "Pinet broker reload failed: Reload failed: refreshed adapter start failed. Restored the previous runtime.",
+      "error",
+    );
+    expect(notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed adapter cleanup"),
       "error",
     );
     expect(notify).not.toHaveBeenCalledWith("Pinet already running (broker)", "info");
@@ -4542,7 +4552,7 @@ describe("slack-bridge broker startup backlog recovery", () => {
     expect(setStatus).toHaveBeenCalled();
   });
 
-  it("keeps exactly one live broker row and clears stranded broker-targeted pending backlog across startup and reload", async () => {
+  it("keeps exactly one live broker row across in-place and settings-driven full reloads", async () => {
     const stableBrokerId = "stable-broker-id";
     const priorBrokerId = "broker-prev";
     const dbPath = path.join(testHome, ".pi", "pinet-broker.db");
@@ -4740,7 +4750,26 @@ describe("slack-bridge broker startup backlog recovery", () => {
     );
     inspectHealthyBrokerState();
 
+    fs.mkdirSync(path.join(testHome, ".pi", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, ".pi", "agent", "settings.json"),
+      JSON.stringify({
+        "slack-bridge": {
+          allowAllWorkspaceUsers: true,
+          meshSecret: "rotated-test-secret",
+        },
+      }),
+    );
+    await pinetStart?.handler("start", ctx);
+
+    expect(startBrokerSpy).toHaveBeenCalledTimes(2);
+    expect(brokerRuntimes).toHaveLength(2);
+    expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(brokerRuntimes[1]?.stop).not.toHaveBeenCalled();
+    inspectHealthyBrokerState();
+
     await sessionShutdown?.({}, ctx);
+    expect(brokerRuntimes[1]?.stop).toHaveBeenCalledTimes(1);
     expect(notify).not.toHaveBeenCalledWith(
       expect.stringContaining("Pinet broker failed"),
       "error",
