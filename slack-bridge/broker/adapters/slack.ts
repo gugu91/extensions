@@ -100,6 +100,8 @@ export interface SlackAdapterConfig {
   onAppHomeOpened?: (event: ParsedAppHomeOpened) => Promise<void> | void;
   /** Best-effort callback for Slack slash commands handled by the broker process. */
   onSlashCommand?: (event: ParsedSlashCommand) => Promise<string | null> | string | null;
+  onSocketOpen?: () => void;
+  onSocketError?: (message: string) => void;
 }
 
 interface SlackThreadInfo {
@@ -180,6 +182,7 @@ export class SlackAdapter implements MessageAdapter {
       appToken: this.config.appToken,
       dedup: this.processedSocketDeliveries,
       abortAndWait: () => this.slackRequests.abortAndWait(),
+      onOpen: () => this.config.onSocketOpen?.(),
       onThreadStarted: (event) => this.onThreadStarted(event),
       onThreadContextChanged: (event) => this.onContextChanged(event),
       onMessage: (event) => this.onMessage(event),
@@ -190,7 +193,7 @@ export class SlackAdapter implements MessageAdapter {
       onSlashCommand: (event) => this.onSlashCommand(event),
       onError: (error) => {
         if (!isAbortError(error)) {
-          console.error(`[slack-adapter] Socket Mode: ${errorMsg(error)}`);
+          this.config.onSocketError?.(errorMsg(error));
         }
       },
     });

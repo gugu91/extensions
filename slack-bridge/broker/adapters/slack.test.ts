@@ -1198,14 +1198,14 @@ describe("SlackAdapter", () => {
 
     await (
       client as unknown as {
-        handleFrame: (raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
       }
-    ).handleFrame(firstFrame);
+    ).handleFrame(null, firstFrame);
     await (
       client as unknown as {
-        handleFrame: (raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
       }
-    ).handleFrame(secondFrame);
+    ).handleFrame(null, secondFrame);
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(resolveUserSpy).toHaveBeenCalledTimes(1);
@@ -1246,9 +1246,10 @@ describe("SlackAdapter", () => {
 
     await (
       client as unknown as {
-        handleFrame: (raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
       }
     ).handleFrame(
+      null,
       JSON.stringify({
         envelope_id: "env-1",
         type: "interactive",
@@ -1362,9 +1363,10 @@ describe("SlackAdapter", () => {
 
     await (
       client as unknown as {
-        handleFrame: (raw: string) => Promise<void>;
+        handleFrame: (socket: WebSocket | null, raw: string) => Promise<void>;
       }
     ).handleFrame(
+      null,
       JSON.stringify({
         envelope_id: "env-1",
         type: "interactive",
@@ -3311,6 +3313,7 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
   const originalWebSocket = globalThis.WebSocket;
 
   class FakeWebSocket {
+    static readonly CONNECTING = 0;
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
 
@@ -3333,7 +3336,12 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     }
 
     send(data: string): void {
-      this.sent.push(String(data));
+      if (this.readyState === FakeWebSocket.CONNECTING) {
+        throw new DOMException("Sent before connected.", "InvalidStateError");
+      }
+      if (this.readyState !== FakeWebSocket.CLOSED) {
+        this.sent.push(String(data));
+      }
     }
 
     close(): void {
@@ -3363,6 +3371,110 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
       globalThis.WebSocket = originalWebSocket;
     }
     vi.restoreAllMocks();
+  });
+
+  it("keeps late frames and close events bound to the socket being replaced", async () => {
+    vi.useFakeTimers();
+    try {
+      let connectionCount = 0;
+      const onError = vi.fn();
+      const client = new SlackSocketModeClient({
+        slack: vi.fn(async (method: string) => {
+          if (method !== "apps.connections.open") return {};
+          connectionCount += 1;
+          return { url: `wss://slack.test/socket-${connectionCount}` };
+        }),
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        resolveBotUserIdOnConnect: false,
+        reconnectDelayMs: 0,
+        onError,
+      });
+
+      await client.connect();
+      const previous = FakeWebSocket.instances[0]!;
+      previous.emit("message", { data: JSON.stringify({ type: "disconnect" }) });
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      const replacement = FakeWebSocket.instances[1]!;
+      replacement.readyState = FakeWebSocket.CONNECTING;
+      previous.emit("message", {
+        data: JSON.stringify({ envelope_id: "env-late", type: "hello" }),
+      });
+      await Promise.resolve();
+
+      expect(previous.sent).toEqual([]);
+      expect(replacement.sent).toEqual([]);
+      expect(onError).not.toHaveBeenCalled();
+
+      previous.close();
+      await vi.runOnlyPendingTimersAsync();
+      expect(previous.readyState).toBe(FakeWebSocket.CLOSED);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+
+      await client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not overlap reconnects when the old socket closes during connection setup", async () => {
+    vi.useFakeTimers();
+    try {
+      let connectionCount = 0;
+      const client = new SlackSocketModeClient({
+        slack: vi.fn((method: string) => {
+          if (method !== "apps.connections.open") return Promise.resolve({});
+          connectionCount += 1;
+          return connectionCount === 1
+            ? Promise.resolve({ url: "wss://slack.test/socket-1" })
+            : new Promise<never>(() => {});
+        }),
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        resolveBotUserIdOnConnect: false,
+        reconnectDelayMs: 0,
+      });
+
+      await client.connect();
+      const previous = FakeWebSocket.instances[0]!;
+      previous.emit("message", { data: JSON.stringify({ type: "disconnect" }) });
+      await vi.runOnlyPendingTimersAsync();
+      expect(connectionCount).toBe(2);
+
+      previous.close();
+      await vi.runOnlyPendingTimersAsync();
+      expect(connectionCount).toBe(2);
+
+      await client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes Socket Mode connection failures through the adapter callback", async () => {
+    fetchMock.mockImplementation(
+      async (input) =>
+        new Response(
+          JSON.stringify(
+            String(input).endsWith("/auth.test")
+              ? { ok: true, user_id: "U_BOT" }
+              : { ok: false, error: "socket_unavailable" },
+          ),
+        ),
+    );
+
+    const onSocketError = vi.fn();
+    const adapter = new SlackAdapter({
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      onSocketError,
+    });
+
+    await adapter.connect();
+    expect(onSocketError).toHaveBeenCalledWith(expect.stringContaining("socket_unavailable"));
+    await adapter.disconnect();
   });
 
   it("receives a DM, ACKs the envelope, emits inbound text, then removes 👀 after replying", async () => {

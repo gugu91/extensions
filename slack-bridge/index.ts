@@ -725,6 +725,7 @@ export default function (pi: ExtensionAPI) {
     getAllowedUsers: () => allowedUsers,
     shouldAllowAllWorkspaceUsers: () =>
       resolveAllowAllWorkspaceUsers(settings, process.env.SLACK_ALLOW_ALL_WORKSPACE_USERS),
+    setExtStatus,
     onAppHomeOpened: handleBrokerAppHomeOpened,
     onSlashCommand: handleBrokerSlackSlashCommand,
   });

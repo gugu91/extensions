@@ -560,6 +560,7 @@ export class SlackSocketModeClient {
   private botUserId: string | null = null;
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connecting = false;
   private shuttingDown = false;
 
   constructor(config: SlackSocketModeClientConfig) {
@@ -599,47 +600,61 @@ export class SlackSocketModeClient {
   }
 
   private async connectSocketMode(): Promise<void> {
-    if (this.shuttingDown) return;
+    if (this.shuttingDown || this.connecting) return;
 
+    this.connecting = true;
+    let shouldReconnect = false;
     try {
       const response = await this.config.slack("apps.connections.open", this.config.appToken);
-      this.ws = new WebSocket(response.url as string);
+      if (this.shuttingDown) return;
 
-      this.ws.addEventListener("open", () => {
+      const previous = this.ws;
+      const socket = new WebSocket(response.url as string);
+      this.ws = socket;
+      previous?.close();
+
+      socket.addEventListener("open", () => {
         this.config.onOpen?.();
       });
 
-      this.ws.addEventListener("message", (event) => {
-        void this.handleFrame(String(event.data)).catch((error) => {
+      socket.addEventListener("message", (event) => {
+        void this.handleFrame(socket, String(event.data)).catch((error) => {
           this.config.onError?.(error);
         });
       });
 
-      this.ws.addEventListener("close", () => {
-        if (!this.shuttingDown) {
+      socket.addEventListener("close", () => {
+        if (this.ws === socket && !this.shuttingDown) {
+          this.ws = null;
           this.scheduleReconnect();
         }
       });
 
-      this.ws.addEventListener("error", () => {
+      socket.addEventListener("error", () => {
         /* close fires after error — handled there */
       });
     } catch (error) {
       if (!isAbortError(error)) {
         this.config.onError?.(error);
       }
+      shouldReconnect = true;
+    } finally {
+      this.connecting = false;
+    }
+
+    if (shouldReconnect) {
       this.scheduleReconnect();
     }
   }
 
-  private async handleFrame(raw: string): Promise<void> {
+  private async handleFrame(socket: WebSocket | null, raw: string): Promise<void> {
     if (this.shuttingDown) return;
 
     const envelope = parseSocketFrame(raw);
     if (!envelope) return;
 
     if (envelope.envelopeId) {
-      this.ws?.send(JSON.stringify({ envelope_id: envelope.envelopeId }));
+      socket?.send(JSON.stringify({ envelope_id: envelope.envelopeId }));
     }
 
     const dedupKey = envelope.dedupKey ?? null;
@@ -653,7 +668,9 @@ export class SlackSocketModeClient {
       }
 
       if (envelope.type === "disconnect") {
-        this.scheduleReconnect();
+        if (this.ws === socket) {
+          this.scheduleReconnect();
+        }
         return;
       }
 
@@ -723,7 +740,7 @@ export class SlackSocketModeClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.shuttingDown || this.reconnectTimer) return;
+    if (this.shuttingDown || this.connecting || this.reconnectTimer) return;
     this.config.onReconnectScheduled?.();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

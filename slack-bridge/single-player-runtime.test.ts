@@ -308,6 +308,25 @@ describe("single-player-runtime", () => {
     expect(spies.maybeDrainInboxIfIdle).toHaveBeenCalledWith(ctx);
   });
 
+  it("routes Socket Mode errors through the TUI", async () => {
+    const state: TestState = {
+      threads: new Map(),
+      pendingEyes: new Map(),
+      unclaimedThreads: new Set(),
+      inbox: [],
+      lastDmChannel: null,
+    };
+    const setExtStatus = vi.fn();
+    const runtime = createSinglePlayerRuntime(createDeps(state, { setExtStatus }).deps);
+    const ctx = createContext();
+
+    await runtime.connect(ctx);
+    const socketConfig = socketState.config as SlackSocketModeClientConfig | null;
+    socketConfig?.onError?.(new Error("socket failed"));
+
+    expect(setExtStatus).toHaveBeenCalledWith(ctx, "error");
+  });
+
   it("ignores opt-in reactions in uninvoked single-player Slack threads", async () => {
     const state: TestState = {
       threads: new Map(),

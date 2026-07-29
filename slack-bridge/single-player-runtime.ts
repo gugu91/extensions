@@ -536,7 +536,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
         },
         onError: (error) => {
           if (!isAbortError(error)) {
-            console.error(`[slack-bridge] Slack access: ${deps.formatError(error)}`);
+            deps.setExtStatus(ctx, "error");
           }
         },
         onThreadStarted: (event) => onThreadStarted(event),
