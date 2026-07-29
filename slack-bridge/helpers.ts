@@ -245,6 +245,7 @@ export interface InboxMessage {
   timestamp: string;
   isChannelMention?: boolean;
   brokerInboxId?: number;
+  brokerInboxOrigin?: "subtree";
   metadata?: InboxMessageMetadata | null;
   scope?: RuntimeScopeCarrier | null;
 }
