@@ -164,93 +164,153 @@ function isExportedNode(node) {
   return Boolean(node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword));
 }
 
+function isExportedVariableDeclaration(node) {
+  return ts.isVariableDeclarationList(node.parent) && isExportedNode(node.parent.parent);
+}
+
 function hasSingleUseHelperIgnore(sourceText, position) {
   const precedingText = sourceText.slice(Math.max(0, position - 300), position);
   return /agent-standards-ignore\s+prefer-inline-single-use-helper/.test(precedingText);
 }
 
-function collectTopLevelHelperNames(sourceFile) {
-  const helperNames = new Set();
-
-  for (const statement of sourceFile.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name && !isExportedNode(statement)) {
-      helperNames.add(statement.name.text);
-      continue;
-    }
-
-    if (!ts.isVariableStatement(statement) || isExportedNode(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name)) continue;
-      const initializer = declaration.initializer;
-      if (
-        initializer &&
-        (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))
-      ) {
-        helperNames.add(declaration.name.text);
-      }
-    }
-  }
-
-  return helperNames;
+function collectExportedSymbols(sourceFile, checker) {
+  const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
+  if (!moduleSymbol) return new Set();
+  return new Set(
+    checker
+      .getExportsOfModule(moduleSymbol)
+      .map((symbol) =>
+        symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol,
+      ),
+  );
 }
 
-function collectTopLevelHelperDeclarations(
+function isLocalHelperDeclaration(node, exportedSymbols, checker) {
+  if (ts.isFunctionDeclaration(node)) {
+    const symbol = node.name ? checker.getSymbolAtLocation(node.name) : undefined;
+    return Boolean(node.name && !isExportedNode(node) && symbol && !exportedSymbols.has(symbol));
+  }
+  if (
+    !ts.isVariableDeclaration(node) ||
+    !ts.isIdentifier(node.name) ||
+    isExportedVariableDeclaration(node)
+  ) {
+    return false;
+  }
+  const symbol = checker.getSymbolAtLocation(node.name);
+  if (!symbol || exportedSymbols.has(symbol)) {
+    return false;
+  }
+  return Boolean(
+    node.initializer &&
+    (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)),
+  );
+}
+
+function helperKey(node) {
+  const names = [node.name.text];
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if ((ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent)) && parent.name) {
+      names.push(parent.name.text);
+    } else if (
+      (ts.isFunctionExpression(parent) || ts.isArrowFunction(parent)) &&
+      ts.isVariableDeclaration(parent.parent) &&
+      ts.isIdentifier(parent.parent.name)
+    ) {
+      names.push(parent.parent.name.text);
+    } else if (ts.isMethodDeclaration(parent) && ts.isIdentifier(parent.name)) {
+      names.push(parent.name.text);
+    } else if (ts.isClassDeclaration(parent) && parent.name) {
+      names.push(parent.name.text);
+    }
+  }
+  return names.reverse().join(".");
+}
+
+function collectHelperKeys(sourceFile, checker) {
+  const helperKeys = new Set();
+  const exportedSymbols = collectExportedSymbols(sourceFile, checker);
+  const visit = (node) => {
+    if (isLocalHelperDeclaration(node, exportedSymbols, checker)) {
+      helperKeys.add(helperKey(node));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return helperKeys;
+}
+
+function collectHelperDeclarations(
   sourceFile,
   sourceText,
   addedLineRanges,
-  existingHelperNames,
+  existingHelperKeys,
+  checker,
 ) {
   const helpers = [];
-
-  for (const statement of sourceFile.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name && !isExportedNode(statement)) {
-      const start = statement.name.getStart(sourceFile);
+  const exportedSymbols = collectExportedSymbols(sourceFile, checker);
+  const visit = (node) => {
+    if (isLocalHelperDeclaration(node, exportedSymbols, checker)) {
+      const start = node.name.getStart(sourceFile);
       const { line, character } = sourceFile.getLineAndCharacterOfPosition(start);
       const lineNumber = line + 1;
       if (
         lineIsAdded(lineNumber, addedLineRanges) &&
-        !existingHelperNames.has(statement.name.text) &&
+        !existingHelperKeys.has(helperKey(node)) &&
         !hasSingleUseHelperIgnore(sourceText, start)
       ) {
-        helpers.push({ name: statement.name.text, line: lineNumber, column: character + 1 });
-      }
-      continue;
-    }
-
-    if (!ts.isVariableStatement(statement) || isExportedNode(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name)) continue;
-      const initializer = declaration.initializer;
-      if (
-        !initializer ||
-        (!ts.isArrowFunction(initializer) && !ts.isFunctionExpression(initializer))
-      ) {
-        continue;
-      }
-      const start = declaration.name.getStart(sourceFile);
-      const { line, character } = sourceFile.getLineAndCharacterOfPosition(start);
-      const lineNumber = line + 1;
-      if (
-        lineIsAdded(lineNumber, addedLineRanges) &&
-        !existingHelperNames.has(declaration.name.text) &&
-        !hasSingleUseHelperIgnore(sourceText, start)
-      ) {
-        helpers.push({ name: declaration.name.text, line: lineNumber, column: character + 1 });
+        helpers.push({
+          name: node.name.text,
+          line: lineNumber,
+          column: character + 1,
+          declarationPosition: start,
+        });
       }
     }
-  }
-
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return helpers;
 }
 
-function countIdentifierReferences(sourceFile, name) {
-  let count = 0;
+function createSingleFileProgram(sourceText, fileName) {
+  const options = { noLib: true, noResolve: true, target: ts.ScriptTarget.Latest };
+  const absoluteFileName = path.resolve(fileName);
+  const host = ts.createCompilerHost(options);
+  host.fileExists = (requestedFileName) => path.resolve(requestedFileName) === absoluteFileName;
+  host.readFile = (requestedFileName) =>
+    path.resolve(requestedFileName) === absoluteFileName ? sourceText : undefined;
+  host.getSourceFile = (requestedFileName, languageVersion) =>
+    path.resolve(requestedFileName) === absoluteFileName
+      ? ts.createSourceFile(absoluteFileName, sourceText, languageVersion, true)
+      : undefined;
 
+  const program = ts.createProgram([absoluteFileName], options, host);
+  const sourceFile = program.getSourceFile(absoluteFileName);
+  if (!sourceFile) throw new Error(`could not parse ${fileName}`);
+  return { sourceFile, checker: program.getTypeChecker() };
+}
+
+function countSymbolReferences(sourceFile, checker, declarationPosition) {
+  let declarationIdentifier;
+  const findDeclaration = (node) => {
+    if (declarationIdentifier) return;
+    if (ts.isIdentifier(node) && node.getStart(sourceFile) === declarationPosition) {
+      declarationIdentifier = node;
+      return;
+    }
+    ts.forEachChild(node, findDeclaration);
+  };
+  findDeclaration(sourceFile);
+  if (!declarationIdentifier) return 0;
+
+  const symbol = checker.getSymbolAtLocation(declarationIdentifier);
+  if (!symbol) return 0;
+  let count = 0;
   const visit = (node) => {
-    if (ts.isIdentifier(node) && node.text === name) count += 1;
+    if (ts.isIdentifier(node) && checker.getSymbolAtLocation(node) === symbol) count += 1;
     ts.forEachChild(node, visit);
   };
-
   visit(sourceFile);
   return count;
 }
@@ -261,21 +321,24 @@ export function findSingleUseAddedHelpers(
   addedLineRanges,
   baseSourceText = "",
 ) {
-  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
-  const baseSourceFile = ts.createSourceFile(
-    fileName,
+  const { sourceFile, checker } = createSingleFileProgram(sourceText, fileName);
+  const { sourceFile: baseSourceFile, checker: baseChecker } = createSingleFileProgram(
     baseSourceText,
-    ts.ScriptTarget.Latest,
-    true,
+    `${fileName}.base.ts`,
   );
-  const helpers = collectTopLevelHelperDeclarations(
+  const helpers = collectHelperDeclarations(
     sourceFile,
     sourceText,
     addedLineRanges,
-    collectTopLevelHelperNames(baseSourceFile),
+    collectHelperKeys(baseSourceFile, baseChecker),
+    checker,
   );
 
-  return helpers.filter((helper) => countIdentifierReferences(sourceFile, helper.name) === 2);
+  return helpers
+    .filter(
+      (helper) => countSymbolReferences(sourceFile, checker, helper.declarationPosition) === 2,
+    )
+    .map(({ declarationPosition: _declarationPosition, ...helper }) => helper);
 }
 
 function formatCountDelta(ruleName, current, base) {
