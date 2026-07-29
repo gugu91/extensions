@@ -1029,6 +1029,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     await sendMessage(agent.id, "/exit", { subtreeLifecycle: "stop" }).catch(() => null);
   }
 
+  // agent-standards-ignore prefer-inline-single-use-helper: restart-safe runtime cleanup resolution
   function childRuntimeSpecs(broker: Broker, agentId: string): WorkerRuntimeSpec[] {
     const specs: WorkerRuntimeSpec[] = [...spawnedWorkers.values()];
     const recordedAgentIds = new Set(
@@ -1311,7 +1312,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
     const sessionName = buildTmuxSessionName(repoPath, role, launchId);
-    const configuredRuntime: unknown = deps.getSettings().subtreeWorkerRuntime;
+    const configuredRuntime = (deps.getSettings() as { subtreeWorkerRuntime?: string })
+      .subtreeWorkerRuntime;
     const runtimeKind = configuredRuntime === undefined ? "tmux" : configuredRuntime;
     if (runtimeKind !== "tmux" && runtimeKind !== "herdr") {
       const invalidValue = JSON.stringify(runtimeKind) ?? String(runtimeKind);
