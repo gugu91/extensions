@@ -346,6 +346,57 @@ describe("runtime spec persistence", () => {
     db.close();
   });
 
+  it.each([
+    ["tmux", "tmux_socket", ""],
+    ["tmux", "tmux_session", "   "],
+    ["tmux", "tmux_target", ""],
+    ["herdr", "herdr_session", ""],
+    ["herdr", "herdr_config_dir", "   "],
+    ["herdr", "herdr_pane_id", ""],
+    ["herdr", "herdr_shell_pid", 0],
+    ["herdr", "herdr_shell_pid", -1],
+  ])("rejects a corrupt %s row with malformed %s", (runtimeKind, column, value) => {
+    const path = dbPath();
+    const db = new BrokerDB(path);
+    db.initialize();
+    db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
+    db.upsertAgentRuntimeSpec(runtimeKind === "tmux" ? spec("worker-1") : herdrSpec("worker-1"));
+
+    const sqlite = new DatabaseSync(path);
+    try {
+      sqlite.exec("PRAGMA ignore_check_constraints = ON");
+      sqlite
+        .prepare(`UPDATE agent_runtime_specs SET ${column} = ? WHERE agent_id = 'worker-1'`)
+        .run(value);
+    } finally {
+      sqlite.close();
+    }
+
+    expect(() => db.getAgentRuntimeSpec("worker-1")).toThrow(
+      `Invalid ${runtimeKind === "tmux" ? "tmux" : "Herdr"} runtime payload for agent worker-1`,
+    );
+    db.close();
+  });
+
+  it.each([
+    ["tmuxSocket", "tmux"],
+    ["tmuxSession", "tmux"],
+    ["tmuxTarget", "tmux"],
+    ["herdrSession", "herdr"],
+    ["herdrConfigDir", "herdr"],
+    ["herdrPaneId", "herdr"],
+  ] as const)("rejects a blank %s when persisting", (field, runtimeKind) => {
+    const db = new BrokerDB(dbPath());
+    db.initialize();
+    db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
+    const input = runtimeKind === "tmux" ? spec("worker-1") : herdrSpec("worker-1");
+
+    expect(() =>
+      db.upsertAgentRuntimeSpec({ ...input, [field]: "   " } as AgentRuntimeSpecInput),
+    ).toThrow(`Invalid ${runtimeKind === "tmux" ? "tmux" : "Herdr"} runtime payload`);
+    db.close();
+  });
+
   it("never persists secret values, only an env allowlist of names", () => {
     const db = new BrokerDB(dbPath());
     db.initialize();

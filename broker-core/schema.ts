@@ -2719,7 +2719,11 @@ export class BrokerDB implements BrokerDBInterface {
       let herdrPaneId: string | null = null;
       let herdrShellPid: number | null = null;
       if (input.runtimeKind === "tmux") {
-        if (!input.tmuxSocket || !input.tmuxSession || !input.tmuxTarget) {
+        if (
+          input.tmuxSocket.trim().length === 0 ||
+          input.tmuxSession.trim().length === 0 ||
+          input.tmuxTarget.trim().length === 0
+        ) {
           throw new Error(`Invalid tmux runtime payload for agent ${input.agentId}`);
         }
         tmuxSocket = input.tmuxSocket;
@@ -2727,9 +2731,9 @@ export class BrokerDB implements BrokerDBInterface {
         tmuxTarget = input.tmuxTarget;
       } else {
         if (
-          !input.herdrSession ||
-          !input.herdrConfigDir ||
-          !input.herdrPaneId ||
+          input.herdrSession.trim().length === 0 ||
+          input.herdrConfigDir.trim().length === 0 ||
+          input.herdrPaneId.trim().length === 0 ||
           !Number.isInteger(input.herdrShellPid) ||
           input.herdrShellPid <= 0
         ) {
@@ -2851,8 +2855,11 @@ export class BrokerDB implements BrokerDBInterface {
     if (row.runtime_kind === "tmux") {
       if (
         row.tmux_socket === null ||
+        row.tmux_socket.trim().length === 0 ||
         row.tmux_session === null ||
+        row.tmux_session.trim().length === 0 ||
         row.tmux_target === null ||
+        row.tmux_target.trim().length === 0 ||
         row.herdr_session !== null ||
         row.herdr_config_dir !== null ||
         row.herdr_pane_id !== null ||
@@ -2871,8 +2878,11 @@ export class BrokerDB implements BrokerDBInterface {
     if (row.runtime_kind === "herdr") {
       if (
         row.herdr_session === null ||
+        row.herdr_session.trim().length === 0 ||
         row.herdr_config_dir === null ||
+        row.herdr_config_dir.trim().length === 0 ||
         row.herdr_pane_id === null ||
+        row.herdr_pane_id.trim().length === 0 ||
         row.herdr_shell_pid === null ||
         !Number.isInteger(row.herdr_shell_pid) ||
         row.herdr_shell_pid <= 0 ||
