@@ -334,6 +334,11 @@ function buildTmuxMonitorCommand(sessionName: string, socketPath: string | null)
   return `tmux ${socketArgs}attach -t ${quoteShellValue(sessionName)}`;
 }
 
+function isMissingExactTmuxTarget(error: Error): boolean {
+  const stderr = "stderr" in error && typeof error.stderr === "string" ? error.stderr : "";
+  return /can't find session:/i.test(`${error.message}\n${stderr}`);
+}
+
 export function getExtensionEntryPath(): string {
   const currentPath = fileURLToPath(import.meta.url);
   const extension = path.extname(currentPath) || ".js";
@@ -669,10 +674,17 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
 
   async function killTmuxSession(sessionName: string, tmuxBaseArgs: string[]): Promise<void> {
     const exactTarget = `=${sessionName}`;
-    await runTmuxCommand([...tmuxBaseArgs, "has-session", "-t", exactTarget]).catch(() => {
-      throw new Error("missing");
-    });
-    await runTmuxCommand([...tmuxBaseArgs, "kill-session", "-t", exactTarget]);
+    try {
+      await runTmuxCommand([...tmuxBaseArgs, "has-session", "-t", exactTarget]);
+    } catch (error) {
+      if (error instanceof Error && isMissingExactTmuxTarget(error)) return;
+      throw error;
+    }
+    try {
+      await runTmuxCommand([...tmuxBaseArgs, "kill-session", "-t", exactTarget]);
+    } catch (error) {
+      if (!(error instanceof Error) || !isMissingExactTmuxTarget(error)) throw error;
+    }
   }
 
   async function cleanupSpawn(handle: SubtreeSpawnLaunchHandle): Promise<void> {
@@ -690,9 +702,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
 
     fencedLaunchIds.add(handle.launchId);
     const tmuxBaseArgs = buildTmuxBaseArgs(worker.tmuxSocketPath);
-    await killTmuxSession(handle.tmuxSessionName, tmuxBaseArgs).catch((error) => {
-      if (!(error instanceof Error) || error.message !== "missing") throw error;
-    });
+    await killTmuxSession(handle.tmuxSessionName, tmuxBaseArgs);
 
     const broker = activeBroker;
     const agentId = selfAgentId;

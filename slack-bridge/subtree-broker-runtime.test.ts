@@ -126,10 +126,19 @@ function createTmuxHarness(): {
             (session) => session === target || session.startsWith(target ?? ""),
           );
       if (args.includes("has-session") && matches.length !== 1) {
-        throw new Error(matches.length === 0 ? "missing tmux session" : "ambiguous tmux session");
+        if (matches.length === 0) {
+          throw Object.assign(new Error(`can't find session: ${target}`), {
+            stderr: `can't find session: ${target}`,
+          });
+        }
+        throw new Error("ambiguous tmux session");
       }
       if (args.includes("kill-session")) {
-        if (matches.length !== 1) throw new Error("missing or ambiguous tmux session");
+        if (matches.length !== 1) {
+          throw Object.assign(new Error(`can't find session: ${target}`), {
+            stderr: `can't find session: ${target}`,
+          });
+        }
         const [matchedSession] = matches;
         liveSessions.delete(matchedSession);
         killedSessions.push(matchedSession);
@@ -358,6 +367,50 @@ describe("subtree broker spawn lifecycle", () => {
     });
     expect(repeatedRetry).toEqual(retried);
     expect(launchCount).toBe(2);
+  });
+
+  it("propagates operational tmux cleanup failures without launching a replacement", async () => {
+    const tmux = createTmuxHarness();
+    let failProbe = false;
+    let launchCount = 0;
+    const runTmuxCommand = async (args: string[]): Promise<void> => {
+      if (failProbe && args.includes("has-session")) {
+        throw new Error("tmux transport unavailable");
+      }
+      await tmux.run(args);
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `cleanup-failure-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand },
+    );
+    tmux.setOnLaunch(() => {
+      launchCount += 1;
+    });
+
+    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Retry cleanup failure",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+      else throw error;
+    }
+    if (!timeoutError) throw new Error("expected registration timeout");
+
+    failProbe = true;
+    await expect(
+      runtime.spawnWorker(ctx, {
+        task: "Must not relaunch",
+        repo: ".",
+        cleanupHandle: timeoutError.handle,
+      }),
+    ).rejects.toThrow("tmux transport unavailable");
+    expect(launchCount).toBe(1);
+    expect(tmux.liveSessions).toEqual(new Set([timeoutError.handle.tmuxSessionName]));
   });
 
   it("fences an old launch before cleanup so an in-flight registration cannot survive retry", async () => {
