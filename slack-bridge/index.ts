@@ -8,6 +8,7 @@ import {
   loadSettings as loadSettingsFromFile,
   buildAllowlist,
   resolvePinetMeshAuth,
+  reloadPinetRuntimeInPlaceSafely,
   reloadPinetRuntimeSafely,
   buildPinetOwnerToken,
   resolveAgentIdentity,
@@ -687,6 +688,8 @@ export default function (pi: ExtensionAPI) {
   let currentRuntimeMode: SlackBridgeRuntimeMode = "off";
   let brokerRole: "broker" | "follower" | null = null;
   let brokerClient: BrokerClientRef | null = null;
+  let pinetLifecycleTail: Promise<void> = Promise.resolve();
+  let pinetReloadPromise: Promise<void> | null = null;
   let followerRuntimeDiagnostic: FollowerRuntimeDiagnostic | null = null;
   const followerDeliveryState = createFollowerDeliveryState();
   let desiredAgentStatus: "working" | "idle" = "idle";
@@ -867,7 +870,7 @@ export default function (pi: ExtensionAPI) {
         "Pinet broker shutdown requested by another local session (/pinet start replace). Stopping the broker runtime in this session.",
         "warning",
       );
-      await stopPinetRuntime(ctx, { releaseIdentity: true });
+      await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: true }));
       slackRequestRuntime.reset();
       singlePlayerRuntime.resetShutdownState();
     },
@@ -1162,6 +1165,15 @@ export default function (pi: ExtensionAPI) {
     throw new Error("Pinet is in an unexpected state.");
   }
 
+  function runPinetLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const run = pinetLifecycleTail.then(operation, operation);
+    pinetLifecycleTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   async function transitionToRuntimeMode(
     ctx: ExtensionContext,
     mode: SlackBridgeRuntimeMode,
@@ -1174,7 +1186,12 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (currentRuntimeMode !== "off") {
-      await stopPinetRuntime(ctx, { releaseIdentity: true });
+      if (pinetReloadPromise) {
+        await pinetReloadPromise.catch(() => {
+          /* transition from the restored runtime */
+        });
+      }
+      await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: true }));
       // Runtime transitions keep the extension alive in-process, so restore a
       // fresh top-level Slack request tracker after tearing the prior runtime down.
       slackRequestRuntime.reset();
@@ -1256,38 +1273,84 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function reloadPinetRuntime(ctx: ExtensionContext): Promise<void> {
-    await reloadPinetRuntimeSafely({
-      getCurrentRole: () => brokerRole,
-      snapshotState: () => snapshotReloadableRuntime(),
-      restoreState: (snapshot) => {
-        restoreReloadableRuntime(snapshot);
-      },
-      refreshState: () => {
-        refreshSettings();
-      },
-      validateRefreshedState: () => {
+    if (pinetReloadPromise) {
+      await pinetReloadPromise;
+      return;
+    }
+
+    const reloadWork = runPinetLifecycle(async () => {
+      let reloadBrokerInPlace = false;
+      const validateRefreshedState = () => {
         if (!botToken || !appToken) {
           throw new Error("Slack tokens are not configured after reload.");
         }
-      },
-      stopRuntime: async () => {
-        await stopPinetRuntime(ctx, { releaseIdentity: false });
-        // Reload intentionally keeps the extension alive in-process, so restore a
-        // fresh top-level Slack request tracker after aborting the previous
-        // generation. This preserves shutdown abort semantics without leaving
-        // top-level Slack tools permanently stuck in "shutdown in progress".
-        slackRequestRuntime.reset();
-        singlePlayerRuntime.resetShutdownState();
-        setExtStatus(ctx, "reconnecting");
-      },
-      startRuntime: async (role) => {
-        if (role === "broker") {
-          await connectAsBroker(ctx);
-          return;
+        if (brokerRole === "broker") {
+          reloadBrokerInPlace = brokerRuntime.canReloadInPlace();
         }
-        await connectAsFollower(ctx);
-      },
+      };
+
+      if (brokerRole === "broker") {
+        await reloadPinetRuntimeInPlaceSafely({
+          snapshotState: () => snapshotReloadableRuntime(),
+          restoreState: (snapshot) => {
+            restoreReloadableRuntime(snapshot);
+          },
+          refreshState: () => {
+            refreshSettings();
+          },
+          validateRefreshedState,
+          reloadRuntime: async () => {
+            if (reloadBrokerInPlace) {
+              const result = await brokerRuntime.reloadAdapters(ctx);
+              botUserId = result.botUserId;
+              return;
+            }
+
+            await stopPinetRuntime(ctx, { releaseIdentity: false });
+            slackRequestRuntime.reset();
+            singlePlayerRuntime.resetShutdownState();
+            setExtStatus(ctx, "reconnecting");
+            await connectAsBroker(ctx, { refreshSettings: false });
+          },
+        });
+        return;
+      }
+
+      await reloadPinetRuntimeSafely({
+        getCurrentRole: () => brokerRole,
+        snapshotState: () => snapshotReloadableRuntime(),
+        restoreState: (snapshot) => {
+          restoreReloadableRuntime(snapshot);
+        },
+        refreshState: () => {
+          refreshSettings();
+        },
+        validateRefreshedState,
+        stopRuntime: async () => {
+          await stopPinetRuntime(ctx, { releaseIdentity: false });
+          // Reload intentionally keeps the extension alive in-process, so restore a
+          // fresh top-level Slack request tracker after aborting the previous
+          // generation. This preserves shutdown abort semantics without leaving
+          // top-level Slack tools permanently stuck in "shutdown in progress".
+          slackRequestRuntime.reset();
+          singlePlayerRuntime.resetShutdownState();
+          setExtStatus(ctx, "reconnecting");
+        },
+        startRuntime: async (role) => {
+          if (role === "broker") {
+            await connectAsBroker(ctx);
+            return;
+          }
+          await connectAsFollower(ctx);
+        },
+      });
+    }).finally(() => {
+      if (pinetReloadPromise === reloadWork) {
+        pinetReloadPromise = null;
+      }
     });
+    pinetReloadPromise = reloadWork;
+    await reloadWork;
   }
 
   // ─── Tools ──────────────────────────────────────────
@@ -1462,9 +1525,14 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Commands ───────────────────────────────────────
 
-  async function connectAsBroker(ctx: ExtensionContext): Promise<void> {
+  async function connectAsBroker(
+    ctx: ExtensionContext,
+    options: { refreshSettings?: boolean } = {},
+  ): Promise<void> {
     setExtStatus(ctx, "reconnecting");
-    refreshSettings();
+    if (options.refreshSettings !== false) {
+      refreshSettings();
+    }
     maybeWarnSlackUserAccess(ctx);
     maybeWarnSlackGuardrailPosture(ctx);
 
@@ -1775,7 +1843,7 @@ export default function (pi: ExtensionAPI) {
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
     sessionUiRuntime.cleanupForSessionShutdown();
-    await stopPinetRuntime(ctx, { releaseIdentity: true });
+    await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: true }));
     pinetRegistrationGate.reset();
   });
 }

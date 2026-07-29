@@ -206,14 +206,17 @@ export class SlackAdapter implements MessageAdapter {
 
   async disconnect(): Promise<void> {
     this.shuttingDown = true;
-    await this.threadStatuses.clearAll();
-    const socketMode = this.socketMode;
-    this.socketMode = null;
-    if (socketMode) {
-      await socketMode.disconnect();
-      return;
+    try {
+      await this.threadStatuses.clearAll();
+    } finally {
+      const socketMode = this.socketMode;
+      this.socketMode = null;
+      if (socketMode) {
+        await socketMode.disconnect();
+      } else {
+        await this.slackRequests.abortAndWait();
+      }
     }
-    await this.slackRequests.abortAndWait();
   }
 
   onInbound(handler: (msg: InboundMessage) => void): void {
