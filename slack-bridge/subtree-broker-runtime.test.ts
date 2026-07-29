@@ -189,6 +189,25 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmux.liveSessions.size).toBe(3);
   });
 
+  it("single-flights public start with automatic spawn startup", async () => {
+    const tmux = createTmuxHarness();
+    const getAgentMetadata = vi.fn(async () => ({}));
+    const { runtime } = createRuntime(
+      () => false,
+      `public-start-flight-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { getAgentMetadata, runTmuxCommand: tmux.run },
+    );
+    tmux.setOnLaunch((facts) => registerChild(runtime, facts, "spawn-child"));
+
+    const [, spawned] = await Promise.all([
+      runtime.start(ctx),
+      runtime.spawnWorker(ctx, { task: "Spawn while starting", repo: "." }),
+    ]);
+
+    expect(spawned.agentId).toBe("spawn-child");
+    expect(getAgentMetadata).toHaveBeenCalledTimes(1);
+  });
+
   it("validates empty spawn inputs before starting the broker", async () => {
     const getAgentMetadata = vi.fn(async () => ({}));
     const { runtime } = createRuntime(

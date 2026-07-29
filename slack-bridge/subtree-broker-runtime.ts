@@ -776,7 +776,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     }
   }
 
-  async function start(ctx: ExtensionContext): Promise<SubtreeBrokerStatus> {
+  async function startOnce(ctx: ExtensionContext): Promise<SubtreeBrokerStatus> {
     if (activeBroker) return getStatus();
 
     const stableId = deps.getCentralAgentId() ?? deps.getAgentStableId();
@@ -886,14 +886,18 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     }
   }
 
-  async function ensureSubtreeBroker(ctx: ExtensionContext): Promise<void> {
-    if (activeBroker) return;
+  function start(ctx: ExtensionContext): Promise<SubtreeBrokerStatus> {
+    if (activeBroker) return Promise.resolve(getStatus());
     if (!brokerStartPromise) {
-      brokerStartPromise = start(ctx).finally(() => {
+      brokerStartPromise = startOnce(ctx).finally(() => {
         brokerStartPromise = null;
       });
     }
-    await brokerStartPromise;
+    return brokerStartPromise;
+  }
+
+  async function ensureSubtreeBroker(ctx: ExtensionContext): Promise<void> {
+    await start(ctx);
   }
 
   async function spawnWorkerOnce(
