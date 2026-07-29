@@ -189,6 +189,24 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmux.liveSessions.size).toBe(3);
   });
 
+  it("validates empty spawn inputs before starting the broker", async () => {
+    const getAgentMetadata = vi.fn(async () => ({}));
+    const { runtime } = createRuntime(
+      () => false,
+      `spawn-validation-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { getAgentMetadata },
+    );
+
+    await expect(runtime.spawnWorker(ctx, { task: "", repo: "." })).rejects.toThrow(
+      "spawn requires task",
+    );
+    await expect(runtime.spawnWorker(ctx, { task: "Task", repo: "" })).rejects.toThrow(
+      "spawn requires repo",
+    );
+    expect(getAgentMetadata).not.toHaveBeenCalled();
+    expect(runtime.isActive()).toBe(false);
+  });
+
   it("stops a broker when post-listen initialization fails so startup can retry", async () => {
     const tmux = createTmuxHarness();
     const getAgentMetadata = vi

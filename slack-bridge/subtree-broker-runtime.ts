@@ -900,12 +900,12 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     ctx: ExtensionContext,
     input: SubtreeSpawnInput,
   ): Promise<SubtreeSpawnResult> {
+    if (!input.task.trim()) throw new Error("spawn requires task");
+    if (!input.repo.trim()) throw new Error("spawn requires repo");
     await ensureSubtreeBroker(ctx);
     if (!activeBroker || !activePaths || !selfAgentId) {
       throw new Error("Subtree broker is not running.");
     }
-    if (!input.task.trim()) throw new Error("spawn requires task");
-    if (!input.repo.trim()) throw new Error("spawn requires repo");
     if (input.cleanupHandle) {
       await cleanupSpawn(input.cleanupHandle);
     }
