@@ -36,6 +36,7 @@ import {
 } from "./broker/hibernation-activation.js";
 import { freezeHibernationActivationAuthority } from "./broker/hibernation-activation-authority.js";
 import type { BrokerDB } from "./broker/schema.js";
+import type { AgentRuntimeSpec } from "@pinet/broker-core/types";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_SPAWN_REGISTRATION_TIMEOUT_MS = 45_000;
@@ -56,8 +57,23 @@ export interface SubtreeWorkerRecord {
   laneId: string | null;
   agentId: string | null;
   startedAt: string;
+  runtimeKind: AgentRuntimeSpec["runtimeKind"];
   monitorCommand: string;
   tmuxSocketPath: string | null;
+}
+
+interface WorkerRuntimeSpec {
+  runtimeKind: AgentRuntimeSpec["runtimeKind"];
+  sessionName: string;
+  tmuxSocketPath: string | null;
+}
+
+interface WorkerRuntimeController {
+  createLaunchSpec: (sessionName: string) => WorkerRuntimeSpec;
+  monitorCommand: (spec: WorkerRuntimeSpec) => string;
+  launch: (spec: WorkerRuntimeSpec, launcherPath: string) => Promise<void>;
+  probe: (spec: WorkerRuntimeSpec) => Promise<boolean>;
+  cleanup: (spec: WorkerRuntimeSpec) => Promise<void>;
 }
 
 export interface SubtreeBrokerStatus {
@@ -358,6 +374,61 @@ function isMissingTmuxTarget(error: Error): boolean {
   );
 }
 
+// agent-standards-ignore prefer-inline-single-use-helper: runtime backend construction seam
+function createTmuxWorkerRuntimeController(
+  runTmuxCommand: (args: string[]) => Promise<void>,
+): WorkerRuntimeController {
+  // agent-standards-ignore prefer-inline-single-use-helper: shared controller probe contract
+  const probe = async (spec: WorkerRuntimeSpec): Promise<boolean> => {
+    const exactTarget = `=${spec.sessionName}`;
+    try {
+      await runTmuxCommand([
+        ...buildTmuxBaseArgs(spec.tmuxSocketPath),
+        "has-session",
+        "-t",
+        exactTarget,
+      ]);
+      return true;
+    } catch (error) {
+      if (error instanceof Error && isMissingTmuxTarget(error)) return false;
+      throw error;
+    }
+  };
+
+  return {
+    createLaunchSpec: (sessionName) => ({
+      runtimeKind: "tmux",
+      sessionName,
+      tmuxSocketPath: findTmuxSocketPath(),
+    }),
+    monitorCommand: (spec) => buildTmuxMonitorCommand(spec.sessionName, spec.tmuxSocketPath),
+    launch: async (spec, launcherPath) => {
+      await runTmuxCommand([
+        ...buildTmuxBaseArgs(spec.tmuxSocketPath),
+        "new-session",
+        "-d",
+        "-s",
+        spec.sessionName,
+        launcherPath,
+      ]);
+    },
+    probe,
+    cleanup: async (spec) => {
+      if (!(await probe(spec))) return;
+      try {
+        await runTmuxCommand([
+          ...buildTmuxBaseArgs(spec.tmuxSocketPath),
+          "kill-session",
+          "-t",
+          `=${spec.sessionName}`,
+        ]);
+      } catch (error) {
+        if (!(error instanceof Error) || !isMissingTmuxTarget(error)) throw error;
+      }
+    },
+  };
+}
+
 export function getExtensionEntryPath(): string {
   const currentPath = fileURLToPath(import.meta.url);
   const extension = path.extname(currentPath) || ".js";
@@ -471,6 +542,10 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     (async (args: string[]): Promise<void> => {
       await execFileAsync("tmux", args);
     });
+  const workerRuntimeControllers: Record<AgentRuntimeSpec["runtimeKind"], WorkerRuntimeController> =
+    {
+      tmux: createTmuxWorkerRuntimeController(runTmuxCommand),
+    };
 
   function stopHeartbeat(): void {
     if (!heartbeatTimer) return;
@@ -695,21 +770,6 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     await sendMessage(agent.id, "/exit", { subtreeLifecycle: "stop" }).catch(() => null);
   }
 
-  async function killTmuxSession(sessionName: string, tmuxBaseArgs: string[]): Promise<void> {
-    const exactTarget = `=${sessionName}`;
-    try {
-      await runTmuxCommand([...tmuxBaseArgs, "has-session", "-t", exactTarget]);
-    } catch (error) {
-      if (error instanceof Error && isMissingTmuxTarget(error)) return;
-      throw error;
-    }
-    try {
-      await runTmuxCommand([...tmuxBaseArgs, "kill-session", "-t", exactTarget]);
-    } catch (error) {
-      if (!(error instanceof Error) || !isMissingTmuxTarget(error)) throw error;
-    }
-  }
-
   function childTmuxSessions(broker: Broker, agentId: string): string[] {
     const sessions = new Set<string>();
     for (const worker of spawnedWorkers.values()) {
@@ -733,10 +793,11 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     }
 
     const tmuxSocketPath = findTmuxSocketPath();
-    const tmuxBaseArgs = buildTmuxBaseArgs(tmuxSocketPath);
     await Promise.all(
       childTmuxSessions(broker, agentId).map((sessionName) =>
-        killTmuxSession(sessionName, tmuxBaseArgs).catch(() => undefined),
+        workerRuntimeControllers.tmux
+          .cleanup({ runtimeKind: "tmux", sessionName, tmuxSocketPath })
+          .catch(() => undefined),
       ),
     );
   }
@@ -931,7 +992,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       fenceLaunch(activeBroker, handle.launchId);
       spawnedWorkers.delete(handle.launchId);
       try {
-        await killTmuxSession(handle.tmuxSessionName, buildTmuxBaseArgs(worker.tmuxSocketPath));
+        await workerRuntimeControllers[worker.runtimeKind].cleanup(worker);
       } catch (error) {
         spawnedWorkers.set(handle.launchId, worker);
         throw error;
@@ -943,9 +1004,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
     const sessionName = buildTmuxSessionName(repoPath, role, launchId);
-    const tmuxSocketPath = findTmuxSocketPath();
-    const tmuxBaseArgs = buildTmuxBaseArgs(tmuxSocketPath);
-    const monitorCommand = buildTmuxMonitorCommand(sessionName, tmuxSocketPath);
+    const runtimeController = workerRuntimeControllers.tmux;
+    const runtimeSpec = runtimeController.createLaunchSpec(sessionName);
+    const monitorCommand = runtimeController.monitorCommand(runtimeSpec);
     const childLaunchEnv = buildChildLaunchEnv(activePaths, selfAgentId, {
       launchId,
       role,
@@ -974,8 +1035,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       laneId: input.laneId ?? null,
       agentId: null,
       startedAt: new Date().toISOString(),
+      runtimeKind: runtimeSpec.runtimeKind,
       monitorCommand,
-      tmuxSocketPath,
+      tmuxSocketPath: runtimeSpec.tmuxSocketPath,
     };
     const launchHandle: SubtreeSpawnLaunchHandle = {
       launchId,
@@ -985,7 +1047,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     };
     spawnedWorkers.set(launchId, workerRecord);
     try {
-      await runTmuxCommand([...tmuxBaseArgs, "new-session", "-d", "-s", sessionName, launcherPath]);
+      await runtimeController.launch(runtimeSpec, launcherPath);
     } catch (error) {
       fenceLaunch(activeBroker, launchId);
       throw new SubtreeSpawnLaunchError(
@@ -997,7 +1059,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const agent = await waitForSpawnedAgent({
       broker: activeBroker,
       handle: launchHandle,
-      tmuxBaseArgs,
+      tmuxBaseArgs: buildTmuxBaseArgs(runtimeSpec.tmuxSocketPath),
       timeoutMs: input.waitForRegistrationMs ?? DEFAULT_SPAWN_REGISTRATION_TIMEOUT_MS,
     });
     const updatedRecord: SubtreeWorkerRecord = { ...workerRecord, agentId: agent.id };
@@ -1019,7 +1081,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         cwd: repoPath,
         repoRoot: repoPath,
         worktreePath: repoPath,
-        tmuxSocket: tmuxSocketPath ?? "",
+        tmuxSocket: runtimeSpec.tmuxSocketPath ?? "",
         tmuxSession: sessionName,
         tmuxTarget: sessionName,
         extensionEntryPath: getExtensionEntryPath(),
