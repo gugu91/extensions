@@ -988,17 +988,44 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     await sendMessage(agent.id, "/exit", { subtreeLifecycle: "stop" }).catch(() => null);
   }
 
-  function childTmuxSessions(broker: Broker, agentId: string): string[] {
-    const sessions = new Set<string>();
-    for (const worker of spawnedWorkers.values()) {
-      sessions.add(worker.sessionName);
-    }
+  function childRuntimeSpecs(broker: Broker, agentId: string): WorkerRuntimeSpec[] {
+    const specs: WorkerRuntimeSpec[] = [...spawnedWorkers.values()];
+    const recordedAgentIds = new Set(
+      [...spawnedWorkers.values()].flatMap((worker) => (worker.agentId ? [worker.agentId] : [])),
+    );
     for (const agent of broker.db.getAllAgents()) {
-      if (!isSubtreeChildAgent(agent, agentId)) continue;
-      const session = metadataString(agent.metadata, "tmuxSession");
-      if (session) sessions.add(session);
+      if (!isSubtreeChildAgent(agent, agentId) || recordedAgentIds.has(agent.id)) continue;
+      const durableSpec = broker.db.getAgentRuntimeSpec(agent.id);
+      if (durableSpec?.runtimeKind === "tmux") {
+        specs.push({
+          runtimeKind: "tmux",
+          sessionName: durableSpec.tmuxSession,
+          tmuxSocketPath: durableSpec.tmuxSocket,
+        });
+        continue;
+      }
+      if (durableSpec?.runtimeKind === "herdr") {
+        specs.push({
+          runtimeKind: "herdr",
+          sessionName: agent.id,
+          tmuxSocketPath: null,
+          herdrSession: durableSpec.herdrSession,
+          herdrConfigDir: durableSpec.herdrConfigDir,
+          herdrPaneId: durableSpec.herdrPaneId,
+          herdrShellPid: durableSpec.herdrShellPid,
+        });
+        continue;
+      }
+      const tmuxSession = metadataString(agent.metadata, "tmuxSession");
+      if (tmuxSession) {
+        specs.push({
+          runtimeKind: "tmux",
+          sessionName: tmuxSession,
+          tmuxSocketPath: findTmuxSocketPath(),
+        });
+      }
     }
-    return [...sessions];
+    return specs;
   }
 
   async function stopChildren(broker: Broker, agentId: string): Promise<void> {
@@ -1010,12 +1037,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       await sleep(SUBTREE_CHILD_EXIT_GRACE_MS);
     }
 
-    const tmuxSocketPath = findTmuxSocketPath();
     await Promise.all(
-      childTmuxSessions(broker, agentId).map((sessionName) =>
-        workerRuntimeControllers.tmux
-          .cleanup({ runtimeKind: "tmux", sessionName, tmuxSocketPath })
-          .catch(() => undefined),
+      childRuntimeSpecs(broker, agentId).map((spec) =>
+        cleanupWorkerRuntime(spec).catch(() => undefined),
       ),
     );
   }

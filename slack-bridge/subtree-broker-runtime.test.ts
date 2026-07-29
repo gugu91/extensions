@@ -250,7 +250,6 @@ describe("subtree broker spawn lifecycle", () => {
 
   it("selects Herdr only when explicitly configured", async () => {
     const tmuxRun = vi.fn(async () => {});
-    let runtime: SubtreeBrokerRuntime;
     let launchId = "";
     let sessionName = "";
     const runHerdrCommand = vi.fn(async (args: string[]) => {
@@ -276,7 +275,7 @@ describe("subtree broker spawn lifecycle", () => {
       }
       return "{}";
     });
-    ({ runtime } = createRuntime(
+    const { runtime } = createRuntime(
       () => false,
       `herdr-selection-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
       {
@@ -284,7 +283,7 @@ describe("subtree broker spawn lifecycle", () => {
         runTmuxCommand: tmuxRun,
         runHerdrCommand,
       },
-    ));
+    );
 
     const result = await runtime.spawnWorker(ctx, { task: "Run in Herdr", repo: "." });
 
@@ -319,6 +318,50 @@ describe("subtree broker spawn lifecycle", () => {
     );
     expect(tmuxRun).not.toHaveBeenCalled();
   });
+
+  it.each(["tmux", "herdr"] as const)(
+    "dispatches broker-stop cleanup to the recorded %s runtime",
+    async (runtimeKind) => {
+      const tmux = createTmuxHarness();
+      const herdrCommands: string[][] = [];
+      const runHerdrCommand = async (args: string[]): Promise<string> => {
+        herdrCommands.push(args);
+        if (args.includes("create")) {
+          return JSON.stringify({ result: { root_pane: { pane_id: "w1:p9" } } });
+        }
+        if (args.includes("process-info")) {
+          return JSON.stringify({ result: { process_info: { shell_pid: 9009 } } });
+        }
+        return "{}";
+      };
+      const { runtime } = createRuntime(
+        () => false,
+        `stop-${runtimeKind}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+        {
+          getSettings: () => ({ subtreeWorkerRuntime: runtimeKind }),
+          runTmuxCommand: tmux.run,
+          runHerdrCommand,
+        },
+      );
+
+      await expect(
+        runtime.spawnWorker(ctx, {
+          task: `Run in ${runtimeKind}`,
+          repo: ".",
+          waitForRegistrationMs: 2,
+        }),
+      ).rejects.toBeInstanceOf(SubtreeSpawnRegistrationTimeoutError);
+      await runtime.stop();
+
+      if (runtimeKind === "tmux") {
+        expect(tmux.killedSessions).toHaveLength(1);
+        expect(herdrCommands).toHaveLength(0);
+      } else {
+        expect(tmux.killedSessions).toHaveLength(0);
+        expect(herdrCommands.some((args) => args.includes("close"))).toBe(true);
+      }
+    },
+  );
 
   it("single-flights public start with automatic spawn startup", async () => {
     const tmux = createTmuxHarness();
