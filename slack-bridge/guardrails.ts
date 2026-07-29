@@ -21,6 +21,7 @@ export const READ_ONLY_TOOLS = new Set([
   "slack:canvas_comments_read",
   "slack:confirm_action",
   "pinet:agents",
+  "pinet:lanes",
   "pinet:read",
   "memory_read",
   "memory_search",

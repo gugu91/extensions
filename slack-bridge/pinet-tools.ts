@@ -1952,9 +1952,10 @@ function runPinetLanesAction(
   return (async () => {
     const op = getMaybeString(params, "op")?.toLowerCase() ?? "list";
     const policyContext = `op=${op} | format=${output.format}`;
-    deps.requireToolPolicy(toolName, undefined, policyContext);
+    const threadTs = getMaybeString(params, "thread_ts");
+    deps.requireToolPolicy(toolName, threadTs, policyContext);
     if (op === "upsert" || op === "participant") {
-      deps.requireToolPolicy(`${toolName}:write`, undefined, policyContext);
+      deps.requireToolPolicy(`${toolName}:write`, threadTs, policyContext);
     }
     if (!deps.pinetEnabled()) {
       throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
@@ -2669,6 +2670,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility. Upsert and participant operations additionally require guardrail policy pinet:lanes:write.",
     parameters: Type.Object({
       op: Type.Optional(Type.String({ description: "Operation: list, upsert, or participant" })),
+      thread_ts: Type.Optional(
+        Type.String({ description: "Slack thread timestamp for confirmation-required mutations" }),
+      ),
       lane_id: Type.Optional(Type.String({ description: "Stable lane id, e.g. issue-688" })),
       name: Type.Optional(
         Type.Union([Type.String(), Type.Null()], { description: "Human-readable lane name" }),

@@ -1392,13 +1392,18 @@ describe("registerPinetTools", () => {
     })) as { details: { status: string } };
     const upsertResult = (await tools.get("pinet")?.execute("tool-call-lane-upsert-read-only", {
       action: "lanes",
-      args: { op: "upsert", lane_id: "issue-965" },
+      args: { op: "upsert", lane_id: "issue-965", thread_ts: "123.456" },
     })) as { details: { status: string } };
     const participantResult = (await tools
       .get("pinet")
       ?.execute("tool-call-lane-participant-read-only", {
         action: "lanes",
-        args: { op: "participant", lane_id: "issue-965", agent_id: "worker-1" },
+        args: {
+          op: "participant",
+          lane_id: "issue-965",
+          agent_id: "worker-1",
+          thread_ts: "123.456",
+        },
       })) as { details: { status: string } };
 
     expect(listResult.details.status).toBe("succeeded");
@@ -1407,31 +1412,13 @@ describe("registerPinetTools", () => {
     expect(listPinetLanes).toHaveBeenCalledOnce();
     expect(upsertPinetLane).not.toHaveBeenCalled();
     expect(setPinetLaneParticipant).not.toHaveBeenCalled();
-    expect(requireToolPolicy).toHaveBeenCalledWith(
-      "pinet:lanes",
-      undefined,
-      "op=list | format=cli",
-    );
-    expect(requireToolPolicy).toHaveBeenCalledWith(
-      "pinet:lanes",
-      undefined,
-      "op=upsert | format=cli",
-    );
-    expect(requireToolPolicy).toHaveBeenCalledWith(
-      "pinet:lanes",
-      undefined,
-      "op=participant | format=cli",
-    );
-    expect(requireToolPolicy).toHaveBeenCalledWith(
-      "pinet:lanes:write",
-      undefined,
-      "op=upsert | format=cli",
-    );
-    expect(requireToolPolicy).toHaveBeenCalledWith(
-      "pinet:lanes:write",
-      undefined,
-      "op=participant | format=cli",
-    );
+    expect(requireToolPolicy.mock.calls).toEqual([
+      ["pinet:lanes", undefined, "op=list | format=cli"],
+      ["pinet:lanes", "123.456", "op=upsert | format=cli"],
+      ["pinet:lanes:write", "123.456", "op=upsert | format=cli"],
+      ["pinet:lanes", "123.456", "op=participant | format=cli"],
+      ["pinet:lanes:write", "123.456", "op=participant | format=cli"],
+    ]);
   });
 
   it("updates durable PM lane metadata through the lanes dispatcher", async () => {
