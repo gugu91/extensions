@@ -638,6 +638,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     broker: Broker;
     launchId: string;
     sessionName: string;
+    socketPath: string;
     tmuxBaseArgs: string[];
     timeoutMs: number;
   }): Promise<AgentInfo> {
@@ -663,7 +664,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     throw new SubtreeSpawnRegistrationTimeoutError(input.timeoutMs, {
       launchId: input.launchId,
       tmuxSessionName: input.sessionName,
-      socketPath: activePaths?.socketPath ?? "",
+      socketPath: input.socketPath,
       state: "launched_unregistered",
     });
   }
@@ -915,6 +916,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       await cleanupSpawn(input.cleanupHandle);
     }
 
+    const socketPath = activePaths.socketPath;
     const repoPath = resolveRepoPath(input.repo, deps.cwd);
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
@@ -961,6 +963,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       broker: activeBroker,
       launchId,
       sessionName,
+      socketPath,
       tmuxBaseArgs,
       timeoutMs: input.waitForRegistrationMs ?? DEFAULT_SPAWN_REGISTRATION_TIMEOUT_MS,
     });

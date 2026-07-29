@@ -283,6 +283,40 @@ describe("subtree broker spawn lifecycle", () => {
     expect(tmux.liveSessions).toEqual(new Set(["unrelated-session"]));
   });
 
+  it("keeps the launch-time Pinet socket in a timeout handle if the broker stops", async () => {
+    const tmux = createTmuxHarness();
+    let launchSocketPath = "";
+    let stopped = false;
+    const runTmuxCommand = async (args: string[]): Promise<void> => {
+      await tmux.run(args);
+      if (!stopped && args.includes("send-keys") && args.at(-1) === "Enter") {
+        stopped = true;
+        launchSocketPath = runtime.getStatus().paths?.socketPath ?? "";
+        await runtime.stop({ stopChildren: false });
+      }
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `stopped-timeout-handle-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand },
+    );
+
+    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Broker stops while waiting",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+      else throw error;
+    }
+
+    expect(launchSocketPath).toContain("pinet.sock");
+    expect(timeoutError?.handle.socketPath).toBe(launchSocketPath);
+  });
+
   it("uses an exact tmux target so cleanup cannot kill a prefix-related session", async () => {
     const tmux = createTmuxHarness();
     const { runtime } = createRuntime(
