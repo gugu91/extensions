@@ -3510,6 +3510,36 @@ describe("SlackAdapter — e2e Socket Mode lifecycle", () => {
     }
   });
 
+  it("classifies message handler failures as event errors", async () => {
+    const handlerError = new Error("message failed");
+    const onError = vi.fn();
+    const client = new SlackSocketModeClient({
+      slack: vi.fn(async () => ({ url: "wss://slack.test/socket" })),
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      resolveBotUserIdOnConnect: false,
+      onMessage: () => {
+        throw handlerError;
+      },
+      onError,
+    });
+
+    await client.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "events_api",
+        payload: { event: { type: "message" } },
+      }),
+    });
+
+    await waitForAssertion(() => {
+      expect(onError).toHaveBeenCalledWith(handlerError, "event");
+    });
+    await client.disconnect();
+  });
+
   it("routes Socket Mode connection failures through the adapter callback", async () => {
     fetchMock.mockImplementation(
       async (input) =>
