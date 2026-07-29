@@ -564,7 +564,7 @@ describe("subtree broker spawn lifecycle", () => {
     expect(recovered.agentId).toBe("recovered-child");
   });
 
-  it("propagates operational tmux cleanup failures without launching a replacement", async () => {
+  it("keeps a retry handle retryable when cleanup fails before replacement launch", async () => {
     const tmux = createTmuxHarness();
     let failProbe = false;
     let launchCount = 0;
@@ -605,6 +605,7 @@ describe("subtree broker spawn lifecycle", () => {
       }),
     ).rejects.toThrow("tmux transport unavailable");
     expect(launchCount).toBe(1);
+    expect(tmux.commands.filter((args) => args.includes("new-session"))).toHaveLength(1);
     expect(tmux.liveSessions).toEqual(new Set([timeoutError.handle.tmuxSessionName]));
 
     failProbe = false;
@@ -612,14 +613,32 @@ describe("subtree broker spawn lifecycle", () => {
       launchCount += 1;
       registerChild(runtime, facts, "retry-child");
     });
+    const replacement = await runtime.spawnWorker(ctx, {
+      task: "Retry after transport recovery",
+      repo: ".",
+      cleanupHandle: timeoutError.handle,
+    });
+
+    expect(replacement.agentId).toBe("retry-child");
+    expect(launchCount).toBe(2);
+    expect(tmux.commands.filter((args) => args.includes("new-session"))).toHaveLength(2);
+    expect(runtime.listAgents()?.filter((agent) => agent.parentAgentId)).toHaveLength(1);
+    expect(
+      runtime
+        .getHibernationRuntimeControl()
+        ?.db.getAgents()
+        .find((agent) => agent.launchId === timeoutError.handle.launchId),
+    ).toBeUndefined();
+
     await expect(
       runtime.spawnWorker(ctx, {
-        task: "Retry after transport recovery",
+        task: "Must not launch twice",
         repo: ".",
         cleanupHandle: timeoutError.handle,
       }),
-    ).resolves.toMatchObject({ agentId: "retry-child" });
+    ).rejects.toThrow("spawn cleanup handle has already been consumed");
     expect(launchCount).toBe(2);
+    expect(tmux.commands.filter((args) => args.includes("new-session"))).toHaveLength(2);
   });
 
   it("disconnects a child accepted after the final timeout lookup", async () => {
