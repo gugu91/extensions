@@ -68,6 +68,7 @@ describe("matchesToolPattern", () => {
   it("matches legacy Pinet underscore guardrail patterns against dispatcher action names", () => {
     expect(matchesToolPattern("pinet:send", ["pinet_send"])).toBe(true);
     expect(matchesToolPattern("pinet_read", ["pinet:read"])).toBe(true);
+    expect(matchesToolPattern("pinet:lanes:write", ["pinet_lanes:write"])).toBe(true);
   });
 
   it("treats former pinet_message policies as send guardrail aliases", () => {
@@ -146,6 +147,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("pinet:schedule")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:snooze")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:spawn")).toBe(true);
+    expect(WRITE_TOOLS.has("pinet:lanes:write")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:free")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:ports")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:reload")).toBe(true);
@@ -154,6 +156,7 @@ describe("isToolBlocked", () => {
     expect(WRITE_TOOLS.has("pinet_message")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:read")).toBe(true);
     expect(READ_ONLY_TOOLS.has("pinet:agents")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("pinet:lanes")).toBe(true);
     expect(WRITE_TOOLS.has("pinet:read")).toBe(false);
     expect(WRITE_TOOLS.has("pinet:agents")).toBe(false);
     expect(READ_ONLY_TOOLS.has("pinet:send")).toBe(false);
@@ -174,6 +177,10 @@ describe("isToolBlocked", () => {
     expect(isToolBlocked("pinet_snooze", g)).toBe(true);
     expect(isToolBlocked("pinet:spawn", g)).toBe(true);
     expect(isToolBlocked("pinet_spawn", g)).toBe(true);
+    expect(isToolBlocked("pinet:lanes:write", g)).toBe(true);
+    expect(isToolBlocked("pinet_lanes:write", g)).toBe(true);
+    expect(isToolBlocked("pinet:lanes", g)).toBe(false);
+    expect(isToolBlocked("pinet_lanes", g)).toBe(false);
     expect(isToolBlocked("pinet:ports", g)).toBe(true);
     expect(isToolBlocked("pinet:reload", g)).toBe(true);
     expect(isToolBlocked("pinet:exit", g)).toBe(true);
@@ -324,6 +331,7 @@ describe("buildSecurityPrompt", () => {
     // Should mention allowed tools
     expect(prompt).toContain("read");
     expect(prompt).toContain("slack_send");
+    expect(prompt).toContain("pinet:agents, pinet:lanes, pinet:read");
   });
 
   it("includes blocked tools section", () => {
