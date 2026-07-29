@@ -614,7 +614,7 @@ describe("subtree broker spawn lifecycle", () => {
     expect(recovered.agentId).toBe("recovered-child");
   });
 
-  it("propagates operational tmux cleanup failures without launching a replacement", async () => {
+  it("keeps a retry handle retryable when cleanup fails before replacement launch", async () => {
     const tmux = createTmuxHarness();
     let failProbe = false;
     let launchCount = 0;
@@ -662,13 +662,22 @@ describe("subtree broker spawn lifecycle", () => {
       launchCount += 1;
       registerChild(runtime, facts, "retry-child");
     });
+    const replacement = await runtime.spawnWorker(ctx, {
+      task: "Retry after transport recovery",
+      repo: ".",
+      cleanupHandle: timeoutError.handle,
+    });
+
+    expect(replacement.agentId).toBe("retry-child");
+    expect(launchCount).toBe(2);
+
     await expect(
       runtime.spawnWorker(ctx, {
-        task: "Retry after transport recovery",
+        task: "Must not launch twice",
         repo: ".",
         cleanupHandle: timeoutError.handle,
       }),
-    ).resolves.toMatchObject({ agentId: "retry-child" });
+    ).rejects.toThrow("spawn cleanup handle has already been consumed");
     expect(launchCount).toBe(2);
   });
 
