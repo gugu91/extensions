@@ -118,12 +118,21 @@ function createTmuxHarness(): {
       }
 
       const target = args[args.indexOf("-t") + 1];
-      if (args.includes("has-session") && (!target || !liveSessions.has(target))) {
-        throw new Error("missing tmux session");
+      const matches = target?.startsWith("=")
+        ? liveSessions.has(target.slice(1))
+          ? [target.slice(1)]
+          : []
+        : [...liveSessions].filter(
+            (session) => session === target || session.startsWith(target ?? ""),
+          );
+      if (args.includes("has-session") && matches.length !== 1) {
+        throw new Error(matches.length === 0 ? "missing tmux session" : "ambiguous tmux session");
       }
-      if (args.includes("kill-session") && target) {
-        liveSessions.delete(target);
-        killedSessions.push(target);
+      if (args.includes("kill-session")) {
+        if (matches.length !== 1) throw new Error("missing or ambiguous tmux session");
+        const [matchedSession] = matches;
+        liveSessions.delete(matchedSession);
+        killedSessions.push(matchedSession);
       }
     },
   };
@@ -225,6 +234,58 @@ describe("subtree broker spawn lifecycle", () => {
     await runtime.cleanupSpawn(timeoutError.handle);
     expect(tmux.killedSessions).toEqual([timeoutError.handle.tmuxSessionName]);
     expect(tmux.liveSessions).toEqual(new Set(["unrelated-session"]));
+  });
+
+  it("uses an exact tmux target so cleanup cannot kill a prefix-related session", async () => {
+    const tmux = createTmuxHarness();
+    const { runtime } = createRuntime(
+      () => false,
+      `exact-cleanup-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand: tmux.run },
+    );
+
+    let timeoutError: SubtreeSpawnRegistrationTimeoutError | null = null;
+    try {
+      await runtime.spawnWorker(ctx, {
+        task: "Never registers",
+        repo: ".",
+        waitForRegistrationMs: 5,
+      });
+    } catch (error) {
+      if (error instanceof SubtreeSpawnRegistrationTimeoutError) timeoutError = error;
+      else throw error;
+    }
+    if (!timeoutError) throw new Error("expected registration timeout");
+
+    tmux.liveSessions.delete(timeoutError.handle.tmuxSessionName);
+    tmux.liveSessions.add(`${timeoutError.handle.tmuxSessionName}-extra`);
+    await runtime.cleanupSpawn(timeoutError.handle);
+
+    expect(tmux.killedSessions).toEqual([]);
+    expect(tmux.liveSessions).toEqual(new Set([`${timeoutError.handle.tmuxSessionName}-extra`]));
+  });
+
+  it("rejects a cleanup handle without a live launch record", async () => {
+    const tmux = createTmuxHarness();
+    const { runtime } = createRuntime(
+      () => false,
+      `authenticated-cleanup-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      { runTmuxCommand: tmux.run },
+    );
+    await runtime.start(ctx);
+    const socketPath = runtime.getStatus().paths?.socketPath;
+    if (!socketPath) throw new Error("subtree broker did not start");
+    tmux.liveSessions.add("caller-controlled");
+
+    await expect(
+      runtime.cleanupSpawn({
+        launchId: "unknown-launch",
+        tmuxSessionName: "caller-controlled",
+        socketPath,
+        state: "launched_unregistered",
+      }),
+    ).rejects.toThrow("spawn cleanup handle does not belong to this subtree broker");
+    expect(tmux.liveSessions).toEqual(new Set(["caller-controlled"]));
   });
 
   it("adopts a child that registers after the observer timeout", async () => {

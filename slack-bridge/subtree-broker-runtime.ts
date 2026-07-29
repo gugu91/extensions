@@ -57,6 +57,7 @@ export interface SubtreeWorkerRecord {
   agentId: string | null;
   startedAt: string;
   monitorCommand: string;
+  tmuxSocketPath: string | null;
 }
 
 export interface SubtreeBrokerStatus {
@@ -664,10 +665,11 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
   }
 
   async function killTmuxSession(sessionName: string, tmuxBaseArgs: string[]): Promise<void> {
-    await runTmuxCommand([...tmuxBaseArgs, "has-session", "-t", sessionName]).catch(() => {
+    const exactTarget = `=${sessionName}`;
+    await runTmuxCommand([...tmuxBaseArgs, "has-session", "-t", exactTarget]).catch(() => {
       throw new Error("missing");
     });
-    await runTmuxCommand([...tmuxBaseArgs, "kill-session", "-t", sessionName]);
+    await runTmuxCommand([...tmuxBaseArgs, "kill-session", "-t", exactTarget]);
   }
 
   async function cleanupSpawn(handle: SubtreeSpawnLaunchHandle): Promise<void> {
@@ -675,11 +677,14 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       throw new Error("spawn cleanup handle does not belong to this subtree broker");
     }
     const worker = spawnedWorkers.get(handle.launchId);
-    if (worker && worker.sessionName !== handle.tmuxSessionName) {
+    if (!worker) {
+      throw new Error("spawn cleanup handle does not belong to this subtree broker");
+    }
+    if (worker.sessionName !== handle.tmuxSessionName) {
       throw new Error("spawn cleanup handle does not match its recorded tmux session");
     }
 
-    const tmuxBaseArgs = buildTmuxBaseArgs(findTmuxSocketPath());
+    const tmuxBaseArgs = buildTmuxBaseArgs(worker.tmuxSocketPath);
     await killTmuxSession(handle.tmuxSessionName, tmuxBaseArgs).catch((error) => {
       if (!(error instanceof Error) || error.message !== "missing") throw error;
     });
@@ -924,6 +929,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       agentId: null,
       startedAt: new Date().toISOString(),
       monitorCommand,
+      tmuxSocketPath,
     };
     spawnedWorkers.set(launchId, workerRecord);
 
