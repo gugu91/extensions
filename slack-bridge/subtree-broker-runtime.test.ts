@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PinetControlCommand, SlackBridgeSettings } from "./helpers.js";
+import type { InboxMessage, PinetControlCommand, SlackBridgeSettings } from "./helpers.js";
 import {
   buildSubtreeBrokerPaths,
   createSubtreeBrokerRuntime,
@@ -16,6 +16,7 @@ const roots: string[] = [];
 function createRuntime(
   deliverSteeringMessage: SubtreeBrokerRuntimeDeps["deliverSteeringMessage"],
   stableId = `compaction-gate-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+  queuedInbox: InboxMessage[] = [],
 ): {
   runtime: SubtreeBrokerRuntime;
   stableId: string;
@@ -28,7 +29,12 @@ function createRuntime(
     getAgentIdentity: () => ({ name: "Test", emoji: "🧪" }),
     getAgentMetadata: async () => ({}),
     getMeshRoleFromMetadata: (_metadata, fallback) => fallback ?? "worker",
-    pushInboxMessages: () => {},
+    pushInboxMessages: (messages) => queuedInbox.push(...messages),
+    discardQueuedInboxMessages: () => {
+      for (let index = queuedInbox.length - 1; index >= 0; index -= 1) {
+        if (queuedInbox[index]?.brokerInboxOrigin === "subtree") queuedInbox.splice(index, 1);
+      }
+    },
     updateBadge: () => {},
     maybeDrainInboxIfIdle: () => false,
     deliverSteeringMessage,
@@ -72,6 +78,43 @@ function queueSteeringMessage(runtime: SubtreeBrokerRuntime): string {
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.stop({ releaseIdentity: true })));
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("subtree broker inbox delivery", () => {
+  it("queues each regular inbox entry once and recovers it across restart", async () => {
+    const queuedInbox: InboxMessage[] = [];
+    const first = createRuntime(() => false, undefined, queuedInbox);
+    await first.runtime.start(ctx);
+    const control = first.runtime.getHibernationRuntimeControl();
+    if (!control) throw new Error("subtree broker did not start");
+    const selfId = first.runtime.getStatus().selfAgentId;
+    if (!selfId) throw new Error("subtree broker has no self id");
+    const threadId = `a2a:sender:${selfId}`;
+    control.db.createThread(threadId, "agent", "", selfId);
+    control.db.insertMessage(threadId, "agent", "inbound", "sender", "finished the task", [selfId]);
+
+    first.runtime.drainInbox(ctx);
+    first.runtime.drainInbox(ctx);
+
+    expect(queuedInbox).toHaveLength(1);
+    expect(queuedInbox[0]?.brokerInboxOrigin).toBe("subtree");
+    expect(control.db.getPendingInboxCount(selfId)).toBe(1);
+
+    await first.runtime.stop({ releaseIdentity: true });
+    expect(queuedInbox).toHaveLength(0);
+
+    const { runtime: restarted } = createRuntime(() => false, first.stableId, queuedInbox);
+    await restarted.start(ctx);
+    restarted.drainInbox(ctx);
+    expect(queuedInbox).toHaveLength(1);
+
+    const inboxId = queuedInbox[0]?.brokerInboxId;
+    if (inboxId == null) throw new Error("queued message has no inbox id");
+    restarted.markDelivered([inboxId]);
+
+    expect(restarted.getHibernationRuntimeControl()?.db.getPendingInboxCount(selfId)).toBe(0);
+    expect(restarted.readInbox()?.messages).toHaveLength(1);
+  });
 });
 
 describe("subtree broker compaction delivery retry", () => {

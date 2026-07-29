@@ -1,4 +1,4 @@
-import { getBrokerInboxIds } from "./broker-delivery.js";
+import { getBrokerInboxIds, getSubtreeInboxIds } from "./broker-delivery.js";
 import { markFollowerInboxIdsDelivered, type FollowerDeliveryState } from "./follower-delivery.js";
 import { formatInboxMessages, type InboxMessage } from "./helpers.js";
 
@@ -21,6 +21,7 @@ export interface InboxDrainRuntimeDeps {
   hasFollowerClient: () => boolean;
   flushFollowerDeliveredAcks: () => Promise<void>;
   markBrokerInboxIdsDelivered: (inboxIds: number[]) => void;
+  markSubtreeInboxIdsDelivered: (inboxIds: number[]) => void;
   getFollowerDeliveryState: () => FollowerDeliveryState;
   maxMessagesPerDrain?: number;
 }
@@ -65,6 +66,7 @@ export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrain
     }
 
     const brokerInboxIds = getBrokerInboxIds(pending);
+    const subtreeInboxIds = getSubtreeInboxIds(pending);
     deps.updateBadge();
     void deps.reportStatus("working").catch(() => {
       /* best effort */
@@ -92,6 +94,13 @@ export function createInboxDrainRuntime(deps: InboxDrainRuntimeDeps): InboxDrain
           } catch {
             /* best effort */
           }
+        }
+      }
+      if (subtreeInboxIds.length > 0) {
+        try {
+          deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
+        } catch {
+          /* best effort */
         }
       }
       return;

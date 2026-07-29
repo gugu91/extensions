@@ -23,6 +23,7 @@ function createDeps(overrides: Partial<InboxDrainRuntimeDeps> = {}) {
   const deliverTrackedSlackFollowUpMessage = vi.fn(() => true);
   const flushFollowerDeliveredAcks = vi.fn(async () => {});
   const markBrokerInboxIdsDelivered = vi.fn();
+  const markSubtreeInboxIdsDelivered = vi.fn();
   let securityPrompt = "";
   let brokerRole: "broker" | "follower" | null = null;
   let followerClient = true;
@@ -45,6 +46,7 @@ function createDeps(overrides: Partial<InboxDrainRuntimeDeps> = {}) {
     hasFollowerClient: () => followerClient,
     flushFollowerDeliveredAcks,
     markBrokerInboxIdsDelivered,
+    markSubtreeInboxIdsDelivered,
     getFollowerDeliveryState: () => followerDeliveryState,
     ...overrides,
   };
@@ -61,6 +63,7 @@ function createDeps(overrides: Partial<InboxDrainRuntimeDeps> = {}) {
     deliverTrackedSlackFollowUpMessage,
     flushFollowerDeliveredAcks,
     markBrokerInboxIdsDelivered,
+    markSubtreeInboxIdsDelivered,
     followerDeliveryState,
     setSecurityPrompt: (value: string) => {
       securityPrompt = value;
@@ -155,6 +158,26 @@ describe("createInboxDrainRuntime", () => {
     expect(flushFollowerDeliveredAcks).not.toHaveBeenCalled();
   });
 
+  it("acknowledges subtree ids only through the subtree runtime", () => {
+    const {
+      runtime,
+      inbox,
+      markBrokerInboxIdsDelivered,
+      markSubtreeInboxIdsDelivered,
+      setBrokerRole,
+    } = createDeps();
+    inbox.push(
+      createMessage({ brokerInboxId: 77 }),
+      createMessage({ brokerInboxId: 77, brokerInboxOrigin: "subtree" }),
+    );
+    setBrokerRole("broker");
+
+    runtime.drainInbox();
+
+    expect(markBrokerInboxIdsDelivered).toHaveBeenCalledWith([77]);
+    expect(markSubtreeInboxIdsDelivered).toHaveBeenCalledWith([77]);
+  });
+
   it("does not drain inbox work while the agent is active", () => {
     const {
       runtime,
@@ -177,10 +200,20 @@ describe("createInboxDrainRuntime", () => {
   });
 
   it("requeues pending inbox work when the follow-up delivery is not accepted", () => {
-    const { runtime, inbox, updateBadge, reportStatus, markBrokerInboxIdsDelivered } = createDeps({
+    const {
+      runtime,
+      inbox,
+      updateBadge,
+      reportStatus,
+      markBrokerInboxIdsDelivered,
+      markSubtreeInboxIdsDelivered,
+    } = createDeps({
       deliverTrackedSlackFollowUpMessage: vi.fn(() => false),
     });
-    const message = createMessage({ brokerInboxId: 88 });
+    const message = createMessage({
+      brokerInboxId: 88,
+      brokerInboxOrigin: "subtree",
+    });
     inbox.push(message);
 
     runtime.drainInbox();
@@ -188,6 +221,7 @@ describe("createInboxDrainRuntime", () => {
     expect(reportStatus).toHaveBeenCalledWith("working");
     expect(updateBadge).toHaveBeenCalledTimes(2);
     expect(markBrokerInboxIdsDelivered).not.toHaveBeenCalled();
+    expect(markSubtreeInboxIdsDelivered).not.toHaveBeenCalled();
     expect(inbox).toEqual([message]);
   });
 

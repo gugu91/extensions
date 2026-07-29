@@ -272,6 +272,9 @@ export default function (pi: ExtensionAPI) {
     markBrokerInboxIdsDelivered: (inboxIds) => {
       brokerRuntime.markDelivered(inboxIds);
     },
+    markSubtreeInboxIdsDelivered: (inboxIds) => {
+      subtreeBrokerRuntime.markDelivered(inboxIds);
+    },
     getFollowerDeliveryState: () => followerDeliveryState,
   });
   const { deliverFollowUpMessage, flushDeliveredFollowerAcks, drainInbox } = inboxDrainRuntime;
@@ -590,6 +593,11 @@ export default function (pi: ExtensionAPI) {
       getMeshRoleFromMetadata(metadata, fallbackRole),
     pushInboxMessages: (messages) => {
       inbox.push(...messages);
+    },
+    discardQueuedInboxMessages: () => {
+      for (let index = inbox.length - 1; index >= 0; index -= 1) {
+        if (inbox[index]?.brokerInboxOrigin === "subtree") inbox.splice(index, 1);
+      }
     },
     updateBadge,
     maybeDrainInboxIfIdle,

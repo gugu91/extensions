@@ -107,6 +107,7 @@ function makeDeps(stableId: string, settings: SlackBridgeSettings): SubtreeBroke
     getAgentMetadata: async () => ({}),
     getMeshRoleFromMetadata: (_metadata, fallback) => fallback ?? "worker",
     pushInboxMessages: () => {},
+    discardQueuedInboxMessages: () => {},
     updateBadge: () => {},
     maybeDrainInboxIfIdle: () => false,
     deliverSteeringMessage: () => false,
