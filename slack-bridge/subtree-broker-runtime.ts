@@ -883,6 +883,8 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       selfAgentId = null;
       startedAt = null;
       activePaths = null;
+      deps.discardQueuedInboxMessages();
+      pendingInboxIds.clear();
       await broker.stop().catch(() => undefined);
       throw error;
     }
