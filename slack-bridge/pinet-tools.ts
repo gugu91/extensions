@@ -2244,6 +2244,9 @@ function buildPinetSessionSearchOptions(
     ...(getMaybeString(params, "worktree_path")
       ? { worktreePath: getMaybeString(params, "worktree_path") }
       : {}),
+    ...(getMaybeString(params, "runtime_locator")
+      ? { runtimeLocator: getMaybeString(params, "runtime_locator") }
+      : {}),
     ...(getMaybeString(params, "tmux_session")
       ? { tmuxSession: getMaybeString(params, "tmux_session") }
       : {}),
@@ -2263,6 +2266,7 @@ function formatPinetSessionSearchHeader(
     options.threadId ? `thread_id=${options.threadId}` : null,
     options.repo ? `repo=${options.repo}` : null,
     options.worktreePath ? `worktree=${options.worktreePath}` : null,
+    options.runtimeLocator ? `runtime=${options.runtimeLocator}` : null,
     options.tmuxSession ? `tmux=${options.tmuxSession}` : null,
     options.since ? `since=${options.since}` : null,
     options.until ? `until=${options.until}` : null,
@@ -2277,7 +2281,7 @@ function formatPinetSessionLine(session: AgentSessionSearchInfo, full: boolean):
   const where = [
     session.repo ?? null,
     session.branch ? `branch=${session.branch}` : null,
-    session.tmuxSession ? `tmux=${session.tmuxSession}` : null,
+    session.runtimeLocator ? `${session.runtimeKind ?? "runtime"}=${session.runtimeLocator}` : null,
   ].filter((item): item is string => Boolean(item));
   const threads = session.relatedThreadIds.slice(0, full ? 10 : 3).join(", ");
   const suffix = session.relatedThreadIds.length > (full ? 10 : 3) ? " …" : "";
@@ -2341,7 +2345,7 @@ function runPinetSessionsAction(
     deps.requireToolPolicy(
       toolName,
       undefined,
-      `agent_name=${options.agentName ?? ""} | agent_id=${options.agentId ?? ""} | thread_id=${options.threadId ?? ""} | repo=${options.repo ?? ""} | worktree_path=${options.worktreePath ?? ""} | tmux_session=${options.tmuxSession ?? ""} | since=${options.since ?? ""} | until=${options.until ?? ""} | limit=${options.limit ?? ""} | format=${output.format} | full=${output.full}`,
+      `agent_name=${options.agentName ?? ""} | agent_id=${options.agentId ?? ""} | thread_id=${options.threadId ?? ""} | repo=${options.repo ?? ""} | worktree_path=${options.worktreePath ?? ""} | runtime_locator=${options.runtimeLocator ?? ""} | tmux_session=${options.tmuxSession ?? ""} | since=${options.since ?? ""} | until=${options.until ?? ""} | limit=${options.limit ?? ""} | format=${output.format} | full=${output.full}`,
     );
 
     if (!deps.pinetEnabled()) {
@@ -2610,7 +2614,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   registerAction({
     name: "sessions",
     description:
-      "Search live and historical Pinet worker Pi sessions by display name, agent id, thread, repo/worktree, tmux session, or time range.",
+      "Search live and historical Pinet worker Pi sessions by display name, agent id, thread, repo/worktree, runtime locator (tmux session or herdr pane), or time range.",
     parameters: Type.Object({
       op: Type.Optional(Type.String({ description: "Operation: search (default)" })),
       agent_name: Type.Optional(
@@ -2621,6 +2625,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       thread_id: Type.Optional(Type.String({ description: "Related Pinet/Slack/A2A thread id" })),
       repo: Type.Optional(Type.String({ description: "Repo name or path fragment" })),
       worktree_path: Type.Optional(Type.String({ description: "Worktree/cwd path fragment" })),
+      runtime_locator: Type.Optional(
+        Type.String({ description: "Broker-managed runtime locator (tmux session or herdr pane)" }),
+      ),
       tmux_session: Type.Optional(Type.String({ description: "Broker-managed tmux session name" })),
       since: Type.Optional(
         Type.String({ description: "Only sessions active after this ISO time" }),

@@ -305,7 +305,7 @@ function buildChildLaunchEnv(
     PINET_PARENT_AGENT_ID: selfAgentId,
     PINET_ROOT_AGENT_ID: selfAgentId,
     PINET_SPAWNED_BY_AGENT_ID: selfAgentId,
-    PINET_LAUNCH_SOURCE: input.runtimeKind === "herdr" ? "broker-herdr" : "subtree-broker-tmux",
+    PINET_LAUNCH_SOURCE: input.runtimeKind === "herdr" ? "subtree-broker-herdr" : "subtree-broker-tmux",
     ...(input.launchId ? { PINET_LAUNCH_ID: input.launchId } : {}),
     ...(input.role ? { PINET_SUBTREE_ROLE: input.role } : {}),
     ...(input.laneId ? { PINET_LANE_ID: input.laneId } : {}),
