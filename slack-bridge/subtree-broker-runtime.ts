@@ -885,6 +885,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       activePaths = null;
       deps.discardQueuedInboxMessages();
       pendingInboxIds.clear();
+      deps.updateBadge();
       await broker.stop().catch(() => undefined);
       throw error;
     }
