@@ -261,6 +261,7 @@ describe("registerSlackTools", () => {
     const noteThreadReply = vi.fn();
     const clearPendingAttention = vi.fn();
     const requireToolPolicy = vi.fn();
+    const markSubtreeInboxIdsDelivered = vi.fn();
     let pinetDeliveryEnabled = true;
     let pinetDeliveryAvailable = false;
     const sendPinetSlackMessage = vi.fn(async (input: SlackPinetDeliveryInput) => ({
@@ -282,6 +283,7 @@ describe("registerSlackTools", () => {
       getAgentOwnerToken: () => "owner:test-token",
       getLastDmChannel: () => lastDmChannel,
       updateBadge: () => {},
+      markSubtreeInboxIdsDelivered,
       resolveUser: async (userId) => resolveUser(userId),
       threadContext: {
         resolveThreadChannel: (threadTs) => resolveThreadChannel(threadTs),
@@ -385,6 +387,7 @@ describe("registerSlackTools", () => {
       noteThreadReply,
       clearPendingAttention,
       requireToolPolicy,
+      markSubtreeInboxIdsDelivered,
       setPinetDeliveryEnabled: (value: boolean) => {
         pinetDeliveryEnabled = value;
       },
@@ -410,6 +413,23 @@ describe("registerSlackTools", () => {
     const response = await tools.get("slack_inbox")!.execute("tool-1", {});
     expect(response.content?.[0]?.text).toContain("UPDATED SECURITY PROMPT");
     expect(response.content?.[0]?.text).not.toContain("INITIAL SECURITY PROMPT");
+  });
+
+  it("acknowledges subtree messages consumed through slack_inbox", async () => {
+    const { inbox, tools, markSubtreeInboxIdsDelivered } = setup();
+    inbox.push({
+      channel: "pinet",
+      threadTs: "a2a:sender:subbroker",
+      userId: "sender",
+      text: "finished the task",
+      timestamp: "123.456",
+      brokerInboxId: 42,
+      brokerInboxOrigin: "subtree",
+    });
+
+    await tools.get("slack_inbox")!.execute("tool-subtree-inbox", {});
+
+    expect(markSubtreeInboxIdsDelivered).toHaveBeenCalledWith([42]);
   });
 
   it("reads the latest bot token and default channel when slack_post_channel executes", async () => {
