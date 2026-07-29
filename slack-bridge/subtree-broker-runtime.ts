@@ -155,10 +155,14 @@ export class SubtreeSpawnRegistrationTimeoutError extends Error {
 export class SubtreeSpawnLaunchError extends Error {
   readonly handle: SubtreeSpawnLaunchHandle;
 
-  constructor(error: Error, handle: SubtreeSpawnLaunchHandle) {
+  constructor(
+    error: Error,
+    handle: SubtreeSpawnLaunchHandle,
+    runtimeKind: WorkerRuntimeSpec["runtimeKind"] = "tmux",
+  ) {
     const message = error.message;
     super(
-      `subtree worker session ${handle.tmuxSessionName} may have started after tmux reported: ${message}; ` +
+      `subtree worker session ${handle.tmuxSessionName} may have started after ${runtimeKind} reported: ${message}; ` +
         `launchId=${handle.launchId}; tmuxSessionName=${handle.tmuxSessionName}; ` +
         `socketPath=${handle.socketPath}; state=${handle.state}`,
       { cause: error },
@@ -503,6 +507,12 @@ export function createHerdrWorkerRuntimeController(
       try {
         await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "list"]);
       } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          throw new Error(
+            "Herdr worker runtime is configured but the 'herdr' executable is unavailable.",
+            { cause: error },
+          );
+        }
         if (!(error instanceof Error) || !isMissingHerdrSession(error)) throw error;
         await runHerdrSessionCommand(runHerdrCommand, spec, ["server"], true);
         let ready = false;
@@ -1212,9 +1222,15 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const role = normalizeRole(input.role);
     const launchId = `subtree-${Date.now().toString(36)}-${randomSuffix()}`;
     const sessionName = buildTmuxSessionName(repoPath, role, launchId);
-    const runtimeController = workerRuntimeControllers.tmux;
-    const runtimeSpec = runtimeController.createLaunchSpec(sessionName);
-    const monitorCommand = runtimeController.monitorCommand(runtimeSpec);
+    const configuredRuntime = deps.getSettings().subtreeWorkerRuntime ?? "tmux";
+    const runtimeSpec: WorkerRuntimeSpec =
+      configuredRuntime === "tmux"
+        ? workerRuntimeControllers.tmux.createLaunchSpec(sessionName)
+        : workerRuntimeControllers.herdr.createLaunchSpec(sessionName);
+    const monitorCommand =
+      runtimeSpec.runtimeKind === "tmux"
+        ? workerRuntimeControllers.tmux.monitorCommand(runtimeSpec)
+        : workerRuntimeControllers.herdr.monitorCommand(runtimeSpec);
     const childLaunchEnv = buildChildLaunchEnv(activePaths, selfAgentId, {
       launchId,
       role,
@@ -1253,12 +1269,17 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     };
     spawnedWorkers.set(launchId, workerRecord);
     try {
-      await runtimeController.launch(workerRecord, launcherPath, childLaunchEnv);
+      if (workerRecord.runtimeKind === "tmux") {
+        await workerRuntimeControllers.tmux.launch(workerRecord, launcherPath, childLaunchEnv);
+      } else {
+        await workerRuntimeControllers.herdr.launch(workerRecord, launcherPath, childLaunchEnv);
+      }
     } catch (error) {
       fenceLaunch(activeBroker, launchId);
       throw new SubtreeSpawnLaunchError(
         error instanceof Error ? error : new Error(String(error)),
         launchHandle,
+        workerRecord.runtimeKind,
       );
     }
 
@@ -1280,22 +1301,37 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     // SAME authoritative DB the hibernate/wake command path resolves against via
     // `getHibernationRuntimeControl`.
     if (hibernationRuntimeActive()) {
-      await persistSpawnedRuntimeSpec(activeBroker.db, {
+      const commonRuntimeFacts = {
         agentId: agent.id,
         stableId: agent.stableId ?? "",
         brokerOwnerId: selfAgentId,
         cwd: repoPath,
         repoRoot: repoPath,
         worktreePath: repoPath,
-        tmuxSocket: runtimeSpec.tmuxSocketPath ?? "",
-        tmuxSession: sessionName,
-        tmuxTarget: sessionName,
         extensionEntryPath: getExtensionEntryPath(),
         envAllowlist: Object.keys(childLaunchEnv),
-        configFingerprint: "subtree-broker-tmux",
+        configFingerprint: `subtree-broker-${workerRecord.runtimeKind}`,
         expectedUser: os.userInfo().username,
-        launchSource: "subtree-broker-tmux",
-      });
+        launchSource: `subtree-broker-${workerRecord.runtimeKind}`,
+      };
+      if (workerRecord.runtimeKind === "tmux") {
+        await persistSpawnedRuntimeSpec(activeBroker.db, {
+          ...commonRuntimeFacts,
+          runtimeKind: "tmux",
+          tmuxSocket: workerRecord.tmuxSocketPath ?? "",
+          tmuxSession: workerRecord.sessionName,
+          tmuxTarget: workerRecord.sessionName,
+        });
+      } else if (workerRecord.herdrPaneId && workerRecord.herdrShellPid !== null) {
+        await persistSpawnedRuntimeSpec(activeBroker.db, {
+          ...commonRuntimeFacts,
+          runtimeKind: "herdr",
+          herdrSession: workerRecord.herdrSession,
+          herdrConfigDir: workerRecord.herdrConfigDir,
+          herdrPaneId: workerRecord.herdrPaneId,
+          herdrShellPid: workerRecord.herdrShellPid,
+        });
+      }
     }
 
     const messageResult = await sendMessage(agent.id, input.task, {

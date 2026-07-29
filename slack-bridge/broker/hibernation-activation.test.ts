@@ -58,11 +58,14 @@ function orchestrator(db: BrokerDB): HibernationOrchestrator {
   });
 }
 
+type TmuxSpawnRuntimeSpecFacts = SpawnRuntimeSpecFacts & { runtimeKind?: "tmux" };
+
 function specFacts(
   repoRoot: string,
-  overrides: Partial<SpawnRuntimeSpecFacts> = {},
+  overrides: Partial<TmuxSpawnRuntimeSpecFacts> = {},
 ): SpawnRuntimeSpecFacts {
   return {
+    runtimeKind: "tmux",
     agentId: "worker-1",
     stableId: `host-a:session:${join(repoRoot, "session.jsonl")}`,
     brokerOwnerId: "broker-1",

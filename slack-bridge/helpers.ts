@@ -46,6 +46,8 @@ export interface SlackBridgeSettings {
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   runtimeMode?: "off" | "single" | "broker" | "follower";
+  /** Runtime backend for newly spawned subtree workers. Defaults to tmux. */
+  subtreeWorkerRuntime?: "tmux" | "herdr";
   brokerPrompt?: string;
   autoConnect?: boolean;
   autoFollow?: boolean;

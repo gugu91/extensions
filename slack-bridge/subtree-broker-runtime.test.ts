@@ -243,6 +243,81 @@ describe("subtree broker spawn lifecycle", () => {
     expect(new Set(results.map((result) => result.agentId)).size).toBe(3);
     expect(getAgentMetadata).toHaveBeenCalledTimes(1);
     expect(tmux.liveSessions.size).toBe(3);
+    expect(
+      runtime.getStatus().spawnedWorkers.every((worker) => worker.runtimeKind === "tmux"),
+    ).toBe(true);
+  });
+
+  it("selects Herdr only when explicitly configured", async () => {
+    const tmuxRun = vi.fn(async () => {});
+    let runtime: SubtreeBrokerRuntime;
+    let launchId = "";
+    let sessionName = "";
+    const runHerdrCommand = vi.fn(async (args: string[]) => {
+      if (args.includes("create")) {
+        launchId =
+          args
+            .find((value) => value.startsWith("PINET_LAUNCH_ID="))
+            ?.slice("PINET_LAUNCH_ID=".length) ?? "";
+        sessionName = args[args.indexOf("--label") + 1] ?? "";
+        return JSON.stringify({ result: { root_pane: { pane_id: "w1:p2" } } });
+      }
+      if (args.includes("process-info")) {
+        return JSON.stringify({ result: { process_info: { shell_pid: 4242 } } });
+      }
+      if (args.includes("run")) {
+        const control = runtime.getHibernationRuntimeControl();
+        const parentAgentId = runtime.getStatus().selfAgentId;
+        if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
+        control.db.registerAgent("herdr-child", "Herdr Child", "🌱", process.pid, {
+          parentAgentId,
+          launchId,
+        });
+      }
+      return "{}";
+    });
+    ({ runtime } = createRuntime(
+      () => false,
+      `herdr-selection-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runTmuxCommand: tmuxRun,
+        runHerdrCommand,
+      },
+    ));
+
+    const result = await runtime.spawnWorker(ctx, { task: "Run in Herdr", repo: "." });
+
+    expect(result.agentId).toBe("herdr-child");
+    expect(result.sessionName).toBe(sessionName);
+    expect(result.monitorCommand).toContain("herdr session attach");
+    expect(runtime.getStatus().spawnedWorkers[0]).toMatchObject({
+      runtimeKind: "herdr",
+      herdrPaneId: "w1:p2",
+      herdrShellPid: 4242,
+    });
+    expect(tmuxRun).not.toHaveBeenCalled();
+  });
+
+  it("fails clearly instead of substituting tmux when configured Herdr is unavailable", async () => {
+    const tmuxRun = vi.fn(async () => {});
+    const unavailable = Object.assign(new Error("spawn herdr ENOENT"), { code: "ENOENT" });
+    const { runtime } = createRuntime(
+      () => false,
+      `herdr-unavailable-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runTmuxCommand: tmuxRun,
+        runHerdrCommand: async () => {
+          throw unavailable;
+        },
+      },
+    );
+
+    await expect(runtime.spawnWorker(ctx, { task: "Run in Herdr", repo: "." })).rejects.toThrow(
+      "Herdr worker runtime is configured but the 'herdr' executable is unavailable",
+    );
+    expect(tmuxRun).not.toHaveBeenCalled();
   });
 
   it("single-flights public start with automatic spawn startup", async () => {
