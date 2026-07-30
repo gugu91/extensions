@@ -9,6 +9,53 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.5] - 2026-07-30
+
+Pinet v0.2.5 adds Herdr-backed subtree workers, broker-managed hibernation and safer worker recovery. It keeps the coordinated `@pinet/*` package set aligned.
+
+### Version verification
+
+- `pi-extensions` — `0.2.5` (private repo package)
+- `@pinet/transport-core` — `0.2.5`
+- `@pinet/broker-core` — `0.2.5`
+- `@pinet/pinet-core` — `0.2.5`
+- `@pinet/imessage-bridge` — `0.2.5`
+- `@pinet/slack-bridge` — `0.2.5`
+- `@pinet/model-aware-compaction` — `0.2.5`
+
+### Release highlights
+
+- Adds Herdr as a subtree worker runtime. Runtime kinds and locators now flow through persistence, registration, lifecycle controls and session search.
+- Migrates existing tmux runtime records without changing tmux as the default. Older clients remain compatible with session-search responses.
+- Adds broker-managed hibernation and wake flows with fenced lifecycle transitions, live runtime adapters and default-off activation.
+- Hardens subtree startup, retries and teardown. Pinet now serialises startup, returns durable spawn handles, rolls back incomplete launches and recovers orphaned Herdr panes after restart.
+- Improves broker recovery. Pinet can replace stranded brokers, preserve workers across broker reloads and reconnect disconnected followers safely.
+- Fixes a Slack Socket Mode reconnect race and holds inbound delivery while Pi compaction is active.
+- Enforces read-only lane rules and classifies `pinet:spawn` as a write operation.
+- Replaces loose JSON and configuration boundaries with named data transfer objects across the transport, broker and bridge packages. The new agent-standards lint prevents these type escapes returning.
+- Adds shared timeout, sleep and backoff primitives to `@pinet/transport-core`, while preserving public declaration compatibility.
+- Adds the Pinet website and improves dispatcher handling for oversized output.
+
+### Notable pull requests
+
+- [#972](https://github.com/gugu91/pinet/pull/972) — add the Herdr launch backend for subtree workers
+- [#973](https://github.com/gugu91/pinet/pull/973) — preserve workers across broker reloads
+- [#971](https://github.com/gugu91/pinet/pull/971) — fix the Slack Socket Mode reconnect race
+- [#969](https://github.com/gugu91/pinet/pull/969) — add the runtime-kind schema and worker launch seam
+- [#968](https://github.com/gugu91/pinet/pull/968) — block lane mutations under read-only guardrails
+- [#964](https://github.com/gugu91/pinet/pull/964) — serialise subtree startup and return durable spawn handles
+- [#956](https://github.com/gugu91/pinet/pull/956) — reconnect disconnected Pinet followers
+- [#954](https://github.com/gugu91/pinet/pull/954) — hold inbound delivery while Pi compaction runs
+- [#952](https://github.com/gugu91/pinet/pull/952) — recover stranded brokers safely
+- [#930](https://github.com/gugu91/pinet/pull/930) — add default-off hibernation runtime activation
+- [#927](https://github.com/gugu91/pinet/pull/927) — add live hibernation runtime adapters
+- [#871](https://github.com/gugu91/pinet/pull/871) — preserve transport payload declaration compatibility
+- [#864](https://github.com/gugu91/pinet/pull/864) — extract shared async transport primitives
+- [#863](https://github.com/gugu91/pinet/pull/863) — add the Pinet website
+- [#861](https://github.com/gugu91/pinet/pull/861) — add the agent coding standards lint
+
+See the [full change set since the 0.2.4 release commit](https://github.com/gugu91/pinet/compare/45314342b36c8c2c29087fbc0b9ca1634c40d5e3...9a42f8eb6a191c430a204efc43594226734c7c28).
+
 ## [0.2.4] - 2026-07-06
 
 Pinet v0.2.4 keeps the coordinated `@pinet/*` package set aligned and ships the Slack-bridge thread-ownership hardening merged after the v0.2.3 release prep.
