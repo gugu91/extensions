@@ -319,7 +319,7 @@ describe("runtime spec persistence", () => {
     }
   });
 
-  it("rejects a corrupt row whose kind and payload do not form a runtime spec", () => {
+  it("rejects mixed runtime payloads at the schema boundary", () => {
     const path = dbPath();
     const db = new BrokerDB(path);
     db.initialize();
@@ -328,22 +328,19 @@ describe("runtime spec persistence", () => {
 
     const sqlite = new DatabaseSync(path);
     try {
-      sqlite.exec("PRAGMA ignore_check_constraints = ON");
-      sqlite
-        .prepare(
-          `UPDATE agent_runtime_specs
-           SET herdr_session = 'pinet-workers'
-           WHERE agent_id = 'worker-1'`,
-        )
-        .run();
+      expect(() =>
+        sqlite
+          .prepare(
+            `UPDATE agent_runtime_specs
+             SET herdr_session = 'pinet-workers'
+             WHERE agent_id = 'worker-1'`,
+          )
+          .run(),
+      ).toThrow(/CHECK constraint failed/);
     } finally {
       sqlite.close();
+      db.close();
     }
-
-    expect(() => db.getAgentRuntimeSpec("worker-1")).toThrow(
-      "Invalid tmux runtime payload for agent worker-1",
-    );
-    db.close();
   });
 
   it.each([
@@ -364,7 +361,6 @@ describe("runtime spec persistence", () => {
 
     const sqlite = new DatabaseSync(path);
     try {
-      sqlite.exec("PRAGMA ignore_check_constraints = ON");
       sqlite
         .prepare(`UPDATE agent_runtime_specs SET ${column} = ? WHERE agent_id = 'worker-1'`)
         .run(value);

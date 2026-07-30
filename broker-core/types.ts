@@ -169,6 +169,8 @@ export type AgentRuntimeSpec =
       herdrShellPid: number;
     });
 
+export type TmuxAgentRuntimeSpec = Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }>;
+
 type RuntimeSpecWithoutTimestamps<T extends AgentRuntimeSpec> = T extends AgentRuntimeSpec
   ? Omit<T, "createdAt" | "updatedAt">
   : never;
@@ -185,6 +187,8 @@ export interface RedactedAgentRuntimeSpec {
   session: AgentSessionSummary;
   repo: string | null;
   hasWorktree: boolean;
+  runtimeKind: AgentRuntimeSpec["runtimeKind"];
+  /** Legacy tmux presence flag retained for client compatibility. */
   hasTmuxSession: boolean;
   configFingerprint: string;
   expectedHost: string;

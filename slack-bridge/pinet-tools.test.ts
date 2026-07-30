@@ -289,6 +289,7 @@ function makeLifecycleStatus(overrides: Partial<AgentLifecycleStatus> = {}): Age
       session: { kind: "session", ref: "session:abc123", host: "host-1", hasPath: false },
       repo: "extensions",
       hasWorktree: true,
+      runtimeKind: "tmux",
       hasTmuxSession: true,
       configFingerprint: "cfg-v1",
       expectedHost: "host-1",

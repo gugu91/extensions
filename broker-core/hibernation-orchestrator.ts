@@ -6,8 +6,8 @@ import type {
   AgentInfo,
   AgentLifecycleLease,
   AgentLifecycleTransitionInput,
-  AgentRuntimeSpec,
   RuntimeGenerationAcceptance,
+  TmuxAgentRuntimeSpec,
   WakeTriggerKind,
 } from "./types.js";
 
@@ -36,7 +36,7 @@ export interface RuntimeLaunchContext {
   /** Per-attempt nonce the launched runtime must echo back on registration. */
   reservationNonce: string;
   correlationId: string;
-  spec: AgentRuntimeSpec;
+  spec: TmuxAgentRuntimeSpec;
 }
 
 /**
@@ -58,11 +58,11 @@ export interface RuntimeAttemptHandle {
 /** Controls the dormant Pi runtime process (never tmux itself). */
 export interface HibernationProcessController {
   /** Ask the follower to flush a checkpoint and confirm hibernate safety. */
-  requestCheckpoint(spec: AgentRuntimeSpec): Promise<HibernationCheckpointOutcome>;
+  requestCheckpoint(spec: TmuxAgentRuntimeSpec): Promise<HibernationCheckpointOutcome>;
   /** Gracefully stop the live Pi runtime (TERM then bounded KILL) before hibernation. */
-  stopRuntime(spec: AgentRuntimeSpec): Promise<{ stopped: boolean; rssBytes: number | null }>;
+  stopRuntime(spec: TmuxAgentRuntimeSpec): Promise<{ stopped: boolean; rssBytes: number | null }>;
   /** True while the recorded Pi PID/process generation is still alive. */
-  isRuntimeAlive(spec: AgentRuntimeSpec): Promise<boolean>;
+  isRuntimeAlive(spec: TmuxAgentRuntimeSpec): Promise<boolean>;
   /**
    * Stop the runtime a SPECIFIC wake attempt launched, addressed by its
    * attempt-bound handle (not the durable spec). Used by retry cleanup to prove
@@ -76,7 +76,7 @@ export interface HibernationProcessController {
 /** Reads/writes the attachable tmux shell that outlives the Pi runtime. */
 export interface HibernationTmuxController {
   /** True if the recorded tmux session/pane still exists (operator-attachable). */
-  isSessionAttachable(spec: AgentRuntimeSpec): Promise<boolean>;
+  isSessionAttachable(spec: TmuxAgentRuntimeSpec): Promise<boolean>;
   /**
    * Launch exactly one replacement runtime into the recorded pane. The launched
    * runtime is expected to register presenting the reservation fence. Resolves

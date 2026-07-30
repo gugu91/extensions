@@ -48,25 +48,75 @@ export interface SubtreeBrokerPaths {
   lockPath: string;
 }
 
-interface WorkerRuntimeSpecBase {
-  sessionName: string;
-  tmuxSocketPath: string | null;
-}
-
 export type WorkerRuntimeSpec =
-  | (WorkerRuntimeSpecBase & {
+  | {
       runtimeKind: "tmux";
-    })
-  | (WorkerRuntimeSpecBase & {
+      sessionName: string;
+      tmuxSocketPath: string | null;
+    }
+  | {
       runtimeKind: "herdr";
+      sessionName: string;
       herdrSession: string;
       herdrConfigDir: string;
       herdrPaneId: string | null;
       herdrShellPid: number | null;
-    });
+    };
 
 type TmuxWorkerRuntimeSpec = Extract<WorkerRuntimeSpec, { runtimeKind: "tmux" }>;
 type HerdrWorkerRuntimeSpec = Extract<WorkerRuntimeSpec, { runtimeKind: "herdr" }>;
+type PendingHerdrRuntimeRecord = Omit<HerdrWorkerRuntimeSpec, "herdrPaneId" | "herdrShellPid"> & {
+  launchId: string;
+  herdrPaneId: string;
+  herdrShellPid: number;
+};
+
+const PENDING_HERDR_RUNTIMES_SETTING = "pinet.subtreePendingHerdrRuntimes";
+
+function readPendingHerdrRuntimes(db: BrokerDB): PendingHerdrRuntimeRecord[] {
+  const records = db.getSetting<PendingHerdrRuntimeRecord[]>(PENDING_HERDR_RUNTIMES_SETTING);
+  if (!Array.isArray(records)) return [];
+  return records.filter(
+    (record) =>
+      record !== null &&
+      typeof record === "object" &&
+      record.runtimeKind === "herdr" &&
+      typeof record.launchId === "string" &&
+      record.launchId.length > 0 &&
+      typeof record.sessionName === "string" &&
+      record.sessionName.length > 0 &&
+      typeof record.herdrSession === "string" &&
+      record.herdrSession.length > 0 &&
+      typeof record.herdrConfigDir === "string" &&
+      record.herdrConfigDir.length > 0 &&
+      typeof record.herdrPaneId === "string" &&
+      record.herdrPaneId.length > 0 &&
+      typeof record.herdrShellPid === "number" &&
+      Number.isInteger(record.herdrShellPid) &&
+      record.herdrShellPid > 0,
+  );
+}
+
+function updatePendingHerdrRuntime(
+  db: BrokerDB,
+  launchId: string,
+  spec: HerdrWorkerRuntimeSpec | null,
+): void {
+  const records = readPendingHerdrRuntimes(db).filter((record) => record.launchId !== launchId);
+  if (spec) {
+    if (!spec.herdrPaneId || spec.herdrShellPid === null) {
+      throw new Error(`Herdr runtime ${spec.sessionName} has no cleanup identity`);
+    }
+    records.push({
+      ...spec,
+      launchId,
+      herdrPaneId: spec.herdrPaneId,
+      herdrShellPid: spec.herdrShellPid,
+    });
+  }
+  if (records.length === 0) db.deleteSetting(PENDING_HERDR_RUNTIMES_SETTING);
+  else db.setSetting(PENDING_HERDR_RUNTIMES_SETTING, records);
+}
 
 export type SubtreeWorkerRecord = WorkerRuntimeSpec & {
   launchId: string;
@@ -81,7 +131,12 @@ export type SubtreeWorkerRecord = WorkerRuntimeSpec & {
 interface WorkerRuntimeController<T extends WorkerRuntimeSpec> {
   createLaunchSpec: (sessionName: string) => T;
   monitorCommand: (spec: T) => string;
-  launch: (spec: T, launcherPath: string, launchEnv: Record<string, string>) => Promise<void>;
+  launch: (
+    spec: T,
+    launcherPath: string,
+    launchEnv: Record<string, string>,
+    onRuntimeOwned?: (spec: T) => void,
+  ) => Promise<void>;
   cleanup: (spec: T) => Promise<void>;
 }
 
@@ -302,6 +357,7 @@ function buildChildLaunchEnv(
   return {
     PINET_SOCKET_PATH: paths.socketPath,
     PINET_BROKER_MANAGED: "1",
+    PINET_BROKER_AGENT_ID: selfAgentId,
     PINET_PARENT_AGENT_ID: selfAgentId,
     PINET_ROOT_AGENT_ID: selfAgentId,
     PINET_SPAWNED_BY_AGENT_ID: selfAgentId,
@@ -506,7 +562,6 @@ export function createHerdrWorkerRuntimeController(
     createLaunchSpec: (sessionName) => ({
       runtimeKind: "herdr",
       sessionName,
-      tmuxSocketPath: null,
       herdrSession: options.herdrSession,
       herdrConfigDir: options.herdrConfigDir,
       herdrPaneId: null,
@@ -514,7 +569,7 @@ export function createHerdrWorkerRuntimeController(
     }),
     monitorCommand: (spec) =>
       `XDG_CONFIG_HOME=${quoteShellValue(spec.herdrConfigDir)} herdr session attach ${quoteShellValue(spec.herdrSession)}`,
-    launch: async (spec, launcherPath, launchEnv) => {
+    launch: async (spec, launcherPath, launchEnv, onRuntimeOwned) => {
       ensureHerdrConfig(spec.herdrConfigDir);
       try {
         await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "list"]);
@@ -561,6 +616,8 @@ export function createHerdrWorkerRuntimeController(
           "--env",
           `${key}=`,
         ]),
+        ...SUBTREE_INHERITED_ENV_KEYS.flatMap((key) => ["--env", `${key}=`]),
+        ...HERDR_UNSET_ENV_KEYS.flatMap((key) => ["--env", `${key}=`]),
         "--no-focus",
       ]);
       const createResponse = JSON.parse(createOutput) as {
@@ -583,20 +640,23 @@ export function createHerdrWorkerRuntimeController(
           result?: { process_info?: { shell_pid?: number } };
         };
         const shellPid = processResponse.result?.process_info?.shell_pid;
-        if (!Number.isInteger(shellPid) || (shellPid ?? 0) <= 0) {
+        if (typeof shellPid !== "number" || !Number.isInteger(shellPid) || shellPid <= 0) {
           throw new Error(`Herdr pane ${paneId} returned no shell PID`);
         }
-        spec.herdrShellPid = shellPid ?? null;
+        spec.herdrShellPid = shellPid;
+        onRuntimeOwned?.(spec);
       } catch (launchError) {
         try {
           await runHerdrSessionCommand(runHerdrCommand, spec, ["pane", "close", paneId]);
           spec.herdrPaneId = null;
+          spec.herdrShellPid = null;
         } catch (rollbackError) {
           if (
             rollbackError instanceof Error &&
             (isMissingHerdrPane(rollbackError) || isMissingHerdrSession(rollbackError))
           ) {
             spec.herdrPaneId = null;
+            spec.herdrShellPid = null;
           } else {
             const rollbackMessage =
               rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
@@ -636,7 +696,11 @@ export function createHerdrWorkerRuntimeController(
           result?: { process_info?: { shell_pid?: number } };
         };
         const observedShellPid = processResponse.result?.process_info?.shell_pid;
-        if (!Number.isInteger(observedShellPid) || (observedShellPid ?? 0) <= 0) {
+        if (
+          typeof observedShellPid !== "number" ||
+          !Number.isInteger(observedShellPid) ||
+          observedShellPid <= 0
+        ) {
           throw new Error(`Herdr pane ${paneId} returned no shell PID`);
         }
         if (observedShellPid !== recordedShellPid) {
@@ -673,6 +737,9 @@ export const SUBTREE_INHERITED_ENV_KEYS = [
   "PI_SETTINGS_PATH",
   "PINET_MESH_SECRET",
   "PINET_MESH_SECRET_PATH",
+  "PINET_HIBERNATION_RUNTIME_ACTIVATION",
+  "SLACK_ALLOW_ALL_WORKSPACE_USERS",
+  "SLACK_ALLOWED_USERS",
   "SLACK_APP_TOKEN",
   "SLACK_BOT_TOKEN",
 ];
@@ -704,30 +771,26 @@ const PER_LAUNCH_PINET_ENV_KEYS = [
   "PINET_SPAWNED_BY_AGENT_ID",
   "PINET_SUBTREE_ROLE",
   "PINET_TMUX_SESSION",
+  "PINET_WAKE_CORRELATION_ID",
+  "PINET_WAKE_FENCE_TOKEN",
+  "PINET_WAKE_LEASE_ID",
+  "PINET_WAKE_RESERVED_GENERATION",
+  "PINET_WAKE_RESERVATION_NONCE",
 ];
 
+const HERDR_UNSET_ENV_KEYS = ["CLAUDE_TMUX_SOCKET_DIR", "TMUX", "TMUX_PANE"];
+
 function buildLauncherScript(input: {
+  runtimeKind: WorkerRuntimeSpec["runtimeKind"];
   repoPath: string;
   env: Record<string, string>;
   extensionEntryPath: string;
   startupPrompt: string;
 }): string {
-  const inheritedEnvKeys = [
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
-    "PI_OFFLINE",
-    "PI_SETTINGS_PATH",
-    "PINET_MESH_SECRET",
-    "PINET_MESH_SECRET_PATH",
-    "SLACK_APP_TOKEN",
-    "SLACK_BOT_TOKEN",
-  ];
-  const inheritedExports = inheritedEnvKeys
-    .map((key) => {
-      const value = process.env[key];
-      return value ? `export ${key}=${quoteShellValue(value)}` : null;
-    })
-    .filter((line): line is string => Boolean(line));
+  const inheritedEnv = SUBTREE_INHERITED_ENV_KEYS.map((key) => {
+    const value = process.env[key];
+    return value ? `export ${key}=${quoteShellValue(value)}` : `unset ${key}`;
+  });
   const envExports = Object.entries(input.env).map(
     ([key, value]) => `export ${key}=${quoteShellValue(value)}`,
   );
@@ -737,11 +800,10 @@ function buildLauncherScript(input: {
     "#!/bin/bash",
     "set -euo pipefail",
     `cd ${quoteShellValue(input.repoPath)}`,
-    ...inheritedExports,
+    ...(input.runtimeKind === "herdr" ? HERDR_UNSET_ENV_KEYS.map((key) => `unset ${key}`) : []),
+    ...inheritedEnv,
     ...envExports,
-    ...PER_LAUNCH_PINET_ENV_KEYS.filter((key) => !(key in input.env)).map(
-      (key) => `unset ${key}`,
-    ),
+    ...PER_LAUNCH_PINET_ENV_KEYS.filter((key) => !(key in input.env)).map((key) => `unset ${key}`),
     `export PI_NICKNAME=${quoteShellValue(nickname)}`,
     `exec pi -e ${quoteShellValue(input.extensionEntryPath)} ${quoteShellValue(input.startupPrompt)}`,
     "",
@@ -1056,15 +1118,28 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
 
   // agent-standards-ignore prefer-inline-single-use-helper: restart-safe runtime cleanup resolution
   function childRuntimeSpecs(broker: Broker, agentId: string): WorkerRuntimeSpec[] {
-    const specs: WorkerRuntimeSpec[] = [...spawnedWorkers.values()];
+    const specs = new Map<string, WorkerRuntimeSpec>();
+    const addSpec = (spec: WorkerRuntimeSpec): void => {
+      const key =
+        spec.runtimeKind === "tmux"
+          ? `tmux:${spec.tmuxSocketPath ?? ""}:${spec.sessionName}`
+          : `herdr:${spec.herdrConfigDir}:${spec.herdrSession}:${spec.herdrPaneId ?? ""}:${spec.herdrShellPid ?? ""}`;
+      specs.set(key, spec);
+    };
+    const workers = [...spawnedWorkers.values()];
+    for (const worker of workers) addSpec(worker);
+    const activeLaunchIds = new Set(spawnedWorkers.keys());
+    for (const { launchId, ...spec } of readPendingHerdrRuntimes(broker.db)) {
+      if (!activeLaunchIds.has(launchId)) addSpec(spec);
+    }
     const recordedAgentIds = new Set(
-      [...spawnedWorkers.values()].flatMap((worker) => (worker.agentId ? [worker.agentId] : [])),
+      workers.flatMap((worker) => (worker.agentId ? [worker.agentId] : [])),
     );
     for (const agent of broker.db.getAllAgents()) {
       if (!isSubtreeChildAgent(agent, agentId) || recordedAgentIds.has(agent.id)) continue;
       const durableSpec = broker.db.getAgentRuntimeSpec(agent.id);
       if (durableSpec?.runtimeKind === "tmux") {
-        specs.push({
+        addSpec({
           runtimeKind: "tmux",
           sessionName: durableSpec.tmuxSession,
           tmuxSocketPath: durableSpec.tmuxSocket,
@@ -1072,10 +1147,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         continue;
       }
       if (durableSpec?.runtimeKind === "herdr") {
-        specs.push({
+        addSpec({
           runtimeKind: "herdr",
           sessionName: agent.id,
-          tmuxSocketPath: null,
           herdrSession: durableSpec.herdrSession,
           herdrConfigDir: durableSpec.herdrConfigDir,
           herdrPaneId: durableSpec.herdrPaneId,
@@ -1099,14 +1173,14 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
         continue;
       }
       if (tmuxSession) {
-        specs.push({
+        addSpec({
           runtimeKind: "tmux",
           sessionName: tmuxSession,
           tmuxSocketPath: findTmuxSocketPath(),
         });
       }
     }
-    return specs;
+    return [...specs.values()];
   }
 
   async function stopChildren(broker: Broker, agentId: string): Promise<void> {
@@ -1118,11 +1192,19 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       await sleep(SUBTREE_CHILD_EXIT_GRACE_MS);
     }
 
-    await Promise.all(
-      childRuntimeSpecs(broker, agentId).map((spec) =>
-        cleanupWorkerRuntime(spec).catch(() => undefined),
-      ),
+    const cleanupResults = await Promise.all(
+      childRuntimeSpecs(broker, agentId).map(async (spec) => {
+        try {
+          await cleanupWorkerRuntime(spec);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
     );
+    if (cleanupResults.every(Boolean)) {
+      broker.db.deleteSetting(PENDING_HERDR_RUNTIMES_SETTING);
+    }
   }
 
   async function stop(
@@ -1180,34 +1262,33 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       lockPath: paths.lockPath,
       ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
       ...(meshAuth.meshSecretPath ? { meshSecretPath: meshAuth.meshSecretPath } : {}),
-      ...(runtimeActive
-        ? {
-            beforeListen: ({ db }) => {
-              // Phase B, Seam 3 (default-off): reconcile crash-stranded wake rows
-              // on THIS broker's authoritative DB BEFORE it begins listening, so
-              // a stranded waking/hibernating row is completed/quarantined/
-              // requeued deterministically instead of racing an incoming
-              // (possibly duplicate) wake registration. Pure DB reconciliation;
-              // launches nothing. `selfId` equals the self-agent id registered
-              // below, so recovery's lease ownership matches the live wake path.
-              recoverStrandedWakesBeforeRegistrations(
-                createHibernationOrchestrator({
-                  db,
-                  brokerInstanceId: selfId,
-                  extensionEntryPath: getExtensionEntryPath(),
-                  baseLaunchEnv: buildChildLaunchEnv(paths, selfId),
-                  inheritedEnvKeys: SUBTREE_INHERITED_ENV_KEYS,
-                  config: {
-                    handshakeTimeoutMs: startupHib.handshakeTimeoutMs,
-                    wakeLeaseMs: startupHib.wakeLeaseMs,
-                    maxConcurrentWakes: startupHib.maxConcurrentWakes,
-                    maxConcurrentWakesPerRepo: startupHib.maxConcurrentWakesPerRepo,
-                  },
-                }),
-              );
-            },
-          }
-        : {}),
+      beforeListen: async ({ db }) => {
+        const pendingHerdrRuntimes = readPendingHerdrRuntimes(db);
+        for (const pending of pendingHerdrRuntimes) {
+          const spec: HerdrWorkerRuntimeSpec = pending;
+          await cleanupWorkerRuntime(spec);
+        }
+        if (pendingHerdrRuntimes.length > 0) {
+          db.deleteSetting(PENDING_HERDR_RUNTIMES_SETTING);
+        }
+        if (runtimeActive) {
+          recoverStrandedWakesBeforeRegistrations(
+            createHibernationOrchestrator({
+              db,
+              brokerInstanceId: selfId,
+              extensionEntryPath: getExtensionEntryPath(),
+              baseLaunchEnv: buildChildLaunchEnv(paths, selfId),
+              inheritedEnvKeys: SUBTREE_INHERITED_ENV_KEYS,
+              config: {
+                handshakeTimeoutMs: startupHib.handshakeTimeoutMs,
+                wakeLeaseMs: startupHib.wakeLeaseMs,
+                maxConcurrentWakes: startupHib.maxConcurrentWakes,
+                maxConcurrentWakesPerRepo: startupHib.maxConcurrentWakesPerRepo,
+              },
+            }),
+          );
+        }
+      },
     });
 
     try {
@@ -1305,6 +1386,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     if (!activeBroker || !activePaths || !selfAgentId) {
       throw new Error("Subtree broker is not running.");
     }
+    const broker = activeBroker;
     if (input.cleanupHandle) {
       const handle = input.cleanupHandle;
       if (!activePaths || handle.socketPath !== activePaths.socketPath) {
@@ -1326,6 +1408,9 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       spawnedWorkers.delete(handle.launchId);
       try {
         await cleanupWorkerRuntime(worker);
+        if (worker.runtimeKind === "herdr") {
+          updatePendingHerdrRuntime(activeBroker.db, handle.launchId, null);
+        }
       } catch (error) {
         spawnedWorkers.set(handle.launchId, worker);
         throw error;
@@ -1341,7 +1426,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       .subtreeWorkerRuntime;
     const runtimeKind = configuredRuntime === undefined ? "tmux" : configuredRuntime;
     if (runtimeKind !== "tmux" && runtimeKind !== "herdr") {
-      const invalidValue = JSON.stringify(runtimeKind) ?? String(runtimeKind);
+      const invalidValue = JSON.stringify(runtimeKind);
       throw new Error(
         `Invalid subtreeWorkerRuntime setting ${invalidValue}; valid options are "tmux" and "herdr".`,
       );
@@ -1367,6 +1452,7 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     fs.writeFileSync(
       launcherPath,
       buildLauncherScript({
+        runtimeKind: runtimeSpec.runtimeKind,
         repoPath,
         env: childLaunchEnv,
         extensionEntryPath: getExtensionEntryPath(),
@@ -1398,7 +1484,12 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
       if (workerRecord.runtimeKind === "tmux") {
         await workerRuntimeControllers.tmux.launch(workerRecord, launcherPath, childLaunchEnv);
       } else {
-        await workerRuntimeControllers.herdr.launch(workerRecord, launcherPath, childLaunchEnv);
+        await workerRuntimeControllers.herdr.launch(
+          workerRecord,
+          launcherPath,
+          childLaunchEnv,
+          (spec) => updatePendingHerdrRuntime(broker.db, launchId, spec),
+        );
       }
     } catch (error) {
       fenceLaunch(activeBroker, launchId);
@@ -1418,29 +1509,21 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
     const updatedRecord: SubtreeWorkerRecord = { ...workerRecord, agentId: agent.id };
     spawnedWorkers.set(launchId, updatedRecord);
 
-    // Phase B, Seam 2 (default-off): record a durable, broker-authored runtime
-    // spec so this freshly-registered worker is hibernatable/wakeable later. The
-    // authz VCS identity is derived from the repo's REAL git remote (never the
-    // directory name); an unresolvable remote or non-durable locator set fails
-    // closed (no spec persisted). No-op unless the durable, non-reloadable
-    // runtime-activation authority is set. Persisted into `activeBroker.db` — the
-    // SAME authoritative DB the hibernate/wake command path resolves against via
-    // `getHibernationRuntimeControl`.
-    if (hibernationRuntimeActive()) {
-      const commonRuntimeFacts = {
-        agentId: agent.id,
-        stableId: agent.stableId ?? "",
-        brokerOwnerId: selfAgentId,
-        cwd: repoPath,
-        repoRoot: repoPath,
-        worktreePath: repoPath,
-        extensionEntryPath: getExtensionEntryPath(),
-        envAllowlist: Object.keys(childLaunchEnv),
-        configFingerprint: `subtree-broker-${workerRecord.runtimeKind}`,
-        expectedUser: os.userInfo().username,
-        launchSource: childLaunchEnv.PINET_LAUNCH_SOURCE,
-      };
-      if (workerRecord.runtimeKind === "tmux") {
+    const commonRuntimeFacts = {
+      agentId: agent.id,
+      stableId: agent.stableId ?? "",
+      brokerOwnerId: selfAgentId,
+      cwd: repoPath,
+      repoRoot: repoPath,
+      worktreePath: repoPath,
+      extensionEntryPath: getExtensionEntryPath(),
+      envAllowlist: Object.keys(childLaunchEnv),
+      configFingerprint: `subtree-broker-${workerRecord.runtimeKind}`,
+      expectedUser: os.userInfo().username,
+      launchSource: childLaunchEnv.PINET_LAUNCH_SOURCE,
+    };
+    if (workerRecord.runtimeKind === "tmux") {
+      if (hibernationRuntimeActive()) {
         await persistSpawnedRuntimeSpec(activeBroker.db, {
           ...commonRuntimeFacts,
           runtimeKind: "tmux",
@@ -1448,15 +1531,50 @@ export function createSubtreeBrokerRuntime(deps: SubtreeBrokerRuntimeDeps): Subt
           tmuxSession: workerRecord.sessionName,
           tmuxTarget: workerRecord.sessionName,
         });
-      } else if (workerRecord.herdrPaneId && workerRecord.herdrShellPid !== null) {
-        await persistSpawnedRuntimeSpec(activeBroker.db, {
-          ...commonRuntimeFacts,
-          runtimeKind: "herdr",
-          herdrSession: workerRecord.herdrSession,
-          herdrConfigDir: workerRecord.herdrConfigDir,
-          herdrPaneId: workerRecord.herdrPaneId,
-          herdrShellPid: workerRecord.herdrShellPid,
-        });
+      }
+    } else {
+      let persisted = false;
+      let persistenceError: Error | null = null;
+      if (workerRecord.herdrPaneId && workerRecord.herdrShellPid !== null) {
+        try {
+          persisted = Boolean(
+            await persistSpawnedRuntimeSpec(activeBroker.db, {
+              ...commonRuntimeFacts,
+              runtimeKind: "herdr",
+              herdrSession: workerRecord.herdrSession,
+              herdrConfigDir: workerRecord.herdrConfigDir,
+              herdrPaneId: workerRecord.herdrPaneId,
+              herdrShellPid: workerRecord.herdrShellPid,
+            }),
+          );
+        } catch (error) {
+          persistenceError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+      if (persisted) {
+        updatePendingHerdrRuntime(activeBroker.db, launchId, null);
+      } else {
+        const failureMessage = `Herdr worker ${agent.id} has no durable restart-safe cleanup identity`;
+        const failure = persistenceError
+          ? new Error(failureMessage, { cause: persistenceError })
+          : new Error(failureMessage);
+        fenceLaunch(activeBroker, launchId);
+        await requestChildExit(agent);
+        try {
+          await cleanupWorkerRuntime(workerRecord);
+          updatePendingHerdrRuntime(activeBroker.db, launchId, null);
+          spawnedWorkers.delete(launchId);
+          activeBroker.db.unregisterAgent(agent.id);
+        } catch (error) {
+          throw new SubtreeSpawnLaunchError(
+            new Error(`${failure.message}; cleanup also failed`, {
+              cause: error instanceof Error ? error : new Error(String(error)),
+            }),
+            launchHandle,
+            "herdr",
+          );
+        }
+        throw new Error(`${failure.message}; worker stopped`, { cause: failure });
       }
     }
 

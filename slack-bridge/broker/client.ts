@@ -64,6 +64,9 @@ export interface ThreadInfo {
 export type AgentInfo = ClientAgentInfo;
 export type { AgentSessionSearchInfo, AgentSessionSearchOptions };
 
+type WireAgentSessionSearchInfo = Omit<AgentSessionSearchInfo, "runtimeKind" | "runtimeLocator"> &
+  Partial<Pick<AgentSessionSearchInfo, "runtimeKind" | "runtimeLocator">>;
+
 export interface ScheduledWakeupInfo {
   id: number;
   threadId: string;
@@ -671,10 +674,16 @@ export class BrokerClient {
     options: AgentSessionSearchOptions = {},
   ): Promise<AgentSessionSearchInfo[]> {
     try {
-      return (await this.request(
+      const sessions = (await this.request(
         "agent.sessions.search",
         options as unknown as Record<string, unknown>,
-      )) as AgentSessionSearchInfo[];
+      )) as WireAgentSessionSearchInfo[];
+      return sessions.map((session) => ({
+        ...session,
+        runtimeKind: session.runtimeKind ?? (session.tmuxSession ? "tmux" : null),
+        runtimeLocator:
+          session.runtimeLocator ?? (session.runtimeKind === "herdr" ? null : session.tmuxSession),
+      }));
     } catch (err) {
       if (isRpcMethodNotFoundError(err, "agent.sessions.search")) {
         throw new Error(

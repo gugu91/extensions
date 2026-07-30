@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetHibernationActivationAuthorityForTest } from "./broker/hibernation-activation-authority.js";
@@ -16,7 +18,14 @@ import {
 const ctx = {} as ExtensionContext;
 const runtimes: SubtreeBrokerRuntime[] = [];
 const roots: string[] = [];
-const originalTmuxSession = process.env.PINET_TMUX_SESSION;
+const originalLaunchEnv: Record<string, string | undefined> = {
+  PINET_TMUX_SESSION: process.env.PINET_TMUX_SESSION,
+  PINET_WAKE_LEASE_ID: process.env.PINET_WAKE_LEASE_ID,
+  SLACK_ALLOWED_USERS: process.env.SLACK_ALLOWED_USERS,
+  SLACK_APP_TOKEN: process.env.SLACK_APP_TOKEN,
+  SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
+  TMUX: process.env.TMUX,
+};
 
 function createRuntime(
   deliverSteeringMessage: SubtreeBrokerRuntimeDeps["deliverSteeringMessage"],
@@ -84,8 +93,11 @@ afterEach(async () => {
       .map((runtime) => runtime.stop({ releaseIdentity: true, stopChildren: false })),
   );
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-  if (originalTmuxSession === undefined) delete process.env.PINET_TMUX_SESSION;
-  else process.env.PINET_TMUX_SESSION = originalTmuxSession;
+  for (const [key, value] of Object.entries(originalLaunchEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  vi.restoreAllMocks();
 });
 
 describe("subtree broker inbox delivery", () => {
@@ -250,18 +262,38 @@ describe("subtree broker spawn lifecycle", () => {
     expect(
       runtime.getStatus().spawnedWorkers.every((worker) => worker.runtimeKind === "tmux"),
     ).toBe(true);
+    const launcherScripts = tmux.commands
+      .filter((args) => args.includes("new-session"))
+      .map((args) => fs.readFileSync(args.at(-1) ?? "", "utf8"));
+    expect(launcherScripts).toHaveLength(3);
+    expect(launcherScripts.every((script) => !script.includes("unset TMUX"))).toBe(true);
+    expect(
+      launcherScripts.every((script) => !script.includes("unset CLAUDE_TMUX_SOCKET_DIR")),
+    ).toBe(true);
   });
 
-  it("selects Herdr only when explicitly configured and unsets inherited tmux identity", async () => {
+  it("selects Herdr only when configured and sets the child broker identity", async () => {
     process.env.PINET_TMUX_SESSION = "parent-stale";
+    process.env.PINET_WAKE_LEASE_ID = "stale-wake-lease";
+    process.env.SLACK_ALLOWED_USERS = "current-test-user";
+    process.env.SLACK_BOT_TOKEN = "current-test-token";
+    process.env.TMUX = "/tmp/stale-tmux,1,0";
+    delete process.env.SLACK_APP_TOKEN;
     const tmuxRun = vi.fn(async () => {});
     let launchId = "";
     let sessionName = "";
     const runHerdrCommand = vi.fn(async (args: string[]) => {
       if (args.includes("create")) {
+        const brokerAgentId = runtime.getStatus().selfAgentId;
+        if (!brokerAgentId) throw new Error("subtree broker did not start");
         expect(args).toContain("PINET_TMUX_SESSION=");
-        expect(args).toContain("PINET_BROKER_AGENT_ID=");
+        expect(args).toContain(`PINET_BROKER_AGENT_ID=${brokerAgentId}`);
         expect(args).toContain("PINET_LANE_ID=");
+        expect(args).toContain("SLACK_ALLOWED_USERS=");
+        expect(args).toContain("SLACK_BOT_TOKEN=");
+        expect(args).toContain("SLACK_APP_TOKEN=");
+        expect(args).toContain("PINET_WAKE_LEASE_ID=");
+        expect(args).toContain("TMUX=");
         launchId =
           args
             .find((value) => value.startsWith("PINET_LAUNCH_ID="))
@@ -278,15 +310,24 @@ describe("subtree broker spawn lifecycle", () => {
         const launcherPath = quotedLauncherPath.slice(1, -1);
         const launcherScript = fs.readFileSync(launcherPath, "utf8");
         expect(launcherScript).toContain("unset PINET_TMUX_SESSION");
-        expect(launcherScript).toContain("unset PINET_BROKER_AGENT_ID");
+        expect(launcherScript).toContain("export PINET_BROKER_AGENT_ID=");
         expect(launcherScript).toContain("unset PINET_LANE_ID");
+        expect(launcherScript).toContain("export SLACK_ALLOWED_USERS='current-test-user'");
+        expect(launcherScript).toContain("export SLACK_BOT_TOKEN='current-test-token'");
+        expect(launcherScript).toContain("unset SLACK_APP_TOKEN");
+        expect(launcherScript).toContain("unset PINET_WAKE_LEASE_ID");
+        expect(launcherScript).toContain("unset TMUX");
         const control = runtime.getHibernationRuntimeControl();
         const parentAgentId = runtime.getStatus().selfAgentId;
         if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
-        control.db.registerAgent("herdr-child", "Herdr Child", "🌱", process.pid, {
-          parentAgentId,
-          launchId,
-        });
+        control.db.registerAgent(
+          "herdr-child",
+          "Herdr Child",
+          "🌱",
+          process.pid,
+          { parentAgentId, launchId },
+          "test:session:/tmp/herdr-child.jsonl",
+        );
       }
       return "{}";
     });
@@ -305,8 +346,16 @@ describe("subtree broker spawn lifecycle", () => {
     expect(result.agentId).toBe("herdr-child");
     expect(result.sessionName).toBe(sessionName);
     expect(result.childLaunchEnv.PINET_LAUNCH_SOURCE).toBe("subtree-broker-herdr");
+    expect(result.childLaunchEnv.PINET_BROKER_AGENT_ID).toBe(runtime.getStatus().selfAgentId);
     expect(result.childLaunchEnv).not.toHaveProperty("PINET_TMUX_SESSION");
     expect(result.monitorCommand).toContain("herdr session attach");
+    expect(
+      runtime.getHibernationRuntimeControl()?.db.getAgentRuntimeSpec(result.agentId),
+    ).toMatchObject({
+      runtimeKind: "herdr",
+      herdrPaneId: "w1:p2",
+      herdrShellPid: 4242,
+    });
     expect(runtime.getStatus().spawnedWorkers[0]).toMatchObject({
       runtimeKind: "herdr",
       herdrPaneId: "w1:p2",
@@ -380,10 +429,14 @@ describe("subtree broker spawn lifecycle", () => {
         const control = runtime.getHibernationRuntimeControl();
         const parentAgentId = runtime.getStatus().selfAgentId;
         if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
-        control.db.registerAgent("retry-before-create", "Retry Child", "🌱", process.pid, {
-          parentAgentId,
-          launchId,
-        });
+        control.db.registerAgent(
+          "retry-before-create",
+          "Retry Child",
+          "🌱",
+          process.pid,
+          { parentAgentId, launchId },
+          "test:session:/tmp/retry-before-create.jsonl",
+        );
       }
       return "{}";
     };
@@ -440,10 +493,14 @@ describe("subtree broker spawn lifecycle", () => {
         const control = runtime.getHibernationRuntimeControl();
         const parentAgentId = runtime.getStatus().selfAgentId;
         if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
-        control.db.registerAgent("retry-after-create", "Retry Child", "🌱", process.pid, {
-          parentAgentId,
-          launchId,
-        });
+        control.db.registerAgent(
+          "retry-after-create",
+          "Retry Child",
+          "🌱",
+          process.pid,
+          { parentAgentId, launchId },
+          "test:session:/tmp/retry-after-create.jsonl",
+        );
       }
       return "{}";
     };
@@ -478,7 +535,12 @@ describe("subtree broker spawn lifecycle", () => {
 
   it("keeps tmux and Herdr workers isolated under one broker", async () => {
     const originalActivation = process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION;
+    const originalTmuxSocketDir = process.env.CLAUDE_TMUX_SOCKET_DIR;
+    const tmuxSocketDir = fs.mkdtempSync(path.join(os.tmpdir(), "pinet-mixed-tmux-"));
+    const tmuxSocketPath = path.join(tmuxSocketDir, "claude.sock");
+    fs.writeFileSync(tmuxSocketPath, "");
     process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION = "1";
+    process.env.CLAUDE_TMUX_SOCKET_DIR = tmuxSocketDir;
     __resetHibernationActivationAuthorityForTest();
 
     try {
@@ -589,6 +651,7 @@ describe("subtree broker spawn lifecycle", () => {
       );
       expect(tmuxSpec).toMatchObject({
         runtimeKind: "tmux",
+        tmuxSocket: tmuxSocketPath,
         tmuxSession: tmuxResult.sessionName,
       });
       expect(herdrSpec).toMatchObject({
@@ -620,6 +683,12 @@ describe("subtree broker spawn lifecycle", () => {
       } else {
         process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION = originalActivation;
       }
+      if (originalTmuxSocketDir === undefined) {
+        delete process.env.CLAUDE_TMUX_SOCKET_DIR;
+      } else {
+        process.env.CLAUDE_TMUX_SOCKET_DIR = originalTmuxSocketDir;
+      }
+      fs.rmSync(tmuxSocketDir, { recursive: true, force: true });
       __resetHibernationActivationAuthorityForTest();
     }
   }, 15_000);
@@ -667,6 +736,251 @@ describe("subtree broker spawn lifecycle", () => {
       }
     },
   );
+
+  it("recovers an unregistered Herdr pane after a broker restart", async () => {
+    const stableId = `herdr-inflight-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    const herdrCommands: string[][] = [];
+    let holdCleanup = false;
+    let markCleanupStarted: () => void = () => {};
+    const cleanupStarted = new Promise<void>((resolve) => {
+      markCleanupStarted = resolve;
+    });
+    let releaseCleanup: () => void = () => {};
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const runHerdrCommand = async (args: string[]): Promise<string> => {
+      herdrCommands.push(args);
+      if (holdCleanup && args.includes("close")) {
+        markCleanupStarted();
+        await cleanupReleased;
+      }
+      if (args.includes("create")) {
+        return JSON.stringify({ result: { root_pane: { pane_id: "w1:p8" } } });
+      }
+      if (args.includes("process-info")) {
+        return JSON.stringify({ result: { process_info: { shell_pid: 8008 } } });
+      }
+      return "{}";
+    };
+    const first = createRuntime(() => false, stableId, {
+      getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+      runHerdrCommand,
+    }).runtime;
+
+    await expect(
+      first.spawnWorker(ctx, { task: "Run in Herdr", repo: ".", waitForRegistrationMs: 2 }),
+    ).rejects.toBeInstanceOf(SubtreeSpawnRegistrationTimeoutError);
+    await first.stop({ stopChildren: false });
+
+    herdrCommands.length = 0;
+    holdCleanup = true;
+    const restarted = createRuntime(() => false, stableId, {
+      getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+      runHerdrCommand,
+    }).runtime;
+    const restart = restarted.start(ctx);
+    await cleanupStarted;
+    expect(fs.existsSync(buildSubtreeBrokerPaths(stableId).socketPath)).toBe(false);
+    releaseCleanup();
+    await restart;
+    expect(herdrCommands.some((args) => args.includes("close") && args.includes("w1:p8"))).toBe(
+      true,
+    );
+    await restarted.stop();
+  });
+
+  it("keeps the broker socket closed and retries failed startup cleanup", async () => {
+    const stableId = `herdr-startup-cleanup-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    const herdrCommands: string[][] = [];
+    let failCleanup = false;
+    const runHerdrCommand = async (args: string[]): Promise<string> => {
+      herdrCommands.push(args);
+      if (failCleanup && args.includes("get")) throw new Error("cleanup unavailable");
+      if (args.includes("create")) {
+        return JSON.stringify({ result: { root_pane: { pane_id: "w1:p9" } } });
+      }
+      if (args.includes("process-info")) {
+        return JSON.stringify({ result: { process_info: { shell_pid: 9009 } } });
+      }
+      return "{}";
+    };
+    const first = createRuntime(() => false, stableId, {
+      getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+      runHerdrCommand,
+    }).runtime;
+    await expect(
+      first.spawnWorker(ctx, { task: "Run in Herdr", repo: ".", waitForRegistrationMs: 2 }),
+    ).rejects.toBeInstanceOf(SubtreeSpawnRegistrationTimeoutError);
+    await first.stop({ stopChildren: false });
+
+    failCleanup = true;
+    const failingRestart = createRuntime(() => false, stableId, {
+      getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+      runHerdrCommand,
+    }).runtime;
+    await expect(failingRestart.start(ctx)).rejects.toThrow("cleanup unavailable");
+    expect(fs.existsSync(buildSubtreeBrokerPaths(stableId).socketPath)).toBe(false);
+
+    failCleanup = false;
+    const recovered = createRuntime(() => false, stableId, {
+      getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+      runHerdrCommand,
+    }).runtime;
+    await recovered.start(ctx);
+    expect(herdrCommands.some((args) => args.includes("close") && args.includes("w1:p9"))).toBe(
+      true,
+    );
+    await recovered.stop();
+  });
+
+  it("recovers Herdr cleanup identity after a broker restart with hibernation disabled", async () => {
+    const originalActivation = process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION;
+    delete process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION;
+    __resetHibernationActivationAuthorityForTest();
+
+    const stableId = `herdr-restart-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    const herdrCommands: string[][] = [];
+    let launchId = "";
+    let firstRuntime: ReturnType<typeof createRuntime>["runtime"];
+    const runHerdrCommand = async (args: string[]): Promise<string> => {
+      herdrCommands.push(args);
+      if (args.includes("create")) {
+        launchId =
+          args
+            .find((value) => value.startsWith("PINET_LAUNCH_ID="))
+            ?.slice("PINET_LAUNCH_ID=".length) ?? "";
+        return JSON.stringify({ result: { root_pane: { pane_id: "w1:p7" } } });
+      }
+      if (args.includes("process-info")) {
+        return JSON.stringify({ result: { process_info: { shell_pid: 7007 } } });
+      }
+      if (args.includes("run")) {
+        const control = firstRuntime.getHibernationRuntimeControl();
+        const parentAgentId = firstRuntime.getStatus().selfAgentId;
+        if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
+        control.db.registerAgent(
+          "restart-herdr-child",
+          "Herdr Child",
+          "🌱",
+          process.pid,
+          { parentAgentId, launchId },
+          "test:session:/tmp/restart-herdr-child.jsonl",
+        );
+      }
+      return "{}";
+    };
+
+    try {
+      firstRuntime = createRuntime(() => false, stableId, {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runHerdrCommand,
+      }).runtime;
+      await firstRuntime.spawnWorker(ctx, { task: "Run in Herdr", repo: "." });
+      expect(
+        firstRuntime.getHibernationRuntimeControl()?.db.getAgentRuntimeSpec("restart-herdr-child"),
+      ).toMatchObject({
+        runtimeKind: "herdr",
+        herdrPaneId: "w1:p7",
+        herdrShellPid: 7007,
+      });
+      await firstRuntime.stop({ stopChildren: false });
+
+      herdrCommands.length = 0;
+      const restarted = createRuntime(() => false, stableId, {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runHerdrCommand,
+      }).runtime;
+      await restarted.start(ctx);
+
+      vi.useFakeTimers();
+      try {
+        const stop = restarted.stop();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await stop;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(herdrCommands.some((args) => args.includes("close") && args.includes("w1:p7"))).toBe(
+        true,
+      );
+    } finally {
+      if (originalActivation === undefined) {
+        delete process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION;
+      } else {
+        process.env.PINET_HIBERNATION_RUNTIME_ACTIVATION = originalActivation;
+      }
+      __resetHibernationActivationAuthorityForTest();
+    }
+  });
+
+  it("cleans up a Herdr worker when durable spec persistence rejects", async () => {
+    const herdrCommands: string[][] = [];
+    let launchId = "";
+    const runHerdrCommand = async (args: string[]): Promise<string> => {
+      herdrCommands.push(args);
+      if (args.includes("create")) {
+        launchId =
+          args
+            .find((value) => value.startsWith("PINET_LAUNCH_ID="))
+            ?.slice("PINET_LAUNCH_ID=".length) ?? "";
+        return JSON.stringify({ result: { root_pane: { pane_id: "w1:p10" } } });
+      }
+      if (args.includes("process-info")) {
+        return JSON.stringify({ result: { process_info: { shell_pid: 10_010 } } });
+      }
+      if (args.includes("run")) {
+        const control = runtime.getHibernationRuntimeControl();
+        const parentAgentId = runtime.getStatus().selfAgentId;
+        if (!control || !parentAgentId || !launchId) throw new Error("missing launch facts");
+        control.db.registerAgent(
+          "persistence-failure-child",
+          "Herdr Child",
+          "🌱",
+          process.pid,
+          { parentAgentId, launchId },
+          "test:session:/tmp/persistence-failure-child.jsonl",
+        );
+      }
+      return "{}";
+    };
+    const { runtime } = createRuntime(
+      () => false,
+      `herdr-persistence-failure-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+      {
+        getSettings: () => ({ subtreeWorkerRuntime: "herdr" }),
+        runHerdrCommand,
+      },
+    );
+    await runtime.start(ctx);
+    const control = runtime.getHibernationRuntimeControl();
+    if (!control) throw new Error("subtree broker did not start");
+    vi.spyOn(control.db, "upsertAgentRuntimeSpec").mockImplementation(() => {
+      throw new Error("simulated persistence failure");
+    });
+
+    await expect(runtime.spawnWorker(ctx, { task: "Run in Herdr", repo: "." })).rejects.toThrow(
+      "worker stopped",
+    );
+
+    expect(control.db.getAgentById("persistence-failure-child")?.disconnectedAt).toBeTruthy();
+    expect(control.db.getAgentRuntimeSpec("persistence-failure-child")).toBeNull();
+    expect(
+      herdrCommands.filter((args) => args.includes("close") && args.includes("w1:p10")),
+    ).toHaveLength(1);
+    vi.useFakeTimers();
+    try {
+      const stop = runtime.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stop;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(
+      herdrCommands.filter((args) => args.includes("close") && args.includes("w1:p10")),
+    ).toHaveLength(1);
+  });
 
   it("never dispatches Herdr metadata with an inherited tmux session to tmux cleanup", async () => {
     const tmux = createTmuxHarness();
@@ -1142,6 +1456,8 @@ describe("subtree broker spawn lifecycle", () => {
   it("disconnects a child accepted after the final timeout lookup", async () => {
     const tmux = createTmuxHarness();
     const meshSecret = "timeout-race-secret";
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     let launchFacts: TmuxLaunchFacts | null = null;
     const racingClients: BrokerClient[] = [];
     const runTmuxCommand = async (args: string[]): Promise<void> => {
@@ -1157,6 +1473,7 @@ describe("subtree broker spawn lifecycle", () => {
           launchId: launchFacts.launchId,
           tmuxSession: launchFacts.sessionName,
         });
+        now += 10;
       }
     };
     const { runtime } = createRuntime(

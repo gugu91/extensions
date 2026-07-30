@@ -2859,11 +2859,7 @@ export class BrokerDB implements BrokerDBInterface {
         row.tmux_session === null ||
         row.tmux_session.trim().length === 0 ||
         row.tmux_target === null ||
-        row.tmux_target.trim().length === 0 ||
-        row.herdr_session !== null ||
-        row.herdr_config_dir !== null ||
-        row.herdr_pane_id !== null ||
-        row.herdr_shell_pid !== null
+        row.tmux_target.trim().length === 0
       ) {
         throw new Error(`Invalid tmux runtime payload for agent ${agentId}`);
       }
@@ -2885,10 +2881,7 @@ export class BrokerDB implements BrokerDBInterface {
         row.herdr_pane_id.trim().length === 0 ||
         row.herdr_shell_pid === null ||
         !Number.isInteger(row.herdr_shell_pid) ||
-        row.herdr_shell_pid <= 0 ||
-        row.tmux_socket !== null ||
-        row.tmux_session !== null ||
-        row.tmux_target !== null
+        row.herdr_shell_pid <= 0
       ) {
         throw new Error(`Invalid Herdr runtime payload for agent ${agentId}`);
       }
