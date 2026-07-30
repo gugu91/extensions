@@ -69,6 +69,8 @@ import {
   resumePathFromSessionRef,
 } from "./hibernation-runtime-helpers.js";
 
+type TmuxAgentRuntimeSpec = Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }>;
+
 export interface CommandResult {
   stdout: string;
   stderr: string;
@@ -347,7 +349,7 @@ export function createHibernationProcessController(
   const d = resolveProcessDeps(deps);
 
   async function runtimeAlive(
-    spec: AgentRuntimeSpec,
+    spec: TmuxAgentRuntimeSpec,
   ): Promise<{ alive: boolean; generation: ProcessGeneration | null }> {
     const addr: PaneAddress = { tmuxSocket: spec.tmuxSocket, tmuxTarget: spec.tmuxTarget };
     const current = await readPaneGeneration(d.runner, addr);
@@ -366,7 +368,7 @@ export function createHibernationProcessController(
   }
 
   return {
-    async requestCheckpoint(spec: AgentRuntimeSpec): Promise<HibernationCheckpointOutcome> {
+    async requestCheckpoint(spec: TmuxAgentRuntimeSpec): Promise<HibernationCheckpointOutcome> {
       // Contract (narrowed, evidence-backed): a `hibernateSafe` result asserts
       // the RESUMABILITY PRECONDITION — the recorded pane still hosts a live
       // process generation (pane-authoritative pid, `pane_dead=0`, live pid with
@@ -394,7 +396,7 @@ export function createHibernationProcessController(
     },
 
     async stopRuntime(
-      spec: AgentRuntimeSpec,
+      spec: TmuxAgentRuntimeSpec,
     ): Promise<{ stopped: boolean; rssBytes: number | null }> {
       const addr: PaneAddress = { tmuxSocket: spec.tmuxSocket, tmuxTarget: spec.tmuxTarget };
       // Capture the live generation to stop BEFORE any mutation; if the pane is
@@ -425,7 +427,7 @@ export function createHibernationProcessController(
       return { stopped, rssBytes };
     },
 
-    async isRuntimeAlive(spec: AgentRuntimeSpec): Promise<boolean> {
+    async isRuntimeAlive(spec: TmuxAgentRuntimeSpec): Promise<boolean> {
       return (await runtimeAlive(spec)).alive;
     },
 
@@ -502,7 +504,7 @@ export function createHibernationTmuxController(
   };
 
   return {
-    async isSessionAttachable(spec: AgentRuntimeSpec): Promise<boolean> {
+    async isSessionAttachable(spec: TmuxAgentRuntimeSpec): Promise<boolean> {
       const result = await runner.run("tmux", [
         ...tmuxSocketArgs(spec.tmuxSocket),
         "has-session",
@@ -515,6 +517,9 @@ export function createHibernationTmuxController(
     async respawnRuntime(
       ctx: RuntimeLaunchContext,
     ): Promise<{ launched: boolean; handle: RuntimeAttemptHandle | null }> {
+      if (ctx.spec.runtimeKind !== "tmux") {
+        throw new Error("hibernation unsupported on this runtime");
+      }
       const spec = ctx.spec;
       const resumePath = resumePathFromSessionRef(spec.sessionResumeRef);
       // Unresumable spec ⇒ no session to bring back; fail closed (no handle).

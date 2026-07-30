@@ -29,7 +29,9 @@ export interface ResolveSlackBridgeStartupRuntimeModeOptions {
 export function isBrokerManagedFollowerLaunch(env = process.env): boolean {
   if (env.PINET_BROKER_MANAGED !== "1") return false;
   if (env.PINET_LAUNCH_SOURCE === "broker-tmux") return true;
+  if (env.PINET_LAUNCH_SOURCE === "broker-herdr") return true;
   if (env.PINET_LAUNCH_SOURCE === "subtree-broker-tmux") return true;
+  if (env.PINET_LAUNCH_SOURCE === "subtree-broker-herdr") return true;
   return Boolean(env.PINET_SOCKET_PATH?.trim());
 }
 

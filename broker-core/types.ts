@@ -118,20 +118,13 @@ export interface AgentLifecycleEvent {
  * environment: only an env allowlist and opaque credential references. Secrets
  * are injected from broker memory/config at launch time.
  */
-export interface AgentRuntimeSpec {
+interface AgentRuntimeSpecBase {
   agentId: string;
   stableId: string;
   brokerOwnerId: string;
   cwd: string;
   repoRoot: string;
   worktreePath: string;
-  /** Runtime backend discriminant. Only tmux is supported until PR B. */
-  runtimeKind: "tmux";
-  /** Canonical tmux server socket path recorded at launch; never searched for. */
-  tmuxSocket: string;
-  tmuxSession: string;
-  /** Fully-qualified tmux target (session:window.pane) recorded at launch. */
-  tmuxTarget: string;
   executable: string;
   /** Argument vector without secrets; credential values are references only. */
   argv: string[];
@@ -156,7 +149,33 @@ export interface AgentRuntimeSpec {
   updatedAt: string;
 }
 
-export type AgentRuntimeSpecInput = Omit<AgentRuntimeSpec, "createdAt" | "updatedAt">;
+export type AgentRuntimeSpec =
+  | (AgentRuntimeSpecBase & {
+      runtimeKind: "tmux";
+      /** Canonical tmux server socket path recorded at launch; never searched for. */
+      tmuxSocket: string;
+      tmuxSession: string;
+      /** Fully-qualified tmux target (session:window.pane) recorded at launch. */
+      tmuxTarget: string;
+    })
+  | (AgentRuntimeSpecBase & {
+      runtimeKind: "herdr";
+      /** Pinet-owned named Herdr server session. */
+      herdrSession: string;
+      /** Dedicated XDG_CONFIG_HOME whose config enables durable pane history. */
+      herdrConfigDir: string;
+      herdrPaneId: string;
+      /** Server-owned pane shell PID captured at launch for cleanup fencing. */
+      herdrShellPid: number;
+    });
+
+export type TmuxAgentRuntimeSpec = Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }>;
+
+type RuntimeSpecWithoutTimestamps<T extends AgentRuntimeSpec> = T extends AgentRuntimeSpec
+  ? Omit<T, "createdAt" | "updatedAt">
+  : never;
+
+export type AgentRuntimeSpecInput = RuntimeSpecWithoutTimestamps<AgentRuntimeSpec>;
 
 /**
  * Client-facing redacted view of a runtime spec. Raw stable paths, private
@@ -168,6 +187,8 @@ export interface RedactedAgentRuntimeSpec {
   session: AgentSessionSummary;
   repo: string | null;
   hasWorktree: boolean;
+  runtimeKind: AgentRuntimeSpec["runtimeKind"];
+  /** Legacy tmux presence flag retained for client compatibility. */
   hasTmuxSession: boolean;
   configFingerprint: string;
   expectedHost: string;
@@ -341,6 +362,8 @@ export interface AgentSessionSearchOptions {
   threadId?: string;
   repo?: string;
   worktreePath?: string;
+  runtimeLocator?: string;
+  /** Legacy tmux-only locator filter retained for wire compatibility. */
   tmuxSession?: string;
   since?: string;
   until?: string;
@@ -366,6 +389,9 @@ export interface AgentSessionSearchInfo {
   repoRoot: string | null;
   worktreePath: string | null;
   branch: string | null;
+  runtimeKind: AgentRuntimeSpec["runtimeKind"] | null;
+  runtimeLocator: string | null;
+  /** Legacy tmux-only locator retained for wire compatibility. */
   tmuxSession: string | null;
   brokerManaged: boolean;
   brokerManagedBy: string | null;

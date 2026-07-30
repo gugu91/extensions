@@ -1056,7 +1056,7 @@ describe("BrokerClient — listThreads / listAgents", () => {
         repoRoot: null,
         worktreePath: null,
         branch: "main",
-        tmuxSession: null,
+        tmuxSession: "pinet-frozen-hazel-whale",
         brokerManaged: false,
         brokerManagedBy: null,
         launchSource: null,
@@ -1072,7 +1072,13 @@ describe("BrokerClient — listThreads / listAgents", () => {
     ];
     mock.respondTo(mock.connections[0], req.id, sessions);
 
-    await expect(sessionsPromise).resolves.toEqual(sessions);
+    await expect(sessionsPromise).resolves.toEqual([
+      {
+        ...sessions[0],
+        runtimeKind: "tmux",
+        runtimeLocator: "pinet-frozen-hazel-whale",
+      },
+    ]);
 
     client.disconnect();
   });

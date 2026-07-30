@@ -256,6 +256,7 @@ describe("buildRuntimeSpecInput", () => {
     cwd: "/repos/extensions/.worktrees/wt",
     repoRoot: "/repos/extensions/.worktrees/wt",
     worktreePath: "/repos/extensions/.worktrees/wt",
+    runtimeKind: "tmux",
     tmuxSocket: "/tmp/pinet.sock",
     tmuxSession: "pinet-worker-1",
     tmuxTarget: "pinet-worker-1:0.0",
@@ -288,6 +289,37 @@ describe("buildRuntimeSpecInput", () => {
     ]);
     // envAllowlist is de-duplicated and drops empties (names only).
     expect(spec?.envAllowlist).toEqual(["PINET_SOCKET_PATH", "PI_SETTINGS_PATH"]);
+  });
+
+  it("composes a Herdr spec from its recorded runtime locators", () => {
+    const herdrFacts: SpawnAuthoredRuntimeFacts = {
+      agentId: facts.agentId,
+      stableId: facts.stableId,
+      brokerOwnerId: facts.brokerOwnerId,
+      cwd: facts.cwd,
+      repoRoot: facts.repoRoot,
+      worktreePath: facts.worktreePath,
+      runtimeKind: "herdr",
+      herdrSession: "pinet-workers",
+      herdrConfigDir: "/tmp/pinet-herdr-config",
+      herdrPaneId: "w1:p2",
+      herdrShellPid: 4242,
+      extensionEntryPath: facts.extensionEntryPath,
+      envAllowlist: facts.envAllowlist,
+      configFingerprint: "cfg#herdr",
+      expectedUser: facts.expectedUser,
+      launchSource: "subtree-broker-herdr",
+      vcsIdentity: facts.vcsIdentity,
+    };
+
+    expect(buildRuntimeSpecInput(herdrFacts)).toMatchObject({
+      runtimeKind: "herdr",
+      herdrSession: "pinet-workers",
+      herdrConfigDir: "/tmp/pinet-herdr-config",
+      herdrPaneId: "w1:p2",
+      herdrShellPid: 4242,
+      launchSource: "subtree-broker-herdr",
+    });
   });
 
   it("preserves the broker-derived vcsIdentity, including null (fail-closed authz)", () => {

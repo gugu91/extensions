@@ -36,18 +36,18 @@ const AGENT_METADATA = {
   tmuxSession: "worker-1",
 };
 
-function runtimeSpec(agentId: string, stableId: string): AgentRuntimeSpecInput {
-  return {
+function runtimeSpec(
+  agentId: string,
+  stableId: string,
+  runtimeKind: "tmux" | "herdr" = "tmux",
+): AgentRuntimeSpecInput {
+  const common = {
     agentId,
     stableId,
     brokerOwnerId: "broker-1",
     cwd: "/repo/wt",
     repoRoot: "/repo",
     worktreePath: "/repo/wt",
-    runtimeKind: "tmux",
-    tmuxSocket: "/private/tmp/tmux-501/default",
-    tmuxSession: "worker-1",
-    tmuxTarget: "worker-1:0.0",
     executable: "/usr/local/bin/pi",
     argv: ["pi", "--model", "openai-codex/gpt-5.6-sol"],
     envAllowlist: ["PI_MESH_SOCKET", "HOME"],
@@ -58,6 +58,22 @@ function runtimeSpec(agentId: string, stableId: string): AgentRuntimeSpecInput {
     launchSource: "pinet-spawn",
     vcsIdentity: "gugu91/pinet",
   };
+  return runtimeKind === "tmux"
+    ? {
+        ...common,
+        runtimeKind,
+        tmuxSocket: "/private/tmp/tmux-501/default",
+        tmuxSession: "worker-1",
+        tmuxTarget: "worker-1:0.0",
+      }
+    : {
+        ...common,
+        runtimeKind,
+        herdrSession: "pinet-workers",
+        herdrConfigDir: "/private/var/pinet/herdr-config",
+        herdrPaneId: "w1:p2",
+        herdrShellPid: 4242,
+      };
 }
 
 /** Register an eligible broker-managed root worker with a durable runtime spec. */
@@ -255,6 +271,20 @@ describe("HibernationOrchestrator — hibernate", () => {
     const hibernatedEvent = events.find((e) => e.toState === "hibernated");
     expect(hibernatedEvent?.outcome).toBe("accepted");
     expect(hibernatedEvent?.rssBytesBefore).toBe(120_000_000);
+  });
+
+  it("refuses Herdr at the hibernation boundary", async () => {
+    h.db.upsertAgentRuntimeSpec(runtimeSpec("worker-1", "host:session:abcdef123456", "herdr"));
+
+    expect(h.orch.prepareHibernation("worker-1")).toMatchObject({
+      ready: false,
+      reason: "hibernation unsupported on this runtime",
+    });
+    await expect(h.orch.hibernate("worker-1")).resolves.toMatchObject({
+      ok: false,
+      reason: "hibernation unsupported on this runtime",
+    });
+    expect(h.proc.checkpointCalls).toBe(0);
   });
 
   it("refuses when policy is never (fails closed)", async () => {
