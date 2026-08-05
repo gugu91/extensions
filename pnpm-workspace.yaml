@@ -9,5 +9,6 @@ packages:
   - imessage-bridge
   - nvim-bridge
   - neon-psql
+  - orb-node
   - openai-execution-shaping
   - model-aware-compaction

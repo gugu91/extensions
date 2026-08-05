@@ -114,6 +114,8 @@ importers:
 
   openai-execution-shaping: {}
 
+  orb-node: {}
+
   pinet-core:
     dependencies:
       "@pinet/broker-core":

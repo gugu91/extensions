@@ -73,6 +73,14 @@ const packageConfigs = {
     vendorDirs: [],
     importRewrites: [],
   },
+  "orb-node": {
+    declaration: true,
+    excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
+    excludeFiles: new Set(),
+    excludePrefixes: ["setup/"],
+    vendorDirs: [],
+    importRewrites: [],
+  },
   "slack-api": {
     excludeDirs: new Set(["dist", "node_modules", ".turbo"]),
     excludeFiles: new Set(),
