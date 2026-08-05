@@ -67,23 +67,21 @@ Start pi. Pinet appears in your Slack sidebar.
 
 The repository includes these extensions:
 
-| Package                                     | Description                                             |
-| ------------------------------------------- | ------------------------------------------------------- |
-| [`transport-core`](transport-core/)         | Message contracts shared across transport packages      |
-| [`browser-playwright`](browser-playwright/) | Browser automation with Playwright                      |
-| [`slack-bridge`](slack-bridge/)             | Slack integration with broker mesh, inbox, and canvases |
-| [`slack-api`](slack-api/)                   | Typed Slack Web API client                              |
-| [`imessage-bridge`](imessage-bridge/)       | macOS iMessage transport                                |
-| [`nvim-bridge`](nvim-bridge/)               | Neovim editor context sync                              |
-| [`neon-psql`](neon-psql/)                   | Neon Postgres tunnel                                    |
-| [`types`](types/)                           | Shared type declarations                                |
+| Package                               | Description                                             |
+| ------------------------------------- | ------------------------------------------------------- |
+| [`transport-core`](transport-core/)   | Message contracts shared across transport packages      |
+| [`slack-bridge`](slack-bridge/)       | Slack integration with broker mesh, inbox, and canvases |
+| [`slack-api`](slack-api/)             | Typed Slack Web API client                              |
+| [`imessage-bridge`](imessage-bridge/) | macOS iMessage transport                                |
+| [`nvim-bridge`](nvim-bridge/)         | Neovim editor context sync                              |
+| [`neon-psql`](neon-psql/)             | Neon Postgres tunnel                                    |
+| [`types`](types/)                     | Shared type declarations                                |
 
 Recent updates include:
 
 - broker mesh for coordinating multiple agents
 - Slack canvases, uploads, modals, bookmarks, and pins
 - scheduled wake-ups and inbox sync
-- browser automation with reusable sessions
 - optional shared-secret mesh authentication
 
 ## How Pinet works
@@ -133,7 +131,6 @@ pnpm prepush      # All checks (runs on git push)
 ```
 extensions/
 ├── transport-core/       # Message contracts
-├── browser-playwright/   # Browser automation
 ├── slack-bridge/         # Slack integration
 ├── slack-api/           # Slack API client
 ├── imessage-bridge/     # iMessage transport
@@ -154,7 +151,6 @@ For development, link extensions directly:
 ln -s "$(pwd)/slack-bridge" ~/.pi/agent/extensions/slack-bridge
 ln -s "$(pwd)/nvim-bridge" ~/.pi/agent/extensions/nvim-bridge
 ln -s "$(pwd)/neon-psql" ~/.pi/agent/extensions/neon-psql
-ln -s "$(pwd)/browser-playwright" ~/.pi/agent/extensions/browser-playwright
 ```
 
 ## Philosophy

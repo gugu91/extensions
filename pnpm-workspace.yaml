@@ -3,7 +3,6 @@ minimumReleaseAge: 10080 # 7 days
 packages:
   - transport-core
   - broker-core
-  - browser-playwright
   - pinet-core
   - slack-bridge
   - slack-api

@@ -13,7 +13,6 @@ __pycache__/
 .env*
 .firecrawl/
 slack-api/.tmp/
-.pi/state/browser-playwright/
 .tmp
 .worktrees
 .handovers
