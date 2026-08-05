@@ -9,8 +9,7 @@
     "extensions": [
       "./slack-bridge/index.ts",
       "./nvim-bridge/index.ts",
-      "./neon-psql/index.ts",
-      "./browser-playwright/index.ts"
+      "./neon-psql/index.ts"
     ]
   },
   "scripts": {
@@ -55,7 +54,6 @@
   "workspaces": [
     "transport-core",
     "broker-core",
-    "browser-playwright",
     "pinet-core",
     "slack-bridge",
     "slack-api",

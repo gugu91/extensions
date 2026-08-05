@@ -188,42 +188,24 @@ GitHub itself; the delegating agent just relays the summary.
 
 ## 6. Caveats & known issues
 
-1. **Worktree + extension clash.** When the reviewer is spawned with `cwd`
-   inside a worktree that contains its own `.pi/extensions/browser-playwright/index.ts`,
-   pi tries to register every browser tool twice — once from
-   `~/.pi/agent/extensions/browser-playwright/index.ts` and once from the
-   worktree's copy — and the child subagent aborts at startup before any
-   tool runs. This is **not** an agent-definition issue; it's a pi/extension
-   loader issue. Current workaround (the "Goat / Turtle pattern"):
-
-   ```bash
-   cd .worktrees/<review-worktree>
-   mv .pi/extensions/browser-playwright/index.ts \
-      .pi/extensions/browser-playwright/index.ts.turtle-disabled
-   ```
-
-   Non-destructive (we remove the worktree after the review anyway). We
-   should file a separate issue against `pi-subagents` or pi-core to
-   de-duplicate identical extension registrations before the child spawns.
-
-2. **`twin` unavailable on current mesh.** Callers must pass
+1. **`twin` unavailable on current mesh.** Callers must pass
    `model=anthropic/claude-opus-4-7` until `twin` is back, or rely on
    `fallbackModels`. See §3.
 
-3. **`tools:` constrains extension tools too.** In `pi-subagents`, a
+2. **`tools:` constrains extension tools too.** In `pi-subagents`, a
    present `tools:` field becomes Pi's `--tools` allowlist, and Pi applies
    that list to both builtin and extension tool names. For this reviewer,
    `comment_add` and `comment_list` must stay in the list or PiComms posting
    will fail.
 
-4. **PiComms posting depends on both extension loading and tool allowlisting.**
+3. **PiComms posting depends on both extension loading and tool allowlisting.**
    Leaving `extensions:` absent ensures `nvim-bridge` loads in the child,
    and keeping `comment_add` / `comment_list` in `tools:` ensures those
    extension tools remain callable. If a future reviewer variant sets
    `extensions:` to an allowlist, that allowlist must still include the
    `nvim-bridge` extension path.
 
-5. **Built-in `Agent` tool is currently broken.** Separate from this port.
+4. **Built-in `Agent` tool is currently broken.** Separate from this port.
    Every `Agent` call across every `subagent_type` fails with
    `The "path" argument must be of type string. Received undefined`. Once
    the built-in tool is fixed we'll have two viable routes for calling the

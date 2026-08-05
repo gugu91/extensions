@@ -23,7 +23,6 @@
   "include": [
     "transport-core/**/*.ts",
     "broker-core/**/*.ts",
-    "browser-playwright/**/*.ts",
     "imessage-bridge/**/*.ts",
     "pinet-core/**/*.ts",
     "nvim-bridge/**/*.ts",
