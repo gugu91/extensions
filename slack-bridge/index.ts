@@ -540,7 +540,6 @@ export default function (pi: ExtensionAPI) {
     updateThreadStatus: (channel, threadTs, status) =>
       slackThreadStatuses.update(channel, threadTs, status),
     clearThreadStatus: (channel, threadTs) => slackThreadStatuses.clear(channel, threadTs),
-    beforeAgentStart: agentPromptGuidance.beforeAgentStart,
     onCompletionAgentEnd: agentCompletionRuntime.onAgentEnd,
     setDeliverTrackedSlackFollowUpMessage: (deliver) => {
       deliverTrackedSlackFollowUpMessage = deliver;
@@ -1182,6 +1181,7 @@ export default function (pi: ExtensionAPI) {
       if (mode === "off") {
         setExtStatus(ctx, "off");
       }
+      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
       return;
     }
 
@@ -1209,6 +1209,7 @@ export default function (pi: ExtensionAPI) {
       setExtStatus(ctx, "reconnecting");
       await singlePlayerRuntime.connect(ctx);
       botUserId = singlePlayerRuntime.getBotUserId() ?? botUserId;
+      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
       void ensureSlackScopeDiagnostics(ctx);
       return;
     }
@@ -1249,19 +1250,13 @@ export default function (pi: ExtensionAPI) {
     await brokerRuntime.disconnect({ releaseIdentity: options.releaseIdentity });
 
     if (brokerClient) {
-      if (options.releaseIdentity) {
-        await disconnectFollower(ctx).catch(() => {
+      await followerRuntime
+        .disconnect(ctx, { releaseIdentity: options.releaseIdentity })
+        .catch(() => {
           /* best effort */
         });
-      } else {
-        await followerRuntime.disconnect(ctx, { releaseIdentity: false }).catch(() => {
-          /* best effort */
-        });
-        brokerClient = null;
-        desiredAgentStatus = "idle";
-        brokerRole = null;
-        pinetEnabled = false;
-      }
+      brokerClient = null;
+      followerRuntimeDiagnostic = null;
     }
 
     await singlePlayerRuntime.disconnect();
@@ -1270,6 +1265,7 @@ export default function (pi: ExtensionAPI) {
     desiredAgentStatus = "idle";
     currentRuntimeMode = "off";
     setExtStatus(ctx, "off");
+    await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
   }
 
   async function reloadPinetRuntime(ctx: ExtensionContext): Promise<void> {
@@ -1303,6 +1299,7 @@ export default function (pi: ExtensionAPI) {
             if (reloadBrokerInPlace) {
               const result = await brokerRuntime.reloadAdapters(ctx);
               botUserId = result.botUserId;
+              await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
               return;
             }
 
@@ -1356,6 +1353,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Tools ──────────────────────────────────────────
 
   const toolRegistrationRuntime = createToolRegistrationRuntime({
+    buildPromptGuidelines: agentPromptGuidance.buildPromptGuidelines,
     slackTools: {
       getBotToken: () => {
         if (!botToken) {
@@ -1596,6 +1594,7 @@ export default function (pi: ExtensionAPI) {
     pinetEnabled = true;
     desiredAgentStatus = "idle";
     currentRuntimeMode = "broker";
+    await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
 
     if (recoveredBrokerMessages > 0 || releasedBrokerClaims > 0) {
       const recoveredTargetedDetail =
@@ -1658,6 +1657,11 @@ export default function (pi: ExtensionAPI) {
     },
     getAgentMetadata,
     applyRegistrationIdentity,
+    onRegistrationIdentityApplied: async () => {
+      if (currentRuntimeMode === "follower") {
+        await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
+      }
+    },
     persistState,
     updateBadge,
     maybeDrainInboxIfIdle,
@@ -1743,7 +1747,10 @@ export default function (pi: ExtensionAPI) {
       spawnSubtreeWorker: (ctx, input) => subtreeBrokerRuntime.spawnWorker(ctx, input),
       sendPinetAgentMessage,
       signalAgentFree,
-      applyLocalAgentIdentity,
+      applyLocalAgentIdentity: async (name, emoji, personality) => {
+        applyLocalAgentIdentity(name, emoji, personality);
+        await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
+      },
       setExtStatus,
       setExtCtx: sessionUiRuntime.setExtCtx,
     },
@@ -1761,6 +1768,7 @@ export default function (pi: ExtensionAPI) {
     pinetEnabled = true;
     desiredAgentStatus = "idle";
     currentRuntimeMode = "follower";
+    await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
     setExtStatus(ctx, "ok");
   }
 
@@ -1774,6 +1782,7 @@ export default function (pi: ExtensionAPI) {
     brokerRole = null;
     pinetEnabled = false;
     currentRuntimeMode = "off";
+    await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
     if (!options.preserveErrorState) {
       followerRuntimeDiagnostic = null;
       setExtStatus(ctx, "off");
@@ -1799,6 +1808,7 @@ export default function (pi: ExtensionAPI) {
       console.log("[slack-bridge] detected local subagent context; skipping Pinet registration");
       currentRuntimeMode = "off";
       setExtStatus(ctx, "off");
+      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
       return;
     }
 
@@ -1823,6 +1833,7 @@ export default function (pi: ExtensionAPI) {
       console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(err)}`);
       currentRuntimeMode = "off";
       setExtStatus(ctx, "off");
+      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
     }
   });
 

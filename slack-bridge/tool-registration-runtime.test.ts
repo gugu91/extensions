@@ -30,7 +30,7 @@ describe("createToolRegistrationRuntime", () => {
     registrationState.registerIMessageTools.mockReset();
   });
 
-  it("registers the pinned tool wiring in order with the provided deps", () => {
+  it("registers each tool family with the provided deps", () => {
     const pi = { registerTool: vi.fn() } as unknown as ExtensionAPI;
     const slackTools = {} as RegisterSlackToolsDeps;
     const pinetTools = {} as RegisterPinetToolsDeps;
@@ -39,6 +39,7 @@ describe("createToolRegistrationRuntime", () => {
       slackTools,
       pinetTools,
       iMessageTools,
+      buildPromptGuidelines: async () => [],
     });
 
     runtime.register(pi);
@@ -49,12 +50,81 @@ describe("createToolRegistrationRuntime", () => {
     expect(registrationState.registerPinetTools).toHaveBeenCalledWith(pi, pinetTools);
     expect(registrationState.registerIMessageTools).toHaveBeenCalledTimes(1);
     expect(registrationState.registerIMessageTools).toHaveBeenCalledWith(pi, iMessageTools);
+  });
 
-    expect(registrationState.registerSlackTools.mock.invocationCallOrder[0]).toBeLessThan(
-      registrationState.registerPinetTools.mock.invocationCallOrder[0] ?? Infinity,
-    );
-    expect(registrationState.registerPinetTools.mock.invocationCallOrder[0]).toBeLessThan(
-      registrationState.registerIMessageTools.mock.invocationCallOrder[0] ?? Infinity,
-    );
+  it.each([
+    {
+      mode: "off" as const,
+      expectedTools: ["read"],
+      expectedPinetGuidance: null,
+      expectedSlackGuidance: null,
+    },
+    {
+      mode: "single" as const,
+      expectedTools: ["read", "slack", "slack_inbox", "slack_send"],
+      expectedPinetGuidance: null,
+      expectedSlackGuidance: ["RUNTIME GUIDANCE"],
+    },
+    {
+      mode: "follower" as const,
+      expectedTools: ["read", "slack", "slack_inbox", "slack_send", "pinet", "imessage_send"],
+      expectedPinetGuidance: ["RUNTIME GUIDANCE"],
+      expectedSlackGuidance: [],
+    },
+    {
+      mode: "broker" as const,
+      expectedTools: ["read", "slack", "slack_inbox", "slack_send", "pinet", "imessage_send"],
+      expectedPinetGuidance: ["RUNTIME GUIDANCE"],
+      expectedSlackGuidance: [],
+    },
+  ])("keeps only the tools and durable guidance for $mode mode", async (testCase) => {
+    const setActiveTools = vi.fn();
+    const pi: ExtensionAPI = {
+      on: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      registerMessageRenderer: vi.fn(),
+      sendUserMessage: vi.fn(),
+      sendMessage: vi.fn(),
+      appendEntry: vi.fn(),
+      getActiveTools: vi.fn(() => [
+        "read",
+        "slack",
+        "slack_inbox",
+        "slack_send",
+        "pinet",
+        "imessage_send",
+      ]),
+      setActiveTools,
+    };
+    const runtime = createToolRegistrationRuntime({
+      slackTools: {} as RegisterSlackToolsDeps,
+      pinetTools: {} as RegisterPinetToolsDeps,
+      iMessageTools: {} as RegisterIMessageToolsDeps,
+      buildPromptGuidelines: async () => ["RUNTIME GUIDANCE"],
+    });
+
+    await runtime.sync(pi, testCase.mode);
+
+    expect(setActiveTools).toHaveBeenCalledWith(testCase.expectedTools);
+    if (testCase.expectedSlackGuidance) {
+      expect(registrationState.registerSlackTools).toHaveBeenCalledWith(
+        pi,
+        expect.objectContaining({
+          additionalSendPromptGuidelines: testCase.expectedSlackGuidance,
+        }),
+      );
+    } else {
+      expect(registrationState.registerSlackTools).not.toHaveBeenCalled();
+    }
+    if (testCase.expectedPinetGuidance) {
+      expect(registrationState.registerPinetTools).toHaveBeenCalledWith(
+        pi,
+        expect.objectContaining({ promptGuidelines: testCase.expectedPinetGuidance }),
+      );
+    } else {
+      expect(registrationState.registerPinetTools).not.toHaveBeenCalled();
+    }
+    expect(registrationState.registerIMessageTools).not.toHaveBeenCalled();
   });
 });
