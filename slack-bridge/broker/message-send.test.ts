@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendBrokerMessage } from "./message-send.js";
+import { sendBrokerMessage, ThreadOwnershipConflictError } from "./message-send.js";
 import type { BrokerMessage, ThreadInfo } from "./types.js";
 
 function createFakeDb() {
@@ -392,7 +392,53 @@ describe("sendBrokerMessage", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("does not let an idempotent retry bypass thread ownership", async () => {
+  it("recovers a committed send with the same externalId after thread ownership changes", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+    const deps = { db, adapters: [{ name: "slack", send }] };
+    const input = {
+      threadId: "slack:C9:100.500",
+      body: "reply one",
+      senderAgentId: "agent-1",
+      source: "slack",
+      channel: "C9",
+      metadata: { externalId: "amp-worker:w1:reply:42" },
+    };
+
+    const first = await sendBrokerMessage(deps, input);
+    db.threads.set(input.threadId, { ...db.threads.get(input.threadId)!, ownerAgent: "agent-2" });
+
+    const retry = await sendBrokerMessage(deps, input);
+
+    expect(retry.message.id).toBe(first.message.id);
+    expect(send).toHaveBeenCalledTimes(1);
+    // The recovery never re-claims the thread from its new owner.
+    expect(db.getThread(input.threadId)?.ownerAgent).toBe("agent-2");
+  });
+
+  it("still rejects a never-committed send when the thread is owned by another agent", async () => {
+    const db = createFakeDb();
+    db.createThread("slack:C9:100.500", "slack", "C9", "agent-2");
+    const send = vi.fn(async () => undefined);
+
+    const attempt = sendBrokerMessage(
+      { db, adapters: [{ name: "slack", send }] },
+      {
+        threadId: "slack:C9:100.500",
+        body: "reply one",
+        senderAgentId: "agent-1",
+        source: "slack",
+        channel: "C9",
+        metadata: { externalId: "amp-worker:w1:reply:42" },
+      },
+    );
+
+    await expect(attempt).rejects.toBeInstanceOf(ThreadOwnershipConflictError);
+    await expect(attempt).rejects.toThrow(/owned by another agent/i);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not let an ownership-change retry reuse the key for different content", async () => {
     const db = createFakeDb();
     const send = vi.fn(async () => undefined);
     const deps = { db, adapters: [{ name: "slack", send }] };
@@ -408,7 +454,9 @@ describe("sendBrokerMessage", () => {
     await sendBrokerMessage(deps, input);
     db.threads.set(input.threadId, { ...db.threads.get(input.threadId)!, ownerAgent: "agent-2" });
 
-    await expect(sendBrokerMessage(deps, input)).rejects.toThrow(/owned by another agent/i);
+    await expect(sendBrokerMessage(deps, { ...input, body: "something else" })).rejects.toThrow(
+      /idempotency key collision/i,
+    );
     expect(send).toHaveBeenCalledTimes(1);
   });
 

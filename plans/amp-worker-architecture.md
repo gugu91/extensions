@@ -77,14 +77,25 @@ poll ─▶ execute (Amp) ─▶ persist "executed" ─▶ reply ─▶ persist 
   Amp exposes no idempotency handle.
 - Reply routing depends on the assignment's origin, and neither path can
   silently succeed with zero recipients:
-  - Mesh agent threads (source `agent` / `a2a:*`): the reply is a durable
-    direct agent message (`agent.message`) back to the originating agent.
-    The broker persists an inbox row for the target, so a briefly
+  - Scheduler wake-ups (`metadata.scheduledWakeup`): no reply recipient
+    exists — the Amp turn itself was the requested effect and the synthetic
+    `scheduler` sender is not a reachable agent — so the worker acks without
+    replying.
+  - Mesh agent threads (source `agent` AND an `a2a:*` thread): the reply is a
+    durable direct agent message (`agent.message`) back to the originating
+    agent. The broker persists an inbox row for the target, so a briefly
     disconnected recipient still receives it on reconnect; an unknown target
     fails loudly and the unacked assignment is retried on redelivery.
+  - Agent-source mail on a non-mesh thread (malformed/system): fails loudly
+    instead of replying to an unverified sender or silently acking.
   - External transport threads (slack, imessage, …): the reply goes through
     the broker's adapter path (`message.send`), so success means the external
-    transport accepted the delivery.
+    transport accepted the delivery. A permanent thread-ownership conflict
+    (typed `RPC_THREAD_OWNERSHIP_CONFLICT` broker code, raised only when no
+    matching reply is already committed) is terminal: the worker logs it,
+    marks the reply step finished, and acks instead of retrying forever.
+    Replies that committed before an ownership change are recovered by the
+    broker's idempotency pre-check, which runs before the ownership claim.
 - Each reply carries a stable `externalId`
   (`amp-worker:<stable-id>:reply:<message-id>`). Committed broker and a2a
   retries deduplicate on `(source, externalId)`; a2a retries do not invoke the

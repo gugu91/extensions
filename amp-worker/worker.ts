@@ -10,12 +10,20 @@
  *   poll ─▶ execute (Amp) ─▶ persist "executed" ─▶ reply ─▶ persist "replied" ─▶ ack
  *
  * Reply routing depends on where the assignment came from:
- * - mesh agent threads (source "agent" / a2a:*): durable direct agent message
- *   back to the originating agent (`agent.message`), which persists an inbox
- *   row for the target even if it is briefly disconnected.
+ * - scheduler wake-ups (metadata.scheduledWakeup): no reply recipient exists —
+ *   the Amp turn itself was the requested effect — so the worker acks without
+ *   replying.
+ * - mesh agent threads (source "agent" AND a2a:* thread): durable direct
+ *   agent message back to the originating agent (`agent.message`), which
+ *   persists an inbox row for the target even if it is briefly disconnected.
+ * - agent-source mail on a non-mesh thread (malformed/system): fails loudly
+ *   rather than replying to an unverified sender or silently acking.
  * - external transport threads (slack, imessage, …): the broker's adapter
  *   path (`message.send`), so success means the external delivery was
- *   accepted. Neither path can silently succeed with zero recipients.
+ *   accepted. Neither path can silently succeed with zero recipients. A
+ *   permanent thread-ownership conflict (typed broker code) is terminal:
+ *   the worker logs it, marks the reply step finished, and acks instead of
+ *   retrying forever.
  *
  * Replies carry a stable per-job `externalId` in their metadata. Broker and
  * a2a retries deduplicate committed sends. External adapters remain
@@ -41,6 +49,7 @@ import {
   type PinetControlCommand,
 } from "@pinet/broker-core/mail-control";
 import { classifyPinetMail } from "@pinet/broker-core/mail-classification";
+import { RPC_THREAD_OWNERSHIP_CONFLICT } from "@pinet/broker-core/types";
 import type { InboxItem } from "@pinet/pinet-core/broker-client";
 import type { AmpExecutionResult } from "./amp-runner.js";
 import type { AmpWorkerStateStore, AmpJobRecord } from "./state-store.js";
@@ -404,21 +413,50 @@ export class AmpWorker {
         ...(job.ampThreadId ? { ampThreadId: job.ampThreadId } : {}),
       };
       const replyText = buildReplyText(job);
-      if (item.message.source === "agent" || job.threadId.startsWith("a2a:")) {
+      if (item.message.metadata?.scheduledWakeup === true) {
+        // Scheduler wake-up: the Amp turn itself was the requested effect and
+        // the synthetic "scheduler" sender is not a reachable agent, so there
+        // is no reply recipient. Ack without replying.
+        this.log(`message ${job.messageId} was a scheduled wake-up; acking without reply`);
+      } else if (item.message.source === "agent" && job.threadId.startsWith("a2a:")) {
         // Mesh assignment: reply as a durable direct agent message to the
         // originating agent. The legacy broadcast-style "send" RPC would
         // succeed with zero recipients if the originator was disconnected.
         await this.client.sendAgentMessage(item.message.sender, replyText, metadata);
+      } else if (item.message.source === "agent") {
+        // Agent-source mail outside a mesh (a2a:) thread and not a scheduler
+        // wake-up: there is no adapter for source "agent" and the sender is
+        // not a verified mesh reply target. Fail loudly (redelivery retries)
+        // instead of silently acking or replying to an unverified sender.
+        throw new Error(
+          `Cannot route reply for agent-source message ${job.messageId} on non-mesh thread ${job.threadId}.`,
+        );
       } else {
         // External transport thread: route through the broker's adapter path
         // so the reply actually reaches the external thread.
-        await this.client.sendMessage({
-          threadId: job.threadId,
-          body: replyText,
-          agentName: this.name,
-          agentEmoji: this.emoji,
-          metadata,
-        });
+        try {
+          await this.client.sendMessage({
+            threadId: job.threadId,
+            body: replyText,
+            agentName: this.name,
+            agentEmoji: this.emoji,
+            metadata,
+          });
+        } catch (err) {
+          const code = err instanceof Error ? (err as Error & { code?: number }).code : undefined;
+          if (code !== RPC_THREAD_OWNERSHIP_CONFLICT) {
+            throw err;
+          }
+          // Permanent: the external thread is owned by another agent, so this
+          // reply can never be delivered by this worker. The idempotency
+          // pre-check already recovers replies that committed before an
+          // ownership change, so a conflict here means never-delivered and
+          // never-deliverable. Mark the reply step terminally finished and
+          // ack instead of retrying forever.
+          this.log(
+            `message ${job.messageId} reply undeliverable: thread ${job.threadId} is owned by another agent; acking without reply`,
+          );
+        }
       }
       this.commitState("recordReplied", () => this.store.recordReplied(job.messageId));
     }

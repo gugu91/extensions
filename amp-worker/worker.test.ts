@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TransportJsonObject } from "@pinet/transport-core";
+import { RPC_THREAD_OWNERSHIP_CONFLICT } from "@pinet/broker-core/types";
 import type { InboxItem } from "@pinet/pinet-core/broker-client";
 import type { AmpExecutionResult } from "./amp-runner.js";
 import { AmpWorkerStateStore } from "./state-store.js";
@@ -28,6 +29,8 @@ class FakeBroker implements AmpWorkerBrokerPort {
   disconnected = false;
   sendFailuresRemaining = 0;
   agentSendFailuresRemaining = 0;
+  sendAttempts = 0;
+  sendOwnershipConflict = false;
   private reconnectFailedHandler: ((error: Error) => void) | null = null;
 
   enqueue(item: InboxItem): void {
@@ -73,6 +76,14 @@ class FakeBroker implements AmpWorkerBrokerPort {
     agentEmoji?: string;
     metadata?: TransportJsonObject;
   }): Promise<{ messageId: number }> {
+    this.sendAttempts += 1;
+    if (this.sendOwnershipConflict) {
+      const err = new Error(
+        `Thread ${input.threadId} is already owned by another agent.`,
+      ) as Error & { code?: number };
+      err.code = RPC_THREAD_OWNERSHIP_CONFLICT;
+      throw err;
+    }
     if (this.sendFailuresRemaining > 0) {
       this.sendFailuresRemaining -= 1;
       throw new Error("simulated send failure");
@@ -613,6 +624,107 @@ describe("AmpWorker reply routing", () => {
     expect(harness.broker.agentSends[0].metadata).toMatchObject({
       externalId: `amp-worker:amp-test-stable:reply:${item.message.id}`,
     });
+    expect(harness.store.jobCount()).toBe(0);
+  });
+
+  it("acks a scheduled wake-up after executing it without sending any reply", async () => {
+    const item = makeItem({
+      body: "check on the nightly run",
+      threadId: "wakeup:agent-1",
+      source: "agent",
+      sender: "scheduler",
+      metadata: {
+        senderAgent: "Pinet Scheduler",
+        scheduledWakeup: true,
+        a2a: true,
+        pinetMailClass: "fwup",
+      },
+    });
+    const harness = startWorker((broker) => broker.enqueue(item));
+
+    await waitFor(() => harness.broker.acked.has(item.inboxId));
+    await stopWorker(harness);
+
+    // The wake-up executed as an Amp turn, but the synthetic "scheduler"
+    // sender is not a reachable reply target on any path.
+    expect(harness.runner.calls).toHaveLength(1);
+    expect(harness.broker.sends).toHaveLength(0);
+    expect(harness.broker.agentSends).toHaveLength(0);
+    expect(harness.store.jobCount()).toBe(0);
+  });
+
+  it("never routes agent-source mail on a non-mesh thread as a direct agent reply or silent ack", async () => {
+    const item = makeItem({
+      body: "malformed system mail",
+      threadId: "wakeup:agent-1",
+      source: "agent",
+      sender: "scheduler",
+      metadata: null,
+    });
+    const harness = startWorker((broker) => broker.enqueue(item));
+
+    // The Amp turn runs, but reply routing must fail loudly: no reply to an
+    // unverified sender, no external-adapter attempt, and no ack.
+    await waitFor(() => harness.store.getJob(item.message.id)?.phase === "executed");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await stopWorker(harness);
+
+    expect(harness.runner.calls).toHaveLength(1);
+    expect(harness.broker.sends).toHaveLength(0);
+    expect(harness.broker.agentSends).toHaveLength(0);
+    expect(harness.broker.acked.has(item.inboxId)).toBe(false);
+    expect(harness.store.getJob(item.message.id)).toMatchObject({ phase: "executed" });
+  });
+
+  it("routes an a2a-thread reply from a non-agent source through the external adapter path", async () => {
+    const item = makeItem({
+      body: "odd but externally sourced",
+      threadId: "a2a:agent-orig:agent-1",
+      source: "slack",
+      sender: "U1",
+    });
+    const harness = startWorker((broker) => broker.enqueue(item));
+
+    await waitFor(() => harness.broker.acked.has(item.inboxId));
+    await stopWorker(harness);
+
+    expect(harness.broker.agentSends).toHaveLength(0);
+    expect(harness.broker.sends).toHaveLength(1);
+    expect(harness.broker.sends[0].threadId).toBe(item.message.threadId);
+  });
+
+  it("treats a permanent thread ownership conflict as terminal: acks without reply instead of retrying forever", async () => {
+    const item = makeItem({ body: "external request" });
+    const harness = startWorker((broker) => {
+      broker.sendOwnershipConflict = true;
+      broker.enqueue(item);
+    });
+
+    await waitFor(() => harness.broker.acked.has(item.inboxId));
+    await stopWorker(harness);
+
+    // One Amp run, one send attempt, then a bounded terminal outcome: the
+    // job is marked finished and dropped, never re-sent on redelivery.
+    expect(harness.runner.calls).toHaveLength(1);
+    expect(harness.broker.sendAttempts).toBe(1);
+    expect(harness.broker.sends).toHaveLength(0);
+    expect(harness.broker.agentSends).toHaveLength(0);
+    expect(harness.store.jobCount()).toBe(0);
+  });
+
+  it("keeps ordinary external send failures retryable rather than terminal", async () => {
+    const item = makeItem({ body: "external request" });
+    const harness = startWorker((broker) => {
+      broker.sendFailuresRemaining = 1;
+      broker.enqueue(item);
+    });
+
+    await waitFor(() => harness.broker.acked.has(item.inboxId));
+    await stopWorker(harness);
+
+    expect(harness.runner.calls).toHaveLength(1);
+    expect(harness.broker.sendAttempts).toBe(2);
+    expect(harness.broker.sends).toHaveLength(1);
     expect(harness.store.jobCount()).toBe(0);
   });
 });

@@ -133,11 +133,19 @@ instead of a redelivery loop. A durable-state commit failure is terminal: the
 worker stops with `StateCommitError` rather than risk re-running a completed Amp
 turn.
 
-Replies route by assignment origin: mesh agent threads (`a2a:*`) get a
-durable direct agent message back to the originating agent, while external
-transport threads (Slack, iMessage, …) go through the broker's transport
-adapter path — success always means an intended recipient or the external
-transport actually accepted the reply.
+Replies route by assignment origin: mesh agent threads (source `agent` on an
+`a2a:*` thread) get a durable direct agent message back to the originating
+agent, while external transport threads (Slack, iMessage, …) go through the
+broker's transport adapter path — success always means an intended recipient
+or the external transport actually accepted the reply. Scheduler wake-ups
+(`metadata.scheduledWakeup`) have no reply recipient — the Amp turn itself was
+the requested effect — so the worker acks without replying. Agent-source mail
+on a non-mesh thread fails loudly instead of replying to an unverified sender
+or silently acking. A permanent thread-ownership conflict on an external reply
+(the broker's typed `RPC_THREAD_OWNERSHIP_CONFLICT` code) is terminal: the
+worker logs it, marks the reply step finished, and acks rather than retrying
+forever — replies that committed before an ownership change are still
+recovered via the idempotency key.
 
 ## Architecture
 

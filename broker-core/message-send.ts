@@ -78,6 +78,22 @@ export interface SendBrokerMessageResult {
   adapter: string;
 }
 
+/**
+ * The target transport thread is owned by a different agent. Permanent for
+ * this sender: retrying the identical send cannot succeed unless ownership
+ * changes, so callers should treat it as a terminal delivery outcome rather
+ * than a transient failure.
+ */
+export class ThreadOwnershipConflictError extends Error {
+  readonly threadId: string;
+
+  constructor(threadId: string) {
+    super(`Thread ${threadId} is already owned by another agent.`);
+    this.name = "ThreadOwnershipConflictError";
+    this.threadId = threadId;
+  }
+}
+
 export async function sendBrokerMessage(
   deps: BrokerMessageSenderDeps,
   input: SendBrokerMessageInput,
@@ -107,29 +123,10 @@ export async function sendBrokerMessage(
   const content = normalizeMessageContent(input.content);
   const messageBody = content?.text ?? body;
 
-  let thread = existingThread;
-  if (thread?.ownerAgent && thread.ownerAgent !== input.senderAgentId) {
-    throw new Error(`Thread ${threadId} is already owned by another agent.`);
-  }
-
-  if (!thread || thread.ownerAgent === null) {
-    const claimed = deps.db.claimThread(threadId, input.senderAgentId, source, channel);
-    if (!claimed) {
-      throw new Error(`Thread ${threadId} is already owned by another agent.`);
-    }
-    thread = deps.db.getThread(threadId);
-    if (!thread) {
-      throw new Error(`Thread ${threadId} was claimed but could not be read back.`);
-    }
-  }
-
-  if (thread.source !== source || thread.channel !== channel) {
-    deps.db.updateThread(threadId, { source, channel });
-    thread = { ...thread, source, channel };
-  }
-
-  // Idempotent retry: validate ownership first, then require the committed
-  // message to match the same thread, sender, and body. A reused key is a
+  // Idempotent retry, checked before the ownership claim: a send that already
+  // committed must stay recoverable even if thread ownership has since
+  // changed, so the retry never re-claims or re-delivers. The committed
+  // message must match the same thread, sender, and body — a reused key is a
   // collision, never permission to skip delivery for unrelated content.
   const rawExternalId = input.metadata?.externalId ?? input.metadata?.external_id;
   const explicitExternalId =
@@ -146,8 +143,32 @@ export async function sendBrokerMessage(
           `Idempotency key collision for transport source ${JSON.stringify(source)}.`,
         );
       }
-      return { thread, message: committed, adapter: adapter.name };
+      if (!existingThread) {
+        throw new Error(`Thread ${threadId} has a committed message but no thread record.`);
+      }
+      return { thread: existingThread, message: committed, adapter: adapter.name };
     }
+  }
+
+  let thread = existingThread;
+  if (thread?.ownerAgent && thread.ownerAgent !== input.senderAgentId) {
+    throw new ThreadOwnershipConflictError(threadId);
+  }
+
+  if (!thread || thread.ownerAgent === null) {
+    const claimed = deps.db.claimThread(threadId, input.senderAgentId, source, channel);
+    if (!claimed) {
+      throw new ThreadOwnershipConflictError(threadId);
+    }
+    thread = deps.db.getThread(threadId);
+    if (!thread) {
+      throw new Error(`Thread ${threadId} was claimed but could not be read back.`);
+    }
+  }
+
+  if (thread.source !== source || thread.channel !== channel) {
+    deps.db.updateThread(threadId, { source, channel });
+    thread = { ...thread, source, channel };
   }
 
   const outbound: OutboundMessage = {
