@@ -515,6 +515,7 @@ export class AmpWorker {
     let cancelled = false;
     let inFlight: Promise<void> | null = null;
 
+    // agent-standards-ignore prefer-inline-single-use-helper: the named tick isolates one control-poll cycle from interval scheduling
     const tick = async (): Promise<void> => {
       try {
         const items = await this.client.pollInbox({ controlOnly: true });

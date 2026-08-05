@@ -222,6 +222,7 @@ export class AmpRunner {
       }, this.executionTimeoutMs);
       timeout.unref?.();
 
+      // agent-standards-ignore prefer-inline-single-use-helper: named completion guards make the child error/close race explicit
       const settle = (result: AmpExecutionResult): void => {
         if (settled) return;
         settled = true;
@@ -229,6 +230,7 @@ export class AmpRunner {
         resolve(result);
       };
 
+      // agent-standards-ignore prefer-inline-single-use-helper: named failure guard shares the same child settlement invariant
       const fail = (err: Error): void => {
         if (settled) return;
         settled = true;
