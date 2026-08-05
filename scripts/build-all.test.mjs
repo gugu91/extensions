@@ -14,6 +14,7 @@ const expectedBuildPackages = [
   "neon-psql",
   "openai-execution-shaping",
   "model-aware-compaction",
+  "orb-node",
   "slack-bridge",
 ];
 

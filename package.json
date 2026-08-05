@@ -55,6 +55,7 @@
     "transport-core",
     "broker-core",
     "amp-worker",
+    "orb-node",
     "pinet-core",
     "slack-bridge",
     "slack-api",
