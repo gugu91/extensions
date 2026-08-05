@@ -126,6 +126,7 @@ export interface PinetSubtreeSpawnResult {
 }
 
 export interface RegisterPinetToolsDeps {
+  promptGuidelines?: string[];
   pinetEnabled: () => boolean;
   brokerRole: () => "broker" | "follower" | null;
   requireToolPolicy: (toolName: string, threadTs: string | undefined, action: string) => void;
@@ -2764,6 +2765,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     description: "Dispatch Pinet operations by action with compact help and schema discovery.",
     promptSnippet:
       'Use this compact dispatcher for Pinet actions: send, read, free, snooze, schedule, agents, sessions, lanes, ports, reload, exit, hibernate, wake, spawn, and help. Use /pinet start, /pinet follow, /pinet unfollow, and /pinet subtree start for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" for the compact envelope or args.full=true for verbose/debug detail.',
+    promptGuidelines: deps.promptGuidelines,
     parameters: Type.Object({
       action: Type.String({
         description:

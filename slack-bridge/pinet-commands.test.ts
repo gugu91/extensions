@@ -151,7 +151,7 @@ function createDeps(overrides: Partial<PinetCommandsDeps> = {}): PinetCommandsDe
     }),
     sendPinetAgentMessage: async (target) => ({ messageId: 1, target }),
     signalAgentFree: async () => ({ queuedInboxCount: 0, drainedQueuedInbox: false }),
-    applyLocalAgentIdentity: () => {},
+    applyLocalAgentIdentity: async () => {},
     setExtStatus: () => {},
     setExtCtx: () => {},
   };

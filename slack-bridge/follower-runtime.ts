@@ -67,6 +67,7 @@ export interface FollowerRuntimeDeps {
     emoji: string;
     metadata?: Record<string, unknown> | null;
   }) => void;
+  onRegistrationIdentityApplied: () => Promise<void>;
   persistState: () => void;
   updateBadge: () => void;
   maybeDrainInboxIfIdle: (ctx: ExtensionContext) => boolean;
@@ -234,6 +235,7 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
         deps.getAgentStableId(),
       );
       deps.applyRegistrationIdentity(registration);
+      await deps.onRegistrationIdentityApplied();
       client.setHeartbeatMetadataProvider(() => deps.getAgentMetadata("worker"));
     }
 

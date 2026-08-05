@@ -5,9 +5,6 @@ import { createAgentEventRuntime, type AgentEventRuntimeDeps } from "./agent-eve
 function createDeps(overrides: Partial<AgentEventRuntimeDeps> = {}) {
   const deliverFollowUpMessage = vi.fn(() => true);
   const requireToolPolicy = vi.fn();
-  const beforeAgentStart = vi.fn(async (event: { systemPrompt: string }) => ({
-    systemPrompt: event.systemPrompt + "\nextra guidance",
-  }));
   const onCompletionAgentEnd = vi.fn(async () => {});
   const setDeliverTrackedSlackFollowUpMessage = vi.fn();
 
@@ -18,7 +15,6 @@ function createDeps(overrides: Partial<AgentEventRuntimeDeps> = {}) {
     formatAction: (action) => `<${action}>`,
     formatError: (error) => (error instanceof Error ? error.message : String(error)),
     deliverFollowUpMessage,
-    beforeAgentStart,
     onCompletionAgentEnd,
     setDeliverTrackedSlackFollowUpMessage,
     ...overrides,
@@ -28,7 +24,6 @@ function createDeps(overrides: Partial<AgentEventRuntimeDeps> = {}) {
     deps,
     deliverFollowUpMessage,
     requireToolPolicy,
-    beforeAgentStart,
     onCompletionAgentEnd,
     setDeliverTrackedSlackFollowUpMessage,
   };
@@ -47,7 +42,7 @@ function createPi() {
 
 describe("createAgentEventRuntime", () => {
   it("registers the pinned agent event wiring in order and preserves agent_end ordering", () => {
-    const { deps, beforeAgentStart, onCompletionAgentEnd } = createDeps();
+    const { deps, onCompletionAgentEnd } = createDeps();
     const runtime = createAgentEventRuntime(deps);
     const { pi, registrations } = createPi();
 
@@ -59,7 +54,6 @@ describe("createAgentEventRuntime", () => {
       "turn_end",
       "agent_end",
       "tool_call",
-      "before_agent_start",
       "agent_end",
     ]);
 
@@ -67,7 +61,6 @@ describe("createAgentEventRuntime", () => {
     expect(agentEndHandlers).toHaveLength(2);
     expect(agentEndHandlers[0]?.handler).not.toBe(onCompletionAgentEnd);
     expect(agentEndHandlers[1]?.handler).toBe(onCompletionAgentEnd);
-    expect(registrations[5]?.handler).toBe(beforeAgentStart);
   });
 
   it("hands off tracked Slack follow-up delivery from the created tool-policy runtime", async () => {

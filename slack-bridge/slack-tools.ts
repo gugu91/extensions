@@ -87,6 +87,7 @@ export interface SlackPinetDeliveryPort {
 }
 
 export interface RegisterSlackToolsDeps {
+  additionalSendPromptGuidelines?: string[];
   getBotToken: () => string;
   getDefaultChannel: () => string | undefined;
   getSecurityPrompt: () => string;
@@ -1972,7 +1973,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
       "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
-    promptGuidelines: buildSlackSendPromptGuidelines(),
+    promptGuidelines: [
+      ...buildSlackSendPromptGuidelines(),
+      ...(deps.additionalSendPromptGuidelines ?? []),
+    ],
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(

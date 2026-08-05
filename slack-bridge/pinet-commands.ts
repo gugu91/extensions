@@ -92,7 +92,11 @@ export interface PinetCommandsDeps {
     ctx: ExtensionContext,
     options: { requirePinet?: boolean },
   ) => Promise<{ queuedInboxCount: number; drainedQueuedInbox: boolean }>;
-  applyLocalAgentIdentity: (name: string, emoji: string, personality: string | null) => void;
+  applyLocalAgentIdentity: (
+    name: string,
+    emoji: string,
+    personality: string | null,
+  ) => Promise<void>;
   setExtStatus: (ctx: ExtensionContext, state: "ok" | "reconnecting" | "error" | "off") => void;
   setExtCtx: (ctx: ExtensionContext) => void;
 }
@@ -279,9 +283,20 @@ export async function runPinetCommandAction(
     case "logs":
       runPinetLogs(deps, ctx);
       return;
-    case "rename":
-      runPinetRename(deps, args, ctx);
+    case "rename": {
+      const newName = args.trim();
+      if (newName) {
+        await deps.applyLocalAgentIdentity(newName, deps.agentEmoji(), deps.agentPersonality());
+      } else {
+        const identity = generateAgentName(
+          undefined,
+          deps.runtimeMode() === "broker" ? "broker" : "worker",
+        );
+        await deps.applyLocalAgentIdentity(identity.name, identity.emoji, deps.agentPersonality());
+      }
+      ctx.ui.notify(`${deps.agentEmoji()} Agent renamed to: ${deps.agentName()}`, "info");
       return;
+    }
     case "snooze":
       runPinetSnooze(deps, args, ctx);
       return;
@@ -866,20 +881,6 @@ function runPinetLogs(deps: PinetCommandsDeps, ctx: ExtensionContext): void {
     ].join("\n\n"),
     s.logChannel ? "info" : "warning",
   );
-}
-
-function runPinetRename(deps: PinetCommandsDeps, args: string, ctx: ExtensionContext): void {
-  const newName = args.trim();
-  if (!newName) {
-    const fresh = generateAgentName(
-      undefined,
-      deps.runtimeMode() === "broker" ? "broker" : "worker",
-    );
-    deps.applyLocalAgentIdentity(fresh.name, fresh.emoji, deps.agentPersonality());
-  } else {
-    deps.applyLocalAgentIdentity(newName, deps.agentEmoji(), deps.agentPersonality());
-  }
-  ctx.ui.notify(`${deps.agentEmoji()} Agent renamed to: ${deps.agentName()}`, "info");
 }
 
 function errorMsg(err: unknown): string {
