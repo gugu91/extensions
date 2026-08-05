@@ -463,6 +463,11 @@ describe("broker integration — client ↔ server ↔ DB", () => {
       },
       stableId,
     );
+    expect(reg.metadata).toMatchObject({
+      runtimeKind: "tmux",
+      runtimeLocator: "pinet-frozen-hazel-whale",
+      tmuxSession: "pinet-frozen-hazel-whale",
+    });
     const threadId = `a2a:${brokerReg.agentId}:${reg.agentId}`;
     await worker.claimThread(threadId);
 
@@ -474,10 +479,15 @@ describe("broker integration — client ↔ server ↔ DB", () => {
       stableId,
       repo: "extensions",
       branch: "candidate-review",
+      runtimeKind: "tmux",
+      runtimeLocator: "pinet-frozen-hazel-whale",
       tmuxSession: "pinet-frozen-hazel-whale",
       brokerManaged: true,
     });
     expect(byName[0].relatedThreadIds).toContain(threadId);
+    expect(
+      await client.searchAgentSessions({ runtimeLocator: "pinet-frozen-hazel-whale" }),
+    ).toHaveLength(1);
 
     worker.disconnect();
     await waitFor(() => Boolean(db.getAgentById(reg.agentId)?.disconnectedAt), 1000);

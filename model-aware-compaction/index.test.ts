@@ -41,8 +41,21 @@ describe("extension wiring", () => {
   it("does nothing while disabled", () => {
     const { emit } = harness();
     const compact = vi.fn();
-    emit("agent_end", context(120_000, compact));
-    expect(compact).not.toHaveBeenCalled();
+    // Explicit project settings keep the test hermetic — without them the
+    // extension falls back to ~/.pi/agent/settings.json, coupling the result
+    // to whatever the developer's machine has configured globally.
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "model-aware-compaction-"));
+    fs.mkdirSync(path.join(temp, ".pi"));
+    fs.writeFileSync(
+      path.join(temp, ".pi", "settings.json"),
+      JSON.stringify({ "model-aware-compaction": { enabled: false } }),
+    );
+    try {
+      emit("agent_end", { ...context(120_000, compact), cwd: temp });
+      expect(compact).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it("waits for the complete agent loop before compacting", () => {

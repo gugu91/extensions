@@ -97,5 +97,7 @@ declare module "@earendil-works/pi-coding-agent" {
     ): void;
     sendMessage(message: any): void;
     appendEntry(customType: string, data?: unknown): void;
+    getActiveTools(): string[];
+    setActiveTools(toolNames: string[]): void;
   }
 }

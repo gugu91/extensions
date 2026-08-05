@@ -89,7 +89,8 @@ export function redactRuntimeSpec(spec: AgentRuntimeSpec): RedactedAgentRuntimeS
     },
     repo,
     hasWorktree: Boolean(spec.worktreePath),
-    hasTmuxSession: Boolean(spec.tmuxSession),
+    runtimeKind: spec.runtimeKind,
+    hasTmuxSession: spec.runtimeKind === "tmux" && Boolean(spec.tmuxSession),
     configFingerprint: sanitizeSpecFacet(spec.configFingerprint),
     expectedHost,
     launchSource: sanitizeSpecFacet(spec.launchSource),
@@ -475,7 +476,7 @@ export function formatAgentLifecycleStatus(status: AgentLifecycleStatus): string
   if (status.runtimeSpec) {
     const spec = status.runtimeSpec;
     lines.push(
-      `  runtime spec: present (repo=${spec.repo ?? "-"}, worktree=${spec.hasWorktree ? "yes" : "no"}, tmux=${spec.hasTmuxSession ? "yes" : "no"}, env_allow=${spec.envAllowlistCount}, fingerprint=${spec.configFingerprint})`,
+      `  runtime spec: present (repo=${spec.repo ?? "-"}, worktree=${spec.hasWorktree ? "yes" : "no"}, runtime=${spec.runtimeKind}, env_allow=${spec.envAllowlistCount}, fingerprint=${spec.configFingerprint})`,
     );
   } else if (DURABLE_HIBERNATION_STATES.has(status.state)) {
     lines.push("  runtime spec: MISSING");

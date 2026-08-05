@@ -32,6 +32,7 @@ import {
   extractPinetControlCommand,
   queuePinetRemoteControl,
   finishPinetRemoteControl,
+  reloadPinetRuntimeInPlaceSafely,
   reloadPinetRuntimeSafely,
   getSqliteJournalMode,
   isSqliteWalEnabled,
@@ -1374,6 +1375,33 @@ describe("reloadPinetRuntimeSafely", () => {
     ).rejects.toThrow("Reload failed: refreshed start failed. Restored the previous runtime.");
 
     expect(starts).toEqual(["follower:refreshed", "follower:previous"]);
+    expect(activeConfig).toBe("previous");
+  });
+
+  it("rolls an in-place runtime reload back without stopping its listener", async () => {
+    let activeConfig = "previous";
+    const reloads: string[] = [];
+
+    await expect(
+      reloadPinetRuntimeInPlaceSafely({
+        snapshotState: () => activeConfig,
+        restoreState: (snapshot) => {
+          activeConfig = snapshot;
+        },
+        refreshState: () => {
+          activeConfig = "refreshed";
+        },
+        validateRefreshedState: () => {},
+        reloadRuntime: async () => {
+          reloads.push(activeConfig);
+          if (activeConfig === "refreshed") {
+            throw new Error("refreshed adapter failed");
+          }
+        },
+      }),
+    ).rejects.toThrow("Reload failed: refreshed adapter failed. Restored the previous runtime.");
+
+    expect(reloads).toEqual(["refreshed", "previous"]);
     expect(activeConfig).toBe("previous");
   });
 });

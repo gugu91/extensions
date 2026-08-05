@@ -12,6 +12,10 @@
 ## Design philosophy
 
 - Guiding principle for this change:
+- Simplicity review:
+  - [ ] Comments explain non-obvious reasons or invariants; clearer code replaces narration.
+  - [ ] Tests exercise states reachable through production boundaries rather than bypassing them.
+  - [ ] One-use helpers are inlined unless they form a documented semantic seam.
 - If this touches Pinet / `slack-bridge`: how does it preserve token-efficient progressive discovery?
   - Hot-path schemas/prompts stay compact:
   - Cold paths remain discoverable through dispatcher `help` / per-action schemas or docs/skills:

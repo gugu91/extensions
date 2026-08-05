@@ -30,6 +30,8 @@ export interface PinetSessionCompactDetails {
   host: string | null;
   repo: string | null;
   branch: string | null;
+  runtimeKind: AgentSessionSearchInfo["runtimeKind"];
+  runtimeLocator: string | null;
   tmuxSession: string | null;
   lastSeen: string;
   disconnectedAt: string | null;
@@ -122,6 +124,8 @@ export function buildPinetSessionCompactDetails(
     host: summary?.host ?? null,
     repo: session.repo,
     branch: session.branch,
+    runtimeKind: session.runtimeKind,
+    runtimeLocator: session.runtimeLocator,
     tmuxSession: session.tmuxSession,
     lastSeen: session.lastSeen,
     disconnectedAt: session.disconnectedAt,

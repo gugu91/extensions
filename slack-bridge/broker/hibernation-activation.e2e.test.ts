@@ -107,6 +107,7 @@ function makeDeps(stableId: string, settings: SlackBridgeSettings): SubtreeBroke
     getAgentMetadata: async () => ({}),
     getMeshRoleFromMetadata: (_metadata, fallback) => fallback ?? "worker",
     pushInboxMessages: () => {},
+    discardQueuedInboxMessages: () => {},
     updateBadge: () => {},
     maybeDrainInboxIfIdle: () => false,
     deliverSteeringMessage: () => false,
@@ -464,8 +465,8 @@ suite(
         launchSource: "e2e",
       };
       const spec = await persistSpawnedRuntimeSpec(db, facts);
-      expect(spec).not.toBeNull();
-      expect(spec?.vcsIdentity).toBe("test/repo");
+      if (spec?.runtimeKind !== "tmux") throw new Error("expected persisted tmux runtime spec");
+      expect(spec.vcsIdentity).toBe("test/repo");
       expect(db.getAgentRuntimeSpec(AGENT_ID)?.sessionResumeRef).toBe(`session:${sessionFile}`);
 
       // Wait for the resident runtime to boot.

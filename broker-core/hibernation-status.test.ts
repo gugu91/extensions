@@ -11,7 +11,9 @@ import {
 } from "./hibernation-status.js";
 import type { AgentCheckpointReceipt, AgentRuntimeSpec, AgentWakeQueueEntry } from "./types.js";
 
-function runtimeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpec {
+function runtimeSpec(
+  overrides: Partial<Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }>> = {},
+): Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }> {
   return {
     agentId: "agent-a",
     stableId: "stable-a",
@@ -19,6 +21,7 @@ function runtimeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpe
     cwd: "/Users/secret/work/extensions",
     repoRoot: "/Users/secret/work/extensions",
     worktreePath: "/Users/secret/work/extensions/.worktrees/x",
+    runtimeKind: "tmux",
     tmuxSocket: "/private/tmp/tmux-501/pinet",
     tmuxSession: "pinet-agent-a",
     tmuxTarget: "pinet-agent-a:0.0",
@@ -60,6 +63,7 @@ describe("redactRuntimeSpec", () => {
   it("exposes only presence flags, counts, and opaque refs — never argv/env/paths", () => {
     const redacted = redactRuntimeSpec(runtimeSpec());
     expect(redacted.hasWorktree).toBe(true);
+    expect(redacted.runtimeKind).toBe("tmux");
     expect(redacted.hasTmuxSession).toBe(true);
     expect(redacted.envAllowlistCount).toBe(3);
     expect(redacted.repo).toBe("extensions");
@@ -334,6 +338,7 @@ describe("formatAgentLifecycleStatus", () => {
     expect(text).toContain("agent-a: hibernated");
     expect(text).toContain("gen 7");
     expect(text).toContain("runtime spec: present");
+    expect(text).toContain("runtime=tmux");
     expect(text).toContain("env_allow=3");
     expect(text).toContain("repo=extensions");
     expect(text).toContain("(at capacity)");

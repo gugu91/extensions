@@ -36,7 +36,23 @@ export function markBrokerInboxIdsHandled(
 export function getBrokerInboxIds(messages: InboxMessage[]): number[] {
   return [
     ...new Set(
-      messages.flatMap((message) => (message.brokerInboxId ? [message.brokerInboxId] : [])),
+      messages.flatMap((message) =>
+        message.brokerInboxId && message.brokerInboxOrigin !== "subtree"
+          ? [message.brokerInboxId]
+          : [],
+      ),
+    ),
+  ];
+}
+
+export function getSubtreeInboxIds(messages: InboxMessage[]): number[] {
+  return [
+    ...new Set(
+      messages.flatMap((message) =>
+        message.brokerInboxId && message.brokerInboxOrigin === "subtree"
+          ? [message.brokerInboxId]
+          : [],
+      ),
     ),
   ];
 }

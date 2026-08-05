@@ -46,6 +46,11 @@ import { isBroadcastChannelTarget } from "./broker/agent-messaging.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { HEARTBEAT_INTERVAL_MS } from "./broker/client.js";
 import type { RalphSnoozeStatus } from "./ralph-loop.js";
+import {
+  SubtreeSpawnLaunchError,
+  SubtreeSpawnRegistrationTimeoutError,
+  type SubtreeSpawnLaunchHandle,
+} from "./subtree-broker-runtime.js";
 import type {
   AgentSessionSearchInfo,
   AgentSessionSearchOptions,
@@ -99,11 +104,13 @@ export interface PinetSubtreeSpawnInput {
   repo: string;
   role?: string;
   laneId?: string;
+  cleanupHandle?: SubtreeSpawnLaunchHandle;
 }
 
 export interface PinetSubtreeSpawnResult {
   status: "started";
   launchId: string;
+  runtimeKind: "tmux" | "herdr";
   sessionName: string;
   repoPath: string;
   role: string;
@@ -119,6 +126,7 @@ export interface PinetSubtreeSpawnResult {
 }
 
 export interface RegisterPinetToolsDeps {
+  promptGuidelines?: string[];
   pinetEnabled: () => boolean;
   brokerRole: () => "broker" | "follower" | null;
   requireToolPolicy: (toolName: string, threadTs: string | undefined, action: string) => void;
@@ -423,6 +431,15 @@ function getErrorMessage(error: unknown): string {
 }
 
 function classifyPinetError(message: string): PinetDispatcherError {
+  if (message.includes("state=launched_unregistered")) {
+    return {
+      class: "runtime",
+      message,
+      retryable: true,
+      hint: "Retry spawn with retry_handle to clean up the exact recorded worker runtime before relaunching.",
+    };
+  }
+
   if (message.includes("requires confirmation for action")) {
     return {
       class: "state",
@@ -432,7 +449,11 @@ function classifyPinetError(message: string): PinetDispatcherError {
     };
   }
 
-  if (message.includes("is not running") || message.includes("unexpected state")) {
+  if (
+    message.includes("is not running") ||
+    message.includes("not initialized") ||
+    message.includes("unexpected state")
+  ) {
     return {
       class: "state",
       message,
@@ -1230,15 +1251,6 @@ function runPinetSpawnAction(
   output: PinetOutputOptions,
 ): Promise<PinetToolResult> {
   return (async () => {
-    const task = getMaybeString(params, "task");
-    const repo = getMaybeString(params, "repo");
-    const role = getMaybeString(params, "role") ?? "subworker";
-    const laneId = getMaybeString(params, "lane_id");
-    deps.requireToolPolicy(
-      toolName,
-      undefined,
-      `task=${task ?? ""} | repo=${repo ?? ""} | role=${role} | lane_id=${laneId ?? ""}`,
-    );
     if (!deps.pinetEnabled()) {
       throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
@@ -1247,27 +1259,64 @@ function runPinetSpawnAction(
         "spawn is worker-only; the broker should launch top-level followers, not own subtrees.",
       );
     }
-    if (!task) throw new Error("spawn requires task");
-    if (!repo) throw new Error("spawn requires repo");
-
     if (!deps.spawnSubtreeWorker) {
       throw new Error(
         "subtree worker launcher is unavailable in this runtime. Start a worker subtree with /pinet subtree start and retry.",
       );
     }
 
+    const task = getMaybeString(params, "task");
+    const repo = getMaybeString(params, "repo");
+    const role = getMaybeString(params, "role") ?? "subworker";
+    const laneId = getMaybeString(params, "lane_id");
+    const retryHandleValue = params.retry_handle;
+    let cleanupHandle: SubtreeSpawnLaunchHandle | undefined;
+    if (retryHandleValue !== undefined) {
+      if (!isPinetToolObject(retryHandleValue)) {
+        throw new Error("retry_handle must be a subtree spawn launch handle");
+      }
+      const launchId = getRecordString(retryHandleValue, "launchId");
+      const tmuxSessionName = getRecordString(retryHandleValue, "tmuxSessionName");
+      const socketPath = getRecordString(retryHandleValue, "socketPath");
+      if (
+        !launchId ||
+        !tmuxSessionName ||
+        !socketPath ||
+        retryHandleValue.state !== "launched_unregistered"
+      ) {
+        throw new Error(
+          'retry_handle requires launchId, tmuxSessionName, socketPath, and state="launched_unregistered"',
+        );
+      }
+      cleanupHandle = {
+        launchId,
+        tmuxSessionName,
+        socketPath,
+        state: "launched_unregistered",
+      };
+    }
+
+    deps.requireToolPolicy(
+      toolName,
+      undefined,
+      `task=${task ?? ""} | repo=${repo ?? ""} | role=${role} | lane_id=${laneId ?? ""}`,
+    );
+    if (!task) throw new Error("spawn requires task");
+    if (!repo) throw new Error("spawn requires repo");
+
     const result = await deps.spawnSubtreeWorker({
       task,
       repo,
       role,
       ...(laneId ? { laneId } : {}),
+      ...(cleanupHandle ? { cleanupHandle } : {}),
     });
     return {
       content: [
         {
           type: "text",
           text: output.full
-            ? `Pinet subtree worker started: ${result.agentName} (${result.agentId}) in tmux session ${result.sessionName}. Task message ${result.messageId} delivered. Monitor: ${result.monitorCommand}`
+            ? `Pinet subtree worker started: ${result.agentName} (${result.agentId}) using ${result.runtimeKind} runtime ${result.sessionName}. Task message ${result.messageId} delivered. Monitor: ${result.monitorCommand}`
             : `Pinet subtree worker started: ${result.agentName} (${result.agentId}). Task message ${result.messageId} delivered.`,
         },
       ],
@@ -1904,7 +1953,12 @@ function runPinetLanesAction(
 ): Promise<PinetToolResult> {
   return (async () => {
     const op = getMaybeString(params, "op")?.toLowerCase() ?? "list";
-    deps.requireToolPolicy(toolName, undefined, `op=${op} | format=${output.format}`);
+    const policyContext = `op=${op} | format=${output.format}`;
+    const threadTs = getMaybeString(params, "thread_ts");
+    deps.requireToolPolicy(toolName, threadTs, policyContext);
+    if (op === "upsert" || op === "participant") {
+      deps.requireToolPolicy(`${toolName}:write`, threadTs, policyContext);
+    }
     if (!deps.pinetEnabled()) {
       throw new Error("Pinet is not running. Use /pinet start or /pinet follow first.");
     }
@@ -2191,6 +2245,9 @@ function buildPinetSessionSearchOptions(
     ...(getMaybeString(params, "worktree_path")
       ? { worktreePath: getMaybeString(params, "worktree_path") }
       : {}),
+    ...(getMaybeString(params, "runtime_locator")
+      ? { runtimeLocator: getMaybeString(params, "runtime_locator") }
+      : {}),
     ...(getMaybeString(params, "tmux_session")
       ? { tmuxSession: getMaybeString(params, "tmux_session") }
       : {}),
@@ -2210,6 +2267,7 @@ function formatPinetSessionSearchHeader(
     options.threadId ? `thread_id=${options.threadId}` : null,
     options.repo ? `repo=${options.repo}` : null,
     options.worktreePath ? `worktree=${options.worktreePath}` : null,
+    options.runtimeLocator ? `runtime=${options.runtimeLocator}` : null,
     options.tmuxSession ? `tmux=${options.tmuxSession}` : null,
     options.since ? `since=${options.since}` : null,
     options.until ? `until=${options.until}` : null,
@@ -2224,7 +2282,7 @@ function formatPinetSessionLine(session: AgentSessionSearchInfo, full: boolean):
   const where = [
     session.repo ?? null,
     session.branch ? `branch=${session.branch}` : null,
-    session.tmuxSession ? `tmux=${session.tmuxSession}` : null,
+    session.runtimeLocator ? `${session.runtimeKind ?? "runtime"}=${session.runtimeLocator}` : null,
   ].filter((item): item is string => Boolean(item));
   const threads = session.relatedThreadIds.slice(0, full ? 10 : 3).join(", ");
   const suffix = session.relatedThreadIds.length > (full ? 10 : 3) ? " …" : "";
@@ -2288,7 +2346,7 @@ function runPinetSessionsAction(
     deps.requireToolPolicy(
       toolName,
       undefined,
-      `agent_name=${options.agentName ?? ""} | agent_id=${options.agentId ?? ""} | thread_id=${options.threadId ?? ""} | repo=${options.repo ?? ""} | worktree_path=${options.worktreePath ?? ""} | tmux_session=${options.tmuxSession ?? ""} | since=${options.since ?? ""} | until=${options.until ?? ""} | limit=${options.limit ?? ""} | format=${output.format} | full=${output.full}`,
+      `agent_name=${options.agentName ?? ""} | agent_id=${options.agentId ?? ""} | thread_id=${options.threadId ?? ""} | repo=${options.repo ?? ""} | worktree_path=${options.worktreePath ?? ""} | runtime_locator=${options.runtimeLocator ?? ""} | tmux_session=${options.tmuxSession ?? ""} | since=${options.since ?? ""} | until=${options.until ?? ""} | limit=${options.limit ?? ""} | format=${output.format} | full=${output.full}`,
     );
 
     if (!deps.pinetEnabled()) {
@@ -2417,12 +2475,20 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   registerAction({
     name: "spawn",
     description:
-      "Worker-only: launch a tmux-backed child worker into this worker's active subtree broker and deliver the task over Pinet.",
+      "Worker-only: launch a child worker with the configured runtime into this worker's active subtree broker and deliver the task over Pinet.",
     parameters: Type.Object({
       task: Type.String({ description: "Scoped task prompt for the child worker" }),
       repo: Type.String({ description: "Repo/workspace scope for the child worker" }),
       role: Type.Optional(Type.String({ description: "Child subtree role, e.g. reviewer" })),
       lane_id: Type.Optional(Type.String({ description: "Optional durable Pinet lane id" })),
+      retry_handle: Type.Optional(
+        Type.Object({
+          launchId: Type.String(),
+          tmuxSessionName: Type.String(),
+          socketPath: Type.String(),
+          state: Type.Literal("launched_unregistered"),
+        }),
+      ),
       ...PINET_OUTPUT_OPTION_PARAMETERS,
     }),
     execute: (_id, params, output) => runPinetSpawnAction(params, deps, "pinet:spawn", output),
@@ -2549,7 +2615,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   registerAction({
     name: "sessions",
     description:
-      "Search live and historical Pinet worker Pi sessions by display name, agent id, thread, repo/worktree, tmux session, or time range.",
+      "Search live and historical Pinet worker Pi sessions by display name, agent id, thread, repo/worktree, runtime locator (tmux session or herdr pane), or time range.",
     parameters: Type.Object({
       op: Type.Optional(Type.String({ description: "Operation: search (default)" })),
       agent_name: Type.Optional(
@@ -2560,6 +2626,9 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
       thread_id: Type.Optional(Type.String({ description: "Related Pinet/Slack/A2A thread id" })),
       repo: Type.Optional(Type.String({ description: "Repo name or path fragment" })),
       worktree_path: Type.Optional(Type.String({ description: "Worktree/cwd path fragment" })),
+      runtime_locator: Type.Optional(
+        Type.String({ description: "Broker-managed runtime locator (tmux session or herdr pane)" }),
+      ),
       tmux_session: Type.Optional(Type.String({ description: "Broker-managed tmux session name" })),
       since: Type.Optional(
         Type.String({ description: "Only sessions active after this ISO time" }),
@@ -2607,9 +2676,12 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   registerAction({
     name: "lanes",
     description:
-      "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility.",
+      "List or update durable Pinet lane metadata for PM-mode and complex coordination visibility. Upsert and participant operations additionally require guardrail policy pinet:lanes:write.",
     parameters: Type.Object({
       op: Type.Optional(Type.String({ description: "Operation: list, upsert, or participant" })),
+      thread_ts: Type.Optional(
+        Type.String({ description: "Slack thread timestamp for confirmation-required mutations" }),
+      ),
       lane_id: Type.Optional(Type.String({ description: "Stable lane id, e.g. issue-688" })),
       name: Type.Optional(
         Type.Union([Type.String(), Type.Null()], { description: "Human-readable lane name" }),
@@ -2693,6 +2765,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     description: "Dispatch Pinet operations by action with compact help and schema discovery.",
     promptSnippet:
       'Use this compact dispatcher for Pinet actions: send, read, free, snooze, schedule, agents, sessions, lanes, ports, reload, exit, hibernate, wake, spawn, and help. Use /pinet start, /pinet follow, /pinet unfollow, and /pinet subtree start for TUI lifecycle changes. Defaults to terse CLI text; pass args.format="json" for the compact envelope or args.full=true for verbose/debug detail.',
+    promptGuidelines: deps.promptGuidelines,
     parameters: Type.Object({
       action: Type.String({
         description:
@@ -2854,8 +2927,17 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
           throw error;
         }
         const message = getErrorMessage(error);
+        const launchHandle =
+          error instanceof SubtreeSpawnRegistrationTimeoutError ||
+          error instanceof SubtreeSpawnLaunchError
+            ? error.handle
+            : null;
         return wrapDispatcherEnvelope(
-          buildPinetDispatcherEnvelope("failed", null, [classifyPinetError(message)]),
+          buildPinetDispatcherEnvelope(
+            "failed",
+            launchHandle ? { action: definition.name, details: { launchHandle } } : null,
+            [classifyPinetError(message)],
+          ),
           output,
         );
       }

@@ -12,10 +12,6 @@ import {
 } from "./broker-prompt-loader.js";
 import { buildReactionPromptGuidelines } from "./reaction-triggers.js";
 
-export interface BeforeAgentStartEvent {
-  systemPrompt: string;
-}
-
 export interface AgentPromptGuidanceDeps {
   getIdentityGuidelines: () => string[];
   getAgentName: () => string;
@@ -30,7 +26,7 @@ export interface AgentPromptGuidanceDeps {
 }
 
 export interface AgentPromptGuidance {
-  beforeAgentStart: (event: BeforeAgentStartEvent) => Promise<{ systemPrompt: string }>;
+  buildPromptGuidelines: () => Promise<string[]>;
 }
 
 export function createAgentPromptGuidance(deps: AgentPromptGuidanceDeps): AgentPromptGuidance {
@@ -79,13 +75,7 @@ export function createAgentPromptGuidance(deps: AgentPromptGuidanceDeps): AgentP
     return guidelines;
   }
 
-  async function beforeAgentStart(event: BeforeAgentStartEvent): Promise<{ systemPrompt: string }> {
-    return {
-      systemPrompt: event.systemPrompt + "\n\n" + (await buildPromptGuidelines()).join("\n"),
-    };
-  }
-
   return {
-    beforeAgentStart,
+    buildPromptGuidelines,
   };
 }

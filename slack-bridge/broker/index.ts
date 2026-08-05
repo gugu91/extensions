@@ -5,12 +5,36 @@ import { BrokerSocketServer } from "./socket-server.js";
 import type { ListenTarget } from "./socket-server.js";
 import { assertLoopbackTcpHost } from "./raw-tcp-loopback.js";
 import { LeaderLock } from "./leader.js";
+import { BrokerLockConflictError, classifyBrokerLockConflict } from "./lock-conflict.js";
 import { getDefaultSocketPath } from "./paths.js";
 import type { MessageAdapter } from "./types.js";
 
 export { BrokerDB } from "./schema.js";
 export { BrokerSocketServer } from "./socket-server.js";
-export { LeaderLock } from "./leader.js";
+export {
+  LeaderLock,
+  inspectBrokerLock,
+  readBrokerLockOwner,
+  getProcessStartTime,
+} from "./leader.js";
+export type { BrokerLockInspection, BrokerLockOwner, BrokerLockProbes } from "./leader.js";
+export {
+  BrokerLockConflictError,
+  classifyBrokerLockConflict,
+  formatBrokerLockConflictMessage,
+  probeBrokerSocket,
+  replaceBrokerOwner,
+  requestBrokerShutdown,
+} from "./lock-conflict.js";
+export type {
+  BrokerLockConflict,
+  BrokerLockConflictClassification,
+  BrokerShutdownRequestResult,
+  BrokerSocketProbeResult,
+  ReplaceBrokerOwnerOptions,
+  ReplaceBrokerOwnerOutcome,
+  ReplaceBrokerOwnerResult,
+} from "./lock-conflict.js";
 export type { ListenTarget } from "./socket-server.js";
 export type { AgentMessageCallback, AgentRegistrationResolver } from "./socket-server.js";
 export type {
@@ -59,6 +83,7 @@ export interface Broker {
   lock: LeaderLock;
   adapters: MessageAdapter[];
   addAdapter(adapter: MessageAdapter): void;
+  removeAdapters(adapters: readonly MessageAdapter[]): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -79,11 +104,29 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
   }
 
   // ── Leader lock: prevent split-brain (issue #119) ────
+  // On conflict, classify the lock owner (issue #951) so callers can offer a
+  // real recovery path instead of a generic failure.
   const lock = new LeaderLock(options.lockPath);
   if (!lock.tryAcquire()) {
-    throw new Error(
-      "Another pinet broker is already running. Only one broker may be active at a time.",
-    );
+    const conflict = await classifyBrokerLockConflict({
+      lockPath: lock.getLockPath(),
+      target,
+    });
+    // The owner may have died between the acquire attempt and classification
+    // — retry once when the conflict became reclaimable.
+    if (conflict.kind === "reclaimable" && lock.tryAcquire()) {
+      // Raced a dying owner; we now hold the lock.
+    } else if (conflict.kind === "conflict") {
+      throw new BrokerLockConflictError({
+        classification: conflict.classification,
+        owner: conflict.owner,
+        probe: conflict.probe,
+      });
+    } else {
+      throw new Error(
+        "Another pinet broker is already running. Only one broker may be active at a time.",
+      );
+    }
   }
 
   const db = new BrokerDB(options.dbPath);
@@ -154,18 +197,40 @@ export async function startBroker(options: BrokerOptions = {}): Promise<Broker> 
       server.setOutboundMessageAdapters(adapters);
     },
 
-    async stop(): Promise<void> {
-      for (const adapter of adapters) {
+    async removeAdapters(removedAdapters: readonly MessageAdapter[]): Promise<void> {
+      const removed = new Set(removedAdapters);
+      const retained = adapters.filter((adapter) => !removed.has(adapter));
+      adapters.length = 0;
+      adapters.push(...retained);
+      server.setOutboundMessageAdapters(adapters);
+
+      const disconnectErrors: Error[] = [];
+      for (const adapter of removedAdapters) {
         try {
           await adapter.disconnect();
-        } catch {
-          // best effort
+        } catch (error) {
+          disconnectErrors.push(error instanceof Error ? error : new Error(String(error)));
         }
       }
-      adapters.length = 0;
-      await server.stop();
-      db.close();
-      lock.release();
+      if (disconnectErrors.length > 0) {
+        throw new AggregateError(disconnectErrors, "Failed to disconnect broker adapters");
+      }
+    },
+
+    async stop(): Promise<void> {
+      try {
+        await this.removeAdapters([...adapters]);
+      } finally {
+        try {
+          await server.stop();
+        } finally {
+          try {
+            db.close();
+          } finally {
+            lock.release();
+          }
+        }
+      }
     },
   };
 

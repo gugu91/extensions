@@ -82,6 +82,18 @@ describe("createSessionUiRuntime", () => {
     expect(setStatus).toHaveBeenNthCalledWith(4, "slack-bridge", "🦩 Cobalt Olive Crane ✦ 2");
   });
 
+  it("does not replace a connection error with an unread badge", () => {
+    const { deps } = createDeps({ getInboxLength: () => 2 });
+    const runtime = createSessionUiRuntime(deps);
+    const { ctx, setStatus } = createContext();
+
+    runtime.setExtStatus(ctx, "error");
+    setStatus.mockClear();
+    runtime.updateBadge();
+
+    expect(setStatus).not.toHaveBeenCalled();
+  });
+
   it("gates idle inbox draining while Escape suppression is active", () => {
     const { deps, drainInbox } = createDeps();
     const runtime = createSessionUiRuntime(deps);

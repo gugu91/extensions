@@ -13,6 +13,7 @@ import {
   resolveSlackUserName,
   setSlackSuggestedPrompts,
   SlackSocketModeClient,
+  type SlackSocketErrorSource,
   type ParsedAppHomeOpened,
   type ParsedSlashCommand,
   type ParsedThreadContextChanged,
@@ -100,6 +101,9 @@ export interface SlackAdapterConfig {
   onAppHomeOpened?: (event: ParsedAppHomeOpened) => Promise<void> | void;
   /** Best-effort callback for Slack slash commands handled by the broker process. */
   onSlashCommand?: (event: ParsedSlashCommand) => Promise<string | null> | string | null;
+  onSocketOpen?: () => void;
+  onSocketReconnectScheduled?: () => void;
+  onSocketError?: (message: string, source: SlackSocketErrorSource) => void;
 }
 
 interface SlackThreadInfo {
@@ -180,6 +184,8 @@ export class SlackAdapter implements MessageAdapter {
       appToken: this.config.appToken,
       dedup: this.processedSocketDeliveries,
       abortAndWait: () => this.slackRequests.abortAndWait(),
+      onOpen: () => this.config.onSocketOpen?.(),
+      onReconnectScheduled: () => this.config.onSocketReconnectScheduled?.(),
       onThreadStarted: (event) => this.onThreadStarted(event),
       onThreadContextChanged: (event) => this.onContextChanged(event),
       onMessage: (event) => this.onMessage(event),
@@ -188,9 +194,9 @@ export class SlackAdapter implements MessageAdapter {
       onAppHomeOpened: (event) => this.onAppHomeOpened(event),
       onInteractive: (event) => this.emitInteractiveInbound(event),
       onSlashCommand: (event) => this.onSlashCommand(event),
-      onError: (error) => {
+      onError: (error, source) => {
         if (!isAbortError(error)) {
-          console.error(`[slack-adapter] Socket Mode: ${errorMsg(error)}`);
+          this.config.onSocketError?.(errorMsg(error), source);
         }
       },
     });
@@ -200,14 +206,17 @@ export class SlackAdapter implements MessageAdapter {
 
   async disconnect(): Promise<void> {
     this.shuttingDown = true;
-    await this.threadStatuses.clearAll();
-    const socketMode = this.socketMode;
-    this.socketMode = null;
-    if (socketMode) {
-      await socketMode.disconnect();
-      return;
+    try {
+      await this.threadStatuses.clearAll();
+    } finally {
+      const socketMode = this.socketMode;
+      this.socketMode = null;
+      if (socketMode) {
+        await socketMode.disconnect();
+      } else {
+        await this.slackRequests.abortAndWait();
+      }
     }
-    await this.slackRequests.abortAndWait();
   }
 
   onInbound(handler: (msg: InboundMessage) => void): void {

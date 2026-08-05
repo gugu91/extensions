@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrokerDB } from "./schema.js";
 import type { AgentLifecycleState, AgentRuntimeSpecInput } from "./types.js";
@@ -80,6 +81,39 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+function createV23RuntimeSpecDb(path: string): void {
+  const sqlite = new DatabaseSync(path);
+  try {
+    sqlite.exec(`
+      CREATE TABLE agents (
+        stable_id TEXT, metadata TEXT, status TEXT, last_heartbeat TEXT,
+        disconnected_at TEXT, resumable_until TEXT
+      );
+      CREATE TABLE agent_runtime_specs (
+        agent_id TEXT PRIMARY KEY NOT NULL, stable_id TEXT NOT NULL, broker_owner_id TEXT NOT NULL,
+        cwd TEXT NOT NULL, repo_root TEXT NOT NULL, worktree_path TEXT NOT NULL,
+        runtime_kind TEXT NOT NULL DEFAULT 'tmux' CHECK(runtime_kind IN ('tmux')),
+        tmux_socket TEXT NOT NULL, tmux_session TEXT NOT NULL, tmux_target TEXT NOT NULL,
+        executable TEXT NOT NULL, argv_json TEXT NOT NULL, env_allowlist_json TEXT NOT NULL,
+        session_resume_ref TEXT NOT NULL, config_fingerprint TEXT NOT NULL,
+        expected_host TEXT NOT NULL, expected_user TEXT NOT NULL, launch_source TEXT NOT NULL,
+        vcs_identity TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      INSERT INTO agent_runtime_specs VALUES (
+        'worker-legacy', 'host:session:worker-legacy', 'broker-1', '/repo/wt', '/repo', '/repo/wt',
+        'tmux', '/private/tmp/tmux-501/default', 'worker-legacy', 'worker-legacy:0.0',
+        '/usr/local/bin/pi', '["pi","--resume"]', '["HOME"]', 'session:legacy', 'cfg-legacy',
+        'host-1', 'tm', 'pinet-spawn', 'gugu91/pinet',
+        '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z'
+      );
+      PRAGMA user_version = 23;
+    `);
+  } finally {
+    sqlite.close();
+  }
+}
+
 function spec(agentId: string): AgentRuntimeSpecInput {
   return {
     agentId,
@@ -88,6 +122,7 @@ function spec(agentId: string): AgentRuntimeSpecInput {
     cwd: "/repo/wt",
     repoRoot: "/repo",
     worktreePath: "/repo/wt",
+    runtimeKind: "tmux",
     tmuxSocket: "/private/tmp/tmux-501/default",
     tmuxSession: agentId,
     tmuxTarget: `${agentId}:0.0`,
@@ -103,12 +138,128 @@ function spec(agentId: string): AgentRuntimeSpecInput {
   };
 }
 
+function herdrSpec(agentId: string): AgentRuntimeSpecInput {
+  const common = spec(agentId);
+  return {
+    agentId: common.agentId,
+    stableId: common.stableId,
+    brokerOwnerId: common.brokerOwnerId,
+    cwd: common.cwd,
+    repoRoot: common.repoRoot,
+    worktreePath: common.worktreePath,
+    runtimeKind: "herdr",
+    herdrSession: "pinet-workers",
+    herdrConfigDir: "/private/var/pinet/herdr-config",
+    herdrPaneId: "w1:p2",
+    herdrShellPid: 4242,
+    executable: common.executable,
+    argv: common.argv,
+    envAllowlist: common.envAllowlist,
+    sessionResumeRef: common.sessionResumeRef,
+    configFingerprint: common.configFingerprint,
+    expectedHost: common.expectedHost,
+    expectedUser: common.expectedUser,
+    launchSource: "pinet-spawn-herdr",
+    vcsIdentity: common.vcsIdentity,
+  };
+}
+
 describe("runtime spec persistence", () => {
+  it("creates fresh v24 databases with exact per-kind payload constraints", () => {
+    const path = dbPath();
+    const db = new BrokerDB(path);
+    db.initialize();
+    db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
+
+    expect(db.upsertAgentRuntimeSpec(spec("worker-1")).runtimeKind).toBe("tmux");
+
+    const sqlite = new DatabaseSync(path);
+    try {
+      const columns = sqlite.prepare("PRAGMA table_info(agent_runtime_specs)").all() as Array<{
+        name: string;
+        notnull: number;
+        dflt_value: string | null;
+      }>;
+      expect(columns.find((column) => column.name === "runtime_kind")).toMatchObject({
+        notnull: 1,
+        dflt_value: "'tmux'",
+      });
+      expect(columns.find((column) => column.name === "tmux_socket")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "tmux_session")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "tmux_target")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "herdr_session")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "herdr_config_dir")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "herdr_pane_id")?.notnull).toBe(0);
+      expect(columns.find((column) => column.name === "herdr_shell_pid")?.notnull).toBe(0);
+      const table = sqlite
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runtime_specs'",
+        )
+        .get() as { sql: string };
+      expect(table.sql).toContain("runtime_kind IN ('tmux','herdr')");
+      expect(table.sql).toContain("herdr_session IS NULL");
+      expect(table.sql).toContain("tmux_socket IS NULL");
+      const version = sqlite.prepare("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(24);
+    } finally {
+      sqlite.close();
+      db.close();
+    }
+  });
+
+  it("rebuilds v23 and preserves the complete existing tmux row", () => {
+    const path = dbPath();
+    createV23RuntimeSpecDb(path);
+    const db = new BrokerDB(path);
+    try {
+      db.initialize();
+
+      const sqlite = new DatabaseSync(path);
+      try {
+        expect(sqlite.prepare("SELECT * FROM agent_runtime_specs").get()).toEqual({
+          agent_id: "worker-legacy",
+          stable_id: "host:session:worker-legacy",
+          broker_owner_id: "broker-1",
+          cwd: "/repo/wt",
+          repo_root: "/repo",
+          worktree_path: "/repo/wt",
+          runtime_kind: "tmux",
+          tmux_socket: "/private/tmp/tmux-501/default",
+          tmux_session: "worker-legacy",
+          tmux_target: "worker-legacy:0.0",
+          herdr_session: null,
+          herdr_config_dir: null,
+          herdr_pane_id: null,
+          herdr_shell_pid: null,
+          executable: "/usr/local/bin/pi",
+          argv_json: '["pi","--resume"]',
+          env_allowlist_json: '["HOME"]',
+          session_resume_ref: "session:legacy",
+          config_fingerprint: "cfg-legacy",
+          expected_host: "host-1",
+          expected_user: "tm",
+          launch_source: "pinet-spawn",
+          vcs_identity: "gugu91/pinet",
+          created_at: "2026-07-01T00:00:00.000Z",
+          updated_at: "2026-07-01T00:00:00.000Z",
+        });
+
+        const version = sqlite.prepare("PRAGMA user_version").get() as { user_version: number };
+        expect(version.user_version).toBe(24);
+      } finally {
+        sqlite.close();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
   it("round-trips argv/env arrays and preserves createdAt across updates", () => {
     const db = new BrokerDB(dbPath());
     db.initialize();
     db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
     const first = db.upsertAgentRuntimeSpec(spec("worker-1"));
+    expect(first.runtimeKind).toBe("tmux");
     expect(first.argv).toEqual(["pi", "--model", "x"]);
     expect(first.envAllowlist).toEqual(["HOME", "PI_MESH_SOCKET"]);
 
@@ -124,6 +275,121 @@ describe("runtime spec persistence", () => {
 
     db.deleteAgentRuntimeSpec("worker-1");
     expect(db.getAgentRuntimeSpec("worker-1")).toBeNull();
+    db.close();
+  });
+
+  it("round-trips a Herdr payload without persisting restart-volatile terminal identity", () => {
+    const path = dbPath();
+    const db = new BrokerDB(path);
+    db.initialize();
+    db.registerAgent("worker-herdr", "H", "🐑", 1, undefined, "host:session:worker-herdr");
+
+    const saved = db.upsertAgentRuntimeSpec(herdrSpec("worker-herdr"));
+    expect(saved).toMatchObject({
+      runtimeKind: "herdr",
+      herdrSession: "pinet-workers",
+      herdrConfigDir: "/private/var/pinet/herdr-config",
+      herdrPaneId: "w1:p2",
+      herdrShellPid: 4242,
+    });
+    expect("terminalId" in saved).toBe(false);
+
+    const sqlite = new DatabaseSync(path);
+    try {
+      expect(
+        sqlite
+          .prepare(
+            `SELECT tmux_socket, tmux_session, tmux_target,
+                    herdr_session, herdr_config_dir, herdr_pane_id, herdr_shell_pid
+             FROM agent_runtime_specs WHERE agent_id = ?`,
+          )
+          .get("worker-herdr"),
+      ).toEqual({
+        tmux_socket: null,
+        tmux_session: null,
+        tmux_target: null,
+        herdr_session: "pinet-workers",
+        herdr_config_dir: "/private/var/pinet/herdr-config",
+        herdr_pane_id: "w1:p2",
+        herdr_shell_pid: 4242,
+      });
+    } finally {
+      sqlite.close();
+      db.close();
+    }
+  });
+
+  it("rejects mixed runtime payloads at the schema boundary", () => {
+    const path = dbPath();
+    const db = new BrokerDB(path);
+    db.initialize();
+    db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
+    db.upsertAgentRuntimeSpec(spec("worker-1"));
+
+    const sqlite = new DatabaseSync(path);
+    try {
+      expect(() =>
+        sqlite
+          .prepare(
+            `UPDATE agent_runtime_specs
+             SET herdr_session = 'pinet-workers'
+             WHERE agent_id = 'worker-1'`,
+          )
+          .run(),
+      ).toThrow(/CHECK constraint failed/);
+    } finally {
+      sqlite.close();
+      db.close();
+    }
+  });
+
+  it.each([
+    ["tmux", "tmux_socket", ""],
+    ["tmux", "tmux_session", "   "],
+    ["tmux", "tmux_target", ""],
+    ["herdr", "herdr_session", ""],
+    ["herdr", "herdr_config_dir", "   "],
+    ["herdr", "herdr_pane_id", ""],
+    ["herdr", "herdr_shell_pid", 0],
+    ["herdr", "herdr_shell_pid", -1],
+  ])("rejects a corrupt %s row with malformed %s", (runtimeKind, column, value) => {
+    const path = dbPath();
+    const db = new BrokerDB(path);
+    db.initialize();
+    db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
+    db.upsertAgentRuntimeSpec(runtimeKind === "tmux" ? spec("worker-1") : herdrSpec("worker-1"));
+
+    const sqlite = new DatabaseSync(path);
+    try {
+      sqlite
+        .prepare(`UPDATE agent_runtime_specs SET ${column} = ? WHERE agent_id = 'worker-1'`)
+        .run(value);
+    } finally {
+      sqlite.close();
+    }
+
+    expect(() => db.getAgentRuntimeSpec("worker-1")).toThrow(
+      `Invalid ${runtimeKind === "tmux" ? "tmux" : "Herdr"} runtime payload for agent worker-1`,
+    );
+    db.close();
+  });
+
+  it.each([
+    ["tmuxSocket", "tmux"],
+    ["tmuxSession", "tmux"],
+    ["tmuxTarget", "tmux"],
+    ["herdrSession", "herdr"],
+    ["herdrConfigDir", "herdr"],
+    ["herdrPaneId", "herdr"],
+  ] as const)("rejects a blank %s when persisting", (field, runtimeKind) => {
+    const db = new BrokerDB(dbPath());
+    db.initialize();
+    db.registerAgent("worker-1", "W", "🦉", 1, undefined, "host:session:worker-1");
+    const input = runtimeKind === "tmux" ? spec("worker-1") : herdrSpec("worker-1");
+
+    expect(() =>
+      db.upsertAgentRuntimeSpec({ ...input, [field]: "   " } as AgentRuntimeSpecInput),
+    ).toThrow(`Invalid ${runtimeKind === "tmux" ? "tmux" : "Herdr"} runtime payload`);
     db.close();
   });
 

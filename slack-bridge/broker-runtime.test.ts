@@ -46,6 +46,7 @@ function createDeps(overrides: Partial<BrokerRuntimeDeps> = {}): BrokerRuntimeDe
     onMaintenanceError: vi.fn(),
     onScheduledWakeupError: vi.fn(),
     onAgentStatusChange: vi.fn(),
+    onAdminShutdownRequested: vi.fn(async () => {}),
     createActivityLogger: vi.fn(
       () =>
         ({

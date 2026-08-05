@@ -52,6 +52,7 @@ function runtimeSpec(agentId: string): AgentRuntimeSpecInput {
     cwd: "/repo/wt",
     repoRoot: "/repo",
     worktreePath: "/repo/wt",
+    runtimeKind: "tmux",
     tmuxSocket: "/private/tmp/tmux-501/default",
     tmuxSession: "worker-e2e",
     tmuxTarget: "worker-e2e:0.0",

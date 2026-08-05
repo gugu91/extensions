@@ -53,16 +53,14 @@ export function evaluateHibernateEligibility(agent: AgentInfo): HibernateEligibi
   const metadata = agent.metadata;
   if (metadata?.brokerManaged !== true) return { eligible: false, reason: "not_broker_managed" };
   if (metadata.hibernateSafe !== true) return { eligible: false, reason: "unsafe_or_unconfirmed" };
-  for (const key of [
-    "cwd",
-    "repoRoot",
-    "worktreePath",
-    "tmuxSession",
-    "brokerManagedBy",
-  ] as const) {
+  for (const key of ["cwd", "repoRoot", "worktreePath", "brokerManagedBy"] as const) {
     if (typeof metadata[key] !== "string" || metadata[key].trim().length === 0) {
       return { eligible: false, reason: `missing_${key}` };
     }
+  }
+  const runtimeLocator = metadata.runtimeLocator ?? metadata.tmuxSession;
+  if (typeof runtimeLocator !== "string" || runtimeLocator.trim().length === 0) {
+    return { eligible: false, reason: "missing_runtime_locator" };
   }
   return { eligible: true, reason: "eligible" };
 }

@@ -34,7 +34,6 @@ are skipped on re-runs.
 - NEVER work directly on `main` or checkout feature branches in the main repo directory.
 - ALWAYS create a git worktree: `git worktree add .worktrees/<name> -b <branch>` and `cd` into it before making changes.
 - In a fresh worktree, run `pnpm install --frozen-lockfile` before `pnpm lint`, `pnpm typecheck`, `pnpm test`, or `pnpm prepush`. Dependency bootstrap is per checkout/worktree, not a one-time repo setup step.
-- If the lane exercises live browser launches and no compatible host browser is available, run `cd browser-playwright && npx playwright install chromium` in that worktree.
 - If you are already in a worktree, stay there. Do not `cd` back to the main checkout.
 - When your PR is merged, clean up: `git worktree remove .worktrees/<name>` from the main checkout.
 - NEVER run `git checkout <branch>` or `git switch <branch>` in the main repo checkout. It must always be on `main`.
@@ -82,6 +81,10 @@ Treat review feedback as repo-owned guardrails, not one-off fixes. When an
 agent or reviewer catches a repeatable issue, prefer a cheap deterministic lint,
 test, or CI check so the next agent gets the correction before review.
 
+- **Write decisive code.** Prefer clear invariants over defensive branches,
+  catches, comments, and tests for states the system does not permit. Catch only
+  where failure changes ownership or retry behaviour. Every regression test must
+  fail against the bug or a plausible mutation; otherwise remove it.
 - **Parse boundaries, do not spread `unknown`.** External, serialized, config,
   JSON, Slack, Pinet, and MCP-shaped values must be parsed at the boundary into a
   named DTO or domain type. The diff-aware `lint:agent-standards` check prevents

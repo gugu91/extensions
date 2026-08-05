@@ -109,7 +109,10 @@ export function createHibernationOrchestrator(
 }
 
 /** Broker-authored spawn facts minus the VCS identity (derived here from the git remote). */
-export type SpawnRuntimeSpecFacts = Omit<SpawnAuthoredRuntimeFacts, "vcsIdentity">;
+type SpawnRuntimeSpecFactsWithoutVcs<T extends SpawnAuthoredRuntimeFacts> =
+  T extends SpawnAuthoredRuntimeFacts ? Omit<T, "vcsIdentity"> : never;
+
+export type SpawnRuntimeSpecFacts = SpawnRuntimeSpecFactsWithoutVcs<SpawnAuthoredRuntimeFacts>;
 
 /**
  * Seam 2 — persist a durable, broker-authored runtime spec at worker spawn.

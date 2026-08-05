@@ -51,6 +51,8 @@ export interface SlackBridgeSettings {
   suggestedPrompts?: { title: string; message: string }[];
   reactionCommands?: ReactionCommandSettings;
   runtimeMode?: "off" | "single" | "broker" | "follower";
+  /** Runtime backend for newly spawned subtree workers. Defaults to tmux. */
+  subtreeWorkerRuntime?: "tmux" | "herdr";
   brokerPrompt?: string;
   autoConnect?: boolean;
   autoFollow?: boolean;
@@ -307,6 +309,7 @@ export interface InboxMessage {
   timestamp: string;
   isChannelMention?: boolean;
   brokerInboxId?: number;
+  brokerInboxOrigin?: "subtree";
   metadata?: InboxMessageMetadata | null;
   scope?: RuntimeScopeCarrier | null;
 }
@@ -790,6 +793,44 @@ export async function reloadPinetRuntimeSafely<State>(
 
     try {
       await reloader.startRuntime(role);
+    } catch (rollbackErr) {
+      const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
+      const rollbackMessage =
+        rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+      throw new Error(
+        `Reload failed: ${reloadMessage}. Rollback to the previous runtime also failed: ${rollbackMessage}`,
+      );
+    }
+
+    const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
+    throw new Error(`Reload failed: ${reloadMessage}. Restored the previous runtime.`);
+  }
+}
+
+export async function reloadPinetRuntimeInPlaceSafely<State>(input: {
+  snapshotState: () => State;
+  restoreState: (snapshot: State) => void;
+  refreshState: () => void;
+  validateRefreshedState: () => void | Promise<void>;
+  reloadRuntime: () => Promise<void>;
+}): Promise<void> {
+  const snapshot = input.snapshotState();
+
+  try {
+    input.refreshState();
+    await input.validateRefreshedState();
+  } catch (validationErr) {
+    input.restoreState(snapshot);
+    throw validationErr;
+  }
+
+  try {
+    await input.reloadRuntime();
+  } catch (reloadErr) {
+    input.restoreState(snapshot);
+
+    try {
+      await input.reloadRuntime();
     } catch (rollbackErr) {
       const reloadMessage = reloadErr instanceof Error ? reloadErr.message : String(reloadErr);
       const rollbackMessage =

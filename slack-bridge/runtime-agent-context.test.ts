@@ -675,10 +675,24 @@ describe("createRuntimeAgentContext", () => {
         brokerManaged: true,
         brokerManagedBy: "broker-1",
         launchSource: "broker-tmux",
+        runtimeKind: "tmux",
+        runtimeLocator: "extensions-worker-1",
         tmuxSession: "extensions-worker-1",
       });
       expect(typeof workerMetadata.brokerManagedAt).toBe("string");
       expect(brokerMetadata).not.toHaveProperty("brokerManaged");
+
+      process.env.PINET_LAUNCH_SOURCE = "broker-herdr";
+      process.env.PINET_TMUX_SESSION = "inherited-parent-session";
+      const herdrWorkerMetadata = await runtimeAgentContext.getAgentMetadata("worker");
+      expect(herdrWorkerMetadata).toMatchObject({
+        brokerManaged: true,
+        brokerManagedBy: "broker-1",
+        launchSource: "broker-herdr",
+        runtimeKind: "herdr",
+      });
+      expect(herdrWorkerMetadata).not.toHaveProperty("runtimeLocator");
+      expect(herdrWorkerMetadata).not.toHaveProperty("tmuxSession");
     } finally {
       if (originalManaged === undefined) delete process.env.PINET_BROKER_MANAGED;
       else process.env.PINET_BROKER_MANAGED = originalManaged;

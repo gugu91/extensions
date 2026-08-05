@@ -205,6 +205,7 @@ export class BrokerSocketServer {
     Pick<MessageAdapter, "name" | "send" | "invokeCapability">
   > = [];
   private agentRegistrationResolver: AgentRegistrationResolver | null = null;
+  private adminShutdownHandler: (() => void | Promise<void>) | null = null;
 
   constructor(
     db: BrokerDB,
@@ -360,6 +361,25 @@ export class BrokerSocketServer {
 
   setAgentRegistrationResolver(resolver: AgentRegistrationResolver | null): void {
     this.agentRegistrationResolver = resolver;
+  }
+
+  disconnectAgentConnections(agentId: string): void {
+    for (const [socket, state] of this.connections) {
+      if (state.agentId !== agentId) continue;
+      state.agentId = null;
+      socket.destroy();
+    }
+  }
+
+  /**
+   * Register a handler invoked when an authenticated local client requests a
+   * graceful broker shutdown via the `admin.shutdown` RPC (used by
+   * `/pinet start replace` to take over a broker whose controlling session
+   * was lost). When no handler is wired, the RPC reports method-not-found so
+   * callers treat the broker as not supporting remote shutdown.
+   */
+  setAdminShutdownHandler(handler: (() => void | Promise<void>) | null): void {
+    this.adminShutdownHandler = handler;
   }
 
   setOutboundMessageAdapters(
@@ -586,6 +606,8 @@ export class BrokerSocketServer {
           return this.handleScheduleCreate(req, state);
         case "status.update":
           return this.handleStatusUpdate(req, state);
+        case "admin.shutdown":
+          return this.handleAdminShutdown(req);
         case "adapter.capability":
           return await this.handleAdapterCapability(req, state);
         case "slack.proxy":
@@ -807,10 +829,26 @@ export class BrokerSocketServer {
     const requestedEmoji = typeof params.emoji === "string" ? params.emoji : "";
     const pid = typeof params.pid === "number" ? params.pid : 0;
     const stableId = typeof params.stableId === "string" ? params.stableId : undefined;
-    const metadata =
+    const rawMetadata =
       params.metadata && typeof params.metadata === "object"
         ? (params.metadata as Record<string, unknown>)
         : undefined;
+    const legacyTmuxSession =
+      typeof rawMetadata?.tmuxSession === "string" ? rawMetadata.tmuxSession.trim() : "";
+    const launchSource =
+      typeof rawMetadata?.launchSource === "string" ? rawMetadata.launchSource.trim() : "";
+    const explicitlyHerdr =
+      rawMetadata?.runtimeKind === "herdr" ||
+      launchSource === "broker-herdr" ||
+      launchSource === "subtree-broker-herdr";
+    const metadata =
+      legacyTmuxSession && !explicitlyHerdr && typeof rawMetadata?.runtimeLocator !== "string"
+        ? {
+            ...rawMetadata,
+            runtimeKind: "tmux",
+            runtimeLocator: legacyTmuxSession,
+          }
+        : rawMetadata;
 
     if (stableId) {
       const liveStableIdConflict = this.findLiveStableIdConflict(stableId, socket);
@@ -1273,6 +1311,9 @@ export class BrokerSocketServer {
       ...(typeof params.threadId === "string" ? { threadId: params.threadId } : {}),
       ...(typeof params.repo === "string" ? { repo: params.repo } : {}),
       ...(typeof params.worktreePath === "string" ? { worktreePath: params.worktreePath } : {}),
+      ...(typeof params.runtimeLocator === "string"
+        ? { runtimeLocator: params.runtimeLocator }
+        : {}),
       ...(typeof params.tmuxSession === "string" ? { tmuxSession: params.tmuxSession } : {}),
       ...(typeof params.since === "string" ? { since: params.since } : {}),
       ...(typeof params.until === "string" ? { until: params.until } : {}),
@@ -1687,6 +1728,33 @@ export class BrokerSocketServer {
       /* best effort */
     }
     return rpcOk(req.id, { ok: true });
+  }
+
+  // ─── Admin shutdown handler ───────────────────────────
+
+  /**
+   * Graceful remote shutdown. Requires authentication (enforced by the
+   * generic auth gate). Responds first, then invokes the wired handler on the
+   * next tick so the requester receives the acknowledgement before the broker
+   * tears down its socket.
+   */
+  private handleAdminShutdown(req: JsonRpcRequest): JsonRpcResponse {
+    const handler = this.adminShutdownHandler;
+    if (!handler) {
+      return rpcError(
+        req.id,
+        RPC_METHOD_NOT_FOUND,
+        "This broker does not support remote shutdown.",
+      );
+    }
+    setImmediate(() => {
+      void Promise.resolve()
+        .then(() => handler())
+        .catch(() => {
+          /* best effort — the requester falls back to fenced termination */
+        });
+    });
+    return rpcOk(req.id, { ok: true, shuttingDown: true });
   }
 
   // ─── Adapter capability handler ───────────────────────

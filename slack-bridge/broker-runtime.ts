@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   type InboxMessage,
@@ -16,6 +17,7 @@ import {
 } from "./helpers.js";
 import { startBroker, type Broker } from "./broker/index.js";
 import type { BrokerDB } from "./broker/schema.js";
+import { readMeshSecret } from "./broker/auth.js";
 import { DEFAULT_HEARTBEAT_TIMEOUT_MS } from "./broker/socket-server.js";
 import { MessageRouter } from "./broker/router.js";
 import {
@@ -32,7 +34,7 @@ import {
   queueBrokerInboxIds,
   resetBrokerDeliveryState,
 } from "./broker-delivery.js";
-import type { AgentInfo, InboundMessage } from "./broker/types.js";
+import type { AgentInfo, InboundMessage, MessageAdapter } from "./broker/types.js";
 import {
   type ActivityLogEntry,
   type ActivityLogTone,
@@ -140,11 +142,35 @@ export interface BrokerRuntimeDeps {
     openedAt?: string,
   ) => Promise<BrokerControlPlaneDashboardSnapshot | null>;
   createAdapterBindings: readonly PinetRuntimeAdapterFactory[];
+  /**
+   * Invoked when an authenticated local client asks this broker to shut down
+   * gracefully (`admin.shutdown`, used by `/pinet start replace`). The
+   * implementation should stop the Pinet runtime in the owning session and
+   * notify its operator; the session itself stays alive.
+   */
+  onAdminShutdownRequested: (ctx: ExtensionContext) => Promise<void>;
 }
 
 function normalizeOptionalSetting(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function buildBrokerInPlaceSettingsSignature(settings: SlackBridgeSettings): string {
+  const meshAuth = resolvePinetMeshAuth(settings);
+  const effectiveMeshSecret = meshAuth.meshSecret
+    ? meshAuth.meshSecret
+    : meshAuth.meshSecretPath
+      ? readMeshSecret(meshAuth.meshSecretPath)
+      : null;
+  const meshSecretFingerprint = effectiveMeshSecret
+    ? crypto.createHash("sha256").update(effectiveMeshSecret).digest("hex")
+    : null;
+  return JSON.stringify({
+    meshSecretFingerprint,
+    meshSecretPath: meshAuth.meshSecretPath ?? null,
+    imessageEnabled: settings.imessage?.enabled ?? false,
+  });
 }
 
 export function resolveConfiguredBrokerSkinTheme(settings: SlackBridgeSettings): string {
@@ -153,6 +179,8 @@ export function resolveConfiguredBrokerSkinTheme(settings: SlackBridgeSettings):
 
 export interface BrokerRuntime {
   connect: (ctx: ExtensionContext) => Promise<BrokerRuntimeConnectResult>;
+  reloadAdapters: (ctx: ExtensionContext) => Promise<{ botUserId: string | null }>;
+  canReloadInPlace: () => boolean;
   disconnect: (options?: { releaseIdentity?: boolean }) => Promise<void>;
   claimThread: (threadTs: string, channelId: string, source?: string) => void;
   runMaintenance: (ctx: ExtensionContext) => void;
@@ -188,6 +216,8 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   let activeBroker: Broker | null = null;
   let activeRouter: MessageRouter | null = null;
   let activeSelfId: string | null = null;
+  let activeRuntimeAdapters: MessageAdapter[] = [];
+  let activeInPlaceSettingsSignature: string | null = null;
   let brokerHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let brokerMaintenanceTimer: ReturnType<typeof setInterval> | null = null;
   let brokerScheduledWakeupTimer: ReturnType<typeof setInterval> | null = null;
@@ -523,6 +553,8 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
     activeBroker = null;
     activeRouter = null;
     activeSelfId = null;
+    activeRuntimeAdapters = [];
+    activeInPlaceSettingsSignature = null;
     lastBrokerMaintenance = null;
     lastBrokerMaintenanceSignature = "";
     resetBrokerDeliveryState(deps.deliveryState);
@@ -645,6 +677,8 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         });
 
         activeBroker = broker;
+        activeRuntimeAdapters = adapterBindings.map((binding) => binding.adapter);
+        activeInPlaceSettingsSignature = buildBrokerInPlaceSettingsSignature(settings);
         activeRouter = router;
         activeSelfId = brokerSelfId;
         resetBrokerDeliveryState(deps.deliveryState);
@@ -664,6 +698,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           }
           deps.onAgentStatusChange(ctx, changedAgentId, status);
         });
+        broker.server.setAdminShutdownHandler(() => deps.onAdminShutdownRequested(ctx));
 
         startBrokerHeartbeat();
         startBrokerMaintenance(ctx);
@@ -691,11 +726,91 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
         activeBroker = null;
         activeRouter = null;
         activeSelfId = null;
+        activeRuntimeAdapters = [];
+        activeInPlaceSettingsSignature = null;
         lastBrokerMaintenance = null;
         lastBrokerMaintenanceSignature = "";
         resetBrokerDeliveryState(deps.deliveryState);
         stopObservability();
         throw error;
+      }
+    },
+
+    async reloadAdapters(ctx: ExtensionContext): Promise<{ botUserId: string | null }> {
+      if (!activeBroker || !activeRouter || !activeSelfId) {
+        throw new Error("Pinet broker is not running.");
+      }
+
+      const broker = activeBroker;
+      const router = activeRouter;
+      const selfId = activeSelfId;
+      const bindings = await buildPinetRuntimeAdapterBindings(deps.createAdapterBindings, {
+        broker,
+        router,
+        selfId,
+        ctx,
+      });
+      const nextAdapters = bindings.map((binding) => binding.adapter);
+      const activeSkinTheme = resolveConfiguredBrokerSkinTheme(deps.getSettings());
+      const selfAssignment = buildPinetSkinAssignment({
+        theme: activeSkinTheme,
+        role: "broker",
+        seed: deps.getBrokerStableId(),
+      });
+      deps.setActiveSkinTheme(activeSkinTheme);
+      const selfMetadata = deps.buildSkinMetadata(
+        await deps.getAgentMetadata("broker"),
+        selfAssignment.personality,
+        selfAssignment.statusVocabulary,
+      );
+
+      const previousRuntimeAdapters = activeRuntimeAdapters;
+      activeRuntimeAdapters = [];
+      await broker.removeAdapters(previousRuntimeAdapters);
+      broker.db.setAllowedUsers(deps.getAllowedUsers());
+      broker.db.setSetting("pinet.skinTheme", activeSkinTheme);
+      broker.db.updateAgentIdentity(selfId, {
+        name: selfAssignment.name,
+        emoji: selfAssignment.emoji,
+        metadata: selfMetadata,
+      });
+      deps.applyLocalAgentIdentity(
+        selfAssignment.name,
+        selfAssignment.emoji,
+        selfAssignment.personality,
+      );
+
+      try {
+        const result = await connectPinetRuntimeAdapters({
+          broker,
+          bindings,
+          onInbound: (message) => {
+            void deps.handleInboundMessage({ message, broker, router, selfId, ctx });
+          },
+        });
+        activeRuntimeAdapters = nextAdapters;
+        return result;
+      } catch (error) {
+        try {
+          await broker.removeAdapters(nextAdapters);
+        } catch {
+          /* preserve the adapter connection error */
+        }
+        throw error;
+      }
+    },
+
+    canReloadInPlace(): boolean {
+      try {
+        return (
+          activeInPlaceSettingsSignature !== null &&
+          activeInPlaceSettingsSignature === buildBrokerInPlaceSettingsSignature(deps.getSettings())
+        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Cannot reload Pinet broker because the mesh secret could not be read: ${detail}. The existing broker remains running; restore the secret and retry /pinet start.`,
+        );
       }
     },
 

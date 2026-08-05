@@ -43,6 +43,18 @@ describe("isBrokerManagedFollowerLaunch", () => {
     ).toBe(true);
   });
 
+  it.each(["broker-herdr", "subtree-broker-herdr"])(
+    "detects broker-managed Herdr follower launch source %s",
+    (launchSource) => {
+      expect(
+        isBrokerManagedFollowerLaunch({
+          PINET_BROKER_MANAGED: "1",
+          PINET_LAUNCH_SOURCE: launchSource,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("detects subtree-broker-managed follower launches", () => {
     expect(
       isBrokerManagedFollowerLaunch({

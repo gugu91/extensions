@@ -1,6 +1,6 @@
 {
   "name": "pi-extensions",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -9,8 +9,7 @@
     "extensions": [
       "./slack-bridge/index.ts",
       "./nvim-bridge/index.ts",
-      "./neon-psql/index.ts",
-      "./browser-playwright/index.ts"
+      "./neon-psql/index.ts"
     ]
   },
   "scripts": {
@@ -56,7 +55,6 @@
     "transport-core",
     "broker-core",
     "amp-worker",
-    "browser-playwright",
     "pinet-core",
     "slack-bridge",
     "slack-api",

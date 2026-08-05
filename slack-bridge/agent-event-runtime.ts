@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentCompletionRuntime } from "./agent-completion-runtime.js";
-import type { AgentPromptGuidance } from "./agent-prompt-guidance.js";
 import {
   createSlackToolPolicyRuntime,
   type SlackToolPolicyRuntime,
@@ -8,7 +7,6 @@ import {
 } from "./slack-tool-policy-runtime.js";
 
 export interface AgentEventRuntimeDeps extends SlackToolPolicyRuntimeDeps {
-  beforeAgentStart: AgentPromptGuidance["beforeAgentStart"];
   onCompletionAgentEnd: AgentCompletionRuntime["onAgentEnd"];
   setDeliverTrackedSlackFollowUpMessage: (
     deliver: SlackToolPolicyRuntime["deliverTrackedSlackFollowUpMessage"],
@@ -42,7 +40,6 @@ export function createAgentEventRuntime(deps: AgentEventRuntimeDeps): AgentEvent
     pi.on("turn_end", slackToolPolicyRuntime.onTurnEnd);
     pi.on("agent_end", slackToolPolicyRuntime.onAgentEnd);
     pi.on("tool_call", slackToolPolicyRuntime.onToolCall);
-    pi.on("before_agent_start", deps.beforeAgentStart);
     pi.on("agent_end", deps.onCompletionAgentEnd);
   }
 

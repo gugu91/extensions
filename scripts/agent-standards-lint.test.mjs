@@ -116,6 +116,114 @@ test("findSingleUseAddedHelpers flags only newly added one-use top-level helpers
   assert.deepEqual(helpers, ["oneUse", "arrowOneUse"]);
 });
 
+test("findSingleUseAddedHelpers flags nested one-use helpers", () => {
+  const source = `
+    export function run(): string {
+      function normalize(value: string): string {
+        return value.trim();
+      }
+
+      return normalize("value");
+    }
+  `;
+
+  const helpers = findSingleUseAddedHelpers(source, "sample.ts", [{ start: 3, end: 5 }]);
+
+  assert.deepEqual(
+    helpers.map((helper) => helper.name),
+    ["normalize"],
+  );
+});
+
+test("findSingleUseAddedHelpers resolves same-named nested helpers by symbol", () => {
+  const source = `
+    export function first(): string {
+      function normalize(value: string): string {
+        return value.trim();
+      }
+      return normalize("first");
+    }
+
+    export function second(): string {
+      function normalize(value: string): string {
+        return value.trim();
+      }
+      return normalize("second");
+    }
+  `;
+
+  const helpers = findSingleUseAddedHelpers(source, "sample.ts", [{ start: 3, end: 12 }]);
+
+  assert.deepEqual(
+    helpers.map((helper) => helper.name),
+    ["normalize", "normalize"],
+  );
+});
+
+test("findSingleUseAddedHelpers ignores exported arrow functions", () => {
+  const source = `
+    export const normalize = (value: string): string => value.trim();
+    const result = normalize("value");
+  `;
+
+  const helpers = findSingleUseAddedHelpers(source, "sample.ts", [{ start: 2, end: 2 }]);
+
+  assert.deepEqual(helpers, []);
+});
+
+test("findSingleUseAddedHelpers resolves indirect exports by symbol", () => {
+  const source = `
+    function normalize(value: string): string {
+      return value.trim();
+    }
+    export { normalize };
+    const result = normalize("value");
+
+    export function run(): string {
+      function normalize(value: string): string {
+        return value.trim();
+      }
+      return normalize("nested");
+    }
+  `;
+
+  const helpers = findSingleUseAddedHelpers(source, "sample.ts", [{ start: 2, end: 11 }]);
+
+  assert.deepEqual(
+    helpers.map((helper) => helper.name),
+    ["normalize"],
+  );
+});
+
+test("findSingleUseAddedHelpers distinguishes new nested helpers from base helpers", () => {
+  const baseSource = `
+    function normalize(value: string): string {
+      return value.trim();
+    }
+    const result = normalize("base");
+  `;
+  const source = `${baseSource}
+    export function run(): string {
+      function normalize(value: string): string {
+        return value.trim();
+      }
+      return normalize("nested");
+    }
+  `;
+
+  const helpers = findSingleUseAddedHelpers(
+    source,
+    "sample.ts",
+    [{ start: 7, end: 9 }],
+    baseSource,
+  );
+
+  assert.deepEqual(
+    helpers.map((helper) => helper.name),
+    ["normalize"],
+  );
+});
+
 test("findSingleUseAddedHelpers honors the explicit semantic-seam ignore", () => {
   const source = `
     // agent-standards-ignore prefer-inline-single-use-helper: documents a protocol seam

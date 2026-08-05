@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { getSubtreeInboxIds } from "./broker-delivery.js";
 import type { InboxMessage } from "./helpers.js";
 import type { SlackResult } from "./slack-api.js";
 import {
@@ -86,6 +87,7 @@ export interface SlackPinetDeliveryPort {
 }
 
 export interface RegisterSlackToolsDeps {
+  additionalSendPromptGuidelines?: string[];
   getBotToken: () => string;
   getDefaultChannel: () => string | undefined;
   getSecurityPrompt: () => string;
@@ -96,6 +98,7 @@ export interface RegisterSlackToolsDeps {
   getAgentOwnerToken: () => string;
   getLastDmChannel: () => string | null;
   updateBadge: () => void;
+  markSubtreeInboxIdsDelivered: (inboxIds: number[]) => void;
   resolveUser: (userId: string) => Promise<string>;
   threadContext: SlackToolsThreadContextPort;
   resolveChannel: (nameOrId: string) => Promise<string>;
@@ -1776,6 +1779,11 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
         lines.push(`${prefix} (${message.timestamp}): ${message.text}${metadataSuffix}`);
       }
 
+      const subtreeInboxIds = getSubtreeInboxIds(pending);
+      if (subtreeInboxIds.length > 0) {
+        deps.markSubtreeInboxIdsDelivered(subtreeInboxIds);
+      }
+
       return {
         content: [
           {
@@ -1965,7 +1973,10 @@ export function registerSlackTools(pi: ExtensionAPI, deps: RegisterSlackToolsDep
     description: "Send a message in a Slack assistant thread.",
     promptSnippet:
       "Reply in a Slack assistant thread. When you receive a task: ACK briefly, do the work, report blockers immediately, report the outcome when done. Always reply where the task came from.",
-    promptGuidelines: buildSlackSendPromptGuidelines(),
+    promptGuidelines: [
+      ...buildSlackSendPromptGuidelines(),
+      ...(deps.additionalSendPromptGuidelines ?? []),
+    ],
     parameters: Type.Object({
       text: Type.String({ description: "Message text (Slack markdown)" }),
       thread_ts: Type.Optional(

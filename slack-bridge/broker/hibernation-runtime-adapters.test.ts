@@ -9,7 +9,9 @@ import {
   type CommandRunner,
 } from "./hibernation-runtime-adapters.js";
 
-function makeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpec {
+function makeSpec(
+  overrides: Partial<Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }>> = {},
+): Extract<AgentRuntimeSpec, { runtimeKind: "tmux" }> {
   return {
     agentId: "agent-1",
     stableId: "host:session:/tmp/s/agent-1.jsonl",
@@ -17,6 +19,7 @@ function makeSpec(overrides: Partial<AgentRuntimeSpec> = {}): AgentRuntimeSpec {
     cwd: "/repo/root",
     repoRoot: "/repo/root",
     worktreePath: "/repo/root",
+    runtimeKind: "tmux",
     tmuxSocket: "/tmp/tmux.sock",
     tmuxSession: "pinet-repo-worker-abcd",
     tmuxTarget: "pinet-repo-worker-abcd:0.0",

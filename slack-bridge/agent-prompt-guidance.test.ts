@@ -25,83 +25,68 @@ function createDeps(overrides: Partial<AgentPromptGuidanceDeps> = {}): AgentProm
   };
 }
 
-describe("createAgentPromptGuidance", () => {
-  it("appends identity, personality, and reaction guidance for non-mesh sessions", async () => {
-    const getIdentityGuidelines = vi.fn(() => ["IDENTITY 1", "IDENTITY 2", "IDENTITY 3"]);
-    const guidance = createAgentPromptGuidance(
-      createDeps({
-        getIdentityGuidelines,
-      }),
-    );
+async function renderGuidance(deps: AgentPromptGuidanceDeps): Promise<string> {
+  return (await createAgentPromptGuidance(deps).buildPromptGuidelines()).join("\n");
+}
 
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
+describe("createAgentPromptGuidance", () => {
+  it("builds shared identity, personality, and reaction guidance", async () => {
+    const getIdentityGuidelines = vi.fn(() => ["IDENTITY 1", "IDENTITY 2", "IDENTITY 3"]);
+
+    const result = await renderGuidance(createDeps({ getIdentityGuidelines }));
 
     expect(getIdentityGuidelines).toHaveBeenCalledTimes(1);
-    expect(result.systemPrompt).toContain("BASE\n\nIDENTITY 1\nIDENTITY 2\nIDENTITY 3");
-    expect(result.systemPrompt).toContain("COMMUNICATION STYLE:");
-    expect(result.systemPrompt).toContain("For `Cobalt Olive Crane`, aim for a");
-    expect(result.systemPrompt).toContain("Slack emoji reactions are ignored by default");
-    expect(result.systemPrompt).not.toContain("PINET SKIN (");
-    expect(result.systemPrompt).not.toContain("Pinet BROKER");
-    expect(result.systemPrompt).not.toContain("TASK WORKFLOW:");
-    expect(result.systemPrompt.indexOf("IDENTITY 1")).toBeLessThan(
-      result.systemPrompt.indexOf("COMMUNICATION STYLE:"),
-    );
-    expect(result.systemPrompt.indexOf("COMMUNICATION STYLE:")).toBeLessThan(
-      result.systemPrompt.indexOf("Slack emoji reactions are ignored by default"),
+    expect(result).toContain("IDENTITY 1\nIDENTITY 2\nIDENTITY 3");
+    expect(result).toContain("COMMUNICATION STYLE:");
+    expect(result).toContain("For `Cobalt Olive Crane`, aim for a");
+    expect(result).toContain("Slack emoji reactions are ignored by default");
+    expect(result).not.toContain("PINET SKIN (");
+    expect(result).not.toContain("Pinet BROKER");
+    expect(result).not.toContain("TASK WORKFLOW:");
+    expect(result.indexOf("IDENTITY 1")).toBeLessThan(result.indexOf("COMMUNICATION STYLE:"));
+    expect(result.indexOf("COMMUNICATION STYLE:")).toBeLessThan(
+      result.indexOf("Slack emoji reactions are ignored by default"),
     );
   });
 
   it("includes the skin guideline only when both theme and personality are available", async () => {
-    const guidance = createAgentPromptGuidance(
+    const result = await renderGuidance(
       createDeps({
         getActiveSkinTheme: () => "ocean-mist",
         getAgentPersonality: () => "steady, elegant, observant",
       }),
     );
 
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
-
-    expect(result.systemPrompt).toContain("PINET SKIN (");
-    expect(result.systemPrompt).toContain("steady, elegant, observant");
+    expect(result).toContain("PINET SKIN (");
+    expect(result).toContain("steady, elegant, observant");
   });
 
-  it("adds loaded broker MD guidance, protocol guardrails, and tool guardrails for the broker role", async () => {
-    const guidance = createAgentPromptGuidance(
-      createDeps({
-        getBrokerRole: () => "broker",
-      }),
-    );
+  it("adds loaded broker guidance and guardrails for the broker role", async () => {
+    const result = await renderGuidance(createDeps({ getBrokerRole: () => "broker" }));
 
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
-
-    expect(result.systemPrompt).toContain("You are 🦩 Cobalt Olive Crane, the Pinet BROKER.");
-    expect(result.systemPrompt).toContain("CUSTOM MD POLICY");
-    expect(result.systemPrompt).toContain("DELEGATE, THEN TRACK.");
-    expect(result.systemPrompt).toContain("🔒 BROKER PROTOCOL BOUNDARY:");
-    expect(result.systemPrompt).toContain("🚫 BROKER TOOL RESTRICTION:");
-    expect(result.systemPrompt).not.toContain("TASK WORKFLOW:");
+    expect(result).toContain("You are 🦩 Cobalt Olive Crane, the Pinet BROKER.");
+    expect(result).toContain("CUSTOM MD POLICY");
+    expect(result).toContain("DELEGATE, THEN TRACK.");
+    expect(result).toContain("🔒 BROKER PROTOCOL BOUNDARY:");
+    expect(result).toContain("🚫 BROKER TOOL RESTRICTION:");
+    expect(result).not.toContain("TASK WORKFLOW:");
   });
 
   it("adds worker workflow guidance for follower runtimes", async () => {
-    const guidance = createAgentPromptGuidance(
-      createDeps({
-        getBrokerRole: () => "follower",
-      }),
-    );
+    const result = await renderGuidance(createDeps({ getBrokerRole: () => "follower" }));
 
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
-
-    expect(result.systemPrompt).toContain(
-      "TASK WORKFLOW: When you receive work, follow these steps:",
+    expect(result).toContain("TASK WORKFLOW: When you receive work, follow these steps:");
+    expect(result).toContain("REPLY TOOL RULES:");
+    expect(result).not.toContain("Pinet BROKER");
+    expect(result).not.toContain("🚫 BROKER TOOL RESTRICTION:");
+    expect(result.indexOf("IDENTITY 1")).toBeLessThan(result.indexOf("TASK WORKFLOW:"));
+    expect(result.indexOf("TASK WORKFLOW:")).toBeLessThan(
+      result.indexOf("HELPER / DELEGATION RULES:"),
     );
-    expect(result.systemPrompt).toContain("REPLY TOOL RULES:");
-    expect(result.systemPrompt).not.toContain("Pinet BROKER");
-    expect(result.systemPrompt).not.toContain("🚫 BROKER TOOL RESTRICTION:");
   });
 
-  it("keeps broker prompt order: base, shared guidance, loaded MD, protocol boundary, tool restriction", async () => {
-    const guidance = createAgentPromptGuidance(
+  it("keeps broker guidance in the required order", async () => {
+    const result = await renderGuidance(
       createDeps({
         getBrokerRole: () => "broker",
         loadBrokerPrompt: async () => ({
@@ -113,26 +98,19 @@ describe("createAgentPromptGuidance", () => {
       }),
     );
 
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
-
-    expect(result.systemPrompt.indexOf("BASE")).toBeLessThan(
-      result.systemPrompt.indexOf("IDENTITY 1"),
+    expect(result.indexOf("IDENTITY 1")).toBeLessThan(result.indexOf("LOADED BROKER MD"));
+    expect(result.indexOf("LOADED BROKER MD")).toBeLessThan(
+      result.indexOf("🔒 BROKER PROTOCOL BOUNDARY:"),
     );
-    expect(result.systemPrompt.indexOf("IDENTITY 1")).toBeLessThan(
-      result.systemPrompt.indexOf("LOADED BROKER MD"),
-    );
-    expect(result.systemPrompt.indexOf("LOADED BROKER MD")).toBeLessThan(
-      result.systemPrompt.indexOf("🔒 BROKER PROTOCOL BOUNDARY:"),
-    );
-    expect(result.systemPrompt.indexOf("🔒 BROKER PROTOCOL BOUNDARY:")).toBeLessThan(
-      result.systemPrompt.indexOf("🚫 BROKER TOOL RESTRICTION:"),
+    expect(result.indexOf("🔒 BROKER PROTOCOL BOUNDARY:")).toBeLessThan(
+      result.indexOf("🚫 BROKER TOOL RESTRICTION:"),
     );
   });
 
   it("reports broker prompt loader diagnostics without exposing prompt content", async () => {
     const reportBrokerPromptWarning = vi.fn();
     const reportBrokerPromptDiagnostic = vi.fn();
-    const guidance = createAgentPromptGuidance(
+    const result = await renderGuidance(
       createDeps({
         getBrokerRole: () => "broker",
         reportBrokerPromptWarning,
@@ -152,8 +130,6 @@ describe("createAgentPromptGuidance", () => {
       }),
     );
 
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
-
     expect(reportBrokerPromptWarning).toHaveBeenCalledWith(
       "[slack-bridge] broker prompt: workspace override rejected (over 65536 bytes); continuing",
     );
@@ -162,23 +138,6 @@ describe("createAgentPromptGuidance", () => {
     );
     expect(String(reportBrokerPromptWarning.mock.calls)).not.toContain("PRIVATE PROMPT BODY");
     expect(String(reportBrokerPromptDiagnostic.mock.calls)).not.toContain("PRIVATE PROMPT BODY");
-    expect(result.systemPrompt).toContain("PRIVATE PROMPT BODY");
-  });
-
-  it("keeps identity guidance ahead of follower workflow guidance", async () => {
-    const guidance = createAgentPromptGuidance(
-      createDeps({
-        getBrokerRole: () => "follower",
-      }),
-    );
-
-    const result = await guidance.beforeAgentStart({ systemPrompt: "BASE" });
-
-    expect(result.systemPrompt.indexOf("IDENTITY 1")).toBeLessThan(
-      result.systemPrompt.indexOf("TASK WORKFLOW:"),
-    );
-    expect(result.systemPrompt.indexOf("TASK WORKFLOW:")).toBeLessThan(
-      result.systemPrompt.indexOf("HELPER / DELEGATION RULES:"),
-    );
+    expect(result).toContain("PRIVATE PROMPT BODY");
   });
 });

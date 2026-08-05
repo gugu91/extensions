@@ -60,25 +60,6 @@ importers:
         specifier: file:../transport-core
         version: link:../transport-core
 
-  browser-playwright:
-    dependencies:
-      playwright:
-        specifier: ^1.52.0
-        version: 1.59.1
-    devDependencies:
-      "@earendil-works/pi-ai":
-        specifier: ^0.74.0
-        version: 0.74.0(ws@8.20.0)(zod@4.3.6)
-      "@earendil-works/pi-coding-agent":
-        specifier: ^0.74.0
-        version: 0.74.0(ws@8.20.0)(zod@4.3.6)
-      "@types/node":
-        specifier: ^22.13.1
-        version: 22.19.11
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
   imessage-bridge:
     dependencies:
       "@pinet/transport-core":
@@ -2227,14 +2208,6 @@ packages:
       }
     engines: { node: ">=12.20.0" }
 
-  fsevents@2.3.2:
-    resolution:
-      {
-        integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==,
-      }
-    engines: { node: ^8.16.0 || ^10.6.0 || >=11.0.0 }
-    os: [darwin]
-
   fsevents@2.3.3:
     resolution:
       {
@@ -3108,22 +3081,6 @@ packages:
         integrity: sha512-eG2dWTVw5bzqGRztnHExczNxt5VGsE6OwTeCG3fdUf9KBsZzO3R5OIIIzWR+iZA0NtZ+RDVdaoE2dK1cn6jH4g==,
       }
     engines: { node: ">=0.10" }
-    hasBin: true
-
-  playwright-core@1.59.1:
-    resolution:
-      {
-        integrity: sha512-HBV/RJg81z5BiiZ9yPzIiClYV/QMsDCKUyogwH9p3MCP6IYjUFu/MActgYAvK0oWyV9NlwM3GLBjADyWgydVyg==,
-      }
-    engines: { node: ">=18" }
-    hasBin: true
-
-  playwright@1.59.1:
-    resolution:
-      {
-        integrity: sha512-C8oWjPR3F81yljW9o5OxcWzfh6avkVwDD2VYdwIGqTkl+OGFISgypqzfu7dOe4QNLL2aqcWBmI3PMtLIK233lw==,
-      }
-    engines: { node: ">=18" }
     hasBin: true
 
   postcss@8.5.8:
@@ -5385,9 +5342,6 @@ snapshots:
     dependencies:
       fetch-blob: 3.2.0
 
-  fsevents@2.3.2:
-    optional: true
-
   fsevents@2.3.3:
     optional: true
 
@@ -5846,14 +5800,6 @@ snapshots:
   picomatch@4.0.4: {}
 
   pidtree@0.6.0: {}
-
-  playwright-core@1.59.1: {}
-
-  playwright@1.59.1:
-    dependencies:
-      playwright-core: 1.59.1
-    optionalDependencies:
-      fsevents: 2.3.2
 
   postcss@8.5.8:
     dependencies:

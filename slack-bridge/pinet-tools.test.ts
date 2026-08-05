@@ -9,6 +9,11 @@ import {
   type RegisterPinetToolsDeps,
 } from "./pinet-tools.js";
 import type { AgentLifecycleStatus } from "@pinet/broker-core";
+import {
+  SubtreeSpawnLaunchError,
+  SubtreeSpawnRegistrationTimeoutError,
+} from "./subtree-broker-runtime.js";
+import { isToolBlocked } from "./guardrails.js";
 
 interface MinimalRenderTheme {
   fg: (_color: string, text: string) => string;
@@ -107,6 +112,8 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
         repoRoot: "/Users/alice/projects/extensions",
         worktreePath: "/Users/alice/projects/extensions/.worktrees/issue-719",
         branch: "fix/pinet-worker-session-lookup-719",
+        runtimeKind: "tmux",
+        runtimeLocator: "pinet-extensions-worker",
         tmuxSession: "pinet-extensions-worker",
         brokerManaged: true,
         brokerManagedBy: "broker-1",
@@ -126,6 +133,7 @@ function createDeps(overrides: Partial<RegisterPinetToolsDeps> = {}): RegisterPi
     spawnSubtreeWorker: async (input) => ({
       status: "started",
       launchId: "launch-1",
+      runtimeKind: "tmux",
       sessionName: "pinet-extensions-reviewer-launch-1",
       repoPath: `/tmp/${input.repo}`,
       role: input.role ?? "subworker",
@@ -281,6 +289,7 @@ function makeLifecycleStatus(overrides: Partial<AgentLifecycleStatus> = {}): Age
       session: { kind: "session", ref: "session:abc123", host: "host-1", hasPath: false },
       repo: "extensions",
       hasWorktree: true,
+      runtimeKind: "tmux",
       hasTmuxSession: true,
       configFingerprint: "cfg-v1",
       expectedHost: "host-1",
@@ -999,7 +1008,11 @@ describe("registerPinetTools", () => {
         expect.objectContaining({ action: "schedule", guardrail_tool: "pinet:schedule" }),
         expect.objectContaining({ action: "agents", guardrail_tool: "pinet:agents" }),
         expect.objectContaining({ action: "sessions", guardrail_tool: "pinet:sessions" }),
-        expect.objectContaining({ action: "lanes", guardrail_tool: "pinet:lanes" }),
+        expect.objectContaining({
+          action: "lanes",
+          guardrail_tool: "pinet:lanes",
+          description: expect.stringContaining("pinet:lanes:write"),
+        }),
         expect.objectContaining({ action: "ports", guardrail_tool: "pinet:ports" }),
       ]),
     );
@@ -1357,6 +1370,61 @@ describe("registerPinetTools", () => {
     expect(result.details.data.details).toEqual({ id: 7, fireAt: "2026-04-14T12:05:00.000Z" });
   });
 
+  it("blocks lane mutations but permits lane listing with read-only guardrails", async () => {
+    const requireToolPolicy = vi.fn(
+      (toolName: string, _threadTs: string | undefined, _context: string) => {
+        if (isToolBlocked(toolName, { readOnly: true })) {
+          throw new Error(`Tool "${toolName}" is blocked by read-only guardrails.`);
+        }
+      },
+    );
+    const listPinetLanes = vi.fn(createDeps().listPinetLanes);
+    const upsertPinetLane = vi.fn(createDeps().upsertPinetLane);
+    const setPinetLaneParticipant = vi.fn(createDeps().setPinetLaneParticipant);
+    const tools = registerWithDeps(
+      createDeps({
+        requireToolPolicy,
+        listPinetLanes,
+        upsertPinetLane,
+        setPinetLaneParticipant,
+      }),
+    );
+
+    const listResult = (await tools.get("pinet")?.execute("tool-call-lane-list-read-only", {
+      action: "lanes",
+      args: { op: "list" },
+    })) as { details: { status: string } };
+    const upsertResult = (await tools.get("pinet")?.execute("tool-call-lane-upsert-read-only", {
+      action: "lanes",
+      args: { op: "upsert", lane_id: "issue-965", thread_ts: "123.456" },
+    })) as { details: { status: string } };
+    const participantResult = (await tools
+      .get("pinet")
+      ?.execute("tool-call-lane-participant-read-only", {
+        action: "lanes",
+        args: {
+          op: "participant",
+          lane_id: "issue-965",
+          agent_id: "worker-1",
+          thread_ts: "123.456",
+        },
+      })) as { details: { status: string } };
+
+    expect(listResult.details.status).toBe("succeeded");
+    expect(upsertResult.details.status).toBe("failed");
+    expect(participantResult.details.status).toBe("failed");
+    expect(listPinetLanes).toHaveBeenCalledOnce();
+    expect(upsertPinetLane).not.toHaveBeenCalled();
+    expect(setPinetLaneParticipant).not.toHaveBeenCalled();
+    expect(requireToolPolicy.mock.calls).toEqual([
+      ["pinet:lanes", undefined, "op=list | format=cli"],
+      ["pinet:lanes", "123.456", "op=upsert | format=cli"],
+      ["pinet:lanes:write", "123.456", "op=upsert | format=cli"],
+      ["pinet:lanes", "123.456", "op=participant | format=cli"],
+      ["pinet:lanes:write", "123.456", "op=participant | format=cli"],
+    ]);
+  });
+
   it("updates durable PM lane metadata through the lanes dispatcher", async () => {
     const upsertPinetLane = vi.fn(createDeps().upsertPinetLane);
     const setPinetLaneParticipant = vi.fn(createDeps().setPinetLaneParticipant);
@@ -1671,6 +1739,88 @@ describe("registerPinetTools", () => {
     expect(result.details.data.details).toMatchObject({
       status: "started",
       agentId: "child-1",
+    });
+  });
+
+  it("returns timed-out subtree launch handles in error text and details", async () => {
+    const handle = {
+      launchId: "subtree-timeout-1",
+      tmuxSessionName: "pinet-extensions-reviewer-timeout-1",
+      socketPath: "/tmp/pinet-subtrees/worker-1/pinet.sock",
+      state: "launched_unregistered" as const,
+    };
+    const spawnSubtreeWorker = vi.fn(async () => {
+      throw new SubtreeSpawnRegistrationTimeoutError(45_000, handle);
+    });
+    const tools = registerWithDeps(
+      createDeps({ brokerRole: () => "follower", spawnSubtreeWorker }),
+    );
+
+    const result = (await tools.get("pinet")?.execute("tool-call-spawn-timeout", {
+      action: "spawn",
+      args: { task: "Review PR #761", repo: "extensions", full: true },
+    })) as {
+      content: Array<{ text: string }>;
+      details: {
+        status: string;
+        data: { details: { launchHandle: typeof handle } };
+        errors: Array<{ retryable: boolean }>;
+      };
+    };
+
+    expect(result.content[0]?.text).toContain(`launchId=${handle.launchId}`);
+    expect(result.content[0]?.text).toContain(`tmuxSessionName=${handle.tmuxSessionName}`);
+    expect(result.content[0]?.text).toContain(`socketPath=${handle.socketPath}`);
+    expect(result.details.data.details.launchHandle).toEqual(handle);
+    expect(result.details.errors[0]?.retryable).toBe(true);
+  });
+
+  it("returns ambiguous launch handles in structured error details", async () => {
+    const handle = {
+      launchId: "subtree-launch-1",
+      tmuxSessionName: "pinet-extensions-reviewer-launch-1",
+      socketPath: "/tmp/pinet-subtrees/worker-1/pinet.sock",
+      state: "launched_unregistered" as const,
+    };
+    const spawnSubtreeWorker = vi.fn(async () => {
+      throw new SubtreeSpawnLaunchError(new Error("tmux transport closed"), handle);
+    });
+    const tools = registerWithDeps(
+      createDeps({ brokerRole: () => "follower", spawnSubtreeWorker }),
+    );
+
+    const result = (await tools.get("pinet")?.execute("tool-call-spawn-launch-error", {
+      action: "spawn",
+      args: { task: "Review PR #761", repo: "extensions", full: true },
+    })) as {
+      details: { data: { details: { launchHandle: typeof handle } } };
+    };
+
+    expect(result.details.data.details.launchHandle).toEqual(handle);
+  });
+
+  it("forwards a timeout handle so retry cleanup precedes relaunch", async () => {
+    const spawnSubtreeWorker = vi.fn(createDeps().spawnSubtreeWorker);
+    const tools = registerWithDeps(
+      createDeps({ brokerRole: () => "follower", spawnSubtreeWorker }),
+    );
+    const retryHandle = {
+      launchId: "subtree-timeout-1",
+      tmuxSessionName: "pinet-extensions-reviewer-timeout-1",
+      socketPath: "/tmp/pinet-subtrees/worker-1/pinet.sock",
+      state: "launched_unregistered",
+    };
+
+    await tools.get("pinet")?.execute("tool-call-spawn-retry", {
+      action: "spawn",
+      args: { task: "Review PR #761", repo: "extensions", retry_handle: retryHandle },
+    });
+
+    expect(spawnSubtreeWorker).toHaveBeenCalledWith({
+      task: "Review PR #761",
+      repo: "extensions",
+      role: "subworker",
+      cleanupHandle: retryHandle,
     });
   });
 

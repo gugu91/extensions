@@ -168,16 +168,13 @@ export function parseWakeFenceEnv(env: Record<string, string | undefined>): Wake
  * (which embeds its own session path); authorization uses solely the
  * broker-derived {@link vcsIdentity}.
  */
-export interface SpawnAuthoredRuntimeFacts {
+interface SpawnAuthoredRuntimeFactsBase {
   agentId: string;
   stableId: string;
   brokerOwnerId: string;
   cwd: string;
   repoRoot: string;
   worktreePath: string;
-  tmuxSocket: string;
-  tmuxSession: string;
-  tmuxTarget: string;
   extensionEntryPath: string;
   /** Environment variable NAMES (never values) the launcher exports. */
   envAllowlist: string[];
@@ -187,6 +184,24 @@ export interface SpawnAuthoredRuntimeFacts {
   /** Broker-derived from the runtime's git remote — the ONLY authz identity. */
   vcsIdentity: string | null;
 }
+
+export type SpawnAuthoredRuntimeFacts = SpawnAuthoredRuntimeFactsBase &
+  (
+    | {
+        /** Optional only for compatibility with existing tmux-authored callers. */
+        runtimeKind?: "tmux";
+        tmuxSocket: string;
+        tmuxSession: string;
+        tmuxTarget: string;
+      }
+    | {
+        runtimeKind: "herdr";
+        herdrSession: string;
+        herdrConfigDir: string;
+        herdrPaneId: string;
+        herdrShellPid: number;
+      }
+  );
 
 /**
  * Compose a durable {@link AgentRuntimeSpecInput} from broker-known spawn facts.
@@ -205,31 +220,53 @@ export function buildRuntimeSpecInput(
   const sessionResumeRef = sessionResumeRefFromStableId(facts.stableId);
   if (!sessionResumeRef) return null;
   const resumePath = resumePathFromSessionRef(sessionResumeRef);
-  if (!resumePath) return null;
-  if (!facts.tmuxSocket || !facts.tmuxSession || !facts.tmuxTarget || !facts.repoRoot) return null;
+  if (!resumePath || !facts.repoRoot) return null;
 
-  const expectedHost = parsePinetStableId(facts.stableId)?.host ?? "";
-  const envAllowlist = Array.from(new Set(facts.envAllowlist.filter((name) => name.length > 0)));
-
-  return {
+  const common = {
     agentId: facts.agentId,
     stableId: facts.stableId,
     brokerOwnerId: facts.brokerOwnerId,
     cwd: facts.cwd || facts.repoRoot,
     repoRoot: facts.repoRoot,
     worktreePath: facts.worktreePath || facts.repoRoot,
-    tmuxSocket: facts.tmuxSocket,
-    tmuxSession: facts.tmuxSession,
-    tmuxTarget: facts.tmuxTarget,
     executable: "pi",
     argv: ["-e", facts.extensionEntryPath, "--session", resumePath],
-    envAllowlist,
+    envAllowlist: Array.from(new Set(facts.envAllowlist.filter((name) => name.length > 0))),
     sessionResumeRef,
     configFingerprint: facts.configFingerprint || "unknown",
-    expectedHost,
+    expectedHost: parsePinetStableId(facts.stableId)?.host ?? "",
     expectedUser: facts.expectedUser,
     launchSource: facts.launchSource || "subtree-broker-tmux",
     vcsIdentity: facts.vcsIdentity,
+  };
+
+  if (facts.runtimeKind === "herdr") {
+    if (
+      !facts.herdrSession ||
+      !facts.herdrConfigDir ||
+      !facts.herdrPaneId ||
+      !Number.isInteger(facts.herdrShellPid) ||
+      facts.herdrShellPid <= 0
+    ) {
+      return null;
+    }
+    return {
+      ...common,
+      runtimeKind: "herdr",
+      herdrSession: facts.herdrSession,
+      herdrConfigDir: facts.herdrConfigDir,
+      herdrPaneId: facts.herdrPaneId,
+      herdrShellPid: facts.herdrShellPid,
+    };
+  }
+
+  if (!facts.tmuxSocket || !facts.tmuxSession || !facts.tmuxTarget) return null;
+  return {
+    ...common,
+    runtimeKind: "tmux",
+    tmuxSocket: facts.tmuxSocket,
+    tmuxSession: facts.tmuxSession,
+    tmuxTarget: facts.tmuxTarget,
   };
 }
 
