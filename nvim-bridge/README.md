@@ -90,7 +90,7 @@ Use Pinet directly for durable coordination while the replacement Neovim adapter
 
 - **pnpm** for package management
 - **TypeScript** for type checking (`index.ts`)
-- **ESLint** for TS linting
+- **Oxlint** for TS linting
 - **Prettier** for TS/JSON/Markdown formatting
 - **StyLua** for Lua formatting (`nvim/**`)
 

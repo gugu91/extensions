@@ -120,7 +120,7 @@ pnpm install --frozen-lockfile
 ### Run checks
 
 ```bash
-pnpm lint         # ESLint
+pnpm lint         # Oxlint
 pnpm typecheck    # TypeScript
 pnpm test         # Vitest
 pnpm prepush      # All checks (runs on git push)

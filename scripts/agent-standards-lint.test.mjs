@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildDiffArgsForEntry,
   countTypeEscapeHatches,
+  findForbiddenIsRecordDeclarations,
   findSingleUseAddedHelpers,
   parseNameStatusEntries,
 } from "./agent-standards-lint.mjs";
@@ -59,6 +60,25 @@ test("countTypeEscapeHatches counts TypeScript type escapes but not runtime word
   );
 
   assert.deepEqual(counts, { unknown: 2, any: 2 });
+});
+
+test("findForbiddenIsRecordDeclarations matches function and variable declarations only", () => {
+  const declarations = findForbiddenIsRecordDeclarations(
+    `
+      function isRecord(value: object): boolean {
+        return Boolean(value);
+      }
+      const isRecord = (value: object): boolean => Boolean(value);
+      const result = helpers.isRecord({});
+      class Parser { isRecord(): boolean { return true; } }
+    `,
+    "sample.ts",
+  );
+
+  assert.deepEqual(declarations, [
+    { line: 2, column: 16 },
+    { line: 5, column: 13 },
+  ]);
 });
 
 test("findSingleUseAddedHelpers ignores existing helpers whose declaration line changed", () => {

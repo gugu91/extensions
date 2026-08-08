@@ -129,6 +129,32 @@ export function countTypeEscapeHatches(sourceText, fileName = "input.ts") {
   return counts;
 }
 
+export function findForbiddenIsRecordDeclarations(sourceText, fileName = "input.ts") {
+  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
+  const declarations = [];
+
+  const visit = (node) => {
+    const name =
+      ts.isFunctionDeclaration(node) && node.name?.text === "isRecord"
+        ? node.name
+        : ts.isVariableDeclaration(node) &&
+            ts.isIdentifier(node.name) &&
+            node.name.text === "isRecord"
+          ? node.name
+          : undefined;
+    if (name) {
+      const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+        name.getStart(sourceFile),
+      );
+      declarations.push({ line: line + 1, column: character + 1 });
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return declarations;
+}
+
 export function buildDiffArgsForEntry(baseRef, entry) {
   const paths =
     entry.basePath && entry.basePath !== entry.path ? [entry.basePath, entry.path] : [entry.path];
@@ -371,6 +397,12 @@ function main() {
     baseUnknown += baseCounts.unknown;
     currentAny += currentCounts.any;
     baseAny += baseCounts.any;
+
+    for (const declaration of findForbiddenIsRecordDeclarations(currentSource, entry.path)) {
+      errors.push(
+        `${entry.path}:${declaration.line}:${declaration.column} no-is-record: Do not define \`isRecord\`. Generic record guards usually mean an external boundary leaked inward; parse the boundary into a named DTO/domain type or use a domain-specific guard.`,
+      );
+    }
 
     if (!isRelevantSourceFile(entry.path)) continue;
     const diffText = tryGit(buildDiffArgsForEntry(baseRef, entry)) ?? "";
