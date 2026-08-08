@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  analyzeTypeScriptSource,
   buildDiffArgsForEntry,
-  countTypeEscapeHatches,
-  findForbiddenIsRecordDeclarations,
   findSingleUseAddedHelpers,
   parseNameStatusEntries,
 } from "./agent-standards-lint.mjs";
@@ -47,38 +46,30 @@ test("buildDiffArgsForEntry includes old and new paths for renames", () => {
   );
 });
 
-test("countTypeEscapeHatches counts TypeScript type escapes but not runtime words", () => {
-  const counts = countTypeEscapeHatches(
+test("analyzeTypeScriptSource finds enforced source standards", () => {
+  const analysis = analyzeTypeScriptSource(
     `
       const label = "unknown";
       expect.any(String);
       type Raw = Record<string, unknown>;
       const parse = (value: unknown): value is { id: string } => true;
       type Unsafe = (...args: any[]) => any;
-    `,
-    "sample.ts",
-  );
-
-  assert.deepEqual(counts, { unknown: 2, any: 2 });
-});
-
-test("findForbiddenIsRecordDeclarations matches function and variable declarations only", () => {
-  const declarations = findForbiddenIsRecordDeclarations(
-    `
       function isRecord(value: object): boolean {
         return Boolean(value);
       }
       const isRecord = (value: object): boolean => Boolean(value);
-      const result = helpers.isRecord({});
-      class Parser { isRecord(): boolean { return true; } }
     `,
     "sample.ts",
   );
 
-  assert.deepEqual(declarations, [
-    { line: 2, column: 16 },
-    { line: 5, column: 13 },
-  ]);
+  assert.deepEqual(analysis, {
+    unknown: 2,
+    any: 2,
+    isRecordDeclarations: [
+      { line: 7, column: 16 },
+      { line: 10, column: 13 },
+    ],
+  });
 });
 
 test("findSingleUseAddedHelpers ignores existing helpers whose declaration line changed", () => {

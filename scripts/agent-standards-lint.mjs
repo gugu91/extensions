@@ -115,44 +115,29 @@ function readBaseFile(baseRef, filePath) {
   return tryGit(["show", `${baseRef}:${filePath}`]) ?? "";
 }
 
-export function countTypeEscapeHatches(sourceText, fileName = "input.ts") {
+export function analyzeTypeScriptSource(sourceText, fileName = "input.ts") {
   const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
-  const counts = { unknown: 0, any: 0 };
+  const analysis = { unknown: 0, any: 0, isRecordDeclarations: [] };
 
   const visit = (node) => {
-    if (node.kind === ts.SyntaxKind.UnknownKeyword) counts.unknown += 1;
-    if (node.kind === ts.SyntaxKind.AnyKeyword) counts.any += 1;
-    ts.forEachChild(node, visit);
-  };
+    if (node.kind === ts.SyntaxKind.UnknownKeyword) analysis.unknown += 1;
+    if (node.kind === ts.SyntaxKind.AnyKeyword) analysis.any += 1;
 
-  visit(sourceFile);
-  return counts;
-}
-
-export function findForbiddenIsRecordDeclarations(sourceText, fileName = "input.ts") {
-  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
-  const declarations = [];
-
-  const visit = (node) => {
-    const name =
-      ts.isFunctionDeclaration(node) && node.name?.text === "isRecord"
-        ? node.name
-        : ts.isVariableDeclaration(node) &&
-            ts.isIdentifier(node.name) &&
-            node.name.text === "isRecord"
-          ? node.name
-          : undefined;
-    if (name) {
+    const isForbiddenFunction = ts.isFunctionDeclaration(node) && node.name?.text === "isRecord";
+    const isForbiddenVariable =
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "isRecord";
+    if (isForbiddenFunction || isForbiddenVariable) {
       const { line, character } = sourceFile.getLineAndCharacterOfPosition(
-        name.getStart(sourceFile),
+        node.name.getStart(sourceFile),
       );
-      declarations.push({ line: line + 1, column: character + 1 });
+      analysis.isRecordDeclarations.push({ line: line + 1, column: character + 1 });
     }
+
     ts.forEachChild(node, visit);
   };
 
   visit(sourceFile);
-  return declarations;
+  return analysis;
 }
 
 export function buildDiffArgsForEntry(baseRef, entry) {
@@ -391,14 +376,14 @@ function main() {
   for (const entry of changedFiles) {
     const currentSource = readCurrentFile(entry.path);
     const baseSource = readBaseFile(baseRef, entry.basePath);
-    const currentCounts = countTypeEscapeHatches(currentSource, entry.path);
-    const baseCounts = countTypeEscapeHatches(baseSource, entry.basePath ?? entry.path);
-    currentUnknown += currentCounts.unknown;
-    baseUnknown += baseCounts.unknown;
-    currentAny += currentCounts.any;
-    baseAny += baseCounts.any;
+    const currentAnalysis = analyzeTypeScriptSource(currentSource, entry.path);
+    const baseAnalysis = analyzeTypeScriptSource(baseSource, entry.basePath ?? entry.path);
+    currentUnknown += currentAnalysis.unknown;
+    baseUnknown += baseAnalysis.unknown;
+    currentAny += currentAnalysis.any;
+    baseAny += baseAnalysis.any;
 
-    for (const declaration of findForbiddenIsRecordDeclarations(currentSource, entry.path)) {
+    for (const declaration of currentAnalysis.isRecordDeclarations) {
       errors.push(
         `${entry.path}:${declaration.line}:${declaration.column} no-is-record: Do not define \`isRecord\`. Generic record guards usually mean an external boundary leaked inward; parse the boundary into a named DTO/domain type or use a domain-specific guard.`,
       );
