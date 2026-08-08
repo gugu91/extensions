@@ -35,7 +35,7 @@
   "scripts": {
     "build": "node ../scripts/build-package.mjs",
     "prepack": "pnpm run build",
-    "lint": "eslint . --ext .ts",
+    "lint": "oxlint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config ../vitest.config.ts"
   },

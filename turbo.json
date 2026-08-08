@@ -13,7 +13,7 @@
       "outputs": ["dist/**"]
     },
     "lint": {
-      "inputs": ["**/*.ts", "eslint.config.mjs", "../eslint.config.mjs"],
+      "inputs": ["**/*.ts", "../.oxlintrc.json"],
       "outputs": []
     },
     "typecheck": {
