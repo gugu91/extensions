@@ -1471,12 +1471,17 @@ describe("slack-bridge top-level shutdown", () => {
       },
     } as never as ExtensionContext;
     let rejectConnect!: (error: Error) => void;
-    const connectSpy = vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectConnect = reject;
-        }),
-    );
+    const pendingConnect = new Promise<void>((_resolve, reject) => {
+      rejectConnect = reject;
+    });
+    let notifyConnectStarted!: () => void;
+    const connectStarted = new Promise<void>((resolve) => {
+      notifyConnectStarted = resolve;
+    });
+    const connectSpy = vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(() => {
+      notifyConnectStarted();
+      return pendingConnect;
+    });
     const disconnectSpy = vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
       rejectConnect(new Error("follower startup cancelled"));
     });
@@ -1484,9 +1489,8 @@ describe("slack-bridge top-level shutdown", () => {
     slackBridge(pi);
 
     await expect(events.get("session_start")?.({}, ctx)).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(connectSpy).toHaveBeenCalledOnce();
-    });
+    await connectStarted;
+    expect(connectSpy).toHaveBeenCalledOnce();
     await expect(events.get("session_shutdown")?.({}, ctx)).resolves.toBeUndefined();
 
     expect(disconnectSpy).toHaveBeenCalled();
