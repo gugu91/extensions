@@ -16,11 +16,11 @@ import {
   resolveAgentStableId,
   resolveAllowAllWorkspaceUsers,
   trackBrokerInboundThread,
+  isAbortError,
 } from "./helpers.js";
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
-import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import {
   inspectBrokerLock,
   probeBrokerSocket,
@@ -63,7 +63,11 @@ import {
   markFollowerInboxIdsDelivered,
   queueFollowerInboxIds,
 } from "./follower-delivery.js";
-import { createFollowerRuntime, type BrokerClientRef } from "./follower-runtime.js";
+import {
+  createFollowerRuntime,
+  resolveBrokerSocketPath,
+  type BrokerClientRef,
+} from "./follower-runtime.js";
 import {
   createSinglePlayerRuntime,
   type SinglePlayerPendingAttentionEntry,
@@ -298,7 +302,9 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Helpers ─────────────────────────────────────────
 
-  const gitContextCache = createGitContextCache(() => probeGitContext(process.cwd()));
+  const gitContextCache = createGitContextCache((signal) =>
+    probeGitContext(process.cwd(), undefined, signal),
+  );
   const runtimeAgentContext = createRuntimeAgentContext({
     cwd: process.cwd(),
     getSettings: () => settings,
@@ -357,7 +363,7 @@ export default function (pi: ExtensionAPI) {
     getExtensionContext: sessionUiRuntime.getExtensionContext,
     persistState,
     updateBadge,
-    getGitContext: () => gitContextCache.get(),
+    getGitContext: (signal) => gitContextCache.get(signal),
   });
   const {
     isUserAllowed,
@@ -689,6 +695,7 @@ export default function (pi: ExtensionAPI) {
   let brokerClient: BrokerClientRef | null = null;
   let pinetLifecycleTail: Promise<void> = Promise.resolve();
   let pinetReloadPromise: Promise<void> | null = null;
+  let pendingStartup: { controller: AbortController; promise: Promise<void> } | null = null;
   let followerRuntimeDiagnostic: FollowerRuntimeDiagnostic | null = null;
   const followerDeliveryState = createFollowerDeliveryState();
   let desiredAgentStatus: "working" | "idle" = "idle";
@@ -1173,55 +1180,78 @@ export default function (pi: ExtensionAPI) {
     return run;
   }
 
+  async function cancelPendingStartup(): Promise<void> {
+    const startup = pendingStartup;
+    if (!startup) return;
+    startup.controller.abort();
+    await startup.promise;
+  }
+
+  function runRuntimeModeTransition(
+    ctx: ExtensionContext,
+    mode: SlackBridgeRuntimeMode,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return runPinetLifecycle(async () => {
+      signal?.throwIfAborted();
+      if (currentRuntimeMode === mode) {
+        if (mode === "off") {
+          setExtStatus(ctx, "off");
+        }
+        await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
+        return;
+      }
+
+      if (currentRuntimeMode !== "off") {
+        if (pinetReloadPromise) {
+          await pinetReloadPromise.catch(() => {
+            /* transition from the restored runtime */
+          });
+        }
+        await stopPinetRuntime(ctx, { releaseIdentity: true });
+        signal?.throwIfAborted();
+      }
+
+      slackRequestRuntime.reset();
+      singlePlayerRuntime.resetShutdownState();
+
+      if (mode === "off") {
+        currentRuntimeMode = "off";
+        setExtStatus(ctx, "off");
+        return;
+      }
+
+      if (mode === "single") {
+        currentRuntimeMode = "single";
+        setExtStatus(ctx, "reconnecting");
+        await singlePlayerRuntime.connect(ctx, signal);
+        signal?.throwIfAborted();
+        botUserId = singlePlayerRuntime.getBotUserId() ?? botUserId;
+        await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
+        signal?.throwIfAborted();
+        void ensureSlackScopeDiagnostics(ctx);
+        return;
+      }
+
+      if (mode === "broker") {
+        await connectAsBroker(ctx, {}, signal);
+        signal?.throwIfAborted();
+        void ensureSlackScopeDiagnostics(ctx);
+        return;
+      }
+
+      await connectAsFollower(ctx, signal);
+      signal?.throwIfAborted();
+      void ensureSlackScopeDiagnostics(ctx);
+    });
+  }
+
   async function transitionToRuntimeMode(
     ctx: ExtensionContext,
     mode: SlackBridgeRuntimeMode,
   ): Promise<void> {
-    if (currentRuntimeMode === mode) {
-      if (mode === "off") {
-        setExtStatus(ctx, "off");
-      }
-      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
-      return;
-    }
-
-    if (currentRuntimeMode !== "off") {
-      if (pinetReloadPromise) {
-        await pinetReloadPromise.catch(() => {
-          /* transition from the restored runtime */
-        });
-      }
-      await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: true }));
-      // Runtime transitions keep the extension alive in-process, so restore a
-      // fresh top-level Slack request tracker after tearing the prior runtime down.
-      slackRequestRuntime.reset();
-      singlePlayerRuntime.resetShutdownState();
-    }
-
-    if (mode === "off") {
-      currentRuntimeMode = "off";
-      setExtStatus(ctx, "off");
-      return;
-    }
-
-    if (mode === "single") {
-      currentRuntimeMode = "single";
-      setExtStatus(ctx, "reconnecting");
-      await singlePlayerRuntime.connect(ctx);
-      botUserId = singlePlayerRuntime.getBotUserId() ?? botUserId;
-      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
-      void ensureSlackScopeDiagnostics(ctx);
-      return;
-    }
-
-    if (mode === "broker") {
-      await connectAsBroker(ctx);
-      void ensureSlackScopeDiagnostics(ctx);
-      return;
-    }
-
-    await connectAsFollower(ctx);
-    void ensureSlackScopeDiagnostics(ctx);
+    await cancelPendingStartup();
+    await runRuntimeModeTransition(ctx, mode);
   }
 
   /**
@@ -1249,15 +1279,13 @@ export default function (pi: ExtensionAPI) {
     await subtreeBrokerRuntime.stop({ releaseIdentity: options.releaseIdentity });
     await brokerRuntime.disconnect({ releaseIdentity: options.releaseIdentity });
 
-    if (brokerClient) {
-      await followerRuntime
-        .disconnect(ctx, { releaseIdentity: options.releaseIdentity })
-        .catch(() => {
-          /* best effort */
-        });
-      brokerClient = null;
-      followerRuntimeDiagnostic = null;
-    }
+    await followerRuntime
+      .disconnect(ctx, { releaseIdentity: options.releaseIdentity })
+      .catch(() => {
+        /* best effort */
+      });
+    brokerClient = null;
+    followerRuntimeDiagnostic = null;
 
     await singlePlayerRuntime.disconnect();
     brokerRole = null;
@@ -1269,6 +1297,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function reloadPinetRuntime(ctx: ExtensionContext): Promise<void> {
+    await cancelPendingStartup();
     if (pinetReloadPromise) {
       await pinetReloadPromise;
       return;
@@ -1526,7 +1555,9 @@ export default function (pi: ExtensionAPI) {
   async function connectAsBroker(
     ctx: ExtensionContext,
     options: { refreshSettings?: boolean } = {},
+    signal?: AbortSignal,
   ): Promise<void> {
+    signal?.throwIfAborted();
     setExtStatus(ctx, "reconnecting");
     if (options.refreshSettings !== false) {
       refreshSettings();
@@ -1539,7 +1570,8 @@ export default function (pi: ExtensionAPI) {
       recoveredBrokerMessages,
       recoveredTargetedBacklogCount,
       releasedBrokerClaims,
-    } = await brokerRuntime.connect(ctx);
+    } = await brokerRuntime.connect(ctx, signal);
+    signal?.throwIfAborted();
     const broker = brokerRuntime.getBroker();
     if (!broker) {
       throw new Error("Broker runtime failed to initialize.");
@@ -1562,8 +1594,19 @@ export default function (pi: ExtensionAPI) {
       } else {
         try {
           const imessageAdapter = createIMessageAdapter();
-          await imessageAdapter.connect();
-          broker.addAdapter(imessageAdapter);
+          const abortConnect = () => {
+            void imessageAdapter.disconnect().catch(() => {
+              /* the broker startup path owns connection failures */
+            });
+          };
+          signal?.addEventListener("abort", abortConnect, { once: true });
+          try {
+            await imessageAdapter.connect();
+            signal?.throwIfAborted();
+            broker.addAdapter(imessageAdapter);
+          } finally {
+            signal?.removeEventListener("abort", abortConnect);
+          }
 
           if (environment.blockers.length > 0) {
             ctx.ui.notify(`iMessage send-first mode enabled — ${readinessSummary}`, "warning");
@@ -1588,6 +1631,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    signal?.throwIfAborted();
     broker.server.setOutboundMessageAdapters?.(broker.adapters);
 
     brokerRole = "broker";
@@ -1758,10 +1802,12 @@ export default function (pi: ExtensionAPI) {
 
   commandRegistrationRuntime.register(pi);
 
-  async function connectAsFollower(ctx: ExtensionContext): Promise<void> {
+  async function connectAsFollower(ctx: ExtensionContext, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     pinetRegistrationGate.assertCanRegister();
 
-    const clientRef = await followerRuntime.connect(ctx);
+    const clientRef = await followerRuntime.connect(ctx, signal);
+    signal?.throwIfAborted();
     brokerClient = clientRef;
     followerRuntimeDiagnostic = null;
     brokerRole = "follower";
@@ -1794,6 +1840,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Lifecycle ──────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
+    await cancelPendingStartup();
     compactionGate.reset();
     singlePlayerRuntime.resetShutdownState();
     slackRequestRuntime.reset();
@@ -1815,26 +1862,52 @@ export default function (pi: ExtensionAPI) {
     refreshSettings();
     maybeWarnSlackUserAccess(ctx);
     const startupMode = resolveSlackBridgeStartupRuntimeMode(settings, {
-      brokerSocketExists: fs.existsSync(DEFAULT_SOCKET_PATH),
+      brokerSocketExists: fs.existsSync(resolveBrokerSocketPath()),
       brokerManagedFollowerLaunch: isBrokerManagedFollowerLaunch(),
     });
 
-    try {
+    if (startupMode === "off") {
       await transitionToRuntimeMode(ctx, startupMode);
-      if (startupMode === "single") {
-        maybeWarnSlackGuardrailPosture(ctx);
-        console.log("[slack-bridge] runtime mode: single");
-      } else if (startupMode === "follower") {
-        console.log("[slack-bridge] runtime mode: follower");
-      } else if (startupMode === "broker") {
-        console.log("[slack-bridge] runtime mode: broker");
-      }
-    } catch (err) {
-      console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(err)}`);
-      currentRuntimeMode = "off";
-      setExtStatus(ctx, "off");
-      await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
+      return;
     }
+
+    // Runtime connection can involve Git probes, SQLite, Slack HTTP, and a
+    // Socket Mode handshake. Keep managed tools unavailable until it finishes,
+    // but let Pi render its UI while the queued startup runs in the background.
+    await toolRegistrationRuntime.sync(pi, "off");
+    setExtStatus(ctx, "reconnecting");
+    const controller = new AbortController();
+    const startupPromise = runRuntimeModeTransition(ctx, startupMode, controller.signal)
+      .then(() => {
+        if (startupMode === "single") {
+          maybeWarnSlackGuardrailPosture(ctx);
+          console.log("[slack-bridge] runtime mode: single");
+        } else if (startupMode === "follower") {
+          console.log("[slack-bridge] runtime mode: follower");
+        } else {
+          console.log("[slack-bridge] runtime mode: broker");
+        }
+      })
+      .catch(async (err) => {
+        const cancelled = controller.signal.aborted || isAbortError(err);
+        if (!cancelled) {
+          console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(err)}`);
+        }
+        await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: !cancelled })).catch(
+          (cleanupError) => {
+            console.error(`[slack-bridge] runtime cleanup failed: ${msg(cleanupError)}`);
+          },
+        );
+        slackRequestRuntime.reset();
+        singlePlayerRuntime.resetShutdownState();
+      })
+      .finally(() => {
+        if (pendingStartup?.controller === controller) pendingStartup = null;
+      })
+      .catch((err) => {
+        console.error(`[slack-bridge] background runtime start failed: ${msg(err)}`);
+      });
+    pendingStartup = { controller, promise: startupPromise };
   });
 
   // ─── Agent event wiring ──────────────────────────────
@@ -1854,6 +1927,7 @@ export default function (pi: ExtensionAPI) {
     resetRemoteControlState();
     resetPendingRemoteControlAcks();
     sessionUiRuntime.cleanupForSessionShutdown();
+    await cancelPendingStartup();
     await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: true }));
     pinetRegistrationGate.reset();
   });

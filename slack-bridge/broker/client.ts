@@ -252,6 +252,7 @@ export class BrokerClient {
   private readonly meshSecretPath: string | null;
   private readonly reconnectDelayMs: (attempt: number) => number;
   private socket: net.Socket | null = null;
+  private connectingSocket: net.Socket | null = null;
   private connected = false;
   private shuttingDown = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -326,7 +327,10 @@ export class BrokerClient {
     }
     this.stopHeartbeat();
     this.rejectAllPending(new Error("Client disconnected"));
+    const connectingSocket = this.connectingSocket;
+    this.connectingSocket = null;
     try {
+      connectingSocket?.destroy();
       this.socket?.destroy();
     } catch {
       /* ignore */
@@ -837,8 +841,28 @@ export class BrokerClient {
   private connectSocket(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const sock = net.createConnection(this.connectOpts);
+      this.connectingSocket = sock;
+      let settled = false;
+
+      const rejectConnect = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        if (this.connectingSocket === sock) {
+          this.connectingSocket = null;
+        }
+        reject(error);
+      };
 
       sock.on("connect", () => {
+        if (this.shuttingDown) {
+          rejectConnect(new Error("Client disconnected while connecting"));
+          sock.destroy();
+          return;
+        }
+        settled = true;
+        if (this.connectingSocket === sock) {
+          this.connectingSocket = null;
+        }
         this.socket = sock;
         this.connected = true;
         this.buffer = "";
@@ -850,6 +874,12 @@ export class BrokerClient {
       });
 
       sock.on("close", () => {
+        if (this.connectingSocket === sock) {
+          this.connectingSocket = null;
+        }
+        if (!settled) {
+          rejectConnect(new Error("Socket closed before connection completed"));
+        }
         const wasConnected = this.connected;
         this.connected = false;
         this.socket = null;
@@ -862,8 +892,8 @@ export class BrokerClient {
       });
 
       sock.on("error", (err: Error) => {
-        if (!this.connected) {
-          reject(err);
+        if (!settled) {
+          rejectConnect(err);
         }
         // If already connected, the close event handles cleanup
       });

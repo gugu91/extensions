@@ -24,6 +24,21 @@ describe("probeGitBranch", () => {
 });
 
 describe("probeGitContext", () => {
+  it("aborts an in-flight Git process", async () => {
+    const controller = new AbortController();
+    const runner: ExecFileAsyncLike = vi.fn(
+      async (_file, _args, { signal }) =>
+        new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+
+    const probing = probeGitContext("/tmp/project", runner, controller.signal);
+    controller.abort();
+
+    await expect(probing).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("returns repo, repoRoot, branch, and dirty signal when git commands succeed", async () => {
     const runner: ExecFileAsyncLike = vi.fn(async (_file, args) => {
       if (args[0] === "rev-parse") {

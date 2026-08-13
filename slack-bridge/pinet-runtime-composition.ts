@@ -28,6 +28,7 @@ export interface ConnectPinetRuntimeAdaptersOptions {
   broker: Pick<Broker, "addAdapter">;
   bindings: PinetRuntimeAdapterBinding[];
   onInbound: (message: InboundMessage) => void;
+  signal?: AbortSignal;
 }
 
 export interface ConnectPinetRuntimeAdaptersResult {
@@ -57,14 +58,27 @@ export async function connectPinetRuntimeAdapters({
   broker,
   bindings,
   onInbound,
+  signal,
 }: ConnectPinetRuntimeAdaptersOptions): Promise<ConnectPinetRuntimeAdaptersResult> {
   let botUserId: string | null = null;
 
   for (const binding of bindings) {
+    signal?.throwIfAborted();
     binding.adapter.onInbound(onInbound);
     broker.addAdapter(binding.adapter);
-    await binding.adapter.connect();
-    botUserId ??= binding.getBotUserId?.() ?? null;
+    const abortConnect = () => {
+      void binding.adapter.disconnect().catch(() => {
+        /* the connect path owns startup failures */
+      });
+    };
+    signal?.addEventListener("abort", abortConnect, { once: true });
+    try {
+      await binding.adapter.connect();
+      signal?.throwIfAborted();
+      botUserId ??= binding.getBotUserId?.() ?? null;
+    } finally {
+      signal?.removeEventListener("abort", abortConnect);
+    }
   }
 
   return { botUserId };

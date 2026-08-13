@@ -7,7 +7,7 @@
   "packageManager": "pnpm@10.18.1",
   "pi": {
     "extensions": [
-      "./slack-bridge/index.ts",
+      "./slack-bridge/dist/index.js",
       "./nvim-bridge/index.ts",
       "./neon-psql/index.ts"
     ]

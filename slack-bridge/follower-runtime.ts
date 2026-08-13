@@ -32,7 +32,7 @@ import {
 } from "./follower-delivery.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH } from "./broker/client.js";
 
-function resolveBrokerSocketPath(): string {
+export function resolveBrokerSocketPath(): string {
   const envPath = process.env.PINET_SOCKET_PATH?.trim();
   return envPath && envPath.length > 0 ? envPath : DEFAULT_SOCKET_PATH;
 }
@@ -61,7 +61,10 @@ export interface FollowerRuntimeDeps {
   getLastDmChannel: () => string | null;
   setLastDmChannel: (channelId: string | null) => void;
   pushInboxMessages: (messages: InboxMessage[]) => void;
-  getAgentMetadata: (role: "broker" | "worker") => Promise<Record<string, unknown>>;
+  getAgentMetadata: (
+    role: "broker" | "worker",
+    signal?: AbortSignal,
+  ) => Promise<Record<string, unknown>>;
   applyRegistrationIdentity: (registration: {
     name: string;
     emoji: string;
@@ -88,7 +91,7 @@ export interface FollowerRuntimeDeps {
 }
 
 export interface FollowerRuntime {
-  connect: (ctx: ExtensionContext) => Promise<BrokerClientRef>;
+  connect: (ctx: ExtensionContext, signal?: AbortSignal) => Promise<BrokerClientRef>;
   disconnect: (
     ctx: ExtensionContext,
     options?: { releaseIdentity?: boolean },
@@ -203,7 +206,8 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
     resetFollowerDeliveryState(deps.deliveryState);
   }
 
-  async function connect(ctx: ExtensionContext): Promise<BrokerClientRef> {
+  async function connect(ctx: ExtensionContext, signal?: AbortSignal): Promise<BrokerClientRef> {
+    signal?.throwIfAborted();
     deps.refreshSettings();
     const meshAuth = resolvePinetMeshAuth(deps.getSettings());
     const client = new BrokerClient({
@@ -211,6 +215,10 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
       ...(meshAuth.meshSecret ? { meshSecret: meshAuth.meshSecret } : {}),
       ...(meshAuth.meshSecretPath ? { meshSecretPath: meshAuth.meshSecretPath } : {}),
     });
+    const abortConnect = () => {
+      client.disconnect();
+    };
+    signal?.addEventListener("abort", abortConnect, { once: true });
 
     async function registerFollowerRuntime(): Promise<void> {
       deps.refreshSettings();
@@ -231,7 +239,7 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
       const registration = await client.register(
         hasExplicitIdentityRequest ? workerIdentity.name : "",
         hasExplicitIdentityRequest ? workerIdentity.emoji : "",
-        await deps.getAgentMetadata("worker"),
+        await deps.getAgentMetadata("worker", signal),
         deps.getAgentStableId(),
       );
       deps.applyRegistrationIdentity(registration);
@@ -411,7 +419,9 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
 
     try {
       await client.connect();
+      signal?.throwIfAborted();
       await registerFollowerRuntime();
+      signal?.throwIfAborted();
       deps.setRuntimeDiagnostic(null);
 
       syncedFollowerStatus = "idle";
@@ -492,6 +502,7 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
       });
 
       await resumeThreadClaims();
+      signal?.throwIfAborted();
       startPolling();
       return clientRef;
     } catch (error) {
@@ -501,6 +512,8 @@ export function createFollowerRuntime(deps: FollowerRuntimeDeps): FollowerRuntim
       client.disconnect();
       resetFollowerRuntimeState();
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", abortConnect);
     }
   }
 

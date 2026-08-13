@@ -580,11 +580,25 @@ export class SlackSocketModeClient {
 
   async connect(): Promise<void> {
     this.shuttingDown = false;
-    if (this.config.resolveBotUserIdOnConnect ?? true) {
-      const auth = await this.config.slack("auth.test", this.config.botToken);
-      this.botUserId = typeof auth.user_id === "string" ? auth.user_id : null;
+    const authPromise =
+      (this.config.resolveBotUserIdOnConnect ?? true)
+        ? this.config.slack("auth.test", this.config.botToken)
+        : Promise.resolve(null);
+    const socketResponsePromise = this.config.slack("apps.connections.open", this.config.appToken);
+    void socketResponsePromise.catch(() => undefined);
+
+    try {
+      const auth = await authPromise;
+      if (auth) {
+        this.botUserId = typeof auth.user_id === "string" ? auth.user_id : null;
+      }
+      await this.connectSocketMode(socketResponsePromise);
+    } catch (error) {
+      await this.disconnect().catch(() => {
+        /* preserve the connection error */
+      });
+      throw error;
     }
-    await this.connectSocketMode();
   }
 
   async disconnect(): Promise<void> {
@@ -604,13 +618,14 @@ export class SlackSocketModeClient {
     await this.config.abortAndWait?.();
   }
 
-  private async connectSocketMode(): Promise<void> {
+  private async connectSocketMode(pendingResponse?: ReturnType<SlackCall>): Promise<void> {
     if (this.shuttingDown || this.connecting) return;
 
     this.connecting = true;
     let shouldReconnect = false;
     try {
-      const response = await this.config.slack("apps.connections.open", this.config.appToken);
+      const response = await (pendingResponse ??
+        this.config.slack("apps.connections.open", this.config.appToken));
       if (this.shuttingDown) return;
 
       const previous = this.ws;

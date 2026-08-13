@@ -79,9 +79,9 @@ export interface RuntimeAgentContextDeps {
   getExtensionContext: () => ExtensionContext | null;
   persistState: () => void;
   updateBadge: () => void;
-  getGitContext: () => Promise<GitContext>;
+  getGitContext: (signal?: AbortSignal) => Promise<GitContext>;
   /** Optional test hook for live branch/dirty probing. */
-  getDynamicGitState?: (cwd: string) => Promise<GitDynamicState>;
+  getDynamicGitState?: (cwd: string, signal?: AbortSignal) => Promise<GitDynamicState>;
 }
 
 export interface RuntimeAgentContext {
@@ -110,7 +110,10 @@ export interface RuntimeAgentContext {
   snapshotReloadableRuntime: () => ReloadableRuntimeSnapshot;
   restoreReloadableRuntime: (snapshot: ReloadableRuntimeSnapshot) => void;
   detectProjectTools: (repoRoot: string, cwd: string) => string[];
-  getAgentMetadata: (role?: RuntimeAgentRole) => Promise<Record<string, unknown>>;
+  getAgentMetadata: (
+    role?: RuntimeAgentRole,
+    signal?: AbortSignal,
+  ) => Promise<Record<string, unknown>>;
   asStringValue: (value: unknown) => string | undefined;
   getMeshRoleFromMetadata: (
     metadata: Record<string, unknown> | undefined,
@@ -371,20 +374,24 @@ export function createRuntimeAgentContext(deps: RuntimeAgentContextDeps): Runtim
     return [...tools].sort();
   }
 
-  const dynamicGitProbe = deps.getDynamicGitState ?? ((cwd: string) => probeGitDynamic(cwd));
+  const dynamicGitProbe =
+    deps.getDynamicGitState ??
+    ((cwd: string, signal?: AbortSignal) => probeGitDynamic(cwd, undefined, signal));
 
   async function getAgentMetadata(
     role: RuntimeAgentRole = "worker",
+    signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const gitContext = await deps.getGitContext();
+    const gitContext = await deps.getGitContext(signal);
     const { cwd, repo, repoRoot } = gitContext;
     const resolvedRepoRoot = repoRoot ?? cwd;
     const tools = detectProjectTools(resolvedRepoRoot, cwd);
     const scope = buildSlackCompatibilityScope();
     let dynamic: GitDynamicState;
     try {
-      dynamic = await dynamicGitProbe(cwd);
+      dynamic = await dynamicGitProbe(cwd, signal);
     } catch {
+      signal?.throwIfAborted();
       dynamic = { probeFailed: true };
     }
     const branch = dynamic.branch;
