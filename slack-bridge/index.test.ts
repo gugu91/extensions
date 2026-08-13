@@ -1427,11 +1427,13 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionStart?.({}, ctx);
     await Promise.resolve();
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "https://slack.com/api/apps.connections.open",
-      expect.any(Object),
-    );
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://slack.com/api/apps.connections.open",
+        expect.any(Object),
+      );
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
 
     await pinetStatus?.handler("status", ctx);
 
@@ -1517,11 +1519,13 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionStart?.({}, ctx);
     await Promise.resolve();
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "https://slack.com/api/apps.connections.open",
-      expect.any(Object),
-    );
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://slack.com/api/apps.connections.open",
+        expect.any(Object),
+      );
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining(
         "Slack access is default-deny because no allowedUsers are configured.",
@@ -1647,11 +1651,13 @@ describe("slack-bridge top-level shutdown", () => {
     await sessionStart?.({}, ctx);
     await Promise.resolve();
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "https://slack.com/api/apps.connections.open",
-      expect.any(Object),
-    );
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://slack.com/api/apps.connections.open",
+        expect.any(Object),
+      );
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("runtime guardrails are effectively empty"),
       "warning",
@@ -1927,8 +1933,9 @@ describe("slack-bridge top-level shutdown", () => {
     expect(pinetStart).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await Promise.resolve();
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
 
     await pinetStart?.handler("start", ctx);
 
@@ -2036,7 +2043,9 @@ describe("slack-bridge top-level shutdown", () => {
     expect(sessionShutdown).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
 
     const socket = FakeWebSocket.instances[0] as unknown as {
       emitEvent: (type: string, ...args: unknown[]) => void;
@@ -2179,7 +2188,9 @@ describe("slack-bridge top-level shutdown", () => {
     expect(slackSend).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
 
     const socket = FakeWebSocket.instances[0] as unknown as {
       emitEvent: (type: string, ...args: unknown[]) => void;
@@ -2377,12 +2388,13 @@ describe("slack-bridge top-level shutdown", () => {
 
     try {
       const startup = sessionStart?.({}, ctx);
-      await Promise.resolve();
-      expect(
-        fetchSpy.mock.calls.some(
-          (call) => String(call.at(0)) === "https://slack.com/api/apps.connections.open",
-        ),
-      ).toBe(true);
+      await vi.waitFor(() => {
+        expect(
+          fetchSpy.mock.calls.some(
+            (call) => String(call.at(0)) === "https://slack.com/api/apps.connections.open",
+          ),
+        ).toBe(true);
+      });
 
       await pinetStart?.handler("start", ctx);
       await startup;

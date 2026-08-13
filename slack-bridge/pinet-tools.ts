@@ -16,14 +16,7 @@ import {
   parseScheduledWakeupDelay,
   resolveScheduledWakeupFireAt,
 } from "@pinet/pinet-core/scheduled-wakeups";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  truncateHead,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
@@ -51,6 +44,12 @@ import {
   SubtreeSpawnRegistrationTimeoutError,
   type SubtreeSpawnLaunchHandle,
 } from "./subtree-broker-runtime.js";
+import {
+  DEFAULT_MAX_OUTPUT_BYTES,
+  DEFAULT_MAX_OUTPUT_LINES,
+  formatOutputSize,
+  measureHeadTruncation,
+} from "./tool-output-limits.js";
 import type {
   AgentSessionSearchInfo,
   AgentSessionSearchOptions,
@@ -613,10 +612,7 @@ function wrapDispatcherEnvelope(
     output.format === "json"
       ? renderedText
       : `${renderedText}\n\n--- Pinet dispatcher envelope (JSON) ---\n${JSON.stringify(envelope, null, 2)}`;
-  const truncation = truncateHead(fullOutputText, {
-    maxLines: DEFAULT_MAX_LINES,
-    maxBytes: DEFAULT_MAX_BYTES,
-  });
+  const truncation = measureHeadTruncation(fullOutputText);
 
   let returnedEnvelope = envelope;
   let returnedText = renderedText;
@@ -696,8 +692,8 @@ function wrapDispatcherEnvelope(
       summary = `${subject} output exceeded the inline limit.`;
     }
 
-    const spillNotice = `[Output truncated: original was ${truncation.totalLines} line${truncation.totalLines === 1 ? "" : "s"} (${formatSize(truncation.totalBytes)}), exceeding the inline limit of ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}. Full output saved to: ${fullOutputPath}]`;
-    const warning = `Pinet output exceeded ${formatSize(DEFAULT_MAX_BYTES)} / ${DEFAULT_MAX_LINES} lines; full output saved to ${fullOutputPath}.`;
+    const spillNotice = `[Output truncated: original was ${truncation.totalLines} line${truncation.totalLines === 1 ? "" : "s"} (${formatOutputSize(truncation.totalBytes)}), exceeding the inline limit of ${DEFAULT_MAX_OUTPUT_LINES} lines or ${formatOutputSize(DEFAULT_MAX_OUTPUT_BYTES)}. Full output saved to: ${fullOutputPath}]`;
+    const warning = `Pinet output exceeded ${formatOutputSize(DEFAULT_MAX_OUTPUT_BYTES)} / ${DEFAULT_MAX_OUTPUT_LINES} lines; full output saved to ${fullOutputPath}.`;
     returnedEnvelope = buildPinetDispatcherEnvelope(
       envelope.status,
       {
@@ -712,8 +708,8 @@ function wrapDispatcherEnvelope(
             totalBytes: truncation.totalBytes,
             outputLines: truncation.outputLines,
             outputBytes: truncation.outputBytes,
-            maxLines: DEFAULT_MAX_LINES,
-            maxBytes: DEFAULT_MAX_BYTES,
+            maxLines: DEFAULT_MAX_OUTPUT_LINES,
+            maxBytes: DEFAULT_MAX_OUTPUT_BYTES,
           },
           outputFormat: output.format,
         },

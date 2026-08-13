@@ -1204,6 +1204,11 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    // A prior transition may have aborted the shared Slack request generation.
+    // Every fresh runtime starts with an independent, usable tracker.
+    slackRequestRuntime.reset();
+    singlePlayerRuntime.resetShutdownState();
+
     if (mode === "single") {
       currentRuntimeMode = "single";
       setExtStatus(ctx, "reconnecting");
@@ -1832,6 +1837,10 @@ export default function (pi: ExtensionAPI) {
     } catch (err) {
       console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(err)}`);
       currentRuntimeMode = "off";
+      brokerRole = null;
+      pinetEnabled = false;
+      slackRequestRuntime.reset();
+      singlePlayerRuntime.resetShutdownState();
       setExtStatus(ctx, "off");
       await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
     }
