@@ -76,13 +76,9 @@ describe("Pinet runtime composition", () => {
       onInbound: vi.fn(),
       signal: controller.signal,
     });
-    await vi.waitFor(() => {
-      expect(adapter.connect).toHaveBeenCalled();
-    });
+    expect(adapter.connect).toHaveBeenCalledOnce();
     controller.abort();
-    await vi.waitFor(() => {
-      expect(adapter.disconnect).toHaveBeenCalledOnce();
-    });
+    expect(adapter.disconnect).toHaveBeenCalledOnce();
     rejectConnect(new Error("adapter startup failed"));
 
     await expect(connecting).rejects.toThrow("adapter startup failed");

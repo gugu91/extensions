@@ -48,7 +48,7 @@ import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_OUTPUT_LINES,
   formatOutputSize,
-  measureHeadTruncation,
+  measureOutputLimits,
 } from "./tool-output-limits.js";
 import type {
   AgentSessionSearchInfo,
@@ -612,13 +612,13 @@ function wrapDispatcherEnvelope(
     output.format === "json"
       ? renderedText
       : `${renderedText}\n\n--- Pinet dispatcher envelope (JSON) ---\n${JSON.stringify(envelope, null, 2)}`;
-  const truncation = measureHeadTruncation(fullOutputText);
+  const outputMeasurement = measureOutputLimits(fullOutputText);
 
   let returnedEnvelope = envelope;
   let returnedText = renderedText;
   let returnedDisplayText = displayText;
 
-  if (truncation.truncated) {
+  if (outputMeasurement.exceedsLimit) {
     const fileToken =
       (action ?? "result")
         .trim()
@@ -692,7 +692,7 @@ function wrapDispatcherEnvelope(
       summary = `${subject} output exceeded the inline limit.`;
     }
 
-    const spillNotice = `[Output truncated: original was ${truncation.totalLines} line${truncation.totalLines === 1 ? "" : "s"} (${formatOutputSize(truncation.totalBytes)}), exceeding the inline limit of ${DEFAULT_MAX_OUTPUT_LINES} lines or ${formatOutputSize(DEFAULT_MAX_OUTPUT_BYTES)}. Full output saved to: ${fullOutputPath}]`;
+    const spillNotice = `[Output truncated: original was ${outputMeasurement.totalLines} line${outputMeasurement.totalLines === 1 ? "" : "s"} (${formatOutputSize(outputMeasurement.totalBytes)}), exceeding the inline limit of ${DEFAULT_MAX_OUTPUT_LINES} lines or ${formatOutputSize(DEFAULT_MAX_OUTPUT_BYTES)}. Full output saved to: ${fullOutputPath}]`;
     const warning = `Pinet output exceeded ${formatOutputSize(DEFAULT_MAX_OUTPUT_BYTES)} / ${DEFAULT_MAX_OUTPUT_LINES} lines; full output saved to ${fullOutputPath}.`;
     returnedEnvelope = buildPinetDispatcherEnvelope(
       envelope.status,
@@ -704,10 +704,8 @@ function wrapDispatcherEnvelope(
           fullOutputPath,
           truncation: {
             truncated: true,
-            totalLines: truncation.totalLines,
-            totalBytes: truncation.totalBytes,
-            outputLines: truncation.outputLines,
-            outputBytes: truncation.outputBytes,
+            totalLines: outputMeasurement.totalLines,
+            totalBytes: outputMeasurement.totalBytes,
             maxLines: DEFAULT_MAX_OUTPUT_LINES,
             maxBytes: DEFAULT_MAX_OUTPUT_BYTES,
           },
@@ -731,7 +729,7 @@ function wrapDispatcherEnvelope(
       },
     ],
     details: returnedEnvelope,
-    ...(truncation.truncated ? {} : expandedText ? { expandedText } : {}),
+    ...(outputMeasurement.exceedsLimit ? {} : expandedText ? { expandedText } : {}),
     ...(returnedDisplayText ? { displayText: returnedDisplayText } : {}),
   };
 }

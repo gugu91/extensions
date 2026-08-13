@@ -567,9 +567,7 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
 
       slackSocket = socket;
       const abortConnect = () => {
-        void socket.disconnect().catch(() => {
-          /* connect owns the startup failure */
-        });
+        void socket.disconnect().catch(() => undefined);
       };
       signal?.addEventListener("abort", abortConnect, { once: true });
       try {

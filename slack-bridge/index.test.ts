@@ -25,7 +25,7 @@ type CommandDefinition = {
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
 
-function slackBridge(pi: ExtensionAPI): void {
+function slackBridge(pi: ExtensionAPI, onActiveToolsChanged?: (toolNames: string[]) => void): void {
   const activeTools = new Set([
     "read",
     "slack",
@@ -38,6 +38,7 @@ function slackBridge(pi: ExtensionAPI): void {
   pi.setActiveTools = vi.fn((toolNames: string[]) => {
     activeTools.clear();
     for (const toolName of toolNames) activeTools.add(toolName);
+    onActiveToolsChanged?.(toolNames);
   });
   slackBridgeExtension(pi);
 }
@@ -1306,6 +1307,37 @@ describe("slack-bridge top-level shutdown", () => {
     };
   }
 
+  function createLifecycleHarness(leafId: string, sessionFile: string) {
+    const events = new Map<string, EventHandler>();
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as never as ExtensionAPI;
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: { fg: (_color: string, text: string) => text },
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => leafId,
+        getSessionFile: () => sessionFile,
+      },
+    } as never as ExtensionContext;
+
+    return { events, pi, ctx };
+  }
+
   it("keeps explicit off mode free of Slack Socket Mode ingress on session start", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
@@ -1373,54 +1405,44 @@ describe("slack-bridge top-level shutdown", () => {
       }),
     );
 
-    const events = new Map<string, EventHandler>();
+    const { events, pi, ctx } = createLifecycleHarness(
+      "background-start-leaf",
+      "/tmp/slack-bridge-background-start.json",
+    );
     const FakeWebSocket = createFakeWebSocketClass();
-    const pi = {
-      appendEntry: vi.fn(),
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn((eventName: string, handler: EventHandler) => {
-        events.set(eventName, handler);
-      }),
-      sendUserMessage: vi.fn(),
-    } as never as ExtensionAPI;
-    const ctx = {
-      cwd: process.cwd(),
-      hasUI: true,
-      isIdle: () => true,
-      ui: {
-        theme: { fg: (_color: string, text: string) => text },
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-      },
-      sessionManager: {
-        getEntries: () => [],
-        getHeader: () => null,
-        getLeafId: () => "background-start-leaf",
-        getSessionFile: () => "/tmp/slack-bridge-background-start.json",
-      },
-    } as never as ExtensionContext;
     let resolveSocket!: (response: Response) => void;
     const socketResponse = new Promise<Response>((resolve) => {
       resolveSocket = resolve;
     });
+    let notifySocketRequested!: () => void;
+    const socketRequested = new Promise<void>((resolve) => {
+      notifySocketRequested = resolve;
+    });
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-      if (url.endsWith("/apps.connections.open")) return socketResponse;
+      if (url.endsWith("/apps.connections.open")) {
+        notifySocketRequested();
+        return socketResponse;
+      }
       throw new Error(`Unexpected fetch call: ${url}`);
     });
     vi.stubGlobal("fetch", fetchSpy as never as typeof fetch);
     vi.stubGlobal("WebSocket", FakeWebSocket as never as typeof WebSocket);
+    let notifyToolsActivated!: () => void;
+    const toolsActivated = new Promise<void>((resolve) => {
+      notifyToolsActivated = resolve;
+    });
 
-    slackBridge(pi);
+    slackBridge(pi, (toolNames) => {
+      if (toolNames.includes("slack")) notifyToolsActivated();
+    });
 
     await expect(events.get("session_start")?.({}, ctx)).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://slack.com/api/apps.connections.open",
-        expect.any(Object),
-      );
-    });
+    await socketRequested;
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://slack.com/api/apps.connections.open",
+      expect.any(Object),
+    );
     expect(pi.getActiveTools()).not.toContain("slack");
 
     resolveSocket(
@@ -1429,9 +1451,8 @@ describe("slack-bridge top-level shutdown", () => {
         headers: { "content-type": "application/json" },
       }),
     );
-    await vi.waitFor(() => {
-      expect(pi.getActiveTools()).toContain("slack");
-    });
+    await toolsActivated;
+    expect(pi.getActiveTools()).toContain("slack");
 
     await events.get("session_shutdown")?.({}, ctx);
   });
@@ -1448,32 +1469,10 @@ describe("slack-bridge top-level shutdown", () => {
     fs.writeFileSync(socketPath, "");
     process.env.PINET_SOCKET_PATH = socketPath;
 
-    const events = new Map<string, EventHandler>();
-    const pi = {
-      appendEntry: vi.fn(),
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn((eventName: string, handler: EventHandler) => {
-        events.set(eventName, handler);
-      }),
-      sendUserMessage: vi.fn(),
-    } as never as ExtensionAPI;
-    const ctx = {
-      cwd: process.cwd(),
-      hasUI: true,
-      isIdle: () => true,
-      ui: {
-        theme: { fg: (_color: string, text: string) => text },
-        notify: vi.fn(),
-        setStatus: vi.fn(),
-      },
-      sessionManager: {
-        getEntries: () => [],
-        getHeader: () => null,
-        getLeafId: () => "pending-follower-leaf",
-        getSessionFile: () => "/tmp/slack-bridge-pending-follower.json",
-      },
-    } as never as ExtensionContext;
+    const { events, pi, ctx } = createLifecycleHarness(
+      "pending-follower-leaf",
+      "/tmp/slack-bridge-pending-follower.json",
+    );
     let rejectConnect!: (error: Error) => void;
     const pendingConnect = new Promise<void>((_resolve, reject) => {
       rejectConnect = reject;

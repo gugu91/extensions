@@ -594,9 +594,7 @@ export class SlackSocketModeClient {
       }
       await this.connectSocketMode(socketResponsePromise);
     } catch (error) {
-      await this.disconnect().catch(() => {
-        /* preserve the connection error */
-      });
+      await this.disconnect().catch(() => undefined);
       throw error;
     }
   }

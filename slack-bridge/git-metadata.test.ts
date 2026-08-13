@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  createGitContextCache,
   probeGitBranch,
   probeGitContext,
   probeGitDynamic,
@@ -170,53 +169,5 @@ describe("probeGitDynamic", () => {
       dirtyFileCount: 1,
       probeFailed: false,
     });
-  });
-});
-
-describe("createGitContextCache", () => {
-  it("caches the loaded result", async () => {
-    const loader = vi.fn(async () => ({
-      cwd: "/tmp/project",
-      repo: "project",
-      repoRoot: "/tmp/project",
-      branch: "main",
-    }));
-
-    const cache = createGitContextCache(loader);
-
-    await expect(cache.get()).resolves.toMatchObject({ repo: "project" });
-    await expect(cache.get()).resolves.toMatchObject({ repo: "project" });
-    expect(loader).toHaveBeenCalledTimes(1);
-    expect(cache.peek()).toMatchObject({ repo: "project" });
-  });
-
-  it("shares a single in-flight request", async () => {
-    let resolveLoader!: (value: { cwd: string; repo: string }) => void;
-    const promise = new Promise<{ cwd: string; repo: string }>((resolve) => {
-      resolveLoader = resolve;
-    });
-    const loader = vi.fn(() => promise);
-
-    const cache = createGitContextCache(loader);
-    const a = cache.get();
-    const b = cache.get();
-
-    expect(loader).toHaveBeenCalledTimes(1);
-    resolveLoader({ cwd: "/tmp/project", repo: "project" });
-
-    await expect(a).resolves.toMatchObject({ repo: "project" });
-    await expect(b).resolves.toMatchObject({ repo: "project" });
-  });
-
-  it("clear resets the cache", async () => {
-    const loader = vi.fn(async () => ({ cwd: "/tmp/a", repo: "a" }));
-    loader.mockResolvedValueOnce({ cwd: "/tmp/a", repo: "a" });
-    loader.mockResolvedValueOnce({ cwd: "/tmp/b", repo: "b" });
-
-    const cache = createGitContextCache(loader);
-    await cache.get();
-    cache.clear();
-    await expect(cache.get()).resolves.toMatchObject({ repo: "b" });
-    expect(loader).toHaveBeenCalledTimes(2);
   });
 });

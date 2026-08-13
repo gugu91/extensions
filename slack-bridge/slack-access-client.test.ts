@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("SlackSocketModeClient startup", () => {
-  it("requests bot identity and a Socket Mode URL concurrently", async () => {
+  it("requests startup data concurrently but opens the socket after resolving bot identity", async () => {
     type SlackResponse = Awaited<ReturnType<SlackCall>>;
     let resolveAuth!: (value: SlackResponse) => void;
     let resolveSocket!: (value: SlackResponse) => void;
@@ -48,12 +48,13 @@ describe("SlackSocketModeClient startup", () => {
     });
     const connecting = client.connect();
 
-    await vi.waitFor(() => {
-      expect(slack).toHaveBeenCalledWith("auth.test", "xoxb-test");
-      expect(slack).toHaveBeenCalledWith("apps.connections.open", "xapp-test");
-    });
+    expect(slack).toHaveBeenCalledWith("auth.test", "xoxb-test");
+    expect(slack).toHaveBeenCalledWith("apps.connections.open", "xapp-test");
 
     resolveSocket({ url: "wss://slack.example/socket" });
+    await socketResponse;
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
     resolveAuth({ user_id: "U_BOT" });
     await connecting;
 

@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-
 import { buildTiers, flattenBuildTiers, testDependencyTiers } from "./build-all.mjs";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const expectedBuildPackages = [
   "transport-core",
@@ -53,10 +48,13 @@ test("test dependency tiers cover only the dist exports needed before tests", ()
   });
 });
 
-test("the root Pi manifest loads the built Slack bridge", async () => {
-  const manifest = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+test("the root Pi manifest loads only the built Slack bridge", async () => {
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const slackBridgeEntries = manifest.pi.extensions.filter((entry) =>
+    entry.includes("slack-bridge"),
+  );
 
-  assert.ok(manifest.pi.extensions.includes("./slack-bridge/dist/index.js"));
+  assert.deepEqual(slackBridgeEntries, ["./slack-bridge/dist/index.js"]);
 });
 
 function assertTierDependencies(tiers, dependenciesByPackage) {

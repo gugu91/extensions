@@ -67,9 +67,7 @@ export async function connectPinetRuntimeAdapters({
     binding.adapter.onInbound(onInbound);
     broker.addAdapter(binding.adapter);
     const abortConnect = () => {
-      void binding.adapter.disconnect().catch(() => {
-        /* the connect path owns startup failures */
-      });
+      void binding.adapter.disconnect().catch(() => undefined);
     };
     signal?.addEventListener("abort", abortConnect, { once: true });
     try {
