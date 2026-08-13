@@ -5,10 +5,17 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 type ExecFileResult = { stdout?: string | Buffer };
+export const GIT_PROBE_TIMEOUT_MS = 2_000;
+
 export type ExecFileAsyncLike = (
   file: string,
   args: string[],
-  options: { cwd: string; encoding: "utf-8" },
+  options: {
+    cwd: string;
+    encoding: "utf-8";
+    timeout: number;
+    signal?: AbortSignal;
+  },
 ) => Promise<ExecFileResult>;
 
 export interface GitContext {
@@ -35,12 +42,20 @@ async function runGitCommand(
   args: string[],
   cwd: string,
   runner: ExecFileAsyncLike,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string | undefined; ok: boolean }> {
+  signal?.throwIfAborted();
   try {
-    const result = await runner("git", args, { cwd, encoding: "utf-8" });
+    const result = await runner("git", args, {
+      cwd,
+      encoding: "utf-8",
+      timeout: GIT_PROBE_TIMEOUT_MS,
+      ...(signal ? { signal } : {}),
+    });
     const stdout = typeof result.stdout === "string" ? result.stdout : result.stdout?.toString();
     return { stdout, ok: true };
   } catch {
+    signal?.throwIfAborted();
     return { stdout: undefined, ok: false };
   }
 }
@@ -49,8 +64,9 @@ async function readGitTrimmed(
   args: string[],
   cwd: string,
   runner: ExecFileAsyncLike,
+  signal?: AbortSignal,
 ): Promise<{ value: string | undefined; ok: boolean }> {
-  const { stdout, ok } = await runGitCommand(args, cwd, runner);
+  const { stdout, ok } = await runGitCommand(args, cwd, runner, signal);
   const trimmed = stdout?.trim();
   return { value: trimmed ? trimmed : undefined, ok };
 }
@@ -58,18 +74,21 @@ async function readGitTrimmed(
 export async function probeGitBranch(
   cwd = process.cwd(),
   runner: ExecFileAsyncLike = execFileAsync as ExecFileAsyncLike,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  return (await readGitTrimmed(["branch", "--show-current"], cwd, runner)).value;
+  return (await readGitTrimmed(["branch", "--show-current"], cwd, runner, signal)).value;
 }
 
 async function probeGitDirty(
   cwd: string,
   runner: ExecFileAsyncLike,
+  signal?: AbortSignal,
 ): Promise<{ dirty?: boolean; dirtyFileCount?: number; ok: boolean }> {
   const { stdout, ok } = await runGitCommand(
     ["status", "--porcelain", "--untracked-files=normal"],
     cwd,
     runner,
+    signal,
   );
   if (!ok) {
     return { ok: false };
@@ -85,9 +104,10 @@ async function probeGitDirty(
 export async function probeGitDynamic(
   cwd = process.cwd(),
   runner: ExecFileAsyncLike = execFileAsync as ExecFileAsyncLike,
+  signal?: AbortSignal,
 ): Promise<GitDynamicState> {
-  const branchProbe = await readGitTrimmed(["branch", "--show-current"], cwd, runner);
-  const dirtyProbe = await probeGitDirty(cwd, runner);
+  const branchProbe = await readGitTrimmed(["branch", "--show-current"], cwd, runner, signal);
+  const dirtyProbe = await probeGitDirty(cwd, runner, signal);
 
   return {
     ...(branchProbe.value ? { branch: branchProbe.value } : {}),
@@ -102,9 +122,11 @@ export async function probeGitDynamic(
 export async function probeGitContext(
   cwd = process.cwd(),
   runner: ExecFileAsyncLike = execFileAsync as ExecFileAsyncLike,
+  signal?: AbortSignal,
 ): Promise<GitContext> {
-  const repoRoot = (await readGitTrimmed(["rev-parse", "--show-toplevel"], cwd, runner)).value;
-  const dynamic = await probeGitDynamic(cwd, runner);
+  const repoRoot = (await readGitTrimmed(["rev-parse", "--show-toplevel"], cwd, runner, signal))
+    .value;
+  const dynamic = await probeGitDynamic(cwd, runner, signal);
   const resolvedRepoRoot = repoRoot ?? cwd;
 
   return {
@@ -120,21 +142,49 @@ export async function probeGitContext(
 }
 
 export interface GitContextCache {
-  get(): Promise<GitContext>;
+  get(signal?: AbortSignal): Promise<GitContext>;
   peek(): GitContext | null;
   clear(): void;
 }
 
-export function createGitContextCache(loader: () => Promise<GitContext>): GitContextCache {
+function waitForGitContext(
+  promise: Promise<GitContext>,
+  signal?: AbortSignal,
+): Promise<GitContext> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+export function createGitContextCache(
+  loader: (signal?: AbortSignal) => Promise<GitContext>,
+): GitContextCache {
   let cached: GitContext | null = null;
   let inflight: Promise<GitContext> | null = null;
 
   return {
-    async get(): Promise<GitContext> {
+    async get(signal?: AbortSignal): Promise<GitContext> {
+      signal?.throwIfAborted();
       if (cached) return cached;
-      if (inflight) return inflight;
+      if (inflight) return waitForGitContext(inflight, signal);
 
-      inflight = loader()
+      inflight = loader(signal)
         .then((result) => {
           cached = result;
           return result;
@@ -143,7 +193,7 @@ export function createGitContextCache(loader: () => Promise<GitContext>): GitCon
           inflight = null;
         });
 
-      return inflight;
+      return waitForGitContext(inflight, signal);
     },
 
     peek(): GitContext | null {

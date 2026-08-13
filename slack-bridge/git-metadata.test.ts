@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   createGitContextCache,
+  GIT_PROBE_TIMEOUT_MS,
   probeGitBranch,
   probeGitContext,
   probeGitDynamic,
@@ -24,6 +25,25 @@ describe("probeGitBranch", () => {
 });
 
 describe("probeGitContext", () => {
+  it("aborts an in-flight Git process and applies a fallback timeout", async () => {
+    const controller = new AbortController();
+    const runner: ExecFileAsyncLike = vi.fn(
+      async (_file, _args, options) =>
+        new Promise<never>((_resolve, reject) => {
+          expect(options.timeout).toBe(GIT_PROBE_TIMEOUT_MS);
+          expect(options.signal).toBe(controller.signal);
+          options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+
+    const probing = probeGitContext("/tmp/project", runner, controller.signal);
+    controller.abort();
+
+    await expect(probing).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("returns repo, repoRoot, branch, and dirty signal when git commands succeed", async () => {
     const runner: ExecFileAsyncLike = vi.fn(async (_file, args) => {
       if (args[0] === "rev-parse") {
@@ -191,6 +211,26 @@ describe("createGitContextCache", () => {
 
     await expect(a).resolves.toMatchObject({ repo: "project" });
     await expect(b).resolves.toMatchObject({ repo: "project" });
+  });
+
+  it("lets an aborted waiter stop waiting on a shared in-flight probe", async () => {
+    let resolveLoader!: (value: { cwd: string; repo: string }) => void;
+    const loader = vi.fn(
+      () =>
+        new Promise<{ cwd: string; repo: string }>((resolve) => {
+          resolveLoader = resolve;
+        }),
+    );
+    const cache = createGitContextCache(loader);
+    const shared = cache.get();
+    const controller = new AbortController();
+    const cancelled = cache.get(controller.signal);
+
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+
+    resolveLoader({ cwd: "/tmp/project", repo: "project" });
+    await expect(shared).resolves.toMatchObject({ repo: "project" });
   });
 
   it("clear resets the cache", async () => {

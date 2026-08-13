@@ -74,7 +74,10 @@ export interface BrokerRuntimeDeps {
   getActiveSkinTheme: () => string | null;
   setActiveSkinTheme: (theme: string) => void;
   setAgentOwnerToken: (ownerToken: string) => void;
-  getAgentMetadata: (role: "broker" | "worker") => Promise<Record<string, unknown>>;
+  getAgentMetadata: (
+    role: "broker" | "worker",
+    signal?: AbortSignal,
+  ) => Promise<Record<string, unknown>>;
   applyLocalAgentIdentity: (name: string, emoji: string, personality: string | null) => void;
   buildSkinMetadata: (
     metadata: Record<string, unknown> | undefined,
@@ -177,7 +180,7 @@ export function resolveConfiguredBrokerSkinTheme(settings: SlackBridgeSettings):
 }
 
 export interface BrokerRuntime {
-  connect: (ctx: ExtensionContext) => Promise<BrokerRuntimeConnectResult>;
+  connect: (ctx: ExtensionContext, signal?: AbortSignal) => Promise<BrokerRuntimeConnectResult>;
   reloadAdapters: (ctx: ExtensionContext) => Promise<{ botUserId: string | null }>;
   canReloadInPlace: () => boolean;
   disconnect: (options?: { releaseIdentity?: boolean }) => Promise<void>;
@@ -560,7 +563,11 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
   }
 
   return {
-    async connect(ctx: ExtensionContext): Promise<BrokerRuntimeConnectResult> {
+    async connect(
+      ctx: ExtensionContext,
+      signal?: AbortSignal,
+    ): Promise<BrokerRuntimeConnectResult> {
+      signal?.throwIfAborted();
       const settings = deps.getSettings();
       const meshAuth = resolvePinetMeshAuth(settings);
       const allowedUsers = deps.getAllowedUsers();
@@ -572,6 +579,7 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
       activityLogContext = ctx;
 
       try {
+        signal?.throwIfAborted();
         broker.db.setAllowedUsers(allowedUsers);
         const router = new MessageRouter(broker.db);
         const persistedBrokerStableId =
@@ -630,19 +638,22 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           role: "broker",
           seed: brokerStableId,
         });
+        const agentMetadata = await deps.getAgentMetadata("broker", signal);
+        signal?.throwIfAborted();
         const selfAgent = broker.db.registerAgent(
           ctx.sessionManager.getLeafId() ?? `broker-${process.pid}`,
           selfAssignment.name,
           selfAssignment.emoji,
           process.pid,
           deps.buildSkinMetadata(
-            await deps.getAgentMetadata("broker"),
+            agentMetadata,
             selfAssignment.personality,
             selfAssignment.statusVocabulary,
           ),
           brokerStableId,
         );
         selfId = selfAgent.id;
+        signal?.throwIfAborted();
         deps.applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
 
         const brokerSelfId = selfId;
@@ -658,7 +669,9 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           onInbound: (message) => {
             void deps.handleInboundMessage({ message, broker, router, selfId: brokerSelfId, ctx });
           },
+          signal,
         });
+        signal?.throwIfAborted();
 
         activeBroker = broker;
         activeRuntimeAdapters = adapterBindings.map((binding) => binding.adapter);

@@ -174,6 +174,16 @@ describe("BrokerClient — connect / disconnect", () => {
     expect(client.isConnected()).toBe(false);
   });
 
+  it("disconnect rejects a pending socket connection", async () => {
+    const client = new BrokerClient(mock.connectOpts);
+
+    const connecting = client.connect();
+    client.disconnect();
+
+    await expect(connecting).rejects.toThrow("Socket closed before connection completed");
+    expect(client.isConnected()).toBe(false);
+  });
+
   it("rejects connect when server is not running", async () => {
     const client = new BrokerClient({ host: "127.0.0.1", port: 1 });
     await expect(client.connect()).rejects.toThrow();

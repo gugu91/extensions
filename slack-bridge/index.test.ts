@@ -1362,6 +1362,137 @@ describe("slack-bridge top-level shutdown", () => {
     expect(setStatus).toHaveBeenCalled();
   });
 
+  it("returns from session start before Slack connects and keeps managed tools inactive", async () => {
+    const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
+    fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        "slack-bridge": { runtimeMode: "single", allowAllWorkspaceUsers: true },
+      }),
+    );
+
+    const events = new Map<string, EventHandler>();
+    const FakeWebSocket = createFakeWebSocketClass();
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as never as ExtensionAPI;
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: { fg: (_color: string, text: string) => text },
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "background-start-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-background-start.json",
+      },
+    } as never as ExtensionContext;
+    let resolveSocket!: (response: Response) => void;
+    const socketResponse = new Promise<Response>((resolve) => {
+      resolveSocket = resolve;
+    });
+    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/apps.connections.open")) return socketResponse;
+      throw new Error(`Unexpected fetch call: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy as never as typeof fetch);
+    vi.stubGlobal("WebSocket", FakeWebSocket as never as typeof WebSocket);
+
+    slackBridge(pi);
+
+    await expect(events.get("session_start")?.({}, ctx)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://slack.com/api/apps.connections.open",
+        expect.any(Object),
+      );
+    });
+    expect(pi.getActiveTools()).toEqual(["read"]);
+
+    resolveSocket(
+      new Response(JSON.stringify({ ok: true, url: "wss://slack.example/socket" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(pi.getActiveTools()).toContain("slack");
+    });
+
+    await events.get("session_shutdown")?.({}, ctx);
+  });
+
+  it("cancels a pending follower connection before session shutdown", async () => {
+    const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        "slack-bridge": { runtimeMode: "follower", allowAllWorkspaceUsers: true },
+      }),
+    );
+
+    const events = new Map<string, EventHandler>();
+    const pi = {
+      appendEntry: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn((eventName: string, handler: EventHandler) => {
+        events.set(eventName, handler);
+      }),
+      sendUserMessage: vi.fn(),
+    } as never as ExtensionAPI;
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        theme: { fg: (_color: string, text: string) => text },
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getHeader: () => null,
+        getLeafId: () => "pending-follower-leaf",
+        getSessionFile: () => "/tmp/slack-bridge-pending-follower.json",
+      },
+    } as never as ExtensionContext;
+    let rejectConnect!: (error: Error) => void;
+    const connectSpy = vi.spyOn(BrokerClient.prototype, "connect").mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectConnect = reject;
+        }),
+    );
+    const disconnectSpy = vi.spyOn(BrokerClient.prototype, "disconnect").mockImplementation(() => {
+      rejectConnect(new Error("follower startup cancelled"));
+    });
+
+    slackBridge(pi);
+
+    await expect(events.get("session_start")?.({}, ctx)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(connectSpy).toHaveBeenCalledOnce();
+    });
+    await expect(events.get("session_shutdown")?.({}, ctx)).resolves.toBeUndefined();
+
+    expect(disconnectSpy).toHaveBeenCalled();
+    expect(pi.getActiveTools()).toEqual(["read"]);
+  });
+
   it("starts explicit single runtime mode on session start and reports it in /pinet status", async () => {
     const settingsPath = `${process.env.HOME}/.pi/agent/settings.json`;
     fs.mkdirSync(`${process.env.HOME}/.pi/agent`, { recursive: true });

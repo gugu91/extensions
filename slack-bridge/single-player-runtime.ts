@@ -96,7 +96,7 @@ function interruptSinglePlayerTurn(ctx: ExtensionContext): void {
 }
 
 export interface SinglePlayerRuntime {
-  connect: (ctx: ExtensionContext) => Promise<void>;
+  connect: (ctx: ExtensionContext, signal?: AbortSignal) => Promise<void>;
   disconnect: () => Promise<void>;
   getBotUserId: () => string | null;
   isConnected: () => boolean;
@@ -518,7 +518,8 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
   };
 
   return {
-    async connect(ctx: ExtensionContext): Promise<void> {
+    async connect(ctx: ExtensionContext, signal?: AbortSignal): Promise<void> {
+      signal?.throwIfAborted();
       shuttingDown = false;
 
       const socket = new SlackSocketModeClient({
@@ -565,7 +566,18 @@ export function createSinglePlayerRuntime(deps: SinglePlayerRuntimeDeps): Single
       });
 
       slackSocket = socket;
-      await socket.connect();
+      const abortConnect = () => {
+        void socket.disconnect().catch(() => {
+          /* connect owns the startup failure */
+        });
+      };
+      signal?.addEventListener("abort", abortConnect, { once: true });
+      try {
+        await socket.connect();
+        signal?.throwIfAborted();
+      } finally {
+        signal?.removeEventListener("abort", abortConnect);
+      }
     },
 
     async disconnect(): Promise<void> {

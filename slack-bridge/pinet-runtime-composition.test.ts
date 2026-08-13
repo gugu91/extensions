@@ -58,6 +58,36 @@ describe("Pinet runtime composition", () => {
     expect(bindings).toEqual([{ adapter: matrixAdapter }]);
   });
 
+  it("disconnects an adapter when startup is aborted", async () => {
+    let rejectConnect!: (error: Error) => void;
+    const adapter = new MemoryAdapter("matrix");
+    vi.spyOn(adapter, "connect").mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectConnect = reject;
+        }),
+    );
+    vi.spyOn(adapter, "disconnect").mockImplementation(async () => {
+      adapter.connected = false;
+      rejectConnect(new Error("adapter startup aborted"));
+    });
+    const controller = new AbortController();
+
+    const connecting = connectPinetRuntimeAdapters({
+      broker: { addAdapter: vi.fn() },
+      bindings: [{ adapter }],
+      onInbound: vi.fn(),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(adapter.connect).toHaveBeenCalled();
+    });
+    controller.abort();
+
+    await expect(connecting).rejects.toThrow("adapter startup aborted");
+    expect(adapter.disconnect).toHaveBeenCalledOnce();
+  });
+
   it("connects a non-Slack adapter at the Pinet core composition boundary", async () => {
     const matrixAdapter = new MemoryAdapter("matrix");
     const addAdapter = vi.fn();
