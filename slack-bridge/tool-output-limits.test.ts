@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_OUTPUT_LINES,
   formatOutputSize,
   measureHeadTruncation,
@@ -8,14 +7,12 @@ import {
 
 describe("tool output limits", () => {
   it("keeps output at both limits inline", () => {
-    const content = `${"a".repeat(DEFAULT_MAX_OUTPUT_BYTES - 1)}\n`;
-
-    expect(measureHeadTruncation(content)).toEqual({
+    expect(measureHeadTruncation("a\nb", { maxLines: 2, maxBytes: 3 })).toEqual({
       truncated: false,
-      totalLines: 1,
-      totalBytes: DEFAULT_MAX_OUTPUT_BYTES,
-      outputLines: 1,
-      outputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      totalLines: 2,
+      totalBytes: 3,
+      outputLines: 2,
+      outputBytes: 3,
     });
   });
 

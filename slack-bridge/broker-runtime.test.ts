@@ -92,9 +92,7 @@ describe("broker-runtime", () => {
             rejectConnect = reject;
           }),
       ),
-      disconnect: vi.fn(async () => {
-        rejectConnect(new Error("adapter startup aborted"));
-      }),
+      disconnect: vi.fn(async () => undefined),
       onInbound: vi.fn(),
       send: vi.fn(async () => undefined),
     } satisfies MessageAdapter;
@@ -151,9 +149,12 @@ describe("broker-runtime", () => {
         expect(adapter.connect).toHaveBeenCalledOnce();
       });
       controller.abort();
+      await vi.waitFor(() => {
+        expect(adapter.disconnect).toHaveBeenCalledOnce();
+      });
+      rejectConnect(new Error("adapter startup failed"));
 
-      await expect(connecting).rejects.toThrow("adapter startup aborted");
-      expect(adapter.disconnect).toHaveBeenCalledOnce();
+      await expect(connecting).rejects.toThrow("adapter startup failed");
       expect(db.unregisterAgent).toHaveBeenCalledWith("broker-self");
       expect(stop).toHaveBeenCalledOnce();
       expect(runtime.isConnected()).toBe(false);

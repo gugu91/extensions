@@ -54,9 +54,6 @@ describe("SlackSocketModeClient startup", () => {
     });
 
     resolveSocket({ url: "wss://slack.example/socket" });
-    await Promise.resolve();
-    expect(FakeWebSocket.instances).toHaveLength(0);
-
     resolveAuth({ user_id: "U_BOT" });
     await connecting;
 

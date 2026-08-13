@@ -585,9 +585,7 @@ export class SlackSocketModeClient {
         ? this.config.slack("auth.test", this.config.botToken)
         : Promise.resolve(null);
     const socketResponsePromise = this.config.slack("apps.connections.open", this.config.appToken);
-    void socketResponsePromise.catch(() => {
-      /* connectSocketMode owns connection failures after auth resolves */
-    });
+    void socketResponsePromise.catch(() => undefined);
 
     try {
       const auth = await authPromise;

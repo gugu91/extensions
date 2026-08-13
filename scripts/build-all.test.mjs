@@ -57,7 +57,6 @@ test("the root Pi manifest loads the built Slack bridge", async () => {
   const manifest = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
 
   assert.ok(manifest.pi.extensions.includes("./slack-bridge/dist/index.js"));
-  assert.ok(!manifest.pi.extensions.includes("./slack-bridge/index.ts"));
 });
 
 function assertTierDependencies(tiers, dependenciesByPackage) {

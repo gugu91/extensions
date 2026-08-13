@@ -67,10 +67,7 @@ describe("Pinet runtime composition", () => {
           rejectConnect = reject;
         }),
     );
-    vi.spyOn(adapter, "disconnect").mockImplementation(async () => {
-      adapter.connected = false;
-      rejectConnect(new Error("adapter startup aborted"));
-    });
+    vi.spyOn(adapter, "disconnect");
     const controller = new AbortController();
 
     const connecting = connectPinetRuntimeAdapters({
@@ -83,9 +80,12 @@ describe("Pinet runtime composition", () => {
       expect(adapter.connect).toHaveBeenCalled();
     });
     controller.abort();
+    await vi.waitFor(() => {
+      expect(adapter.disconnect).toHaveBeenCalledOnce();
+    });
+    rejectConnect(new Error("adapter startup failed"));
 
-    await expect(connecting).rejects.toThrow("adapter startup aborted");
-    expect(adapter.disconnect).toHaveBeenCalledOnce();
+    await expect(connecting).rejects.toThrow("adapter startup failed");
   });
 
   it("connects a non-Slack adapter at the Pinet core composition boundary", async () => {

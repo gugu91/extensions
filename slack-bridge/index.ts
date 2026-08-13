@@ -360,7 +360,7 @@ export default function (pi: ExtensionAPI) {
     getExtensionContext: sessionUiRuntime.getExtensionContext,
     persistState,
     updateBadge,
-    getGitContext: () => gitContextCache.get(),
+    getGitContext: (signal) => gitContextCache.get(signal),
   });
   const {
     isUserAllowed,
@@ -1181,9 +1181,7 @@ export default function (pi: ExtensionAPI) {
     const startup = pendingStartup;
     if (!startup) return;
     startup.controller.abort();
-    await startup.promise.catch(() => {
-      /* startup reports and contains its own cleanup failures */
-    });
+    await startup.promise;
   }
 
   function runRuntimeModeTransition(
@@ -1198,7 +1196,6 @@ export default function (pi: ExtensionAPI) {
           setExtStatus(ctx, "off");
         }
         await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
-        signal?.throwIfAborted();
         return;
       }
 
@@ -1210,22 +1207,16 @@ export default function (pi: ExtensionAPI) {
         }
         await stopPinetRuntime(ctx, { releaseIdentity: true });
         signal?.throwIfAborted();
-        // Runtime transitions keep the extension alive in-process, so restore a
-        // fresh top-level Slack request tracker after tearing the prior runtime down.
-        slackRequestRuntime.reset();
-        singlePlayerRuntime.resetShutdownState();
       }
+
+      slackRequestRuntime.reset();
+      singlePlayerRuntime.resetShutdownState();
 
       if (mode === "off") {
         currentRuntimeMode = "off";
         setExtStatus(ctx, "off");
         return;
       }
-
-      // A prior transition may have aborted the shared Slack request generation.
-      // Every fresh runtime starts with an independent, usable tracker.
-      slackRequestRuntime.reset();
-      singlePlayerRuntime.resetShutdownState();
 
       if (mode === "single") {
         currentRuntimeMode = "single";
@@ -1883,11 +1874,7 @@ export default function (pi: ExtensionAPI) {
     await toolRegistrationRuntime.sync(pi, "off");
     setExtStatus(ctx, "reconnecting");
     const controller = new AbortController();
-    const startupRecord = {
-      controller,
-      promise: Promise.resolve(),
-    };
-    startupRecord.promise = runRuntimeModeTransition(ctx, startupMode, controller.signal)
+    const startupPromise = runRuntimeModeTransition(ctx, startupMode, controller.signal)
       .then(() => {
         if (startupMode === "single") {
           maybeWarnSlackGuardrailPosture(ctx);
@@ -1908,23 +1895,16 @@ export default function (pi: ExtensionAPI) {
             console.error(`[slack-bridge] runtime cleanup failed: ${msg(cleanupError)}`);
           },
         );
-        currentRuntimeMode = "off";
-        brokerRole = null;
-        pinetEnabled = false;
         slackRequestRuntime.reset();
         singlePlayerRuntime.resetShutdownState();
-        setExtStatus(ctx, "off");
-        await toolRegistrationRuntime.sync(pi, currentRuntimeMode);
       })
       .finally(() => {
-        if (pendingStartup === startupRecord) {
-          pendingStartup = null;
-        }
+        if (pendingStartup?.controller === controller) pendingStartup = null;
       })
       .catch((err) => {
         console.error(`[slack-bridge] background runtime start failed: ${msg(err)}`);
       });
-    pendingStartup = startupRecord;
+    pendingStartup = { controller, promise: startupPromise };
   });
 
   // ─── Agent event wiring ──────────────────────────────

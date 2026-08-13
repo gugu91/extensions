@@ -653,7 +653,6 @@ export function createBrokerRuntime(deps: BrokerRuntimeDeps): BrokerRuntime {
           brokerStableId,
         );
         selfId = selfAgent.id;
-        signal?.throwIfAborted();
         deps.applyLocalAgentIdentity(selfAgent.name, selfAgent.emoji, selfAssignment.personality);
 
         const brokerSelfId = selfId;

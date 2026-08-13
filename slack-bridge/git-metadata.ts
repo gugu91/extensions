@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 type ExecFileResult = { stdout?: string | Buffer };
-export const GIT_PROBE_TIMEOUT_MS = 2_000;
+const GIT_PROBE_TIMEOUT_MS = 2_000;
 
 export type ExecFileAsyncLike = (
   file: string,
@@ -50,7 +50,7 @@ async function runGitCommand(
       cwd,
       encoding: "utf-8",
       timeout: GIT_PROBE_TIMEOUT_MS,
-      ...(signal ? { signal } : {}),
+      signal,
     });
     const stdout = typeof result.stdout === "string" ? result.stdout : result.stdout?.toString();
     return { stdout, ok: true };
@@ -147,6 +147,7 @@ export interface GitContextCache {
   clear(): void;
 }
 
+// agent-standards-ignore prefer-inline-single-use-helper: isolates abortable waiting from the shared cache load
 function waitForGitContext(
   promise: Promise<GitContext>,
   signal?: AbortSignal,
@@ -154,21 +155,9 @@ function waitForGitContext(
   if (!signal) return promise;
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const abort = () => {
-      signal.removeEventListener("abort", abort);
-      reject(signal.reason);
-    };
+    const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", abort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", abort);
-        reject(error);
-      },
-    );
+    promise.finally(() => signal.removeEventListener("abort", abort)).then(resolve, reject);
   });
 }
 
@@ -180,7 +169,6 @@ export function createGitContextCache(
 
   return {
     async get(signal?: AbortSignal): Promise<GitContext> {
-      signal?.throwIfAborted();
       if (cached) return cached;
       if (inflight) return waitForGitContext(inflight, signal);
 

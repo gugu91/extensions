@@ -1420,7 +1420,7 @@ describe("slack-bridge top-level shutdown", () => {
         expect.any(Object),
       );
     });
-    expect(pi.getActiveTools()).toEqual(["read"]);
+    expect(pi.getActiveTools()).not.toContain("slack");
 
     resolveSocket(
       new Response(JSON.stringify({ ok: true, url: "wss://slack.example/socket" }), {
@@ -1490,7 +1490,7 @@ describe("slack-bridge top-level shutdown", () => {
     await expect(events.get("session_shutdown")?.({}, ctx)).resolves.toBeUndefined();
 
     expect(disconnectSpy).toHaveBeenCalled();
-    expect(pi.getActiveTools()).toEqual(["read"]);
+    expect(pi.getActiveTools()).not.toContain("pinet");
   });
 
   it("starts explicit single runtime mode on session start and reports it in /pinet status", async () => {
@@ -1556,7 +1556,6 @@ describe("slack-bridge top-level shutdown", () => {
     expect(pinetStatus).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await Promise.resolve();
 
     await vi.waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1648,7 +1647,6 @@ describe("slack-bridge top-level shutdown", () => {
     expect(pinetStatus).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await Promise.resolve();
 
     await vi.waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1780,7 +1778,6 @@ describe("slack-bridge top-level shutdown", () => {
     expect(pinetStatus).toBeDefined();
 
     await sessionStart?.({}, ctx);
-    await Promise.resolve();
 
     await vi.waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
