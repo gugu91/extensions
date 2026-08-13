@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createGitContextCache, probeGitBranch, probeGitContext } from "./git-metadata.js";
+import { probeGitBranch, probeGitContext, type GitContext } from "./git-metadata.js";
 import {
   type FollowerRuntimeDiagnostic,
   type InboxMessage,
@@ -302,9 +302,7 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Helpers ─────────────────────────────────────────
 
-  const gitContextCache = createGitContextCache((signal) =>
-    probeGitContext(process.cwd(), undefined, signal),
-  );
+  let gitContext: GitContext | null = null;
   const runtimeAgentContext = createRuntimeAgentContext({
     cwd: process.cwd(),
     getSettings: () => settings,
@@ -363,7 +361,10 @@ export default function (pi: ExtensionAPI) {
     getExtensionContext: sessionUiRuntime.getExtensionContext,
     persistState,
     updateBadge,
-    getGitContext: (signal) => gitContextCache.get(signal),
+    getGitContext: async (signal) => {
+      gitContext ??= await probeGitContext(process.cwd(), undefined, signal);
+      return gitContext;
+    },
   });
   const {
     isUserAllowed,
@@ -1204,9 +1205,7 @@ export default function (pi: ExtensionAPI) {
 
       if (currentRuntimeMode !== "off") {
         if (pinetReloadPromise) {
-          await pinetReloadPromise.catch(() => {
-            /* transition from the restored runtime */
-          });
+          await pinetReloadPromise.catch(() => undefined);
         }
         await stopPinetRuntime(ctx, { releaseIdentity: true });
         signal?.throwIfAborted();
@@ -1595,9 +1594,7 @@ export default function (pi: ExtensionAPI) {
         try {
           const imessageAdapter = createIMessageAdapter();
           const abortConnect = () => {
-            void imessageAdapter.disconnect().catch(() => {
-              /* the broker startup path owns connection failures */
-            });
+            void imessageAdapter.disconnect().catch(() => undefined);
           };
           signal?.addEventListener("abort", abortConnect, { once: true });
           try {
@@ -1871,27 +1868,20 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    // Runtime connection can involve Git probes, SQLite, Slack HTTP, and a
-    // Socket Mode handshake. Keep managed tools unavailable until it finishes,
-    // but let Pi render its UI while the queued startup runs in the background.
     await toolRegistrationRuntime.sync(pi, "off");
     setExtStatus(ctx, "reconnecting");
     const controller = new AbortController();
-    const startupPromise = runRuntimeModeTransition(ctx, startupMode, controller.signal)
-      .then(() => {
+    const startupPromise = (async () => {
+      try {
+        await runRuntimeModeTransition(ctx, startupMode, controller.signal);
         if (startupMode === "single") {
           maybeWarnSlackGuardrailPosture(ctx);
-          console.log("[slack-bridge] runtime mode: single");
-        } else if (startupMode === "follower") {
-          console.log("[slack-bridge] runtime mode: follower");
-        } else {
-          console.log("[slack-bridge] runtime mode: broker");
         }
-      })
-      .catch(async (err) => {
-        const cancelled = controller.signal.aborted || isAbortError(err);
+        console.log(`[slack-bridge] runtime mode: ${startupMode}`);
+      } catch (error) {
+        const cancelled = controller.signal.aborted || isAbortError(error);
         if (!cancelled) {
-          console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(err)}`);
+          console.error(`[slack-bridge] runtime start (${startupMode}) failed: ${msg(error)}`);
         }
         await runPinetLifecycle(() => stopPinetRuntime(ctx, { releaseIdentity: !cancelled })).catch(
           (cleanupError) => {
@@ -1900,13 +1890,12 @@ export default function (pi: ExtensionAPI) {
         );
         slackRequestRuntime.reset();
         singlePlayerRuntime.resetShutdownState();
-      })
-      .finally(() => {
+      } finally {
         if (pendingStartup?.controller === controller) pendingStartup = null;
-      })
-      .catch((err) => {
-        console.error(`[slack-bridge] background runtime start failed: ${msg(err)}`);
-      });
+      }
+    })().catch((error) => {
+      console.error(`[slack-bridge] background runtime start failed: ${msg(error)}`);
+    });
     pendingStartup = { controller, promise: startupPromise };
   });
 

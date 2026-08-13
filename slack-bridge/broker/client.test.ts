@@ -6,7 +6,6 @@ import {
   BrokerClient,
   DEFAULT_SOCKET_PATH,
   REQUEST_TIMEOUT_MS,
-  RECONNECT_DELAY_MS,
   INITIAL_RECONNECT_DELAY_MS,
   MAX_RECONNECT_DELAY_MS,
   HEARTBEAT_INTERVAL_MS,
@@ -99,10 +98,6 @@ describe("BrokerClient — constants", () => {
 
   it("REQUEST_TIMEOUT_MS is 5000", () => {
     expect(REQUEST_TIMEOUT_MS).toBe(5000);
-  });
-
-  it("RECONNECT_DELAY_MS is 3000", () => {
-    expect(RECONNECT_DELAY_MS).toBe(3000);
   });
 
   it("INITIAL_RECONNECT_DELAY_MS is 1000", () => {

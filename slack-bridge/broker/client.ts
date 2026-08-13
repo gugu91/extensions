@@ -106,7 +106,6 @@ interface JsonRpcResponse {
 
 export const DEFAULT_SOCKET_PATH = PINET_DEFAULT_SOCKET_PATH;
 export const REQUEST_TIMEOUT_MS = 5000;
-export const RECONNECT_DELAY_MS = 3000;
 export const INITIAL_RECONNECT_DELAY_MS = 1000;
 export const MAX_RECONNECT_DELAY_MS = 30000;
 export const HEARTBEAT_INTERVAL_MS = 5000;
