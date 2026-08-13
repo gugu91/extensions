@@ -21,7 +21,6 @@ import {
 import { buildSecurityPrompt, type SecurityGuardrails } from "./guardrails.js";
 import { TtlCache, TtlSet } from "./ttl-cache.js";
 import { resolveReactionCommands } from "./reaction-triggers.js";
-import { DEFAULT_SOCKET_PATH } from "./broker/client.js";
 import {
   inspectBrokerLock,
   probeBrokerSocket,
@@ -64,7 +63,11 @@ import {
   markFollowerInboxIdsDelivered,
   queueFollowerInboxIds,
 } from "./follower-delivery.js";
-import { createFollowerRuntime, type BrokerClientRef } from "./follower-runtime.js";
+import {
+  createFollowerRuntime,
+  resolveBrokerSocketPath,
+  type BrokerClientRef,
+} from "./follower-runtime.js";
 import {
   createSinglePlayerRuntime,
   type SinglePlayerPendingAttentionEntry,
@@ -1859,7 +1862,7 @@ export default function (pi: ExtensionAPI) {
     refreshSettings();
     maybeWarnSlackUserAccess(ctx);
     const startupMode = resolveSlackBridgeStartupRuntimeMode(settings, {
-      brokerSocketExists: fs.existsSync(DEFAULT_SOCKET_PATH),
+      brokerSocketExists: fs.existsSync(resolveBrokerSocketPath()),
       brokerManagedFollowerLaunch: isBrokerManagedFollowerLaunch(),
     });
 

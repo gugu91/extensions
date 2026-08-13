@@ -47,6 +47,7 @@ const BROKER_MANAGED_PINET_ENV_KEYS = [
   "PINET_LAUNCH_SOURCE",
   "PINET_BROKER_AGENT_ID",
   "PINET_TMUX_SESSION",
+  "PINET_SOCKET_PATH",
 ] as const;
 
 const originalBrokerManagedPinetEnv = Object.fromEntries(
@@ -1443,6 +1444,9 @@ describe("slack-bridge top-level shutdown", () => {
         "slack-bridge": { runtimeMode: "follower", allowAllWorkspaceUsers: true },
       }),
     );
+    const socketPath = path.join(testHome, "pinet.sock");
+    fs.writeFileSync(socketPath, "");
+    process.env.PINET_SOCKET_PATH = socketPath;
 
     const events = new Map<string, EventHandler>();
     const pi = {

@@ -32,7 +32,7 @@ import {
 } from "./follower-delivery.js";
 import { BrokerClient, DEFAULT_SOCKET_PATH } from "./broker/client.js";
 
-function resolveBrokerSocketPath(): string {
+export function resolveBrokerSocketPath(): string {
   const envPath = process.env.PINET_SOCKET_PATH?.trim();
   return envPath && envPath.length > 0 ? envPath : DEFAULT_SOCKET_PATH;
 }
