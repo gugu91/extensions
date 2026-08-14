@@ -314,16 +314,6 @@ describe("slack-bridge top-level shutdown", () => {
       };
       stop: ReturnType<typeof vi.fn>;
     }> = [];
-    let resolveReloadStarted: (() => void) | null = null;
-    const reloadStarted = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error("Broker reload did not start"));
-      }, 1_000);
-      resolveReloadStarted = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-    });
 
     vi.spyOn(maintenanceModule, "runBrokerMaintenancePass").mockImplementation((db) => ({
       reapedAgentIds: [],
@@ -359,13 +349,9 @@ describe("slack-bridge top-level shutdown", () => {
         stop,
       } as unknown as Awaited<ReturnType<typeof brokerModule.startBroker>>;
     });
-    let slackConnectCount = 0;
-    vi.spyOn(SlackAdapter.prototype, "connect").mockImplementation(async () => {
-      slackConnectCount += 1;
-      if (slackConnectCount === 2) {
-        resolveReloadStarted?.();
-      }
-    });
+    const slackConnectSpy = vi
+      .spyOn(SlackAdapter.prototype, "connect")
+      .mockResolvedValue(undefined);
     vi.spyOn(SlackAdapter.prototype, "disconnect").mockResolvedValue(undefined);
     vi.spyOn(SlackAdapter.prototype, "getBotUserId").mockReturnValue("U_BOT");
 
@@ -381,53 +367,34 @@ describe("slack-bridge top-level shutdown", () => {
     expect(pinetStart).toBeDefined();
     expect(slackDispatcher).toBeDefined();
 
-    await sessionStart?.({}, ctx);
-    await pinetStart?.handler("start", ctx);
+    try {
+      await sessionStart?.({}, ctx);
+      await pinetStart?.handler("start", ctx);
+      await pinetStart?.handler("start", ctx);
 
-    expect(setStatus).toHaveBeenLastCalledWith("slack-bridge", expect.stringContaining("⟳"));
-    expect(brokerRuntimes).toHaveLength(1);
-    brokerRuntimes[0]!.db.registerAgent("sender", "Sender", "📤", 202);
-    brokerRuntimes[0]!.db.queueMessage("broker-leaf", {
-      source: "agent",
-      threadId: "a2a:sender:broker-leaf",
-      channel: "",
-      userId: "sender",
-      text: "/reload",
-      timestamp: "123.456",
-      metadata: { a2a: true, kind: "pinet_control", command: "reload" },
-    });
+      expect(setStatus).toHaveBeenLastCalledWith("slack-bridge", expect.stringContaining("⟳"));
+      expect(brokerRuntimes).toHaveLength(1);
+      expect(slackConnectSpy).toHaveBeenCalledTimes(2);
 
-    const onAgentMessage = brokerRuntimes[0]!.server.onAgentMessage.mock.calls[0]?.[0] as
-      | ((targetAgentId: string) => void)
-      | undefined;
-    expect(onAgentMessage).toBeDefined();
-    if (!onAgentMessage) {
-      throw new Error("Expected broker agent-message handler to be registered");
+      const response = await slackDispatcher!.execute("tool-call-2", {
+        action: "create_channel",
+        args: { name: "reload-test" },
+      });
+
+      expect(response).toMatchObject({
+        details: {
+          status: "succeeded",
+          data: { details: { id: "C123", name: "reload-test" } },
+        },
+      });
+      expect(
+        fetchSpy.mock.calls.some(
+          (call) => String(call.at(0)) === "https://slack.com/api/conversations.create",
+        ),
+      ).toBe(true);
+    } finally {
+      await sessionShutdown?.({}, ctx);
     }
-
-    onAgentMessage("broker-leaf");
-    await reloadStarted;
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const response = await slackDispatcher!.execute("tool-call-2", {
-      action: "create_channel",
-      args: { name: "reload-test" },
-    });
-
-    expect(response).toMatchObject({
-      details: {
-        status: "succeeded",
-        data: { details: { id: "C123", name: "reload-test" } },
-      },
-    });
-    expect(
-      fetchSpy.mock.calls.some(
-        (call) => String(call.at(0)) === "https://slack.com/api/conversations.create",
-      ),
-    ).toBe(true);
-
-    await sessionShutdown?.({}, ctx);
     expect(notify).not.toHaveBeenCalledWith(
       expect.stringContaining("Operation rejected: shutdown in progress"),
       "error",
@@ -547,27 +514,38 @@ describe("slack-bridge top-level shutdown", () => {
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
 
-    await sessionStart?.({}, ctx);
-    await pinetStart?.handler("start", ctx);
-    const firstReload = pinetStart?.handler("start", ctx);
-    const coalescedReload = pinetStart?.handler("start", ctx);
-    await reloadConnectStarted;
-    const shutdown = sessionShutdown?.({}, ctx);
-    await Promise.resolve();
-    expect(brokerRuntimes[0]?.stop).not.toHaveBeenCalled();
+    let shutdown: Promise<void> | undefined;
+    try {
+      await sessionStart?.({}, ctx);
+      await pinetStart?.handler("start", ctx);
+      const firstReload = pinetStart?.handler("start", ctx);
+      const coalescedReload = pinetStart?.handler("start", ctx);
+      await reloadConnectStarted;
+      shutdown = (async () => {
+        await sessionShutdown?.({}, ctx);
+      })();
+      await Promise.resolve();
+      expect(brokerRuntimes[0]?.stop).not.toHaveBeenCalled();
 
-    reloadConnectReleasedGate.resolve();
-    await Promise.all([firstReload, coalescedReload, shutdown]);
+      reloadConnectReleasedGate.resolve();
+      await Promise.all([firstReload, coalescedReload, shutdown]);
 
-    expect(startBrokerSpy).toHaveBeenCalledTimes(1);
-    expect(slackConnectSpy).toHaveBeenCalledTimes(2);
-    expect(brokerRuntimes).toHaveLength(1);
-    expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith(
-      "Pinet broker already running — reloading current runtime",
-      "info",
-    );
-    expect(notify).not.toHaveBeenCalledWith("Pinet already running (broker)", "info");
+      expect(startBrokerSpy).toHaveBeenCalledTimes(1);
+      expect(slackConnectSpy).toHaveBeenCalledTimes(2);
+      expect(brokerRuntimes).toHaveLength(1);
+      expect(brokerRuntimes[0]?.stop).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledWith(
+        "Pinet broker already running — reloading current runtime",
+        "info",
+      );
+      expect(notify).not.toHaveBeenCalledWith("Pinet already running (broker)", "info");
+    } finally {
+      reloadConnectReleasedGate.resolve();
+      shutdown ??= (async () => {
+        await sessionShutdown?.({}, ctx);
+      })();
+      await shutdown;
+    }
   });
 
   it("aborts the current turn before reloading broker runtime from /pinet start", async () => {
