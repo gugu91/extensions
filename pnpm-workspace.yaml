@@ -11,3 +11,4 @@ packages:
   - neon-psql
   - openai-execution-shaping
   - model-aware-compaction
+  - agent-goal

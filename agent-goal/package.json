@@ -1,0 +1,53 @@
+{
+  "name": "@pinet/agent-goal",
+  "version": "0.2.5",
+  "type": "module",
+  "description": "Standalone single-agent durable goal loop for Pi",
+  "author": "Will Porcellini <5994936+gugu91@users.noreply.github.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugu91/pinet.git",
+    "directory": "agent-goal"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "dist/"
+  ],
+  "keywords": [
+    "pi-package",
+    "goal",
+    "agent",
+    "autonomous"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "node ../scripts/build-package.mjs",
+    "prepack": "pnpm run build",
+    "lint": "oxlint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ../vitest.config.ts"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.74.0",
+    "@earendil-works/pi-coding-agent": ">=0.74.0"
+  }
+}
