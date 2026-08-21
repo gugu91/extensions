@@ -75,7 +75,9 @@ describe("GoalRuntime", () => {
     );
     await runtime.create("session-1", "ship");
 
-    await expect(runtime.setStatus("session-1", "active")).resolves.toMatchObject({ version: 1 });
+    await expect(runtime.setStatus("session-1", "active")).rejects.toThrow(
+      "Cannot change a active goal to active",
+    );
     await runtime.setStatus("session-1", "complete");
     await expect(runtime.setStatus("session-1", "active")).rejects.toThrow(
       "Cannot change a complete goal to active",
@@ -96,14 +98,17 @@ describe("GoalRuntime", () => {
     expect(evaluator.evaluate).not.toHaveBeenCalled();
   });
 
-  it("prevents duplicate evaluations for the same scope", async () => {
+  it("re-evaluates the latest progress instead of applying an older result", async () => {
     let resolveEvaluation: ((value: { outcome: "continue"; reason: string }) => void) | undefined;
     const evaluator: GoalEvaluator = {
-      evaluate: vi.fn().mockReturnValue(
-        new Promise((resolve) => {
-          resolveEvaluation = resolve;
-        }),
-      ),
+      evaluate: vi
+        .fn()
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            resolveEvaluation = resolve;
+          }),
+        )
+        .mockResolvedValueOnce({ outcome: "complete", reason: "latest turn completed the goal" }),
     };
     const continuation = {
       continue: vi.fn().mockResolvedValue("started"),
@@ -111,13 +116,18 @@ describe("GoalRuntime", () => {
     const runtime = new GoalRuntime(new MemoryGoalStorage(), evaluator, continuation);
     await runtime.create("session-1", "ship");
 
-    const first = runtime.settle("session-1", { latestOutput: "first" });
-    await runtime.settle("session-1", { latestOutput: "duplicate" });
-    resolveEvaluation?.({ outcome: "continue", reason: "keep going" });
+    const first = runtime.settle("session-1", { latestOutput: "first turn" });
+    await runtime.settle("session-1", { latestOutput: "latest completed turn" });
+    resolveEvaluation?.({ outcome: "continue", reason: "stale result" });
     await first;
 
-    expect(evaluator.evaluate).toHaveBeenCalledOnce();
-    expect(continuation.continue).toHaveBeenCalledOnce();
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
+    expect(evaluator.evaluate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scopeId: "session-1" }),
+      { latestOutput: "latest completed turn" },
+    );
+    expect(continuation.continue).not.toHaveBeenCalled();
+    expect((await runtime.get("session-1"))?.status).toBe("complete");
   });
 
   it("discards stale evaluator results", async () => {

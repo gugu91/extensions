@@ -10,6 +10,7 @@ import type {
 
 export class GoalRuntime {
   private readonly evaluatingScopes = new Set<string>();
+  private readonly pendingProgress = new Map<string, GoalProgress>();
 
   constructor(
     private readonly storage: GoalStorage,
@@ -48,7 +49,6 @@ export class GoalRuntime {
     status: Extract<GoalStatus, "active" | "paused" | "complete">,
   ): Promise<AgentGoal> {
     const current = await this.requireGoal(scopeId);
-    if (current.status === status) return current;
     const transitionAllowed =
       (status === "active" && (current.status === "paused" || current.status === "blocked")) ||
       (status === "paused" && current.status === "active") ||
@@ -82,31 +82,48 @@ export class GoalRuntime {
   }
 
   async settle(scopeId: string, progress: GoalProgress): Promise<void> {
-    if (this.evaluatingScopes.has(scopeId)) return;
+    if (this.evaluatingScopes.has(scopeId)) {
+      this.pendingProgress.set(scopeId, progress);
+      return;
+    }
     this.evaluatingScopes.add(scopeId);
+    let currentProgress: GoalProgress | undefined = progress;
     try {
-      const goal = await this.storage.get(scopeId);
-      if (!goal || goal.status !== "active") return;
+      while (currentProgress) {
+        const goal = await this.storage.get(scopeId);
+        if (!goal || goal.status !== "active") return;
 
-      const evaluation = await this.evaluator.evaluate(goal, progress);
-      const current = await this.storage.get(scopeId);
-      if (!current || current.id !== goal.id || current.version !== goal.version) return;
+        const evaluation = await this.evaluator.evaluate(goal, currentProgress);
+        const pending = this.pendingProgress.get(scopeId);
+        if (pending) {
+          this.pendingProgress.delete(scopeId);
+          currentProgress = pending;
+          continue;
+        }
 
-      if (evaluation.outcome === "continue") {
-        await this.continuation.continue(current, evaluation.reason);
-        return;
+        const current = await this.storage.get(scopeId);
+        if (!current || current.id !== goal.id || current.version !== goal.version) return;
+
+        if (evaluation.outcome === "continue") {
+          await this.continuation.continue(current, evaluation.reason);
+        } else {
+          const next: AgentGoal = {
+            ...current,
+            status: evaluation.outcome,
+            blockedReason: evaluation.outcome === "blocked" ? evaluation.reason : undefined,
+            version: current.version + 1,
+            updatedAt: this.now().toISOString(),
+          };
+          await this.storage.replace(next, current.version);
+        }
+        currentProgress = this.pendingProgress.get(scopeId);
+        this.pendingProgress.delete(scopeId);
       }
-
-      const next: AgentGoal = {
-        ...current,
-        status: evaluation.outcome,
-        blockedReason: evaluation.outcome === "blocked" ? evaluation.reason : undefined,
-        version: current.version + 1,
-        updatedAt: this.now().toISOString(),
-      };
-      await this.storage.replace(next, current.version);
     } finally {
       this.evaluatingScopes.delete(scopeId);
+      const pending = this.pendingProgress.get(scopeId);
+      this.pendingProgress.delete(scopeId);
+      if (pending) await this.settle(scopeId, pending);
     }
   }
 

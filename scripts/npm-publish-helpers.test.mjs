@@ -52,6 +52,7 @@ test("getPublishPackages returns the full publish set in dependency order", () =
     "imessage-bridge",
     "slack-bridge",
     "model-aware-compaction",
+    "agent-goal",
   ]);
 });
 
