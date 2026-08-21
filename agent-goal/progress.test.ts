@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { formatGoalProgress, type GoalProgressMessage } from "./progress.js";
+import {
+  countGoalProgressTokens,
+  formatGoalProgress,
+  type GoalProgressMessage,
+} from "./progress.js";
 
 describe("formatGoalProgress", () => {
+  it("counts provider token usage", () => {
+    expect(
+      countGoalProgressTokens([
+        { role: "assistant", usage: { totalTokens: 120 } },
+        { role: "assistant", usage: { input: 20, output: 10, cacheRead: 5 } },
+      ]),
+    ).toBe(155);
+  });
+
   it("includes conversational and tool evidence", () => {
     expect(
       formatGoalProgress([

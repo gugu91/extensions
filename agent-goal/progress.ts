@@ -3,10 +3,31 @@ export interface GoalProgressMessage {
   content?: string | Array<{ type: string; text?: string }>;
   toolName?: string;
   isError?: boolean;
+  usage?: {
+    totalTokens?: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
 }
 
 const MAX_PROGRESS_MESSAGES = 40;
 const MAX_PROGRESS_CHARACTERS = 40_000;
+
+export function countGoalProgressTokens(messages: GoalProgressMessage[]): number {
+  return messages.reduce((total, message) => {
+    if (!message.usage) return total;
+    if (Number.isFinite(message.usage.totalTokens)) return total + (message.usage.totalTokens ?? 0);
+    return (
+      total +
+      (message.usage.input ?? 0) +
+      (message.usage.output ?? 0) +
+      (message.usage.cacheRead ?? 0) +
+      (message.usage.cacheWrite ?? 0)
+    );
+  }, 0);
+}
 
 export function formatGoalProgress(messages: GoalProgressMessage[]): string {
   const text = messages
