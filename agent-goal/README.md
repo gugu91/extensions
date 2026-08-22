@@ -20,7 +20,7 @@ pi -e ./agent-goal/index.ts
 
 ```text
 /goal <objective>  Create and immediately start a goal
-/goal              Inspect this session's goal
+/goal              Open the minimal goal window (text in headless modes)
 /goal pause        Pause automatic evaluation and continuation
 /goal resume       Resume and immediately continue
 /goal complete     Mark complete manually
@@ -29,7 +29,7 @@ pi -e ./agent-goal/index.ts
 /goal show         Show the persistent goal dashboard
 ```
 
-Pi's footer shows the status and budget usage. A compact widget below the editor shows the objective, turns, tokens, last evaluator decision, continuation state, and available commands. `/goal` remains a textual fallback in headless sessions.
+Pi's footer shows the status and budget usage. A compact widget below the editor shows passive progress. In interactive mode, `/goal` opens a centered, keyboard-dismissable window with the objective, lifecycle state, budget bars, latest evaluator guidance, and continuation state. Press Escape, Enter, `q`, or Ctrl+C to close it. `/goal` remains a textual fallback in headless sessions.
 
 Only one goal may exist per Pi session. Clear the existing goal before creating another.
 

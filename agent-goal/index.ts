@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
+import { GoalWindow } from "./goal-window.js";
 import type {
   GoalBudget,
   GoalContinuation,
@@ -42,7 +43,8 @@ export type {
   GoalUsage,
   GoalWakeScheduler,
 } from "./domain.js";
-export { formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
+export { displayGoalText, formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
+export { GoalWindow } from "./goal-window.js";
 export { MemoryGoalStorage } from "./memory-storage.js";
 export { parseGoalEvaluation, PiGoalEvaluator } from "./pi-evaluator.js";
 export {
@@ -398,6 +400,25 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
         if (!input) {
           const goal = await runtime.get(scopeId);
           const claim = await runtime.getContinuationClaim(scopeId);
+          let openedWindow = false;
+          await ctx.ui.custom<void>(
+            (_tui, theme, _keybindings, done) => {
+              openedWindow = true;
+              return new GoalWindow(goal, claim, theme, () => done(undefined));
+            },
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: 66,
+                minWidth: 36,
+                maxHeight: "80%",
+                margin: 1,
+              },
+            },
+          );
+          if (openedWindow) return;
+
           api.sendMessage(
             {
               customType: "agent-goal.status",
