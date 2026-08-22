@@ -18,10 +18,33 @@ declare module "@earendil-works/pi-coding-agent" {
     options: { maxLines: number; maxBytes: number },
   ): TruncationResult;
 
+  export interface Theme {
+    fg(color: string, text: string): string;
+    bold(text: string): string;
+  }
+
   export interface ExtensionUI {
     theme: any;
     notify(message: string, level?: string): void;
     setStatus(id: string, value?: any): void;
+    custom<T>(
+      factory: (
+        tui: { requestRender(): void },
+        theme: Theme,
+        keybindings: object,
+        done: (value: T) => void,
+      ) => import("@earendil-works/pi-tui").Component,
+      options?: {
+        overlay?: boolean;
+        overlayOptions?: {
+          anchor?: string;
+          width?: number | `${number}%`;
+          minWidth?: number;
+          maxHeight?: number | `${number}%`;
+          margin?: number;
+        };
+      },
+    ): Promise<T>;
   }
 
   export interface SessionEntry {
@@ -40,6 +63,7 @@ declare module "@earendil-works/pi-coding-agent" {
 
   export interface ExtensionContext {
     cwd: string;
+    mode?: "tui" | "rpc" | "json" | "print";
     hasUI?: boolean;
     isIdle?: () => boolean;
     ui: ExtensionUI;
@@ -78,9 +102,11 @@ declare module "@earendil-works/pi-coding-agent" {
     renderResult?: (result: any, options: any, theme: any) => any;
   }
 
+  export interface ExtensionCommandContext extends ExtensionContext {}
+
   export interface CommandDefinition {
     description?: string;
-    handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
+    handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
   }
 
   export interface ExtensionAPI {

@@ -1,6 +1,6 @@
 import type { AgentGoal, GoalContinuationClaim } from "./domain.js";
 
-function displayText(value: string, maxLength: number): string {
+export function displayGoalText(value: string, maxLength: number): string {
   const normalized = value
     .replaceAll("\n", " ")
     .replaceAll("\r", " ")
@@ -31,15 +31,15 @@ export function formatGoalDashboard(goal: AgentGoal, claim?: GoalContinuationCla
     .join(" · ");
   const lines = [
     `Goal · ${goal.status} · v${goal.version}`,
-    displayText(goal.objective, 120),
+    displayGoalText(goal.objective, 120),
     usage,
   ];
   if (goal.lastEvaluation) {
     lines.push(
-      `Last ${goal.lastEvaluation.outcome.toUpperCase()}: ${displayText(goal.lastEvaluation.reason, 100)}`,
+      `Last ${goal.lastEvaluation.outcome.toUpperCase()}: ${displayGoalText(goal.lastEvaluation.reason, 100)}`,
     );
   }
-  if (goal.blockedReason) lines.push(`Reason: ${displayText(goal.blockedReason, 100)}`);
+  if (goal.blockedReason) lines.push(`Reason: ${displayGoalText(goal.blockedReason, 100)}`);
   if (claim) lines.push(`Continuation: ${claim.state} · attempt ${claim.attempt}`);
   lines.push("/goal pause · resume · complete · clear · hide");
   return lines;

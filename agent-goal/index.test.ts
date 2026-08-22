@@ -1,5 +1,6 @@
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -12,6 +13,7 @@ type GoalEventHandler = (
   event: { messages?: GoalProgressMessage[] },
   context: ExtensionContext,
 ) => Promise<void> | void;
+type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
 
 afterEach(() => vi.useRealTimers());
 
@@ -140,6 +142,59 @@ describe("registerAgentGoal", () => {
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(await storage.getContinuationClaim("session-1")).toMatchObject({ state: "started" });
     await handlers.get("session_shutdown")?.({}, context);
+  });
+
+  it("opens a goal overlay in TUI mode and preserves the textual fallback", async () => {
+    const commands = new Map<string, RegisteredCommand>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      sendMessage,
+    } as object as ExtensionAPI;
+    const custom = vi.fn().mockResolvedValue(undefined);
+    const baseContext = {
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "session-1" },
+      ui: {
+        custom,
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        notify: vi.fn(),
+      },
+    };
+    registerAgentGoal(pi, { storage: new MemoryGoalStorage() });
+    const command = commands.get("goal");
+    if (!command) throw new Error("goal command was not registered");
+
+    await command.handler("", {
+      ...baseContext,
+      mode: "tui",
+    } as object as ExtensionCommandContext);
+
+    expect(custom).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        overlay: true,
+        overlayOptions: expect.objectContaining({ anchor: "center" }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await command.handler("", {
+      ...baseContext,
+      mode: "print",
+    } as object as ExtensionCommandContext);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "This session has no goal." }),
+      { triggerTurn: false },
+    );
   });
 
   it("lets the worker create and inspect its own bounded goal", async () => {
