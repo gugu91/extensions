@@ -12,8 +12,9 @@ The publish workflow always validates or publishes the full npm org `pinet` pack
 4. `@pinet/imessage-bridge` from `imessage-bridge/`
 5. `@pinet/slack-bridge` from `slack-bridge/`
 6. `@pinet/model-aware-compaction` from `model-aware-compaction/`
+7. `@pinet/agent-goal` from `agent-goal/`
 
-There is intentionally no workflow target selector or script target flag. Real releases always attempt the shared core packages, bridges, and model-aware compaction package in dependency order so dependency versions stay aligned. npm publishes are sequential rather than atomic, so operators must verify the full package set after any real publish and treat a late failure as a partial-release recovery task.
+There is intentionally no workflow target selector or script target flag. Real releases always attempt the shared core packages, bridges, and standalone extensions in dependency order so dependency versions stay aligned. npm publishes are sequential rather than atomic, so operators must verify the full package set after any real publish and treat a late failure as a partial-release recovery task.
 
 ## Workflow and script
 
@@ -59,7 +60,7 @@ Manual real publishes require all of these gates before the publish job can run:
 
 Tag-triggered real publishes require all of these gates before the publish job can run:
 
-- A maintainer-approved version-bump PR has landed on `main`, with all six `@pinet/*` package versions and `pnpm-lock.yaml` aligned.
+- A maintainer-approved version-bump PR has landed on `main`, with all seven `@pinet/*` package versions aligned and a frozen-lockfile install succeeding.
 - A `vX.Y.Z` tag points at the current `main` tip after the version-bump PR merges.
 - The non-environment preflight job fetches `origin/main` and confirms the tag commit equals the current `origin/main` tip.
 - The same preflight job confirms every full-set package version equals `X.Y.Z`.
@@ -141,7 +142,7 @@ GitHub permissions:
 
 - #772 has confirmed the Pinet/Slack boundary and the full publish set is still correct.
 - Package versions are intentionally bumped together. The publish and bootstrap scripts refuse real publishes for placeholder `0.0.0` packages or versions already present on npm.
-- `pnpm-lock.yaml` is updated for the package-version bump.
+- `pnpm-lock.yaml` is updated when dependency or workspace specifiers change; a version-only bump may leave it unchanged, but `pnpm install --frozen-lockfile` must succeed.
 - `CHANGELOG.md` has a maintainer-approved entry covering the full package set and package versions.
 - The dry-run/readiness job is green on the same `main` commit intended for release.
 - For manual real publishes, the workflow dispatch includes the exact `publish all` release approval phrase and runs from `main`.

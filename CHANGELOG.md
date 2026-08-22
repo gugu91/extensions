@@ -9,6 +9,45 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.6] - 2026-08-22
+
+Pinet v0.2.6 adds the standalone durable single-agent goal loop and tightens Slack bridge startup, mode boundaries, and dependency/release hygiene. It expands the coordinated npm release set to seven `@pinet/*` packages.
+
+### Version verification
+
+- `pi-extensions` — `0.2.6` (private repo package)
+- `@pinet/transport-core` — `0.2.6`
+- `@pinet/broker-core` — `0.2.6`
+- `@pinet/pinet-core` — `0.2.6`
+- `@pinet/imessage-bridge` — `0.2.6`
+- `@pinet/slack-bridge` — `0.2.6`
+- `@pinet/model-aware-compaction` — `0.2.6`
+- `@pinet/agent-goal` — `0.2.6` (initial release)
+
+### Release highlights
+
+- Adds `@pinet/agent-goal`, a standalone Pi extension for one durable, bounded goal per agent session. Agents can create and inspect goals, request independently evaluated completion or blocking decisions, and continue ordinary settled work without an evaluator call.
+- Persists goal state, terminal candidates, evaluator work, continuation claims, usage accounting, and recovery state through replaceable memory and SQLite adapters.
+- Adds bounded iteration, token, runtime, checkpoint, evaluator-retry, and continuation-retry policies with a Pi-native dashboard and headless command fallback.
+- Atomically preserves every settlement that arrives during in-flight evaluation and schedules process-local recovery for deferred or orphaned continuations without requiring Pinet, Slack, a broker, RALPH, tmux, subagents, or spawned Pi processes.
+- Gates Slack runtime guidance and tools by the active mode, reducing irrelevant prompt/tool surface outside Pinet operation.
+- Speeds up and simplifies Slack bridge startup while removing stale startup support and fixing a broker reload lifecycle test race.
+- Replaces ESLint with Oxlint across the workspace and delays newly released dependencies during automated updates.
+- Removes the obsolete browser Playwright extension from the repository.
+
+### Notable pull requests
+
+- [#990](https://github.com/gugu91/pinet/pull/990) — add the standalone single-agent goal loop
+- [#986](https://github.com/gugu91/pinet/pull/986) — fix the broker reload lifecycle test race
+- [#985](https://github.com/gugu91/pinet/pull/985) — simplify Slack bridge startup support
+- [#984](https://github.com/gugu91/pinet/pull/984) — speed up Slack bridge startup
+- [#981](https://github.com/gugu91/pinet/pull/981) — replace ESLint with Oxlint
+- [#980](https://github.com/gugu91/pinet/pull/980) — gate Slack runtime guidance and tools by mode
+- [#979](https://github.com/gugu91/pinet/pull/979) — remove the browser Playwright extension
+- [#977](https://github.com/gugu91/pinet/pull/977) — delay newly released dependencies
+
+See the [full change set since v0.2.5](https://github.com/gugu91/pinet/compare/v0.2.5...v0.2.6).
+
 ## [0.2.5] - 2026-07-30
 
 Pinet v0.2.5 adds Herdr-backed subtree workers, broker-managed hibernation and safer worker recovery. It keeps the coordinated `@pinet/*` package set aligned.
