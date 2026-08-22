@@ -36,6 +36,7 @@ const pending: GoalPendingEvaluation = {
   goalId: "goal-1",
   goalVersion: 3,
   evaluationId: "evaluation-2",
+  iterationsDelta: 1,
   progress: {
     latestOutput: "work",
     tokenDelta: 200,
@@ -105,6 +106,47 @@ describe("SqliteGoalStorage", () => {
       }),
     ).toBe(false);
     second.close();
+  });
+
+  it("atomically aggregates superseding pending settlements", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-goal-"));
+    tempDirectories.push(directory);
+    const storage = new SqliteGoalStorage(join(directory, "goals.sqlite"));
+    await storage.create(goal);
+
+    expect(await storage.appendPendingEvaluation(pending)).toBe(true);
+    expect(
+      await storage.appendPendingEvaluation({
+        ...pending,
+        evaluationId: "evaluation-3",
+        iterationsDelta: 1,
+        progress: { latestOutput: "newer work", tokenDelta: 300 },
+        attempt: 0,
+        lastError: undefined,
+      }),
+    ).toBe(true);
+
+    expect(await storage.getPendingEvaluation("session-1")).toMatchObject({
+      evaluationId: "evaluation-3",
+      iterationsDelta: 2,
+      progress: {
+        latestOutput: "newer work",
+        tokenDelta: 500,
+        terminalCandidate: { outcome: "complete", reason: "all checks pass" },
+      },
+      attempt: 0,
+    });
+    const evaluated = {
+      ...goal,
+      status: "complete" as const,
+      usage: { iterations: 4, tokens: 1_700 },
+      version: 4,
+    };
+    expect(await storage.commitEvaluation(evaluated, 3, "evaluation-2")).toBe(false);
+    expect(await storage.commitEvaluation(evaluated, 3, "evaluation-3")).toBe(true);
+    expect(await storage.get("session-1")).toEqual(evaluated);
+    expect(await storage.getPendingEvaluation("session-1")).toBeUndefined();
+    storage.close();
   });
 
   it("migrates goals created by the initial standalone schema", async () => {

@@ -15,7 +15,9 @@ import type {
   GoalStorage,
   GoalTerminalCandidate,
   GoalTerminalCandidateRecord,
+  GoalWakeScheduler,
 } from "./domain.js";
+import { TimerGoalWakeScheduler } from "./wake-scheduler.js";
 
 const DEFAULT_BUDGET: GoalBudget = { maxIterations: 25 };
 const DEFAULT_RETRY_POLICY: GoalRetryPolicy = {
@@ -31,17 +33,20 @@ export interface GoalRuntimeOptions {
   claimTtlMs?: number;
   delay?: (milliseconds: number) => Promise<void>;
   evaluationInterval?: number;
+  wakeScheduler?: GoalWakeScheduler;
 }
 
 export class GoalRuntime {
   private readonly evaluatingScopes = new Set<string>();
-  private readonly latestSettlements = new Map<string, { id: string; progress: GoalProgress }>();
+  private readonly recoveringScopes = new Set<string>();
   private readonly budget: GoalBudget;
   private readonly retryPolicy: GoalRetryPolicy;
   private readonly eventSink?: GoalEventSink;
   private readonly claimTtlMs: number;
   private readonly delay: (milliseconds: number) => Promise<void>;
   private readonly evaluationInterval: number;
+  private readonly wakeScheduler: GoalWakeScheduler;
+  private closed = false;
 
   constructor(
     private readonly storage: GoalStorage,
@@ -55,12 +60,20 @@ export class GoalRuntime {
     this.eventSink = options.eventSink;
     this.claimTtlMs = options.claimTtlMs ?? 5 * 60_000;
     this.evaluationInterval = options.evaluationInterval ?? 0;
+    this.wakeScheduler =
+      options.wakeScheduler ?? new TimerGoalWakeScheduler(() => this.now().getTime());
     if (!Number.isInteger(this.evaluationInterval) || this.evaluationInterval < 0) {
       throw new Error("Goal evaluationInterval must be a non-negative integer");
     }
     this.delay =
       options.delay ??
       ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  }
+
+  close(closeStorage = true): void {
+    this.closed = true;
+    this.wakeScheduler.close();
+    if (closeStorage) this.storage.close();
   }
 
   async get(scopeId: string): Promise<AgentGoal | undefined> {
@@ -140,6 +153,7 @@ export class GoalRuntime {
     if (candidate) await this.storage.deleteTerminalCandidate(scopeId, candidate.candidateId);
     const claim = await this.storage.getContinuationClaim(scopeId);
     if (claim) await this.storage.deleteContinuationClaim(scopeId, claim.claimId);
+    this.wakeScheduler.cancel(scopeId);
     await this.record({ type: "goal.status_changed", goal: next, previousStatus: current.status });
     return next;
   }
@@ -148,7 +162,10 @@ export class GoalRuntime {
     const current = await this.storage.get(scopeId);
     if (!current) return false;
     const deleted = await this.storage.delete(scopeId, current.version);
-    if (deleted) await this.record({ type: "goal.cleared", goal: current });
+    if (deleted) {
+      this.wakeScheduler.cancel(scopeId);
+      await this.record({ type: "goal.cleared", goal: current });
+    }
     return deleted;
   }
 
@@ -191,46 +208,56 @@ export class GoalRuntime {
   async acknowledgeContinuation(scopeId: string): Promise<void> {
     const claim = await this.storage.getContinuationClaim(scopeId);
     if (claim) await this.storage.deleteContinuationClaim(scopeId, claim.claimId);
+    this.wakeScheduler.cancel(scopeId);
   }
 
   async recover(scopeId: string): Promise<void> {
-    if (await this.storage.getPendingEvaluation(scopeId))
-      await this.processPendingEvaluation(scopeId);
-    const goal = await this.storage.get(scopeId);
-    if (!goal || goal.status !== "active") return;
-    if (this.budgetExhausted(goal)) {
-      await this.markBudgetLimited(goal);
-      return;
-    }
-    let claim = await this.storage.getContinuationClaim(scopeId);
-    const now = this.now().getTime();
-    if (claim && (claim.goalId !== goal.id || claim.goalVersion !== goal.version)) {
-      await this.storage.deleteContinuationClaim(scopeId, claim.claimId);
-      claim = undefined;
-    }
-    if (claim) {
-      const claimIsLive = Date.parse(claim.expiresAt) > now;
-      if (claimIsLive && claim.state !== "deferred") return;
-      if (claimIsLive && Date.parse(claim.availableAt) > now) return;
+    if (this.closed || this.recoveringScopes.has(scopeId)) return;
+    this.recoveringScopes.add(scopeId);
+    try {
+      if (await this.storage.getPendingEvaluation(scopeId))
+        await this.processPendingEvaluation(scopeId);
+      const goal = await this.storage.get(scopeId);
+      if (!goal || goal.status !== "active") return;
+      if (this.budgetExhausted(goal)) {
+        await this.markBudgetLimited(goal);
+        return;
+      }
+      let claim = await this.storage.getContinuationClaim(scopeId);
+      const now = this.now().getTime();
+      if (claim && (claim.goalId !== goal.id || claim.goalVersion !== goal.version)) {
+        await this.storage.deleteContinuationClaim(scopeId, claim.claimId);
+        claim = undefined;
+      }
+      if (claim) {
+        const claimIsLive = Date.parse(claim.expiresAt) > now;
+        if (claimIsLive && claim.state === "started") {
+          this.scheduleRecovery(scopeId, claim.expiresAt);
+          return;
+        }
+        if (claimIsLive && claim.state === "deferred" && Date.parse(claim.availableAt) > now) {
+          this.scheduleRecovery(scopeId, claim.availableAt);
+          return;
+        }
+        await this.record({ type: "goal.recovered", goal });
+        await this.runContinuationClaim(goal, claim);
+        return;
+      }
       await this.record({ type: "goal.recovered", goal });
-      await this.runContinuationClaim(goal, claim);
-      return;
+      await this.continueWithClaim(goal, "Resume the persisted active goal.");
+    } finally {
+      this.recoveringScopes.delete(scopeId);
     }
-    await this.record({ type: "goal.recovered", goal });
-    await this.continueWithClaim(goal, "Resume the persisted active goal.");
   }
 
   async settle(scopeId: string, progress: GoalProgress): Promise<void> {
     const settlementId = randomUUID();
-    this.latestSettlements.set(scopeId, { id: settlementId, progress });
     const ownsEvaluation = !this.evaluatingScopes.has(scopeId);
     if (ownsEvaluation) this.evaluatingScopes.add(scopeId);
     try {
       const goal = await this.storage.get(scopeId);
       if (!goal || goal.status !== "active") return;
       await this.acknowledgeContinuation(scopeId);
-      const latest = this.latestSettlements.get(scopeId);
-      if (!latest) return;
       let durableCandidate = await this.storage.getTerminalCandidate(scopeId);
       if (
         durableCandidate &&
@@ -244,12 +271,13 @@ export class GoalRuntime {
         scopeId,
         goalId: goal.id,
         goalVersion: goal.version,
-        evaluationId: latest.id,
+        evaluationId: settlementId,
+        iterationsDelta: 1,
         progress: {
-          ...latest.progress,
-          tokenDelta: Math.max(0, latest.progress.tokenDelta ?? 0),
+          ...progress,
+          tokenDelta: Math.max(0, progress.tokenDelta ?? 0),
           terminalCandidate:
-            latest.progress.terminalCandidate ??
+            progress.terminalCandidate ??
             (durableCandidate
               ? { outcome: durableCandidate.outcome, reason: durableCandidate.reason }
               : undefined),
@@ -259,19 +287,16 @@ export class GoalRuntime {
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      if (!(await this.storage.putPendingEvaluation(pending))) return;
+      if (!(await this.storage.appendPendingEvaluation(pending))) return;
       if (durableCandidate) {
         await this.storage.deleteTerminalCandidate(scopeId, durableCandidate.candidateId);
       }
       if (!ownsEvaluation) return;
       await this.processPendingEvaluation(scopeId, true);
     } finally {
-      if (this.latestSettlements.get(scopeId)?.id === settlementId) {
-        this.latestSettlements.delete(scopeId);
-      }
       if (ownsEvaluation) {
         this.evaluatingScopes.delete(scopeId);
-        if (await this.storage.getPendingEvaluation(scopeId)) {
+        if (!this.closed && (await this.storage.getPendingEvaluation(scopeId))) {
           await this.processPendingEvaluation(scopeId);
         }
       }
@@ -307,7 +332,7 @@ export class GoalRuntime {
         if (waitMs > 0) await this.delay(waitMs);
 
         const accountedUsage = {
-          iterations: goal.usage.iterations + 1,
+          iterations: goal.usage.iterations + pending.iterationsDelta,
           tokens: goal.usage.tokens + (pending.progress.tokenDelta ?? 0),
         };
         const projectedGoal: AgentGoal = { ...goal, usage: accountedUsage };
@@ -315,7 +340,8 @@ export class GoalRuntime {
           pending.progress.terminalCandidate !== undefined ||
           this.budgetExhausted(projectedGoal) ||
           (this.evaluationInterval > 0 &&
-            accountedUsage.iterations % this.evaluationInterval === 0);
+            Math.floor(accountedUsage.iterations / this.evaluationInterval) >
+              Math.floor(goal.usage.iterations / this.evaluationInterval));
         let evaluation: GoalEvaluation = {
           outcome: "continue",
           reason: "The worker stopped without requesting a terminal goal decision.",
@@ -325,13 +351,52 @@ export class GoalRuntime {
             evaluation = await this.evaluator.evaluate(goal, pending.progress);
           }
         } catch (error) {
+          if (this.closed) return;
           const latestPending = await this.storage.getPendingEvaluation(scopeId);
           if (!latestPending || latestPending.evaluationId !== pending.evaluationId) continue;
           const failure = error instanceof Error ? error : new Error(String(error));
           const attempt = pending.attempt + 1;
           if (attempt >= this.retryPolicy.maxAttempts) {
-            await this.blockAfterRetryExhaustion(goal, "evaluator", failure, attempt, undefined);
-            await this.storage.deletePendingEvaluation(scopeId, pending.evaluationId);
+            const blockedAt = this.now().toISOString();
+            const reason = `evaluator failed after ${attempt} attempts: ${failure.message}`;
+            const blocked: AgentGoal = {
+              ...goal,
+              status: "blocked",
+              blockedReason: reason,
+              usage: accountedUsage,
+              lastSettledAt: blockedAt,
+              lastEvaluation: {
+                id: pending.evaluationId,
+                outcome: "blocked",
+                reason,
+                at: blockedAt,
+              },
+              version: goal.version + 1,
+              updatedAt: blockedAt,
+            };
+            if (
+              !(await this.storage.commitEvaluation(blocked, goal.version, pending.evaluationId))
+            ) {
+              continue;
+            }
+            await this.record({
+              type: "goal.progress_accounted",
+              goal: blocked,
+              tokenDelta: pending.progress.tokenDelta ?? 0,
+            });
+            await this.record({
+              type: "goal.retry_exhausted",
+              scopeId,
+              goalId: goal.id,
+              operation: "evaluator",
+              attempt,
+              error: failure.message,
+            });
+            await this.record({
+              type: "goal.status_changed",
+              goal: blocked,
+              previousStatus: goal.status,
+            });
             return;
           }
           const retryAt = new Date(this.now().getTime() + this.retryDelay(attempt)).toISOString();
@@ -342,7 +407,9 @@ export class GoalRuntime {
             lastError: failure.message,
             updatedAt: this.now().toISOString(),
           };
-          if (!(await this.storage.putPendingEvaluation(retry))) return;
+          if (!(await this.storage.replacePendingEvaluation(retry, pending.evaluationId))) {
+            continue;
+          }
           await this.record({
             type: "goal.retry_scheduled",
             scopeId,
@@ -355,6 +422,7 @@ export class GoalRuntime {
           continue;
         }
 
+        if (this.closed) return;
         const latestPending = await this.storage.getPendingEvaluation(scopeId);
         if (!latestPending || latestPending.evaluationId !== pending.evaluationId) continue;
         const evaluatedAt = this.now().toISOString();
@@ -376,8 +444,9 @@ export class GoalRuntime {
                 blockedReason: "Goal continuation budget exhausted",
               }
             : evaluated;
-        if (!(await this.storage.replace(next, goal.version))) continue;
-        await this.storage.deletePendingEvaluation(scopeId, pending.evaluationId);
+        if (!(await this.storage.commitEvaluation(next, goal.version, pending.evaluationId))) {
+          continue;
+        }
         await this.record({
           type: "goal.progress_accounted",
           goal: next,
@@ -399,7 +468,7 @@ export class GoalRuntime {
     } finally {
       if (!ownsEvaluation) {
         this.evaluatingScopes.delete(scopeId);
-        if (await this.storage.getPendingEvaluation(scopeId)) {
+        if (!this.closed && (await this.storage.getPendingEvaluation(scopeId))) {
           await this.processPendingEvaluation(scopeId);
         }
       }
@@ -464,11 +533,13 @@ export class GoalRuntime {
           reason: error instanceof Error ? error.message : String(error),
         };
       }
+      if (this.closed) return;
       if (result.status === "started") {
         claim.state = "started";
         claim.lastError = undefined;
         claim.updatedAt = this.now().toISOString();
         if (!(await this.storage.replaceContinuationClaim(claim, claim.claimId))) return;
+        this.scheduleRecovery(goal.scopeId, claim.expiresAt);
         await this.record({ type: "goal.continuation_started", goal, claim });
         return;
       }
@@ -479,6 +550,7 @@ export class GoalRuntime {
       claim.updatedAt = this.now().toISOString();
       if (!(await this.storage.replaceContinuationClaim(claim, claim.claimId))) return;
       if (result.status === "busy") {
+        this.scheduleRecovery(goal.scopeId, claim.availableAt);
         await this.record({ type: "goal.continuation_deferred", goal, claim });
         return;
       }
@@ -537,6 +609,7 @@ export class GoalRuntime {
     };
     if (!(await this.storage.replace(next, current.version))) return;
     if (claimId) await this.storage.deleteContinuationClaim(goal.scopeId, claimId);
+    this.wakeScheduler.cancel(goal.scopeId);
     await this.record({
       type: "goal.retry_exhausted",
       scopeId: goal.scopeId,
@@ -567,8 +640,22 @@ export class GoalRuntime {
       updatedAt: this.now().toISOString(),
     };
     if (await this.storage.replace(next, goal.version)) {
+      this.wakeScheduler.cancel(goal.scopeId);
       await this.record({ type: "goal.status_changed", goal: next, previousStatus: goal.status });
     }
+  }
+
+  private scheduleRecovery(scopeId: string, wakeAt: string): void {
+    if (this.closed) return;
+    this.wakeScheduler.schedule(scopeId, wakeAt, () => {
+      void this.recover(scopeId).catch((error) =>
+        this.record({
+          type: "goal.error",
+          operation: "scheduled recovery",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    });
   }
 
   private retryDelay(attempt: number): number {

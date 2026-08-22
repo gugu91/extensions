@@ -64,6 +64,7 @@ export interface GoalPendingEvaluation {
   goalId: string;
   goalVersion: number;
   evaluationId: string;
+  iterationsDelta: number;
   progress: GoalProgress;
   attempt: number;
   availableAt: string;
@@ -93,8 +94,18 @@ export interface GoalStorage {
   replace(goal: AgentGoal, expectedVersion: number): Promise<boolean>;
   delete(scopeId: string, expectedVersion: number): Promise<boolean>;
   getPendingEvaluation(scopeId: string): Promise<GoalPendingEvaluation | undefined>;
+  appendPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean>;
   putPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean>;
+  replacePendingEvaluation(
+    pending: GoalPendingEvaluation,
+    expectedEvaluationId: string,
+  ): Promise<boolean>;
   deletePendingEvaluation(scopeId: string, expectedEvaluationId: string): Promise<boolean>;
+  commitEvaluation(
+    goal: AgentGoal,
+    expectedGoalVersion: number,
+    expectedEvaluationId: string,
+  ): Promise<boolean>;
   getTerminalCandidate(scopeId: string): Promise<GoalTerminalCandidateRecord | undefined>;
   putTerminalCandidate(candidate: GoalTerminalCandidateRecord): Promise<boolean>;
   deleteTerminalCandidate(scopeId: string, expectedCandidateId: string): Promise<boolean>;
@@ -131,6 +142,12 @@ export interface GoalRetryPolicy {
   maxAttempts: number;
   baseDelayMs: number;
   maxDelayMs: number;
+}
+
+export interface GoalWakeScheduler {
+  schedule(scopeId: string, wakeAt: string, wake: () => void): void;
+  cancel(scopeId: string): void;
+  close(): void;
 }
 
 export type GoalEvent =

@@ -9,6 +9,7 @@ import type {
   GoalEventSink,
   GoalRetryPolicy,
   GoalStorage,
+  GoalWakeScheduler,
 } from "./domain.js";
 import { PiGoalEvaluator } from "./pi-evaluator.js";
 import {
@@ -39,6 +40,7 @@ export type {
   GoalTerminalCandidate,
   GoalTerminalCandidateRecord,
   GoalUsage,
+  GoalWakeScheduler,
 } from "./domain.js";
 export { formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
 export { MemoryGoalStorage } from "./memory-storage.js";
@@ -50,6 +52,7 @@ export {
 } from "./progress.js";
 export { GoalRuntime, type GoalRuntimeOptions } from "./runtime.js";
 export { SqliteGoalStorage } from "./sqlite-storage.js";
+export { TimerGoalWakeScheduler } from "./wake-scheduler.js";
 
 export interface AgentGoalExtensionOptions {
   storage?: GoalStorage;
@@ -60,6 +63,7 @@ export interface AgentGoalExtensionOptions {
   retryPolicy?: GoalRetryPolicy;
   databasePath?: string;
   evaluationInterval?: number;
+  wakeScheduler?: GoalWakeScheduler;
 }
 
 interface CompatibleContext extends ExtensionContext {
@@ -149,6 +153,7 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
     eventSink: options.eventSink,
     evaluationInterval:
       options.evaluationInterval ?? Number(process.env.PI_AGENT_GOAL_EVALUATION_INTERVAL ?? 0),
+    wakeScheduler: options.wakeScheduler,
   });
 
   const refreshUi = async (ctx: CompatibleContext): Promise<void> => {
@@ -218,7 +223,7 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
 
   pi.on("session_shutdown", () => {
     activeContext = undefined;
-    if (!options.storage) storage.close();
+    runtime.close(!options.storage);
   });
 
   pi.registerTool({

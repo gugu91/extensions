@@ -64,7 +64,9 @@ The default adapter stores goals and continuation claims in SQLite at:
 
 Set `PI_AGENT_GOAL_DB` to use another path. The stable Pi session ID is the storage scope, so resuming a session restores its goal. Optimistic goal versions reject stale mutations.
 
-Every continuation first acquires a durable, idempotent per-session claim. Busy sessions persist a deferred claim, started claims remain until the next agent run begins, and expired claims are recovered safely on session resume. Evaluator and continuation failures use bounded exponential retries; exhausted retries block the goal with a diagnostic reason.
+Every continuation first acquires a durable, idempotent per-session claim. Busy sessions persist a deferred claim and schedule an in-process wake for their retry time. Started claims schedule an expiry wake, remain until the next agent run begins, and recover safely after interruption or session resume. Evaluator and continuation failures use bounded exponential retries; exhausted retries block the goal with a diagnostic reason.
+
+Settlements that arrive during an in-flight evaluation are atomically aggregated in storage. Every settled iteration and token delta is charged, while the evaluator receives the newest bounded progress and any preserved terminal candidate.
 
 ## Architecture
 
@@ -85,9 +87,15 @@ interface GoalContinuation {
 interface GoalEventSink {
   record(event: GoalEvent): Promise<void> | void;
 }
+
+interface GoalWakeScheduler {
+  schedule(scopeId: string, wakeAt: string, wake: () => void): void;
+  cancel(scopeId: string): void;
+  close(): void;
+}
 ```
 
-`GoalStorage` includes optimistic goal mutation plus durable continuation-claim operations. The package exports `GoalRuntime`, `MemoryGoalStorage`, `SqliteGoalStorage`, `PiGoalEvaluator`, dashboard formatters, lifecycle event types, and `registerAgentGoal`.
+`GoalStorage` includes optimistic goal mutation, atomic pending-settlement aggregation, and durable continuation-claim operations. `TimerGoalWakeScheduler` is the default process-local wake adapter and can be replaced through `GoalRuntimeOptions`. The package exports `GoalRuntime`, both storage adapters, the wake adapter, `PiGoalEvaluator`, dashboard formatters, lifecycle event types, and `registerAgentGoal`.
 
 ```ts
 import { registerAgentGoal } from "@pinet/agent-goal";

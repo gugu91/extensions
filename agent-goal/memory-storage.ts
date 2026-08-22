@@ -62,6 +62,28 @@ export class MemoryGoalStorage implements GoalStorage {
       : undefined;
   }
 
+  async appendPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean> {
+    const goal = this.goals.get(pending.scopeId);
+    if (!goal || goal.id !== pending.goalId || goal.version !== pending.goalVersion) return false;
+    const stored = this.pendingEvaluations.get(pending.scopeId);
+    const existing =
+      stored?.goalId === pending.goalId && stored.goalVersion === pending.goalVersion
+        ? stored
+        : undefined;
+    this.pendingEvaluations.set(pending.scopeId, {
+      ...pending,
+      iterationsDelta: pending.iterationsDelta + (existing?.iterationsDelta ?? 0),
+      progress: {
+        ...pending.progress,
+        tokenDelta: (pending.progress.tokenDelta ?? 0) + (existing?.progress.tokenDelta ?? 0),
+        terminalCandidate:
+          pending.progress.terminalCandidate ?? existing?.progress.terminalCandidate,
+      },
+      createdAt: existing?.createdAt ?? pending.createdAt,
+    });
+    return true;
+  }
+
   async putPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean> {
     const goal = this.goals.get(pending.scopeId);
     if (!goal || goal.id !== pending.goalId || goal.version !== pending.goalVersion) return false;
@@ -77,10 +99,39 @@ export class MemoryGoalStorage implements GoalStorage {
     return true;
   }
 
+  async replacePendingEvaluation(
+    pending: GoalPendingEvaluation,
+    expectedEvaluationId: string,
+  ): Promise<boolean> {
+    const existing = this.pendingEvaluations.get(pending.scopeId);
+    if (!existing || existing.evaluationId !== expectedEvaluationId) return false;
+    return this.putPendingEvaluation(pending);
+  }
+
   async deletePendingEvaluation(scopeId: string, expectedEvaluationId: string): Promise<boolean> {
     const pending = this.pendingEvaluations.get(scopeId);
     if (!pending || pending.evaluationId !== expectedEvaluationId) return false;
     return this.pendingEvaluations.delete(scopeId);
+  }
+
+  async commitEvaluation(
+    goal: AgentGoal,
+    expectedGoalVersion: number,
+    expectedEvaluationId: string,
+  ): Promise<boolean> {
+    const current = this.goals.get(goal.scopeId);
+    const pending = this.pendingEvaluations.get(goal.scopeId);
+    if (
+      !current ||
+      current.id !== goal.id ||
+      current.version !== expectedGoalVersion ||
+      pending?.evaluationId !== expectedEvaluationId
+    ) {
+      return false;
+    }
+    this.goals.set(goal.scopeId, cloneGoal(goal));
+    this.pendingEvaluations.delete(goal.scopeId);
+    return true;
   }
 
   async getTerminalCandidate(scopeId: string): Promise<GoalTerminalCandidateRecord | undefined> {

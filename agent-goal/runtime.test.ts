@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GoalContinuation, GoalEvaluator, GoalEvent } from "./domain.js";
+import type {
+  AgentGoal,
+  GoalContinuation,
+  GoalEvaluator,
+  GoalEvent,
+  GoalWakeScheduler,
+} from "./domain.js";
 import { MemoryGoalStorage } from "./memory-storage.js";
 import { GoalRuntime } from "./runtime.js";
 
@@ -175,11 +181,13 @@ describe("GoalRuntime", () => {
 
     const first = runtime.settle("session-1", {
       latestOutput: "first turn",
+      tokenDelta: 10,
       terminalCandidate: { outcome: "complete", reason: "first claim" },
     });
     await started;
     await runtime.settle("session-1", {
       latestOutput: "latest completed turn",
+      tokenDelta: 20,
       terminalCandidate: { outcome: "complete", reason: "latest claim" },
     });
     resolveEvaluation?.({ outcome: "continue", reason: "stale result" });
@@ -187,7 +195,71 @@ describe("GoalRuntime", () => {
 
     expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
     expect(continuation.continueIfIdle).not.toHaveBeenCalled();
-    expect((await runtime.get("session-1"))?.status).toBe("complete");
+    expect(await runtime.get("session-1")).toMatchObject({
+      status: "complete",
+      usage: { iterations: 2, tokens: 30 },
+    });
+  });
+
+  it("does not let stale evaluator exhaustion block newer pending work", async () => {
+    let signalCommitStarted: (() => void) | undefined;
+    let releaseCommit: (() => void) | undefined;
+    const commitStarted = new Promise<void>((resolve) => {
+      signalCommitStarted = resolve;
+    });
+    const commitRelease = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    class PausingStorage extends MemoryGoalStorage {
+      private pauseNextCommit = true;
+
+      override async commitEvaluation(
+        goal: AgentGoal,
+        expectedGoalVersion: number,
+        expectedEvaluationId: string,
+      ): Promise<boolean> {
+        if (this.pauseNextCommit) {
+          this.pauseNextCommit = false;
+          signalCommitStarted?.();
+          await commitRelease;
+        }
+        return super.commitEvaluation(goal, expectedGoalVersion, expectedEvaluationId);
+      }
+    }
+    const evaluator: GoalEvaluator = {
+      evaluate: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValueOnce({ outcome: "complete", reason: "newer turn verified" }),
+    };
+    const runtime = new GoalRuntime(
+      new PausingStorage(),
+      evaluator,
+      startedContinuation(),
+      undefined,
+      { retryPolicy: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 } },
+    );
+    await runtime.create("session-1", "ship");
+
+    const first = runtime.settle("session-1", {
+      latestOutput: "first claim",
+      tokenDelta: 10,
+      terminalCandidate: { outcome: "complete", reason: "first claim" },
+    });
+    await commitStarted;
+    await runtime.settle("session-1", {
+      latestOutput: "newer verified work",
+      tokenDelta: 20,
+      terminalCandidate: { outcome: "complete", reason: "newer claim" },
+    });
+    releaseCommit?.();
+    await first;
+
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
+    expect(await runtime.get("session-1")).toMatchObject({
+      status: "complete",
+      usage: { iterations: 2, tokens: 30 },
+    });
   });
 
   it("persists a terminal candidate until settled evaluation consumes it", async () => {
@@ -227,6 +299,7 @@ describe("GoalRuntime", () => {
       goalId: goal.id,
       goalVersion: goal.version,
       evaluationId: "evaluation-1",
+      iterationsDelta: 1,
       progress: {
         latestOutput: "completed",
         tokenDelta: 50,
@@ -371,8 +444,16 @@ describe("GoalRuntime", () => {
     expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
   });
 
-  it("persists busy continuation deferral and recovers it when due", async () => {
+  it("automatically wakes a busy continuation when its deferral is due", async () => {
     let now = new Date("2026-01-01T00:00:00.000Z");
+    let wake: (() => void) | undefined;
+    const wakeScheduler: GoalWakeScheduler = {
+      schedule: vi.fn((_scopeId, _wakeAt, callback) => {
+        wake = callback;
+      }),
+      cancel: vi.fn(),
+      close: vi.fn(),
+    };
     const continuation: GoalContinuation = {
       continueIfIdle: vi
         .fn()
@@ -384,21 +465,63 @@ describe("GoalRuntime", () => {
       { evaluate: vi.fn() },
       continuation,
       () => now,
+      { wakeScheduler },
     );
     await runtime.create("session-1", "ship");
 
     await runtime.start("session-1");
     expect(await runtime.getContinuationClaim("session-1")).toMatchObject({ state: "deferred" });
-    await runtime.recover("session-1");
-    expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
+    expect(wakeScheduler.schedule).toHaveBeenCalledWith(
+      "session-1",
+      "2026-01-01T00:00:00.100Z",
+      expect.any(Function),
+    );
 
     now = new Date("2026-01-01T00:00:00.101Z");
-    await runtime.recover("session-1");
-    expect(continuation.continueIfIdle).toHaveBeenCalledTimes(2);
+    wake?.();
+    await vi.waitFor(() => expect(continuation.continueIfIdle).toHaveBeenCalledTimes(2));
     expect(await runtime.getContinuationClaim("session-1")).toMatchObject({
       state: "started",
       attempt: 2,
     });
+  });
+
+  it("does not schedule a wake after shutdown races an in-flight continuation", async () => {
+    let signalContinuationStarted: (() => void) | undefined;
+    let resolveContinuation:
+      | ((result: { status: "busy"; reason: string; retryAfterMs: number }) => void)
+      | undefined;
+    const continuationStarted = new Promise<void>((resolve) => {
+      signalContinuationStarted = resolve;
+    });
+    const wakeScheduler: GoalWakeScheduler = {
+      schedule: vi.fn(),
+      cancel: vi.fn(),
+      close: vi.fn(),
+    };
+    const continuation: GoalContinuation = {
+      continueIfIdle: vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveContinuation = resolve;
+            signalContinuationStarted?.();
+          }),
+      ),
+    };
+    const storage = new MemoryGoalStorage();
+    const runtime = new GoalRuntime(storage, { evaluate: vi.fn() }, continuation, undefined, {
+      wakeScheduler,
+    });
+    await runtime.create("session-1", "ship");
+
+    const start = runtime.start("session-1");
+    await continuationStarted;
+    runtime.close(false);
+    resolveContinuation?.({ status: "busy", reason: "user turn", retryAfterMs: 100 });
+    await start;
+
+    expect(wakeScheduler.close).toHaveBeenCalledOnce();
+    expect(wakeScheduler.schedule).not.toHaveBeenCalled();
   });
 
   it("enforces status transitions and clears continuation claims", async () => {

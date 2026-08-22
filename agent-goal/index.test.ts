@@ -3,7 +3,7 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GoalProgressMessage } from "./progress.js";
 import { registerAgentGoal } from "./index.js";
 import { MemoryGoalStorage } from "./memory-storage.js";
@@ -12,6 +12,8 @@ type GoalEventHandler = (
   event: { messages?: GoalProgressMessage[] },
   context: ExtensionContext,
 ) => Promise<void> | void;
+
+afterEach(() => vi.useRealTimers());
 
 describe("registerAgentGoal", () => {
   it("records a worker terminal candidate and evaluates it after the run settles", async () => {
@@ -82,6 +84,62 @@ describe("registerAgentGoal", () => {
       }),
     );
     expect(await storage.get("session-1")).toMatchObject({ status: "complete" });
+  });
+
+  it("automatically retries a continuation deferred while the session is busy", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const handlers = new Map<string, GoalEventHandler>();
+    const tools = new Map<string, ToolDefinition>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on(name: string, handler: GoalEventHandler) {
+        handlers.set(name, handler);
+      },
+      registerTool(tool: ToolDefinition) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand: vi.fn(),
+      sendMessage,
+    } as object as ExtensionAPI;
+    let idle = false;
+    const context = {
+      hasUI: true,
+      isIdle: () => idle,
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "session-1" },
+      ui: {
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        notify: vi.fn(),
+      },
+    } as object as ExtensionContext;
+    const storage = new MemoryGoalStorage();
+    await storage.create({
+      id: "goal-1",
+      scopeId: "session-1",
+      objective: "ship",
+      status: "active",
+      budget: { maxIterations: 5 },
+      usage: { iterations: 0, tokens: 0 },
+      version: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    registerAgentGoal(pi, { storage });
+
+    await handlers.get("agent_start")?.({}, context);
+    await handlers.get("agent_end")?.({ messages: [] }, context);
+    await handlers.get("agent_settled")?.({}, context);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({ state: "deferred" });
+
+    idle = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({ state: "started" });
+    await handlers.get("session_shutdown")?.({}, context);
   });
 
   it("lets the worker create and inspect its own bounded goal", async () => {
