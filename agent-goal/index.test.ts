@@ -186,12 +186,15 @@ describe("registerAgentGoal", () => {
     );
     expect(sendMessage).not.toHaveBeenCalled();
 
-    await command.handler("", {
-      ...baseContext,
-      mode: "print",
-    } as object as ExtensionCommandContext);
+    for (const mode of ["print", "rpc", "json"] as const) {
+      await command.handler("", {
+        ...baseContext,
+        mode,
+      } as object as ExtensionCommandContext);
+    }
 
-    expect(sendMessage).toHaveBeenCalledWith(
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage).toHaveBeenLastCalledWith(
       expect.objectContaining({ content: "This session has no goal." }),
       { triggerTurn: false },
     );

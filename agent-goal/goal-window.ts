@@ -44,7 +44,7 @@ export class GoalWindow implements Component {
   }
 
   render(width: number): string[] {
-    if (width < 4) return [truncateToWidth("Goal", Math.max(0, width), "")];
+    if (width < 8) return [truncateToWidth("Goal", Math.max(0, width), "")];
     const innerWidth = width - 2;
     const contentWidth = Math.max(1, innerWidth - 2);
     const borderColor = this.goal?.status === "complete" ? "success" : "borderAccent";

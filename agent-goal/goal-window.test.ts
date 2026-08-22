@@ -68,6 +68,15 @@ describe("GoalWindow", () => {
     expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
   });
 
+  it.each([0, 1, 2, 3, 4, 5, 6, 7])(
+    "honors the strict line-width contract at width %i",
+    (width) => {
+      const lines = new GoalWindow(goal, claim, theme, vi.fn()).render(width);
+
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    },
+  );
+
   it.each(["q", "Q", "\u001b", "\r", "\u0003"])("closes for %j", (input) => {
     const onClose = vi.fn();
     const window = new GoalWindow(goal, undefined, theme, onClose);
