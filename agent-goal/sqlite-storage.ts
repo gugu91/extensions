@@ -8,6 +8,7 @@ import type {
   GoalPendingEvaluation,
   GoalStatus,
   GoalStorage,
+  GoalTerminalCandidateRecord,
 } from "./domain.js";
 
 interface GoalRow {
@@ -38,11 +39,23 @@ interface PendingEvaluationRow {
   evaluation_id: string;
   latest_output: string;
   token_delta: number;
+  candidate_outcome: "complete" | "blocked" | null;
+  candidate_reason: string | null;
   attempt: number;
   available_at: string;
   last_error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface TerminalCandidateRow {
+  scope_id: string;
+  goal_id: string;
+  goal_version: number;
+  candidate_id: string;
+  outcome: "complete" | "blocked";
+  reason: string;
+  created_at: string;
 }
 
 interface ClaimRow {
@@ -135,6 +148,16 @@ export class SqliteGoalStorage implements GoalStorage {
     }
     this.db.exec(`
       PRAGMA foreign_keys = ON;
+      CREATE TABLE IF NOT EXISTS agent_goal_terminal_candidates (
+        scope_id TEXT PRIMARY KEY NOT NULL,
+        goal_id TEXT NOT NULL,
+        goal_version INTEGER NOT NULL,
+        candidate_id TEXT UNIQUE NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('complete', 'blocked')),
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (scope_id) REFERENCES agent_goals(scope_id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS agent_goal_pending_evaluations (
         scope_id TEXT PRIMARY KEY NOT NULL,
         goal_id TEXT NOT NULL,
@@ -142,6 +165,8 @@ export class SqliteGoalStorage implements GoalStorage {
         evaluation_id TEXT UNIQUE NOT NULL,
         latest_output TEXT NOT NULL,
         token_delta INTEGER NOT NULL,
+        candidate_outcome TEXT CHECK (candidate_outcome IN ('complete', 'blocked')),
+        candidate_reason TEXT,
         attempt INTEGER NOT NULL,
         available_at TEXT NOT NULL,
         last_error TEXT,
@@ -165,6 +190,21 @@ export class SqliteGoalStorage implements GoalStorage {
         FOREIGN KEY (scope_id) REFERENCES agent_goals(scope_id) ON DELETE CASCADE
       );
     `);
+    const pendingColumns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(agent_goal_pending_evaluations)").all() as Array<{
+          name: string;
+        }>
+      ).map(({ name }) => name),
+    );
+    if (!pendingColumns.has("candidate_outcome")) {
+      this.db.exec(
+        "ALTER TABLE agent_goal_pending_evaluations ADD COLUMN candidate_outcome TEXT CHECK (candidate_outcome IN ('complete', 'blocked'))",
+      );
+    }
+    if (!pendingColumns.has("candidate_reason")) {
+      this.db.exec("ALTER TABLE agent_goal_pending_evaluations ADD COLUMN candidate_reason TEXT");
+    }
   }
 
   async get(scopeId: string): Promise<AgentGoal | undefined> {
@@ -285,7 +325,14 @@ export class SqliteGoalStorage implements GoalStorage {
           goalId: row.goal_id,
           goalVersion: row.goal_version,
           evaluationId: row.evaluation_id,
-          progress: { latestOutput: row.latest_output, tokenDelta: row.token_delta },
+          progress: {
+            latestOutput: row.latest_output,
+            tokenDelta: row.token_delta,
+            terminalCandidate:
+              row.candidate_outcome && row.candidate_reason
+                ? { outcome: row.candidate_outcome, reason: row.candidate_reason }
+                : undefined,
+          },
           attempt: row.attempt,
           availableAt: row.available_at,
           lastError: row.last_error ?? undefined,
@@ -300,15 +347,17 @@ export class SqliteGoalStorage implements GoalStorage {
       .prepare(
         `INSERT INTO agent_goal_pending_evaluations
          (scope_id, goal_id, goal_version, evaluation_id, latest_output, token_delta,
-          attempt, available_at, last_error, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          candidate_outcome, candidate_reason, attempt, available_at, last_error, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM agent_goals WHERE scope_id = ? AND id = ? AND version = ?
          )
          ON CONFLICT(scope_id) DO UPDATE SET goal_id = excluded.goal_id,
            goal_version = excluded.goal_version, evaluation_id = excluded.evaluation_id,
            latest_output = excluded.latest_output, token_delta = excluded.token_delta,
-           attempt = excluded.attempt, available_at = excluded.available_at,
+           candidate_outcome = excluded.candidate_outcome,
+           candidate_reason = excluded.candidate_reason, attempt = excluded.attempt,
+           available_at = excluded.available_at,
            last_error = excluded.last_error, created_at = excluded.created_at,
            updated_at = excluded.updated_at`,
       )
@@ -319,6 +368,8 @@ export class SqliteGoalStorage implements GoalStorage {
         pending.evaluationId,
         pending.progress.latestOutput,
         pending.progress.tokenDelta ?? 0,
+        pending.progress.terminalCandidate?.outcome ?? null,
+        pending.progress.terminalCandidate?.reason ?? null,
         pending.attempt,
         pending.availableAt,
         pending.lastError ?? null,
@@ -337,6 +388,59 @@ export class SqliteGoalStorage implements GoalStorage {
         "DELETE FROM agent_goal_pending_evaluations WHERE scope_id = ? AND evaluation_id = ?",
       )
       .run(scopeId, expectedEvaluationId);
+    return result.changes === 1;
+  }
+
+  async getTerminalCandidate(scopeId: string): Promise<GoalTerminalCandidateRecord | undefined> {
+    const row = this.db
+      .prepare("SELECT * FROM agent_goal_terminal_candidates WHERE scope_id = ?")
+      .get(scopeId) as TerminalCandidateRow | undefined;
+    return row
+      ? {
+          scopeId: row.scope_id,
+          goalId: row.goal_id,
+          goalVersion: row.goal_version,
+          candidateId: row.candidate_id,
+          outcome: row.outcome,
+          reason: row.reason,
+          createdAt: row.created_at,
+        }
+      : undefined;
+  }
+
+  async putTerminalCandidate(candidate: GoalTerminalCandidateRecord): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `INSERT INTO agent_goal_terminal_candidates
+         (scope_id, goal_id, goal_version, candidate_id, outcome, reason, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM agent_goals
+           WHERE scope_id = ? AND id = ? AND version = ? AND status = 'active'
+         )
+         ON CONFLICT(scope_id) DO UPDATE SET goal_id = excluded.goal_id,
+           goal_version = excluded.goal_version, candidate_id = excluded.candidate_id,
+           outcome = excluded.outcome, reason = excluded.reason, created_at = excluded.created_at`,
+      )
+      .run(
+        candidate.scopeId,
+        candidate.goalId,
+        candidate.goalVersion,
+        candidate.candidateId,
+        candidate.outcome,
+        candidate.reason,
+        candidate.createdAt,
+        candidate.scopeId,
+        candidate.goalId,
+        candidate.goalVersion,
+      );
+    return result.changes === 1;
+  }
+
+  async deleteTerminalCandidate(scopeId: string, expectedCandidateId: string): Promise<boolean> {
+    const result = this.db
+      .prepare("DELETE FROM agent_goal_terminal_candidates WHERE scope_id = ? AND candidate_id = ?")
+      .run(scopeId, expectedCandidateId);
     return result.changes === 1;
   }
 
@@ -368,7 +472,11 @@ export class SqliteGoalStorage implements GoalStorage {
         `INSERT OR IGNORE INTO agent_goal_continuations
          (scope_id, goal_id, goal_version, claim_id, state, reason, attempt,
           available_at, expires_at, last_error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM agent_goals
+           WHERE scope_id = ? AND id = ? AND version = ? AND status = 'active'
+         )`,
       )
       .run(
         claim.scopeId,
@@ -383,6 +491,9 @@ export class SqliteGoalStorage implements GoalStorage {
         claim.lastError ?? null,
         claim.createdAt,
         claim.updatedAt,
+        claim.scopeId,
+        claim.goalId,
+        claim.goalVersion,
       );
     return result.changes === 1;
   }

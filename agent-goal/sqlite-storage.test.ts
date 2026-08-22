@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentGoal, GoalContinuationClaim, GoalPendingEvaluation } from "./domain.js";
+import type {
+  AgentGoal,
+  GoalContinuationClaim,
+  GoalPendingEvaluation,
+  GoalTerminalCandidateRecord,
+} from "./domain.js";
 import { SqliteGoalStorage } from "./sqlite-storage.js";
 
 const tempDirectories: string[] = [];
@@ -31,12 +36,26 @@ const pending: GoalPendingEvaluation = {
   goalId: "goal-1",
   goalVersion: 3,
   evaluationId: "evaluation-2",
-  progress: { latestOutput: "work", tokenDelta: 200 },
+  progress: {
+    latestOutput: "work",
+    tokenDelta: 200,
+    terminalCandidate: { outcome: "complete", reason: "all checks pass" },
+  },
   attempt: 1,
   availableAt: "2026-01-01T00:02:00.000Z",
   lastError: "offline",
   createdAt: "2026-01-01T00:01:00.000Z",
   updatedAt: "2026-01-01T00:01:00.000Z",
+};
+
+const candidate: GoalTerminalCandidateRecord = {
+  scopeId: "session-1",
+  goalId: "goal-1",
+  goalVersion: 3,
+  candidateId: "candidate-1",
+  outcome: "complete",
+  reason: "all checks pass",
+  createdAt: "2026-01-01T00:01:00.000Z",
 };
 
 const claim: GoalContinuationClaim = {
@@ -68,13 +87,23 @@ describe("SqliteGoalStorage", () => {
     const first = new SqliteGoalStorage(path);
     await first.create(goal);
     expect(await first.putPendingEvaluation(pending)).toBe(true);
+    expect(await first.putTerminalCandidate(candidate)).toBe(true);
     expect(await first.createContinuationClaim(claim)).toBe(true);
     first.close();
     const second = new SqliteGoalStorage(path);
 
     expect(await second.get("session-1")).toEqual(goal);
     expect(await second.getPendingEvaluation("session-1")).toEqual(pending);
+    expect(await second.getTerminalCandidate("session-1")).toEqual(candidate);
     expect(await second.getContinuationClaim("session-1")).toEqual(claim);
+    expect(await second.deleteContinuationClaim("session-1", claim.claimId)).toBe(true);
+    expect(
+      await second.createContinuationClaim({
+        ...claim,
+        claimId: "stale-claim",
+        goalVersion: 2,
+      }),
+    ).toBe(false);
     second.close();
   });
 

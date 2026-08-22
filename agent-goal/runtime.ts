@@ -4,6 +4,7 @@ import type {
   GoalBudget,
   GoalContinuation,
   GoalContinuationClaim,
+  GoalEvaluation,
   GoalEvaluator,
   GoalEvent,
   GoalEventSink,
@@ -12,6 +13,8 @@ import type {
   GoalRetryPolicy,
   GoalStatus,
   GoalStorage,
+  GoalTerminalCandidate,
+  GoalTerminalCandidateRecord,
 } from "./domain.js";
 
 const DEFAULT_BUDGET: GoalBudget = { maxIterations: 25 };
@@ -27,6 +30,7 @@ export interface GoalRuntimeOptions {
   eventSink?: GoalEventSink;
   claimTtlMs?: number;
   delay?: (milliseconds: number) => Promise<void>;
+  evaluationInterval?: number;
 }
 
 export class GoalRuntime {
@@ -37,6 +41,7 @@ export class GoalRuntime {
   private readonly eventSink?: GoalEventSink;
   private readonly claimTtlMs: number;
   private readonly delay: (milliseconds: number) => Promise<void>;
+  private readonly evaluationInterval: number;
 
   constructor(
     private readonly storage: GoalStorage,
@@ -49,6 +54,10 @@ export class GoalRuntime {
     this.retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
     this.eventSink = options.eventSink;
     this.claimTtlMs = options.claimTtlMs ?? 5 * 60_000;
+    this.evaluationInterval = options.evaluationInterval ?? 0;
+    if (!Number.isInteger(this.evaluationInterval) || this.evaluationInterval < 0) {
+      throw new Error("Goal evaluationInterval must be a non-negative integer");
+    }
     this.delay =
       options.delay ??
       ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
@@ -60,6 +69,10 @@ export class GoalRuntime {
 
   async getContinuationClaim(scopeId: string): Promise<GoalContinuationClaim | undefined> {
     return this.storage.getContinuationClaim(scopeId);
+  }
+
+  async getTerminalCandidate(scopeId: string): Promise<GoalTerminalCandidateRecord | undefined> {
+    return this.storage.getTerminalCandidate(scopeId);
   }
 
   async create(scopeId: string, objective: string, budget = this.budget): Promise<AgentGoal> {
@@ -123,6 +136,8 @@ export class GoalRuntime {
     }
     const pending = await this.storage.getPendingEvaluation(scopeId);
     if (pending) await this.storage.deletePendingEvaluation(scopeId, pending.evaluationId);
+    const candidate = await this.storage.getTerminalCandidate(scopeId);
+    if (candidate) await this.storage.deleteTerminalCandidate(scopeId, candidate.candidateId);
     const claim = await this.storage.getContinuationClaim(scopeId);
     if (claim) await this.storage.deleteContinuationClaim(scopeId, claim.claimId);
     await this.record({ type: "goal.status_changed", goal: next, previousStatus: current.status });
@@ -135,6 +150,32 @@ export class GoalRuntime {
     const deleted = await this.storage.delete(scopeId, current.version);
     if (deleted) await this.record({ type: "goal.cleared", goal: current });
     return deleted;
+  }
+
+  async requestTerminalCandidate(
+    scopeId: string,
+    candidate: GoalTerminalCandidate,
+  ): Promise<GoalTerminalCandidateRecord> {
+    const goal = await this.requireGoal(scopeId);
+    if (goal.status !== "active") {
+      throw new Error(`Cannot request a terminal decision for a ${goal.status} goal`);
+    }
+    const reason = candidate.reason.trim();
+    if (!reason) throw new Error("A terminal goal candidate requires a concrete reason");
+    const record: GoalTerminalCandidateRecord = {
+      ...candidate,
+      reason,
+      scopeId,
+      goalId: goal.id,
+      goalVersion: goal.version,
+      candidateId: randomUUID(),
+      createdAt: this.now().toISOString(),
+    };
+    if (!(await this.storage.putTerminalCandidate(record))) {
+      throw new Error("Goal changed while its terminal candidate was being recorded; retry");
+    }
+    await this.record({ type: "goal.terminal_candidate_requested", goal, candidate: record });
+    return record;
   }
 
   async start(scopeId: string, reason = "Begin working toward the new goal."): Promise<void> {
@@ -161,8 +202,12 @@ export class GoalRuntime {
       await this.markBudgetLimited(goal);
       return;
     }
-    const claim = await this.storage.getContinuationClaim(scopeId);
+    let claim = await this.storage.getContinuationClaim(scopeId);
     const now = this.now().getTime();
+    if (claim && (claim.goalId !== goal.id || claim.goalVersion !== goal.version)) {
+      await this.storage.deleteContinuationClaim(scopeId, claim.claimId);
+      claim = undefined;
+    }
     if (claim) {
       const claimIsLive = Date.parse(claim.expiresAt) > now;
       if (claimIsLive && claim.state !== "deferred") return;
@@ -186,6 +231,14 @@ export class GoalRuntime {
       await this.acknowledgeContinuation(scopeId);
       const latest = this.latestSettlements.get(scopeId);
       if (!latest) return;
+      let durableCandidate = await this.storage.getTerminalCandidate(scopeId);
+      if (
+        durableCandidate &&
+        (durableCandidate.goalId !== goal.id || durableCandidate.goalVersion !== goal.version)
+      ) {
+        await this.storage.deleteTerminalCandidate(scopeId, durableCandidate.candidateId);
+        durableCandidate = undefined;
+      }
       const timestamp = this.now().toISOString();
       const pending: GoalPendingEvaluation = {
         scopeId,
@@ -195,6 +248,11 @@ export class GoalRuntime {
         progress: {
           ...latest.progress,
           tokenDelta: Math.max(0, latest.progress.tokenDelta ?? 0),
+          terminalCandidate:
+            latest.progress.terminalCandidate ??
+            (durableCandidate
+              ? { outcome: durableCandidate.outcome, reason: durableCandidate.reason }
+              : undefined),
         },
         attempt: 0,
         availableAt: timestamp,
@@ -202,6 +260,9 @@ export class GoalRuntime {
         updatedAt: timestamp,
       };
       if (!(await this.storage.putPendingEvaluation(pending))) return;
+      if (durableCandidate) {
+        await this.storage.deleteTerminalCandidate(scopeId, durableCandidate.candidateId);
+      }
       if (!ownsEvaluation) return;
       await this.processPendingEvaluation(scopeId, true);
     } finally {
@@ -245,9 +306,24 @@ export class GoalRuntime {
         const waitMs = Date.parse(pending.availableAt) - this.now().getTime();
         if (waitMs > 0) await this.delay(waitMs);
 
-        let evaluation;
+        const accountedUsage = {
+          iterations: goal.usage.iterations + 1,
+          tokens: goal.usage.tokens + (pending.progress.tokenDelta ?? 0),
+        };
+        const projectedGoal: AgentGoal = { ...goal, usage: accountedUsage };
+        const evaluatorRequired =
+          pending.progress.terminalCandidate !== undefined ||
+          this.budgetExhausted(projectedGoal) ||
+          (this.evaluationInterval > 0 &&
+            accountedUsage.iterations % this.evaluationInterval === 0);
+        let evaluation: GoalEvaluation = {
+          outcome: "continue",
+          reason: "The worker stopped without requesting a terminal goal decision.",
+        };
         try {
-          evaluation = await this.evaluator.evaluate(goal, pending.progress);
+          if (evaluatorRequired) {
+            evaluation = await this.evaluator.evaluate(goal, pending.progress);
+          }
         } catch (error) {
           const latestPending = await this.storage.getPendingEvaluation(scopeId);
           if (!latestPending || latestPending.evaluationId !== pending.evaluationId) continue;
@@ -282,10 +358,6 @@ export class GoalRuntime {
         const latestPending = await this.storage.getPendingEvaluation(scopeId);
         if (!latestPending || latestPending.evaluationId !== pending.evaluationId) continue;
         const evaluatedAt = this.now().toISOString();
-        const accountedUsage = {
-          iterations: goal.usage.iterations + 1,
-          tokens: goal.usage.tokens + (pending.progress.tokenDelta ?? 0),
-        };
         const evaluated: AgentGoal = {
           ...goal,
           status: evaluation.outcome === "continue" ? "active" : evaluation.outcome,
@@ -311,7 +383,11 @@ export class GoalRuntime {
           goal: next,
           tokenDelta: pending.progress.tokenDelta ?? 0,
         });
-        await this.record({ type: "goal.evaluated", goal: next, evaluation });
+        if (evaluatorRequired) {
+          await this.record({ type: "goal.evaluated", goal: next, evaluation });
+        } else {
+          await this.record({ type: "goal.auto_continued", goal: next });
+        }
         if (next.status === "active") await this.continueWithClaim(next, evaluation.reason);
         else
           await this.record({
@@ -331,7 +407,11 @@ export class GoalRuntime {
   }
 
   private async continueWithClaim(goal: AgentGoal, reason: string): Promise<void> {
-    if (await this.storage.getContinuationClaim(goal.scopeId)) return;
+    const existingClaim = await this.storage.getContinuationClaim(goal.scopeId);
+    if (existingClaim) {
+      if (existingClaim.goalId === goal.id && existingClaim.goalVersion === goal.version) return;
+      await this.storage.deleteContinuationClaim(goal.scopeId, existingClaim.claimId);
+    }
     const timestamp = this.now().toISOString();
     const claim: GoalContinuationClaim = {
       scopeId: goal.scopeId,
@@ -362,6 +442,9 @@ export class GoalRuntime {
         currentGoal.status !== "active" ||
         currentClaim?.claimId !== claim.claimId
       ) {
+        if (currentClaim?.claimId === claim.claimId) {
+          await this.storage.deleteContinuationClaim(goal.scopeId, claim.claimId);
+        }
         return;
       }
       const waitMs = Date.parse(claim.availableAt) - this.now().getTime();

@@ -38,9 +38,23 @@ export type GoalEvaluation =
   | { outcome: "complete"; reason: string }
   | { outcome: "blocked"; reason: string };
 
+export interface GoalTerminalCandidate {
+  outcome: "complete" | "blocked";
+  reason: string;
+}
+
+export interface GoalTerminalCandidateRecord extends GoalTerminalCandidate {
+  scopeId: string;
+  goalId: string;
+  goalVersion: number;
+  candidateId: string;
+  createdAt: string;
+}
+
 export interface GoalProgress {
   latestOutput: string;
   tokenDelta?: number;
+  terminalCandidate?: GoalTerminalCandidate;
 }
 
 export type GoalContinuationClaimState = "claimed" | "deferred" | "started";
@@ -81,6 +95,9 @@ export interface GoalStorage {
   getPendingEvaluation(scopeId: string): Promise<GoalPendingEvaluation | undefined>;
   putPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean>;
   deletePendingEvaluation(scopeId: string, expectedEvaluationId: string): Promise<boolean>;
+  getTerminalCandidate(scopeId: string): Promise<GoalTerminalCandidateRecord | undefined>;
+  putTerminalCandidate(candidate: GoalTerminalCandidateRecord): Promise<boolean>;
+  deleteTerminalCandidate(scopeId: string, expectedCandidateId: string): Promise<boolean>;
   getContinuationClaim(scopeId: string): Promise<GoalContinuationClaim | undefined>;
   createContinuationClaim(claim: GoalContinuationClaim): Promise<boolean>;
   replaceContinuationClaim(claim: GoalContinuationClaim, expectedClaimId: string): Promise<boolean>;
@@ -121,6 +138,12 @@ export type GoalEvent =
   | { type: "goal.status_changed"; goal: AgentGoal; previousStatus: GoalStatus }
   | { type: "goal.progress_accounted"; goal: AgentGoal; tokenDelta: number }
   | { type: "goal.evaluated"; goal: AgentGoal; evaluation: GoalEvaluation }
+  | { type: "goal.auto_continued"; goal: AgentGoal }
+  | {
+      type: "goal.terminal_candidate_requested";
+      goal: AgentGoal;
+      candidate: GoalTerminalCandidateRecord;
+    }
   | { type: "goal.continuation_claimed"; goal: AgentGoal; claim: GoalContinuationClaim }
   | { type: "goal.continuation_started"; goal: AgentGoal; claim: GoalContinuationClaim }
   | { type: "goal.continuation_deferred"; goal: AgentGoal; claim: GoalContinuationClaim }

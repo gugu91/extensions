@@ -42,13 +42,12 @@ describe("GoalRuntime", () => {
     ).rejects.toThrow("maxRuntimeMs");
   });
 
-  it("accounts progress, persists the evaluation, and claims one continuation", async () => {
+  it("accounts ordinary progress and continues without evaluator work", async () => {
     const continuation = startedContinuation();
-    const runtime = new GoalRuntime(
-      new MemoryGoalStorage(),
-      { evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "tests remain" }) },
-      continuation,
-    );
+    const evaluator = {
+      evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "tests remain" }),
+    };
+    const runtime = new GoalRuntime(new MemoryGoalStorage(), evaluator, continuation);
     await runtime.create("session-1", "ship");
 
     await runtime.settle("session-1", { latestOutput: "implementation done", tokenDelta: 120 });
@@ -57,12 +56,54 @@ describe("GoalRuntime", () => {
     expect(await runtime.get("session-1")).toMatchObject({
       status: "active",
       usage: { iterations: 1, tokens: 120 },
-      lastEvaluation: { outcome: "continue", reason: "tests remain" },
+      lastEvaluation: {
+        outcome: "continue",
+        reason: "The worker stopped without requesting a terminal goal decision.",
+      },
       version: 2,
     });
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
     expect(await runtime.getContinuationClaim("session-1")).toMatchObject({ state: "started" });
     await runtime.recover("session-1");
     expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
+  });
+
+  it("continues when independent evaluation rejects a terminal claim", async () => {
+    const evaluator = {
+      evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "tests are missing" }),
+    } satisfies GoalEvaluator;
+    const continuation = startedContinuation();
+    const runtime = new GoalRuntime(new MemoryGoalStorage(), evaluator, continuation);
+    await runtime.create("session-1", "ship");
+
+    await runtime.settle("session-1", {
+      latestOutput: "I think this is done",
+      terminalCandidate: { outcome: "complete", reason: "implementation exists" },
+    });
+
+    expect(evaluator.evaluate).toHaveBeenCalledOnce();
+    expect(await runtime.get("session-1")).toMatchObject({ status: "active" });
+    expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
+  });
+
+  it("evaluates configured periodic checkpoints", async () => {
+    const evaluator = {
+      evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "checkpoint passed" }),
+    } satisfies GoalEvaluator;
+    const runtime = new GoalRuntime(
+      new MemoryGoalStorage(),
+      evaluator,
+      startedContinuation(),
+      undefined,
+      { evaluationInterval: 2 },
+    );
+    await runtime.create("session-1", "ship");
+
+    await runtime.settle("session-1", { latestOutput: "turn one" });
+    await runtime.acknowledgeContinuation("session-1");
+    await runtime.settle("session-1", { latestOutput: "turn two" });
+
+    expect(evaluator.evaluate).toHaveBeenCalledOnce();
   });
 
   it.each(["complete", "blocked"] as const)(
@@ -76,7 +117,10 @@ describe("GoalRuntime", () => {
       );
       await runtime.create("session-1", "ship");
 
-      await runtime.settle("session-1", { latestOutput: "done" });
+      await runtime.settle("session-1", {
+        latestOutput: "done",
+        terminalCandidate: { outcome, reason: "worker evidence" },
+      });
 
       expect(await runtime.get("session-1")).toMatchObject({
         status: outcome,
@@ -129,15 +173,49 @@ describe("GoalRuntime", () => {
     const runtime = new GoalRuntime(new MemoryGoalStorage(), evaluator, continuation);
     await runtime.create("session-1", "ship");
 
-    const first = runtime.settle("session-1", { latestOutput: "first turn" });
+    const first = runtime.settle("session-1", {
+      latestOutput: "first turn",
+      terminalCandidate: { outcome: "complete", reason: "first claim" },
+    });
     await started;
-    await runtime.settle("session-1", { latestOutput: "latest completed turn" });
+    await runtime.settle("session-1", {
+      latestOutput: "latest completed turn",
+      terminalCandidate: { outcome: "complete", reason: "latest claim" },
+    });
     resolveEvaluation?.({ outcome: "continue", reason: "stale result" });
     await first;
 
     expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
     expect(continuation.continueIfIdle).not.toHaveBeenCalled();
     expect((await runtime.get("session-1"))?.status).toBe("complete");
+  });
+
+  it("persists a terminal candidate until settled evaluation consumes it", async () => {
+    const storage = new MemoryGoalStorage();
+    const first = new GoalRuntime(storage, { evaluate: vi.fn() }, startedContinuation());
+    await first.create("session-1", "ship");
+    await first.requestTerminalCandidate("session-1", {
+      outcome: "complete",
+      reason: "all acceptance checks pass",
+    });
+    const evaluator = {
+      evaluate: vi.fn().mockResolvedValue({ outcome: "complete", reason: "verified" }),
+    } satisfies GoalEvaluator;
+    const recovered = new GoalRuntime(storage, evaluator, startedContinuation());
+
+    await recovered.settle("session-1", { latestOutput: "verified output" });
+
+    expect(evaluator.evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.any(String) }),
+      expect.objectContaining({
+        terminalCandidate: {
+          outcome: "complete",
+          reason: "all acceptance checks pass",
+        },
+      }),
+    );
+    expect(await storage.getTerminalCandidate("session-1")).toBeUndefined();
+    expect(await recovered.get("session-1")).toMatchObject({ status: "complete" });
   });
 
   it("recovers a durable pending evaluation before continuing", async () => {
@@ -149,7 +227,11 @@ describe("GoalRuntime", () => {
       goalId: goal.id,
       goalVersion: goal.version,
       evaluationId: "evaluation-1",
-      progress: { latestOutput: "completed", tokenDelta: 50 },
+      progress: {
+        latestOutput: "completed",
+        tokenDelta: 50,
+        terminalCandidate: { outcome: "complete", reason: "verified locally" },
+      },
       attempt: 1,
       availableAt: goal.createdAt,
       lastError: "temporary failure",
@@ -190,7 +272,10 @@ describe("GoalRuntime", () => {
     );
     await runtime.create("session-1", "ship");
 
-    await runtime.settle("session-1", { latestOutput: "work" });
+    await runtime.settle("session-1", {
+      latestOutput: "work",
+      terminalCandidate: { outcome: "complete", reason: "claimed done" },
+    });
 
     expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
     expect(await runtime.get("session-1")).toMatchObject({
@@ -224,6 +309,42 @@ describe("GoalRuntime", () => {
       blockedReason: "continuation failed after 2 attempts: offline",
     });
     expect(await runtime.getContinuationClaim("session-1")).toBeUndefined();
+  });
+
+  it("removes a stale claim before continuing a newer active goal version", async () => {
+    const storage = new MemoryGoalStorage();
+    const continuation = startedContinuation();
+    const runtime = new GoalRuntime(storage, { evaluate: vi.fn() }, continuation);
+    const goal = await runtime.create("session-1", "ship");
+    expect(
+      await storage.createContinuationClaim({
+        scopeId: goal.scopeId,
+        goalId: goal.id,
+        goalVersion: goal.version,
+        claimId: "stale-claim",
+        state: "started",
+        reason: "old version",
+        attempt: 1,
+        availableAt: goal.createdAt,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        createdAt: goal.createdAt,
+        updatedAt: goal.updatedAt,
+      }),
+    ).toBe(true);
+    expect(
+      await storage.replace(
+        { ...goal, version: 2, updatedAt: "2026-01-01T00:01:00.000Z" },
+        goal.version,
+      ),
+    ).toBe(true);
+
+    await runtime.start("session-1");
+
+    expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
+    expect(await runtime.getContinuationClaim("session-1")).toMatchObject({
+      goalVersion: 2,
+      state: "started",
+    });
   });
 
   it("does not let stale continuation retry exhaustion block a newer goal version", async () => {

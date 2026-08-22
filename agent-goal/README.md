@@ -2,7 +2,7 @@
 
 A standalone Pi extension that keeps one agent session working toward one durable, bounded goal. It does not require Pinet, the Pinet broker, RALPH, or Slack.
 
-The extension independently evaluates each settled agent run. An unmet goal atomically requests another turn in the same session. Completed, blocked, budget-limited, paused, and cleared goals do not continue.
+The worker runs normally and stops when its current pass is finished. Ordinary settled runs continue automatically without spending a second model call. Independent evaluation runs only when the worker requests `complete` or `blocked`, at an optional periodic checkpoint, or on the final budget turn. Completed, blocked, budget-limited, paused, and cleared goals do not continue.
 
 ## Install
 
@@ -33,6 +33,14 @@ Pi's footer shows the status and budget usage. A compact widget below the editor
 
 Only one goal may exist per Pi session. Clear the existing goal before creating another.
 
+The agent also receives three model-visible tools:
+
+- `create_goal` — create its own bounded, user-aligned durable goal
+- `get_goal` — inspect the current objective, status, and budget
+- `update_goal` — submit `complete` or `blocked` as a candidate for independent verification
+
+An agent-created goal cannot replace an existing goal. Its first automatic continuation starts after the creating run settles, so work performed before goal creation is not incorrectly charged to the goal budget.
+
 ## Budgets
 
 Goals default to 25 settled iterations. Optional token and runtime limits are supported:
@@ -41,9 +49,10 @@ Goals default to 25 settled iterations. Optional token and runtime limits are su
 PI_AGENT_GOAL_MAX_ITERATIONS=25
 PI_AGENT_GOAL_MAX_TOKENS=200000
 PI_AGENT_GOAL_MAX_RUNTIME_MS=14400000
+PI_AGENT_GOAL_EVALUATION_INTERVAL=0
 ```
 
-Iteration and runtime limits are always reliable. Token accounting uses usage reported by Pi providers. The evaluator still reviews the final allowed turn so a completed goal is not incorrectly classified as budget-limited; only another continuation is prevented.
+Iteration and runtime limits are always reliable. Token accounting uses usage reported by Pi providers. `PI_AGENT_GOAL_EVALUATION_INTERVAL` defaults to `0`, which disables periodic checkpoints; set it to a positive number to evaluate every N settled runs. The evaluator always reviews the final allowed turn so a completed goal is not incorrectly classified as budget-limited; only another continuation is prevented.
 
 ## Persistence and recovery
 
@@ -96,14 +105,18 @@ The continuation adapter owns the final idle check and idempotent enqueue. Pi's 
 
 A future Pinet integration can use broker storage and evaluation plus RALPH recovery through these ports, without introducing multi-agent decomposition.
 
-## Evaluation behavior
+## Worker-directed evaluation
 
-After `agent_settled`, the evaluator returns one of:
+The extension registers model-visible `create_goal`, `get_goal`, and `update_goal` tools. The worker can establish its own user-aligned goal, inspect it, and call `update_goal` with `complete` only after verifying the full objective or with `blocked` for a genuine external impasse. `update_goal` records a terminal candidate rather than mutating goal state directly. When the run reaches `agent_settled`, the independent evaluator verifies that candidate. If the worker stops without calling `update_goal`, the runtime accounts the run and continues the same session without an evaluator call.
+
+Evaluation is also forced at configured periodic checkpoints and on the final budget turn. The evaluator returns one of:
 
 - `continue` with the next required work
 - `complete` with completion evidence
 - `blocked` with a specific unavailable external dependency
 
-The evaluator receives bounded recent assistant and tool evidence. Its output is strictly parsed. Newer settled progress supersedes an older in-flight result. Invalid output and provider failures are retried within policy, then recorded as a blocked goal rather than allowing an unverified continuation.
+The standalone in-process evaluator receives bounded recent assistant and tool evidence plus any terminal candidate. Its output is strictly parsed. Newer settled progress supersedes an older in-flight result. Invalid output and provider failures are retried within policy, then recorded as a blocked goal rather than allowing an unverified terminal decision.
+
+The standalone evaluator intentionally remains a zero-process, zero-runtime-dependency baseline. A future Pinet broker adapter can replace storage, evaluation, continuation, and events to add authoritative evidence inspection, atomic wake scheduling, and watchdog recovery. Subagent evaluators remain optional adapters; tmux and spawned Pi processes are not required.
 
 Continuation prompts explicitly treat the objective as user-provided task data, never as higher-priority instructions.
