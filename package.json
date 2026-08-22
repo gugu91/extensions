@@ -58,7 +58,8 @@
     "nvim-bridge",
     "neon-psql",
     "openai-execution-shaping",
-    "model-aware-compaction"
+    "model-aware-compaction",
+    "agent-goal"
   ],
   "dependencies": {
     "typescript": "^5.7.3"
