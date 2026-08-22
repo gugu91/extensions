@@ -63,7 +63,6 @@ declare module "@earendil-works/pi-coding-agent" {
 
   export interface ExtensionContext {
     cwd: string;
-    mode?: "tui" | "rpc" | "json" | "print";
     hasUI?: boolean;
     isIdle?: () => boolean;
     ui: ExtensionUI;

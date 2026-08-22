@@ -2,8 +2,10 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GoalProgressMessage } from "./progress.js";
 import { registerAgentGoal } from "./index.js";
@@ -14,6 +16,12 @@ type GoalEventHandler = (
   context: ExtensionContext,
 ) => Promise<void> | void;
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
+type GoalWindowFactory = (
+  tui: { requestRender(): void },
+  theme: Theme,
+  keybindings: object,
+  done: (value: void) => void,
+) => Component;
 
 afterEach(() => vi.useRealTimers());
 
@@ -155,8 +163,15 @@ describe("registerAgentGoal", () => {
       },
       sendMessage,
     } as object as ExtensionAPI;
-    const custom = vi.fn().mockResolvedValue(undefined);
-    const baseContext = {
+    const custom = vi.fn(async (factory: GoalWindowFactory) => {
+      factory(
+        { requestRender: vi.fn() },
+        { fg: (_color, text) => text, bold: (text) => text } as Theme,
+        {},
+        vi.fn(),
+      );
+    });
+    const context = {
       hasUI: true,
       isIdle: () => true,
       hasPendingMessages: () => false,
@@ -167,15 +182,12 @@ describe("registerAgentGoal", () => {
         setWidget: vi.fn(),
         notify: vi.fn(),
       },
-    };
+    } as object as ExtensionCommandContext;
     registerAgentGoal(pi, { storage: new MemoryGoalStorage() });
     const command = commands.get("goal");
     if (!command) throw new Error("goal command was not registered");
 
-    await command.handler("", {
-      ...baseContext,
-      mode: "tui",
-    } as object as ExtensionCommandContext);
+    await command.handler("", context);
 
     expect(custom).toHaveBeenCalledWith(
       expect.any(Function),
@@ -186,15 +198,11 @@ describe("registerAgentGoal", () => {
     );
     expect(sendMessage).not.toHaveBeenCalled();
 
-    for (const mode of ["print", "rpc", "json"] as const) {
-      await command.handler("", {
-        ...baseContext,
-        mode,
-      } as object as ExtensionCommandContext);
-    }
+    custom.mockImplementation(async () => undefined);
+    await command.handler("", context);
 
-    expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage).toHaveBeenLastCalledWith(
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "This session has no goal." }),
       { triggerTurn: false },
     );

@@ -400,33 +400,35 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
         if (!input) {
           const goal = await runtime.get(scopeId);
           const claim = await runtime.getContinuationClaim(scopeId);
-          if (ctx.mode === "tui") {
-            await ctx.ui.custom<void>(
-              (_tui, theme, _keybindings, done) =>
-                new GoalWindow(goal, claim, theme, () => done(undefined)),
-              {
-                overlay: true,
-                overlayOptions: {
-                  anchor: "center",
-                  width: 66,
-                  minWidth: 36,
-                  maxHeight: "80%",
-                  margin: 1,
-                },
+          let openedWindow = false;
+          await ctx.ui.custom<void>(
+            (_tui, theme, _keybindings, done) => {
+              openedWindow = true;
+              return new GoalWindow(goal, claim, theme, () => done(undefined));
+            },
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: 66,
+                minWidth: 36,
+                maxHeight: "80%",
+                margin: 1,
               },
-            );
-          } else {
-            api.sendMessage(
-              {
-                customType: "agent-goal.status",
-                content: goal
-                  ? formatGoalDashboard(goal, claim).join("\n")
-                  : "This session has no goal.",
-                display: true,
-              },
-              { triggerTurn: false },
-            );
-          }
+            },
+          );
+          if (openedWindow) return;
+
+          api.sendMessage(
+            {
+              customType: "agent-goal.status",
+              content: goal
+                ? formatGoalDashboard(goal, claim).join("\n")
+                : "This session has no goal.",
+              display: true,
+            },
+            { triggerTurn: false },
+          );
           return;
         }
 
