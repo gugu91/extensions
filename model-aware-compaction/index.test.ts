@@ -30,7 +30,12 @@ function context(tokens: number, compact = vi.fn()): ExtensionContext {
     cwd: process.cwd(),
     hasUI: false,
     ui: { notify: vi.fn(), setStatus: vi.fn() } as unknown as ExtensionContext["ui"],
-    sessionManager: {} as ExtensionContext["sessionManager"],
+    sessionManager: {
+      getEntries: () => [],
+      getBranch: () => [],
+      getLeafId: () => undefined,
+      getSessionFile: () => undefined,
+    },
     model: { provider: "openai", id: "gpt-5-mini" },
     getContextUsage: () => ({ tokens, contextWindow: 400_000, percent: tokens / 4_000 }),
     compact,
@@ -51,14 +56,14 @@ describe("extension wiring", () => {
       JSON.stringify({ "model-aware-compaction": { enabled: false } }),
     );
     try {
-      emit("agent_end", { ...context(120_000, compact), cwd: temp });
+      emit("agent_settled", { ...context(120_000, compact), cwd: temp });
       expect(compact).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
     }
   });
 
-  it("waits for the complete agent loop before compacting", () => {
+  it("waits for the full operation to settle before compacting", () => {
     const { emit } = harness();
     const compact = vi.fn();
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), "model-aware-compaction-"));
@@ -70,12 +75,12 @@ describe("extension wiring", () => {
     try {
       const ctx = { ...context(120_000, compact), cwd: temp };
 
-      // Tool-using runs can emit several turn_end events before agent_end.
+      // Pi can still auto-compact and retry after agent_end.
       emit("turn_end", ctx);
-      emit("turn_end", ctx);
+      emit("agent_end", ctx);
       expect(compact).not.toHaveBeenCalled();
 
-      emit("agent_end", ctx);
+      emit("agent_settled", ctx);
       expect(compact).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });
@@ -96,22 +101,75 @@ describe("extension wiring", () => {
     );
     try {
       const ctx = { ...context(120_000, compact), cwd: temp };
-      emit("agent_end", ctx);
-      emit("agent_end", ctx);
+      emit("agent_settled", ctx);
+      emit("agent_settled", ctx);
       expect(compact).toHaveBeenCalledTimes(1);
 
       const options = compact.mock.calls[0]?.[0] as { onComplete?: () => void };
       options.onComplete?.();
-      emit("agent_end", ctx);
+      emit("agent_settled", ctx);
       expect(compact).toHaveBeenCalledTimes(1);
 
-      emit("agent_end", {
+      emit("agent_settled", {
         ...ctx,
         getContextUsage: () => ({ tokens: 90_000, contextWindow: 400_000, percent: 22.5 }),
       });
-      emit("agent_end", ctx);
+      emit("agent_settled", ctx);
       expect(compact).toHaveBeenCalledTimes(2);
     } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a settled branch whose latest entry is already a compaction", () => {
+    const { emit } = harness();
+    const compact = vi.fn();
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "model-aware-compaction-"));
+    fs.mkdirSync(path.join(temp, ".pi"));
+    fs.writeFileSync(
+      path.join(temp, ".pi", "settings.json"),
+      JSON.stringify({ "model-aware-compaction": { enabled: true } }),
+    );
+    try {
+      const base = context(120_000, compact);
+      const ctx = {
+        ...base,
+        cwd: temp,
+        sessionManager: {
+          ...base.sessionManager,
+          getBranch: () => [{ type: "compaction" }],
+        },
+      };
+      emit("agent_settled", ctx);
+      emit("agent_settled", ctx);
+      expect(compact).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an already-compacted callback as an idempotent outcome", () => {
+    const { emit } = harness();
+    const compact = vi.fn();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "model-aware-compaction-"));
+    fs.mkdirSync(path.join(temp, ".pi"));
+    fs.writeFileSync(
+      path.join(temp, ".pi", "settings.json"),
+      JSON.stringify({ "model-aware-compaction": { enabled: true, debug: true } }),
+    );
+    try {
+      const ctx = { ...context(120_000, compact), cwd: temp, hasUI: true };
+      emit("agent_settled", ctx);
+      const options = compact.mock.calls[0]?.[0] as { onError?: (error: Error) => void };
+      options.onError?.(new Error("Already compacted"));
+      emit("agent_settled", ctx);
+
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(error).not.toHaveBeenCalledWith(expect.stringContaining("failed"));
+      expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("failed"), "error");
+    } finally {
+      error.mockRestore();
       fs.rmSync(temp, { recursive: true, force: true });
     }
   });
@@ -127,9 +185,9 @@ describe("extension wiring", () => {
     );
     try {
       const ctx = { ...context(120_000, compact), cwd: temp };
-      emit("agent_end", ctx);
+      emit("agent_settled", ctx);
       emit("model_select", ctx);
-      emit("agent_end", ctx);
+      emit("agent_settled", ctx);
       expect(compact).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(temp, { recursive: true, force: true });

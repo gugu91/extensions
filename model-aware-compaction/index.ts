@@ -37,9 +37,9 @@ export default function modelAwareCompaction(pi: ExtensionAPI) {
   pi.on("session_start", rearm);
   pi.on("model_select", rearm);
 
-  // ctx.compact() aborts an active agent operation. Wait for the complete
-  // model/tool loop to settle so compaction cannot discard pending tool work.
-  pi.on("agent_end", (_event, rawCtx) => {
+  // agent_end may still be followed by Pi's automatic compaction and retry.
+  // Wait until the full operation settles so proactive compaction cannot race it.
+  pi.on("agent_settled", (_event, rawCtx) => {
     const ctx = rawCtx as CompatibleContext;
     const config = loadConfig(ctx.cwd);
     const usage = ctx.getContextUsage?.();
@@ -57,6 +57,11 @@ export default function modelAwareCompaction(pi: ExtensionAPI) {
     }
     if (!decision.shouldCompact || !ctx.compact || !decision.modelKey || decision.limit === null)
       return;
+
+    if (ctx.sessionManager.getBranch().at(-1)?.type === "compaction") {
+      triggeredModelKey = decision.modelKey;
+      return;
+    }
 
     inFlight = true;
     triggeredModelKey = decision.modelKey;
@@ -77,6 +82,8 @@ export default function modelAwareCompaction(pi: ExtensionAPI) {
       },
       onError: (error) => {
         inFlight = false;
+        if (error.message === "Already compacted") return;
+
         triggeredModelKey = null;
         console.error(`${LOG_PREFIX} failed ${details}: ${error.message}`);
         if (config.debug && ctx.hasUI)

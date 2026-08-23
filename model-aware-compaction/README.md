@@ -37,7 +37,7 @@ Rules are evaluated in order. `*` wildcards are supported, such as `example-prox
 
 ## Behavior
 
-After each `agent_end`, the extension reads `ctx.getContextUsage()` and the active `ctx.model`. Waiting for `agent_end` is important: tool-using runs can emit several `turn_end` events, and Pi's `ctx.compact()` aborts an active agent operation before compacting. Triggering only after the complete model/tool loop has settled prevents compaction from discarding pending tool work. When usage first exceeds the matching rule's `activeContextTokens`, the extension calls `ctx.compact()`. It prevents duplicate calls while compaction is in flight and re-arms after usage drops below the threshold, the model changes, a session starts, or compaction fails.
+After each `agent_settled`, the extension reads `ctx.getContextUsage()` and the active `ctx.model`. Pi can still auto-compact, retry, or process queued follow-ups after `agent_end`; waiting for `agent_settled` prevents proactive compaction from racing that automatic lifecycle. When usage first exceeds the matching rule's `activeContextTokens`, the extension calls `ctx.compact()`. It skips branches whose latest entry is already a compaction, prevents duplicate calls while compaction is in flight, and treats an `Already compacted` callback as an idempotent outcome. The threshold re-arms after usage drops below the limit, the model changes, a session starts, or another compaction failure occurs.
 
 Run `/model-aware-compaction-status` to inspect the active model, usage, matched threshold, state, and loaded rules.
 
