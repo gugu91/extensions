@@ -44,7 +44,7 @@ const claim: GoalContinuationClaim = {
 
 describe("GoalWindow", () => {
   it("renders compact goal state and keeps every line within the available width", () => {
-    const window = new GoalWindow(goal, claim, theme, vi.fn(), () =>
+    const window = new GoalWindow(goal, claim, theme, vi.fn(), vi.fn(), () =>
       Date.parse("2026-01-01T00:15:00.000Z"),
     );
 
@@ -57,6 +57,7 @@ describe("GoalWindow", () => {
     expect(lines.join("\n")).toContain("15m/60m");
     expect(lines.join("\n")).toContain("Latest Interaction tests remain");
     expect(lines.join("\n")).toContain("Continuation deferred · attempt 2");
+    expect(lines.join("\n")).toContain("p pause · c complete · x clear · q close");
     expect(lines.every((line) => visibleWidth(line) <= 52)).toBe(true);
   });
 
@@ -77,21 +78,80 @@ describe("GoalWindow", () => {
     },
   );
 
-  it.each(["q", "Q", "\u001b", "\r", "\u0003"])("closes for %j", (input) => {
-    const onClose = vi.fn();
-    const window = new GoalWindow(goal, undefined, theme, onClose);
+  it.each(["q", "Q", "\u001b", "\u0003"])("closes for %j", (input) => {
+    const onAction = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction);
 
     window.handleInput(input);
 
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onAction).toHaveBeenCalledWith("close");
   });
 
-  it("ignores unrelated input", () => {
-    const onClose = vi.fn();
-    const window = new GoalWindow(goal, undefined, theme, onClose);
+  it.each([
+    ["p", "pause"],
+    ["P", "pause"],
+  ] as const)("routes %s to %s", (input, action) => {
+    const onAction = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction);
+
+    window.handleInput(input);
+
+    expect(onAction).toHaveBeenCalledWith(action);
+  });
+
+  it("offers resume for paused and blocked goals", () => {
+    const onPausedAction = vi.fn();
+    const onBlockedAction = vi.fn();
+    new GoalWindow({ ...goal, status: "paused" }, undefined, theme, onPausedAction).handleInput(
+      "r",
+    );
+    new GoalWindow({ ...goal, status: "blocked" }, undefined, theme, onBlockedAction).handleInput(
+      "r",
+    );
+
+    expect(onPausedAction).toHaveBeenCalledWith("resume");
+    expect(onBlockedAction).toHaveBeenCalledWith("resume");
+  });
+
+  it.each([
+    ["c", "complete"],
+    ["x", "clear"],
+  ] as const)("requires confirmation before %s", (input, action) => {
+    const onAction = vi.fn();
+    const requestRender = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction, requestRender);
+
+    window.handleInput(input);
+
+    expect(onAction).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalledOnce();
+    expect(window.render(52).join("\n")).toContain(`${input} again to confirm ${action}`);
+
+    window.handleInput(input);
+
+    expect(onAction).toHaveBeenCalledWith(action);
+  });
+
+  it("cancels a pending destructive action with escape", () => {
+    const onAction = vi.fn();
+    const requestRender = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction, requestRender);
 
     window.handleInput("x");
+    window.handleInput("\u001b");
 
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalledTimes(2);
+    expect(window.render(52).join("\n")).toContain("x clear");
+  });
+
+  it("ignores unavailable and unrelated actions", () => {
+    const onAction = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction);
+
+    window.handleInput("r");
+    window.handleInput("z");
+
+    expect(onAction).not.toHaveBeenCalled();
   });
 });

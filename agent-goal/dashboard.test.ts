@@ -21,7 +21,7 @@ const goal: AgentGoal = {
 };
 
 describe("goal dashboard", () => {
-  it("formats compact footer and widget state", () => {
+  it("formats compact footer and detailed headless state", () => {
     expect(formatGoalStatus(goal)).toBe("goal: active · 3/8 turns · 12430/50000 tok");
     expect(formatGoalDashboard(goal)).toEqual([
       "Goal · active · v4",
