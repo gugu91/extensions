@@ -9,6 +9,34 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.10] - 2026-08-23
+
+Pinet v0.2.10 prevents model-aware proactive compaction from racing Pi's native auto-compaction lifecycle.
+
+### Version verification
+
+- `pi-extensions` — `0.2.10` (private repo package)
+- `@pinet/transport-core` — `0.2.10`
+- `@pinet/broker-core` — `0.2.10`
+- `@pinet/pinet-core` — `0.2.10`
+- `@pinet/imessage-bridge` — `0.2.10`
+- `@pinet/slack-bridge` — `0.2.10`
+- `@pinet/model-aware-compaction` — `0.2.10`
+- `@pinet/agent-goal` — `0.2.10`
+
+### Release highlights
+
+- Moves proactive model-aware compaction from `agent_end` to the terminal `agent_settled` lifecycle event.
+- Skips compaction when the current session branch already ends in a compaction entry.
+- Treats Pi's `Already compacted` callback as an idempotent success instead of surfacing duplicate errors.
+- Adds regression coverage for native-compaction-first races, duplicate callbacks, in-flight guards, and trigger re-arming.
+
+### Notable pull requests
+
+- [#1006](https://github.com/gugu91/pinet/pull/1006) — avoid duplicate compaction after native auto-compaction
+
+See the [full change set since v0.2.9](https://github.com/gugu91/pinet/compare/v0.2.9...v0.2.10).
+
 ## [0.2.9] - 2026-08-23
 
 Pinet v0.2.9 turns the standalone single-agent goal window into an actionable control surface while reducing the persistent goal display to compact status.
