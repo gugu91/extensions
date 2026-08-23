@@ -9,6 +9,35 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.7] - 2026-08-22
+
+Pinet v0.2.7 adds a focused Pi-native goal window to the standalone single-agent goal loop while keeping the coordinated seven-package release set aligned.
+
+### Version verification
+
+- `pi-extensions` — `0.2.7` (private repo package)
+- `@pinet/transport-core` — `0.2.7`
+- `@pinet/broker-core` — `0.2.7`
+- `@pinet/pinet-core` — `0.2.7`
+- `@pinet/imessage-bridge` — `0.2.7`
+- `@pinet/slack-bridge` — `0.2.7`
+- `@pinet/model-aware-compaction` — `0.2.7`
+- `@pinet/agent-goal` — `0.2.7`
+
+### Release highlights
+
+- Opens a centered Pi-native goal window from `/goal` in interactive sessions without requiring tmux or a separate process.
+- Shows the objective, lifecycle state, iteration/token/runtime budgets, latest evaluator guidance, and continuation state in one focused view.
+- Supports Escape, Enter, `q`, and Ctrl+C dismissal while retaining the passive footer/widget status.
+- Preserves textual behavior in non-interactive contexts through Pi's real `ui.custom()` capability contract.
+- Enforces Pi's strict render-width contract, including bounded output for terminal widths below eight columns.
+
+### Notable pull requests
+
+- [#994](https://github.com/gugu91/pinet/pull/994) — add the minimal Pi-native goal window
+
+See the [full change set since v0.2.6](https://github.com/gugu91/pinet/compare/v0.2.6...v0.2.7).
+
 ## [0.2.6] - 2026-08-22
 
 Pinet v0.2.6 adds the standalone durable single-agent goal loop and tightens Slack bridge startup, mode boundaries, and dependency/release hygiene. It expands the coordinated npm release set to seven `@pinet/*` packages.
