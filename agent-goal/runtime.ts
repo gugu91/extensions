@@ -32,6 +32,7 @@ export interface GoalRuntimeOptions {
   eventSink?: GoalEventSink;
   claimTtlMs?: number;
   delay?: (milliseconds: number) => Promise<void>;
+  /** @deprecated Every settled run is evaluated. Retained for configuration compatibility. */
   evaluationInterval?: number;
   wakeScheduler?: GoalWakeScheduler;
 }
@@ -44,7 +45,6 @@ export class GoalRuntime {
   private readonly eventSink?: GoalEventSink;
   private readonly claimTtlMs: number;
   private readonly delay: (milliseconds: number) => Promise<void>;
-  private readonly evaluationInterval: number;
   private readonly wakeScheduler: GoalWakeScheduler;
   private closed = false;
 
@@ -59,10 +59,12 @@ export class GoalRuntime {
     this.retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
     this.eventSink = options.eventSink;
     this.claimTtlMs = options.claimTtlMs ?? 5 * 60_000;
-    this.evaluationInterval = options.evaluationInterval ?? 0;
     this.wakeScheduler =
       options.wakeScheduler ?? new TimerGoalWakeScheduler(() => this.now().getTime());
-    if (!Number.isInteger(this.evaluationInterval) || this.evaluationInterval < 0) {
+    if (
+      options.evaluationInterval !== undefined &&
+      (!Number.isInteger(options.evaluationInterval) || options.evaluationInterval < 0)
+    ) {
       throw new Error("Goal evaluationInterval must be a non-negative integer");
     }
     this.delay =
@@ -336,20 +338,9 @@ export class GoalRuntime {
           tokens: goal.usage.tokens + (pending.progress.tokenDelta ?? 0),
         };
         const projectedGoal: AgentGoal = { ...goal, usage: accountedUsage };
-        const evaluatorRequired =
-          pending.progress.terminalCandidate !== undefined ||
-          this.budgetExhausted(projectedGoal) ||
-          (this.evaluationInterval > 0 &&
-            Math.floor(accountedUsage.iterations / this.evaluationInterval) >
-              Math.floor(goal.usage.iterations / this.evaluationInterval));
-        let evaluation: GoalEvaluation = {
-          outcome: "continue",
-          reason: "The worker stopped without requesting a terminal goal decision.",
-        };
+        let evaluation: GoalEvaluation;
         try {
-          if (evaluatorRequired) {
-            evaluation = await this.evaluator.evaluate(goal, pending.progress);
-          }
+          evaluation = await this.evaluator.evaluate(projectedGoal, pending.progress);
         } catch (error) {
           if (this.closed) return;
           const latestPending = await this.storage.getPendingEvaluation(scopeId);
@@ -452,11 +443,7 @@ export class GoalRuntime {
           goal: next,
           tokenDelta: pending.progress.tokenDelta ?? 0,
         });
-        if (evaluatorRequired) {
-          await this.record({ type: "goal.evaluated", goal: next, evaluation });
-        } else {
-          await this.record({ type: "goal.auto_continued", goal: next });
-        }
+        await this.record({ type: "goal.evaluated", goal: next, evaluation });
         if (next.status === "active") await this.continueWithClaim(next, evaluation.reason);
         else
           await this.record({
@@ -518,7 +505,6 @@ export class GoalRuntime {
       }
       const waitMs = Date.parse(claim.availableAt) - this.now().getTime();
       if (waitMs > 0) await this.delay(waitMs);
-      claim.attempt = attempt;
       let result;
       try {
         result = await this.continuation.continueIfIdle(goal, {
@@ -535,6 +521,7 @@ export class GoalRuntime {
       }
       if (this.closed) return;
       if (result.status === "started") {
+        claim.attempt = attempt;
         claim.state = "started";
         claim.lastError = undefined;
         claim.updatedAt = this.now().toISOString();
@@ -548,12 +535,14 @@ export class GoalRuntime {
       claim.lastError = result.reason;
       claim.availableAt = new Date(this.now().getTime() + retryDelay).toISOString();
       claim.updatedAt = this.now().toISOString();
-      if (!(await this.storage.replaceContinuationClaim(claim, claim.claimId))) return;
       if (result.status === "busy") {
+        if (!(await this.storage.replaceContinuationClaim(claim, claim.claimId))) return;
         this.scheduleRecovery(goal.scopeId, claim.availableAt);
         await this.record({ type: "goal.continuation_deferred", goal, claim });
         return;
       }
+      claim.attempt = attempt;
+      if (!(await this.storage.replaceContinuationClaim(claim, claim.claimId))) return;
       if (attempt < this.retryPolicy.maxAttempts) {
         await this.record({
           type: "goal.retry_scheduled",

@@ -65,11 +65,13 @@ export class PiGoalEvaluator implements GoalEvaluator {
                   "BLOCKED: <specific external dependency>",
                   "Do not treat a partial implementation, an unverified claim, or a request for ordinary follow-up work as complete or blocked.",
                   progress.terminalCandidate
-                    ? `The worker requested ${progress.terminalCandidate.outcome.toUpperCase()}: ${progress.terminalCandidate.reason}`
-                    : "This is a periodic or final-budget checkpoint without a worker terminal claim.",
-                  "Reject an unsupported terminal claim with CONTINUE and identify the evidence or work still required.",
+                    ? `Optional worker hint: ${progress.terminalCandidate.outcome.toUpperCase()}: ${progress.terminalCandidate.reason}`
+                    : "The worker supplied no terminal hint. Infer the outcome directly from the objective and evidence.",
+                  "Treat a worker hint only as evidence to verify. Choose COMPLETE or BLOCKED without one when the evidence supports it; otherwise choose CONTINUE and identify the next required work.",
                   "",
                   `OBJECTIVE:\n${goal.objective}`,
+                  "",
+                  `ACCOUNTED BUDGET:\niterations ${goal.usage.iterations}/${goal.budget.maxIterations}; tokens ${goal.usage.tokens}${goal.budget.maxTokens === undefined ? "" : `/${goal.budget.maxTokens}`}`,
                   "",
                   `LATEST AGENT OUTPUT:\n${progress.latestOutput || "(no textual output)"}`,
                 ].join("\n"),

@@ -48,7 +48,7 @@ describe("GoalRuntime", () => {
     ).rejects.toThrow("maxRuntimeMs");
   });
 
-  it("accounts ordinary progress and continues without evaluator work", async () => {
+  it("evaluates ordinary settled progress and continues when work remains", async () => {
     const continuation = startedContinuation();
     const evaluator = {
       evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "tests remain" }),
@@ -62,13 +62,13 @@ describe("GoalRuntime", () => {
     expect(await runtime.get("session-1")).toMatchObject({
       status: "active",
       usage: { iterations: 1, tokens: 120 },
-      lastEvaluation: {
-        outcome: "continue",
-        reason: "The worker stopped without requesting a terminal goal decision.",
-      },
+      lastEvaluation: { outcome: "continue", reason: "tests remain" },
       version: 2,
     });
-    expect(evaluator.evaluate).not.toHaveBeenCalled();
+    expect(evaluator.evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({ usage: { iterations: 1, tokens: 120 } }),
+      expect.objectContaining({ latestOutput: "implementation done", tokenDelta: 120 }),
+    );
     expect(await runtime.getContinuationClaim("session-1")).toMatchObject({ state: "started" });
     await runtime.recover("session-1");
     expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
@@ -92,7 +92,7 @@ describe("GoalRuntime", () => {
     expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
   });
 
-  it("evaluates configured periodic checkpoints", async () => {
+  it("evaluates every settlement regardless of the legacy checkpoint interval", async () => {
     const evaluator = {
       evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "checkpoint passed" }),
     } satisfies GoalEvaluator;
@@ -109,7 +109,7 @@ describe("GoalRuntime", () => {
     await runtime.acknowledgeContinuation("session-1");
     await runtime.settle("session-1", { latestOutput: "turn two" });
 
-    expect(evaluator.evaluate).toHaveBeenCalledOnce();
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
   });
 
   it.each(["complete", "blocked"] as const)(
@@ -482,7 +482,50 @@ describe("GoalRuntime", () => {
     await vi.waitFor(() => expect(continuation.continueIfIdle).toHaveBeenCalledTimes(2));
     expect(await runtime.getContinuationClaim("session-1")).toMatchObject({
       state: "started",
-      attempt: 2,
+      attempt: 1,
+    });
+  });
+
+  it("does not exhaust continuation retries while the goal session stays busy", async () => {
+    let now = new Date("2026-01-01T00:00:00.000Z");
+    let wake: (() => void) | undefined;
+    const wakeScheduler: GoalWakeScheduler = {
+      schedule: vi.fn((_scopeId, _wakeAt, callback) => {
+        wake = callback;
+      }),
+      cancel: vi.fn(),
+      close: vi.fn(),
+    };
+    const continuation: GoalContinuation = {
+      continueIfIdle: vi.fn().mockResolvedValue({
+        status: "busy",
+        reason: "settlement callback still owns the session",
+        retryAfterMs: 100,
+      }),
+    };
+    const runtime = new GoalRuntime(
+      new MemoryGoalStorage(),
+      { evaluate: vi.fn() },
+      continuation,
+      () => now,
+      {
+        retryPolicy: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
+        wakeScheduler,
+      },
+    );
+    await runtime.create("session-1", "ship");
+    await runtime.start("session-1");
+
+    for (let index = 0; index < 4; index += 1) {
+      now = new Date(now.getTime() + 101);
+      wake?.();
+      await vi.waitFor(() => expect(continuation.continueIfIdle).toHaveBeenCalledTimes(index + 2));
+    }
+
+    expect(await runtime.get("session-1")).toMatchObject({ status: "active" });
+    expect(await runtime.getContinuationClaim("session-1")).toMatchObject({
+      state: "deferred",
+      attempt: 0,
     });
   });
 
