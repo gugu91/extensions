@@ -9,6 +9,35 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.9] - 2026-08-23
+
+Pinet v0.2.9 turns the standalone single-agent goal window into an actionable control surface while reducing the persistent goal display to compact status.
+
+### Version verification
+
+- `pi-extensions` — `0.2.9` (private repo package)
+- `@pinet/transport-core` — `0.2.9`
+- `@pinet/broker-core` — `0.2.9`
+- `@pinet/pinet-core` — `0.2.9`
+- `@pinet/imessage-bridge` — `0.2.9`
+- `@pinet/slack-bridge` — `0.2.9`
+- `@pinet/model-aware-compaction` — `0.2.9`
+- `@pinet/agent-goal` — `0.2.9`
+
+### Release highlights
+
+- Adds keyboard-accessible pause, resume, complete, clear, and close actions to the interactive `/goal` modal.
+- Requires explicit confirmation before complete and clear actions.
+- Refreshes detailed goal information in the modal after lifecycle changes.
+- Removes the duplicated verbose persistent widget and retains compact footer status.
+- Preserves detailed textual `/goal` output for headless contexts and strict narrow-width rendering.
+
+### Notable pull requests
+
+- [#1002](https://github.com/gugu91/pinet/pull/1002) — make the goal window actionable and compact the passive UI
+
+See the [full change set since the v0.2.8 release commit](https://github.com/gugu91/pinet/compare/aff1cb6e6d10a2b3c96f1e24dd004e3196223f66...v0.2.9).
+
 ## [0.2.8] - 2026-08-23
 
 Pinet v0.2.8 makes independent validation automatic for every settled single-agent goal run while keeping the coordinated seven-package release set aligned.
