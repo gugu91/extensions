@@ -23,23 +23,60 @@ function compactNumber(value: number): string {
   return `${scaled.toFixed(scaled < 100 ? 1 : 0).replace(/\.0$/, "")}${suffix}`;
 }
 
+export type GoalWindowAction = "pause" | "resume" | "complete" | "clear" | "close";
+
+type ConfirmableGoalWindowAction = Extract<GoalWindowAction, "complete" | "clear">;
+
 export class GoalWindow implements Component {
+  private pendingConfirmation: ConfirmableGoalWindowAction | undefined;
+
   constructor(
     private readonly goal: AgentGoal | undefined,
     private readonly claim: GoalContinuationClaim | undefined,
     private readonly theme: Theme,
-    private readonly onClose: () => void,
+    private readonly onAction: (action: GoalWindowAction) => void,
+    private readonly requestRender: () => void = () => undefined,
     private readonly now: () => number = Date.now,
   ) {}
 
   handleInput(data: string): void {
-    if (
-      matchesKey(data, "escape") ||
-      matchesKey(data, "ctrl+c") ||
-      matchesKey(data, "return") ||
-      data.toLowerCase() === "q"
-    ) {
-      this.onClose();
+    const key = data.toLowerCase();
+    if (matchesKey(data, "ctrl+c") || key === "q") {
+      this.onAction("close");
+      return;
+    }
+    if (matchesKey(data, "escape")) {
+      if (this.pendingConfirmation) {
+        this.pendingConfirmation = undefined;
+        this.requestRender();
+      } else {
+        this.onAction("close");
+      }
+      return;
+    }
+    if (!this.goal) return;
+
+    if (this.pendingConfirmation) {
+      const confirmationKey = this.pendingConfirmation === "complete" ? "c" : "x";
+      if (key === confirmationKey) {
+        this.onAction(this.pendingConfirmation);
+      } else {
+        this.pendingConfirmation = undefined;
+        this.requestRender();
+      }
+      return;
+    }
+
+    if (key === "p" && this.goal.status === "active") {
+      this.onAction("pause");
+    } else if (key === "r" && (this.goal.status === "paused" || this.goal.status === "blocked")) {
+      this.onAction("resume");
+    } else if (key === "c" && this.goal.status !== "complete") {
+      this.pendingConfirmation = "complete";
+      this.requestRender();
+    } else if (key === "x") {
+      this.pendingConfirmation = "clear";
+      this.requestRender();
     }
   }
 
@@ -62,7 +99,7 @@ export class GoalWindow implements Component {
     if (!this.goal) {
       lines.push(row(), row(` ${this.theme.fg("muted", "No goal for this session.")}`));
       lines.push(row(` ${this.theme.fg("dim", "/goal <objective> to begin")}`), row());
-      lines.push(row(` ${this.theme.fg("dim", "esc · enter · q  close")}`));
+      lines.push(row(` ${this.theme.fg("dim", "esc · q  close")}`));
       lines.push(border(`╰${"─".repeat(innerWidth)}╯`));
       return lines;
     }
@@ -148,7 +185,17 @@ export class GoalWindow implements Component {
       );
     }
 
-    lines.push(row(), row(` ${this.theme.fg("dim", "esc · enter · q  close")}`));
+    const actions = [
+      this.goal.status === "active" ? "p pause" : undefined,
+      this.goal.status === "paused" || this.goal.status === "blocked" ? "r resume" : undefined,
+      this.goal.status !== "complete" ? "c complete" : undefined,
+      "x clear",
+      "q close",
+    ].filter((action): action is string => action !== undefined);
+    const footer = this.pendingConfirmation
+      ? `${this.pendingConfirmation === "complete" ? "c" : "x"} again to confirm ${this.pendingConfirmation} · esc cancel`
+      : actions.join(" · ");
+    lines.push(row(), row(` ${this.theme.fg("dim", footer)}`));
     lines.push(border(`╰${"─".repeat(innerWidth)}╯`));
     return lines;
   }

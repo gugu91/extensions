@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
-import { GoalWindow } from "./goal-window.js";
+import { GoalWindow, type GoalWindowAction } from "./goal-window.js";
 import type {
   GoalBudget,
   GoalContinuation,
@@ -44,7 +44,7 @@ export type {
   GoalWakeScheduler,
 } from "./domain.js";
 export { displayGoalText, formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
-export { GoalWindow } from "./goal-window.js";
+export { GoalWindow, type GoalWindowAction } from "./goal-window.js";
 export { MemoryGoalStorage } from "./memory-storage.js";
 export { parseGoalEvaluation, PiGoalEvaluator } from "./pi-evaluator.js";
 export {
@@ -162,13 +162,30 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
   const refreshUi = async (ctx: CompatibleContext): Promise<void> => {
     const scopeId = ctx.sessionManager.getSessionId();
     const goal = await runtime.get(scopeId);
-    ctx.ui.setStatus(STATUS_KEY, goal ? formatGoalStatus(goal) : undefined);
-    if (!goal || hiddenScopes.has(scopeId)) {
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-      return;
+    const hidden = hiddenScopes.has(scopeId);
+    ctx.ui.setStatus(STATUS_KEY, goal && !hidden ? formatGoalStatus(goal) : undefined);
+    ctx.ui.setWidget(WIDGET_KEY, undefined);
+  };
+
+  const applyGoalAction = async (
+    scopeId: string,
+    action: Exclude<GoalWindowAction, "close">,
+  ): Promise<void> => {
+    switch (action) {
+      case "pause":
+        await runtime.setStatus(scopeId, "paused");
+        break;
+      case "resume":
+        await runtime.setStatus(scopeId, "active");
+        await runtime.start(scopeId, "Resume the goal from current state.");
+        break;
+      case "complete":
+        await runtime.setStatus(scopeId, "complete");
+        break;
+      case "clear":
+        if (!(await runtime.clear(scopeId))) throw new Error("This session has no goal");
+        break;
     }
-    const claim = await runtime.getContinuationClaim(scopeId);
-    ctx.ui.setWidget(WIDGET_KEY, formatGoalDashboard(goal, claim), { placement: "belowEditor" });
   };
 
   pi.on("session_start", async (_event, rawCtx) => {
@@ -397,53 +414,52 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
 
       try {
         if (!input) {
-          const goal = await runtime.get(scopeId);
-          const claim = await runtime.getContinuationClaim(scopeId);
           let openedWindow = false;
-          await ctx.ui.custom<void>(
-            (_tui, theme, _keybindings, done) => {
-              openedWindow = true;
-              return new GoalWindow(goal, claim, theme, () => done(undefined));
-            },
-            {
-              overlay: true,
-              overlayOptions: {
-                anchor: "center",
-                width: 66,
-                minWidth: 36,
-                maxHeight: "80%",
-                margin: 1,
+          while (true) {
+            const goal = await runtime.get(scopeId);
+            const claim = await runtime.getContinuationClaim(scopeId);
+            const action = await ctx.ui.custom<GoalWindowAction>(
+              (tui, theme, _keybindings, done) => {
+                openedWindow = true;
+                return new GoalWindow(goal, claim, theme, done, () => tui.requestRender());
               },
-            },
-          );
-          if (openedWindow) return;
-
-          api.sendMessage(
-            {
-              customType: "agent-goal.status",
-              content: goal
-                ? formatGoalDashboard(goal, claim).join("\n")
-                : "This session has no goal.",
-              display: true,
-            },
-            { triggerTurn: false },
-          );
-          return;
+              {
+                overlay: true,
+                overlayOptions: {
+                  anchor: "center",
+                  width: 66,
+                  minWidth: 36,
+                  maxHeight: "80%",
+                  margin: 1,
+                },
+              },
+            );
+            if (!openedWindow) {
+              api.sendMessage(
+                {
+                  customType: "agent-goal.status",
+                  content: goal
+                    ? formatGoalDashboard(goal, claim).join("\n")
+                    : "This session has no goal.",
+                  display: true,
+                },
+                { triggerTurn: false },
+              );
+              return;
+            }
+            if (!action || action === "close") return;
+            await applyGoalAction(scopeId, action);
+            await refreshUi(ctx);
+          }
         }
 
-        switch (input.toLowerCase()) {
+        const command = input.toLowerCase();
+        switch (command) {
           case "pause":
-            await runtime.setStatus(scopeId, "paused");
-            break;
           case "resume":
-            await runtime.setStatus(scopeId, "active");
-            await runtime.start(scopeId, "Resume the goal from current state.");
-            break;
           case "complete":
-            await runtime.setStatus(scopeId, "complete");
-            break;
           case "clear":
-            if (!(await runtime.clear(scopeId))) throw new Error("This session has no goal");
+            await applyGoalAction(scopeId, command);
             break;
           case "hide":
             hiddenScopes.add(scopeId);

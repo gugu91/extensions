@@ -8,7 +8,7 @@ import type {
 import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GoalProgressMessage } from "./progress.js";
-import { registerAgentGoal } from "./index.js";
+import { registerAgentGoal, type GoalWindowAction } from "./index.js";
 import { MemoryGoalStorage } from "./memory-storage.js";
 
 type GoalEventHandler = (
@@ -20,7 +20,7 @@ type GoalWindowFactory = (
   tui: { requestRender(): void },
   theme: Theme,
   keybindings: object,
-  done: (value: void) => void,
+  done: (value: GoalWindowAction) => void,
 ) => Component;
 
 afterEach(() => vi.useRealTimers());
@@ -218,6 +218,64 @@ describe("registerAgentGoal", () => {
       expect.objectContaining({ content: "This session has no goal." }),
       { triggerTurn: false },
     );
+  });
+
+  it("keeps passive UI compact and applies modal actions before refreshing", async () => {
+    const handlers = new Map<string, GoalEventHandler>();
+    const commands = new Map<string, RegisteredCommand>();
+    const pi = {
+      on(name: string, handler: GoalEventHandler) {
+        handlers.set(name, handler);
+      },
+      registerTool: vi.fn(),
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      sendMessage: vi.fn(),
+    } as object as ExtensionAPI;
+    const storage = new MemoryGoalStorage();
+    await storage.create({
+      id: "goal-1",
+      scopeId: "session-1",
+      objective: "ship",
+      status: "active",
+      budget: { maxIterations: 5 },
+      usage: { iterations: 1, tokens: 10 },
+      version: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const actions: GoalWindowAction[] = ["pause", "close"];
+    const custom = vi.fn(async (factory: GoalWindowFactory) => {
+      factory(
+        { requestRender: vi.fn() },
+        { fg: (_color, text) => text, bold: (text) => text } as Theme,
+        {},
+        vi.fn(),
+      );
+      return actions.shift();
+    });
+    const setStatus = vi.fn();
+    const setWidget = vi.fn();
+    const context = {
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => "session-1" },
+      ui: { custom, setStatus, setWidget, notify: vi.fn() },
+    } as object as ExtensionCommandContext;
+    registerAgentGoal(pi, { storage });
+    const command = commands.get("goal");
+    if (!command) throw new Error("goal command was not registered");
+
+    await handlers.get("session_start")?.({}, context);
+    await command.handler("", context);
+
+    expect(setStatus).toHaveBeenCalledWith("agent-goal", "goal: active · 1/5 turns");
+    expect(setWidget).toHaveBeenCalledWith("agent-goal", undefined);
+    expect(custom).toHaveBeenCalledTimes(2);
+    expect(await storage.get("session-1")).toMatchObject({ status: "paused" });
+    expect(setStatus).toHaveBeenLastCalledWith("agent-goal", "goal: paused · 1/5 turns");
   });
 
   it.each(["complete", "blocked"] as const)(
