@@ -220,78 +220,88 @@ describe("registerAgentGoal", () => {
     );
   });
 
-  it("lets the worker create and inspect its own bounded goal", async () => {
-    const handlers = new Map<string, GoalEventHandler>();
-    const tools = new Map<string, ToolDefinition>();
-    const pi = {
-      on(name: string, handler: GoalEventHandler) {
-        handlers.set(name, handler);
-      },
-      registerTool(tool: ToolDefinition) {
-        tools.set(tool.name, tool);
-      },
-      registerCommand: vi.fn(),
-      sendMessage: vi.fn(),
-    } as object as ExtensionAPI;
-    const context = {
-      hasUI: true,
-      isIdle: () => true,
-      hasPendingMessages: () => false,
-      sessionManager: { getSessionId: () => "session-1" },
-      ui: {
-        setStatus: vi.fn(),
-        setWidget: vi.fn(),
-        notify: vi.fn(),
-      },
-    } as object as ExtensionContext;
-    const storage = new MemoryGoalStorage();
-    const continuation = { continueIfIdle: vi.fn().mockResolvedValue({ status: "started" }) };
-    registerAgentGoal(pi, {
-      storage,
-      evaluator: { evaluate: vi.fn() },
-      continuation,
-      defaultBudget: { maxIterations: 8 },
-    });
-    const createGoalTool = tools.get("create_goal");
-    const getGoalTool = tools.get("get_goal");
-    if (!createGoalTool?.execute || !getGoalTool?.execute) {
-      throw new Error("goal tools were not registered");
-    }
+  it.each(["complete", "blocked"] as const)(
+    "automatically evaluates a worker-created goal as %s without charging its creating run",
+    async (outcome) => {
+      const handlers = new Map<string, GoalEventHandler>();
+      const tools = new Map<string, ToolDefinition>();
+      const pi = {
+        on(name: string, handler: GoalEventHandler) {
+          handlers.set(name, handler);
+        },
+        registerTool(tool: ToolDefinition) {
+          tools.set(tool.name, tool);
+        },
+        registerCommand: vi.fn(),
+        sendMessage: vi.fn(),
+      } as object as ExtensionAPI;
+      const context = {
+        hasUI: true,
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+        sessionManager: { getSessionId: () => "session-1" },
+        ui: {
+          setStatus: vi.fn(),
+          setWidget: vi.fn(),
+          notify: vi.fn(),
+        },
+      } as object as ExtensionContext;
+      const storage = new MemoryGoalStorage();
+      const continuation = { continueIfIdle: vi.fn().mockResolvedValue({ status: "started" }) };
+      const evaluator = {
+        evaluate: vi.fn().mockResolvedValue({ outcome, reason: "independently verified" }),
+      };
+      registerAgentGoal(pi, {
+        storage,
+        evaluator,
+        continuation,
+        defaultBudget: { maxIterations: 8 },
+      });
+      const createGoalTool = tools.get("create_goal");
+      const getGoalTool = tools.get("get_goal");
+      if (!createGoalTool?.execute || !getGoalTool?.execute) {
+        throw new Error("goal tools were not registered");
+      }
 
-    await handlers.get("agent_start")?.({}, context);
-    await expect(
-      createGoalTool.execute(
-        "rejected-call",
-        { objective: "unbounded task", maxIterations: 9 },
+      await handlers.get("agent_start")?.({}, context);
+      await expect(
+        createGoalTool.execute(
+          "rejected-call",
+          { objective: "unbounded task", maxIterations: 9 },
+          new AbortController().signal,
+          undefined,
+          context,
+        ),
+      ).rejects.toThrow("configured limit of 8");
+      await createGoalTool.execute(
+        "call-1",
+        { objective: "finish the approved task", maxIterations: 4 },
         new AbortController().signal,
         undefined,
         context,
-      ),
-    ).rejects.toThrow("configured limit of 8");
-    await createGoalTool.execute(
-      "call-1",
-      { objective: "finish the approved task", maxIterations: 4 },
-      new AbortController().signal,
-      undefined,
-      context,
-    );
-    await handlers.get("agent_end")?.({ messages: [] }, context);
-    await handlers.get("agent_settled")?.({}, context);
-    const inspected = await getGoalTool.execute(
-      "call-2",
-      {},
-      new AbortController().signal,
-      undefined,
-      context,
-    );
+      );
+      await handlers.get("agent_end")?.({ messages: [] }, context);
+      await handlers.get("agent_settled")?.({}, context);
+      const inspected = await getGoalTool.execute(
+        "call-2",
+        {},
+        new AbortController().signal,
+        undefined,
+        context,
+      );
 
-    expect(await storage.get("session-1")).toMatchObject({
-      objective: "finish the approved task",
-      status: "active",
-      budget: { maxIterations: 4 },
-      usage: { iterations: 0 },
-    });
-    expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
-    expect(inspected.content[0]).toMatchObject({ type: "text" });
-  });
+      expect(evaluator.evaluate).toHaveBeenCalledWith(
+        expect.objectContaining({ usage: { iterations: 0, tokens: 0 } }),
+        expect.objectContaining({ terminalCandidate: undefined, tokenDelta: 0 }),
+      );
+      expect(await storage.get("session-1")).toMatchObject({
+        objective: "finish the approved task",
+        status: outcome,
+        budget: { maxIterations: 4 },
+        usage: { iterations: 0, tokens: 0 },
+      });
+      expect(continuation.continueIfIdle).not.toHaveBeenCalled();
+      expect(inspected.content[0]).toMatchObject({ type: "text" });
+    },
+  );
 });

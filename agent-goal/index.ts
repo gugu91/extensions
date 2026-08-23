@@ -202,17 +202,16 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
     activeContext = ctx;
     try {
       const scopeId = ctx.sessionManager.getSessionId();
-      const terminalCandidate = await runtime.getTerminalCandidate(scopeId);
       const agentCreatedGoal = agentCreatedGoalScopes.has(scopeId);
       try {
-        if (agentCreatedGoal && !terminalCandidate) {
-          await runtime.start(scopeId, "Begin working toward the goal created in the prior run.");
-        } else {
-          await runtime.settle(scopeId, {
+        await runtime.settle(
+          scopeId,
+          {
             latestOutput: latestProgress,
-            tokenDelta: agentCreatedGoal ? 0 : latestTokenDelta,
-          });
-        }
+            tokenDelta: latestTokenDelta,
+          },
+          { accountUsage: !agentCreatedGoal },
+        );
       } finally {
         if (agentCreatedGoal) agentCreatedGoalScopes.delete(scopeId);
       }

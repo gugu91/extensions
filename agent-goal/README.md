@@ -39,7 +39,7 @@ The agent also receives three model-visible tools:
 - `get_goal` — inspect the current objective, status, and budget
 - `update_goal` — optionally attach a `complete` or `blocked` hint for independent verification
 
-An agent-created goal cannot replace an existing goal. Its first automatic continuation starts after the creating run settles, so work performed before goal creation is not incorrectly charged to the goal budget.
+An agent-created goal cannot replace an existing goal. The creating run is evaluated when it settles, but its iteration and token usage are not charged because some work may predate goal creation. A `continue` decision starts the first charged goal iteration.
 
 ## Budgets
 
@@ -65,7 +65,7 @@ Set `PI_AGENT_GOAL_DB` to use another path. The stable Pi session ID is the stor
 
 Every continuation first acquires a durable, idempotent per-session claim. Busy sessions persist a deferred claim and schedule an in-process wake for their retry time without consuming failure attempts. Started claims schedule an expiry wake, remain until the next agent run begins, and recover safely after interruption or session resume. Evaluator and unavailable/rejected continuation failures use bounded exponential retries; exhausted retries block the goal with a diagnostic reason.
 
-Settlements that arrive during an in-flight evaluation are atomically aggregated in storage. Every settled iteration and token delta is charged, while the evaluator receives the newest bounded progress and any preserved terminal candidate.
+Settlements that arrive during an in-flight evaluation are atomically aggregated in storage. Every settled iteration and token delta is charged, while the evaluator receives the newest bounded progress and any preserved terminal candidate. Event sinks receive `goal.evaluated` for every committed evaluation; a no-hint `continue` also retains the compatibility `goal.auto_continued` event.
 
 ## Architecture
 

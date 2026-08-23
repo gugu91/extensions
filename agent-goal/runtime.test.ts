@@ -53,7 +53,10 @@ describe("GoalRuntime", () => {
     const evaluator = {
       evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "tests remain" }),
     };
-    const runtime = new GoalRuntime(new MemoryGoalStorage(), evaluator, continuation);
+    const events: GoalEvent[] = [];
+    const runtime = new GoalRuntime(new MemoryGoalStorage(), evaluator, continuation, undefined, {
+      eventSink: { record: (event) => void events.push(event) },
+    });
     await runtime.create("session-1", "ship");
 
     await runtime.settle("session-1", { latestOutput: "implementation done", tokenDelta: 120 });
@@ -68,6 +71,9 @@ describe("GoalRuntime", () => {
     expect(evaluator.evaluate).toHaveBeenCalledWith(
       expect.objectContaining({ usage: { iterations: 1, tokens: 120 } }),
       expect.objectContaining({ latestOutput: "implementation done", tokenDelta: 120 }),
+    );
+    expect(events.map(({ type }) => type)).toEqual(
+      expect.arrayContaining(["goal.evaluated", "goal.auto_continued"]),
     );
     expect(await runtime.getContinuationClaim("session-1")).toMatchObject({ state: "started" });
     await runtime.recover("session-1");

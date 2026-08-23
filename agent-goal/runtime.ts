@@ -252,7 +252,11 @@ export class GoalRuntime {
     }
   }
 
-  async settle(scopeId: string, progress: GoalProgress): Promise<void> {
+  async settle(
+    scopeId: string,
+    progress: GoalProgress,
+    options: { accountUsage?: boolean } = {},
+  ): Promise<void> {
     const settlementId = randomUUID();
     const ownsEvaluation = !this.evaluatingScopes.has(scopeId);
     if (ownsEvaluation) this.evaluatingScopes.add(scopeId);
@@ -274,10 +278,10 @@ export class GoalRuntime {
         goalId: goal.id,
         goalVersion: goal.version,
         evaluationId: settlementId,
-        iterationsDelta: 1,
+        iterationsDelta: options.accountUsage === false ? 0 : 1,
         progress: {
           ...progress,
-          tokenDelta: Math.max(0, progress.tokenDelta ?? 0),
+          tokenDelta: options.accountUsage === false ? 0 : Math.max(0, progress.tokenDelta ?? 0),
           terminalCandidate:
             progress.terminalCandidate ??
             (durableCandidate
@@ -444,6 +448,13 @@ export class GoalRuntime {
           tokenDelta: pending.progress.tokenDelta ?? 0,
         });
         await this.record({ type: "goal.evaluated", goal: next, evaluation });
+        if (
+          next.status === "active" &&
+          evaluation.outcome === "continue" &&
+          pending.progress.terminalCandidate === undefined
+        ) {
+          await this.record({ type: "goal.auto_continued", goal: next });
+        }
         if (next.status === "active") await this.continueWithClaim(next, evaluation.reason);
         else
           await this.record({
