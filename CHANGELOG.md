@@ -37,7 +37,7 @@ Pinet v0.2.8 makes independent validation automatic for every settled single-age
 
 - [#998](https://github.com/gugu91/pinet/pull/998) — validate every settled goal run automatically
 
-See the [full change set since v0.2.7](https://github.com/gugu91/pinet/compare/v0.2.7...v0.2.8).
+See the [full change set since the v0.2.7 release commit](https://github.com/gugu91/pinet/compare/a4f95bcdd32754fcef83cc13189d8ccadb8e93f6...v0.2.8).
 
 ## [0.2.7] - 2026-08-22
 
