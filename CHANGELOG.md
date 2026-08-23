@@ -9,6 +9,36 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.8] - 2026-08-23
+
+Pinet v0.2.8 makes independent validation automatic for every settled single-agent goal run while keeping the coordinated seven-package release set aligned.
+
+### Version verification
+
+- `pi-extensions` — `0.2.8` (private repo package)
+- `@pinet/transport-core` — `0.2.8`
+- `@pinet/broker-core` — `0.2.8`
+- `@pinet/pinet-core` — `0.2.8`
+- `@pinet/imessage-bridge` — `0.2.8`
+- `@pinet/slack-bridge` — `0.2.8`
+- `@pinet/model-aware-compaction` — `0.2.8`
+- `@pinet/agent-goal` — `0.2.8`
+
+### Release highlights
+
+- Invokes the independent evaluator exactly once for every settled active-goal run, even when the worker does not call `update_goal`.
+- Treats `update_goal` as an optional completion or blocker hint rather than a prerequisite for validation.
+- Evaluates goals created during the current run without charging work that may have happened before goal creation.
+- Preserves projected and concurrent settlement accounting through the durable compare-and-swap evaluation path.
+- Defers busy-session continuation attempts without consuming the bounded failure retry budget.
+- Retains the compatibility `goal.auto_continued` event for no-hint continuation decisions.
+
+### Notable pull requests
+
+- [#998](https://github.com/gugu91/pinet/pull/998) — validate every settled goal run automatically
+
+See the [full change set since v0.2.7](https://github.com/gugu91/pinet/compare/v0.2.7...v0.2.8).
+
 ## [0.2.7] - 2026-08-22
 
 Pinet v0.2.7 adds a focused Pi-native goal window to the standalone single-agent goal loop while keeping the coordinated seven-package release set aligned.
