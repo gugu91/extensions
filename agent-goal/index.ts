@@ -2,7 +2,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
-import { GoalWindow, type GoalWindowAction } from "./goal-window.js";
+import {
+  GoalWindow,
+  type GoalWindowAction,
+  type GoalWindowLifecycleAction,
+} from "./goal-window.js";
 import type {
   GoalBudget,
   GoalContinuation,
@@ -44,7 +48,11 @@ export type {
   GoalWakeScheduler,
 } from "./domain.js";
 export { displayGoalText, formatGoalDashboard, formatGoalStatus } from "./dashboard.js";
-export { GoalWindow, type GoalWindowAction } from "./goal-window.js";
+export {
+  GoalWindow,
+  type GoalWindowAction,
+  type GoalWindowLifecycleAction,
+} from "./goal-window.js";
 export { MemoryGoalStorage } from "./memory-storage.js";
 export { parseGoalEvaluation, PiGoalEvaluator } from "./pi-evaluator.js";
 export {
@@ -169,8 +177,15 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
 
   const applyGoalAction = async (
     scopeId: string,
-    action: Exclude<GoalWindowAction, "close">,
+    action: Exclude<GoalWindowLifecycleAction, "close"> | Extract<GoalWindowAction, object>,
   ): Promise<void> => {
+    if (typeof action === "object") {
+      await runtime.updateBudget(scopeId, {
+        maxIterations: action.maxIterations,
+        maxTokens: action.maxTokens,
+      });
+      return;
+    }
     switch (action) {
       case "pause":
         await runtime.setStatus(scopeId, "paused");
@@ -464,13 +479,22 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
       try {
         if (!input) {
           let openedWindow = false;
+          let actionError: string | undefined;
           while (true) {
             const goal = await runtime.get(scopeId);
             const claim = await runtime.getContinuationClaim(scopeId);
             const action = await ctx.ui.custom<GoalWindowAction>(
               (tui, theme, _keybindings, done) => {
                 openedWindow = true;
-                return new GoalWindow(goal, claim, theme, done, () => tui.requestRender());
+                return new GoalWindow(
+                  goal,
+                  claim,
+                  theme,
+                  done,
+                  () => tui.requestRender(),
+                  Date.now,
+                  actionError,
+                );
               },
               {
                 overlay: true,
@@ -497,8 +521,13 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
               return;
             }
             if (!action || action === "close") return;
-            await applyGoalAction(scopeId, action);
-            await refreshUi(ctx);
+            try {
+              await applyGoalAction(scopeId, action);
+              actionError = undefined;
+              await refreshUi(ctx);
+            } catch (error) {
+              actionError = error instanceof Error ? error.message : String(error);
+            }
           }
         }
 

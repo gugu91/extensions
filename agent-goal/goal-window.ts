@@ -23,12 +23,21 @@ function compactNumber(value: number): string {
   return `${scaled.toFixed(scaled < 100 ? 1 : 0).replace(/\.0$/, "")}${suffix}`;
 }
 
-export type GoalWindowAction = "pause" | "resume" | "complete" | "clear" | "close";
+export type GoalWindowLifecycleAction = "pause" | "resume" | "complete" | "clear" | "close";
+export type GoalWindowAction =
+  | GoalWindowLifecycleAction
+  | { type: "budget"; maxIterations: number; maxTokens?: number };
 
-type ConfirmableGoalWindowAction = Extract<GoalWindowAction, "complete" | "clear">;
+type ConfirmableGoalWindowAction = Extract<GoalWindowLifecycleAction, "complete" | "clear">;
+type BudgetField = "turns" | "tokens";
 
 export class GoalWindow implements Component {
   private pendingConfirmation: ConfirmableGoalWindowAction | undefined;
+  private budgetField: BudgetField | undefined;
+  private budgetTurns = "";
+  private budgetTokens = "";
+  private replaceBudgetValue = false;
+  private budgetInputError: string | undefined;
 
   constructor(
     private readonly goal: AgentGoal | undefined,
@@ -37,6 +46,7 @@ export class GoalWindow implements Component {
     private readonly onAction: (action: GoalWindowAction) => void,
     private readonly requestRender: () => void = () => undefined,
     private readonly now: () => number = Date.now,
+    private readonly actionError?: string,
   ) {}
 
   handleInput(data: string): void {
@@ -49,12 +59,51 @@ export class GoalWindow implements Component {
       if (this.pendingConfirmation) {
         this.pendingConfirmation = undefined;
         this.requestRender();
+      } else if (this.budgetField) {
+        this.budgetField = undefined;
+        this.budgetInputError = undefined;
+        this.requestRender();
       } else {
         this.onAction("close");
       }
       return;
     }
     if (!this.goal) return;
+
+    if (this.budgetField) {
+      if (matchesKey(data, "tab") || matchesKey(data, "up") || matchesKey(data, "down")) {
+        this.budgetField = this.budgetField === "turns" ? "tokens" : "turns";
+        this.replaceBudgetValue = true;
+        this.budgetInputError = undefined;
+      } else if (matchesKey(data, "backspace")) {
+        const value = this.budgetField === "turns" ? this.budgetTurns : this.budgetTokens;
+        if (this.budgetField === "turns") this.budgetTurns = value.slice(0, -1);
+        else this.budgetTokens = value.slice(0, -1);
+        this.replaceBudgetValue = false;
+        this.budgetInputError = undefined;
+      } else if (matchesKey(data, "enter")) {
+        const maxIterations = Number(this.budgetTurns);
+        if (!Number.isInteger(maxIterations) || maxIterations <= 0) {
+          this.budgetInputError = "Turns must be a positive integer";
+        } else {
+          const maxTokens = this.budgetTokens ? Number(this.budgetTokens) : undefined;
+          this.onAction({ type: "budget", maxIterations, maxTokens });
+          return;
+        }
+      } else if (/^\d+$/.test(data)) {
+        const value = this.replaceBudgetValue
+          ? data
+          : `${this.budgetField === "turns" ? this.budgetTurns : this.budgetTokens}${data}`;
+        if (this.budgetField === "turns") this.budgetTurns = value;
+        else this.budgetTokens = value;
+        this.replaceBudgetValue = false;
+        this.budgetInputError = undefined;
+      } else {
+        return;
+      }
+      this.requestRender();
+      return;
+    }
 
     if (this.pendingConfirmation) {
       const confirmationKey = this.pendingConfirmation === "complete" ? "c" : "x";
@@ -67,7 +116,15 @@ export class GoalWindow implements Component {
       return;
     }
 
-    if (key === "p" && this.goal.status === "active") {
+    if (key === "b" && this.goal.status !== "complete") {
+      this.budgetField = "turns";
+      this.budgetTurns = String(this.goal.budget.maxIterations);
+      this.budgetTokens =
+        this.goal.budget.maxTokens === undefined ? "" : String(this.goal.budget.maxTokens);
+      this.replaceBudgetValue = true;
+      this.budgetInputError = undefined;
+      this.requestRender();
+    } else if (key === "p" && this.goal.status === "active") {
       this.onAction("pause");
     } else if (key === "r" && (this.goal.status === "paused" || this.goal.status === "blocked")) {
       this.onAction("resume");
@@ -185,16 +242,32 @@ export class GoalWindow implements Component {
       );
     }
 
+    if (this.budgetField) {
+      const turns = `${this.budgetField === "turns" ? "›" : " "} Turns  ${this.budgetTurns || "_"}`;
+      const tokens = `${this.budgetField === "tokens" ? "›" : " "} Tokens ${this.budgetTokens || "unchanged"}`;
+      lines.push(
+        row(),
+        row(` ${this.theme.fg("accent", "Edit budget")}`),
+        row(` ${turns}`),
+        row(` ${tokens}`),
+      );
+    }
+    const error = this.budgetInputError ?? this.actionError;
+    if (error) lines.push(row(` ${this.theme.fg("error", displayGoalText(error, contentWidth))}`));
+
     const actions = [
       this.goal.status === "active" ? "p pause" : undefined,
       this.goal.status === "paused" || this.goal.status === "blocked" ? "r resume" : undefined,
+      this.goal.status !== "complete" ? "b budget" : undefined,
       this.goal.status !== "complete" ? "c complete" : undefined,
       "x clear",
       "q close",
     ].filter((action): action is string => action !== undefined);
     const footer = this.pendingConfirmation
       ? `${this.pendingConfirmation === "complete" ? "c" : "x"} again to confirm ${this.pendingConfirmation} · esc cancel`
-      : actions.join(" · ");
+      : this.budgetField
+        ? "digits edit · tab field · enter save · esc cancel"
+        : actions.join(" · ");
     lines.push(row(), row(` ${this.theme.fg("dim", footer)}`));
     lines.push(border(`╰${"─".repeat(innerWidth)}╯`));
     return lines;

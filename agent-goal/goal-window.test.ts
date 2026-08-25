@@ -57,7 +57,7 @@ describe("GoalWindow", () => {
     expect(lines.join("\n")).toContain("15m/60m");
     expect(lines.join("\n")).toContain("Latest Interaction tests remain");
     expect(lines.join("\n")).toContain("Continuation deferred · attempt 2");
-    expect(lines.join("\n")).toContain("p pause · c complete · x clear · q close");
+    expect(lines.join("\n")).toContain("p pause · b budget · c complete");
     expect(lines.every((line) => visibleWidth(line) <= 52)).toBe(true);
   });
 
@@ -97,6 +97,57 @@ describe("GoalWindow", () => {
     window.handleInput(input);
 
     expect(onAction).toHaveBeenCalledWith(action);
+  });
+
+  it("edits turn and token budgets without closing the overlay", () => {
+    const onAction = vi.fn();
+    const requestRender = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction, requestRender);
+
+    window.handleInput("b");
+    expect(window.render(52).join("\n")).toContain("Edit budget");
+    expect(window.render(52).join("\n")).toContain("› Turns  8");
+
+    window.handleInput("1");
+    window.handleInput("\t");
+    window.handleInput("60000");
+    window.handleInput("\r");
+
+    expect(onAction).toHaveBeenCalledWith({
+      type: "budget",
+      maxIterations: 1,
+      maxTokens: 60_000,
+    });
+    expect(requestRender).toHaveBeenCalledTimes(4);
+  });
+
+  it("validates budget input and cancels editing with escape", () => {
+    const onAction = vi.fn();
+    const requestRender = vi.fn();
+    const window = new GoalWindow(goal, undefined, theme, onAction, requestRender);
+
+    window.handleInput("b");
+    window.handleInput("\u007f");
+    window.handleInput("\r");
+
+    expect(window.render(52).join("\n")).toContain("Turns must be a positive integer");
+    window.handleInput("\u001b");
+    expect(window.render(52).join("\n")).toContain("b budget");
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("renders runtime budget errors inside the reopened overlay", () => {
+    const window = new GoalWindow(
+      goal,
+      undefined,
+      theme,
+      vi.fn(),
+      vi.fn(),
+      Date.now,
+      "Goal maxIterations cannot exceed the configured limit",
+    );
+
+    expect(window.render(52).join("\n")).toContain("Goal maxIterations cannot exceed the configur");
   });
 
   it("offers resume for paused and blocked goals", () => {
