@@ -53,7 +53,7 @@ PI_AGENT_GOAL_MAX_TOKENS=200000
 PI_AGENT_GOAL_MAX_RUNTIME_MS=14400000
 ```
 
-Iteration and runtime limits are always reliable. Token accounting uses usage reported by Pi providers. Operators and the goal-bearing agent may update total turn and token ceilings without recreating the goal. Changes are optimistic and atomic, cannot reduce a ceiling below accounted usage, and cannot exceed a configured default ceiling when one exists. Increasing an exhausted budget reactivates the same goal when capacity is available; no budget change alters the objective or erases usage.
+Iteration and runtime limits are always reliable. Token accounting uses usage reported by Pi providers. Operators and the goal-bearing agent may update total turn and token ceilings without recreating the goal. Changes are optimistic and atomic, cannot reduce a ceiling below accounted usage, must reserve capacity for a currently active turn, and cannot exceed a configured default ceiling when one exists. Increasing an exhausted budget reactivates the same goal when capacity is available; no budget change alters the objective or erases usage.
 
 The evaluator reviews every settled run, including the final allowed turn, so a completed goal is not incorrectly classified as budget-limited; only another continuation is prevented. The former `PI_AGENT_GOAL_EVALUATION_INTERVAL` setting is accepted for configuration compatibility but no longer changes evaluation frequency.
 

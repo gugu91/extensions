@@ -162,14 +162,22 @@ export class GoalRuntime {
         `Goal maxTokens cannot exceed the configured limit of ${this.budget.maxTokens}`,
       );
     }
-    if (update.maxIterations !== undefined && update.maxIterations < current.usage.iterations) {
+    const minimumIterations =
+      current.status === "active" ? current.usage.iterations + 1 : current.usage.iterations;
+    if (update.maxIterations !== undefined && update.maxIterations < minimumIterations) {
       throw new Error(
-        `Goal maxIterations cannot be lower than ${current.usage.iterations} accounted turns`,
+        current.status === "active"
+          ? `Goal maxIterations must leave capacity for the current turn (${minimumIterations} minimum)`
+          : `Goal maxIterations cannot be lower than ${current.usage.iterations} accounted turns`,
       );
     }
-    if (update.maxTokens !== undefined && update.maxTokens < current.usage.tokens) {
+    const minimumTokens =
+      current.status === "active" ? current.usage.tokens + 1 : current.usage.tokens;
+    if (update.maxTokens !== undefined && update.maxTokens < minimumTokens) {
       throw new Error(
-        `Goal maxTokens cannot be lower than ${current.usage.tokens} accounted tokens`,
+        current.status === "active"
+          ? `Goal maxTokens must leave capacity beyond ${current.usage.tokens} accounted tokens`
+          : `Goal maxTokens cannot be lower than ${current.usage.tokens} accounted tokens`,
       );
     }
 
@@ -188,13 +196,7 @@ export class GoalRuntime {
     const next =
       current.status === "budget_limited" && !exhausted
         ? { ...candidate, status: "active" as const, blockedReason: undefined }
-        : current.status === "active" && exhausted
-          ? {
-              ...candidate,
-              status: "budget_limited" as const,
-              blockedReason: "Goal continuation budget exhausted",
-            }
-          : candidate;
+        : candidate;
     if (!(await this.storage.updateBudget(next, current.version))) {
       throw new Error("Goal changed while its budget was being updated; retry the command");
     }

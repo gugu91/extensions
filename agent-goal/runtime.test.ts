@@ -110,10 +110,22 @@ describe("GoalRuntime", () => {
     await expect(runtime.updateBudget("session-1", { maxIterations: 0.5 })).rejects.toThrow(
       "positive integer",
     );
+    await expect(runtime.updateBudget("session-1", { maxIterations: 1 })).rejects.toThrow(
+      "current turn",
+    );
+    await expect(runtime.updateBudget("session-1", { maxTokens: 100 })).rejects.toThrow(
+      "capacity beyond",
+    );
     await expect(runtime.updateBudget("session-1", { maxTokens: 99 })).rejects.toThrow(
-      "accounted tokens",
+      "capacity beyond",
     );
     await expect(runtime.updateBudget("session-1", {})).rejects.toThrow("requires");
+
+    await runtime.settle("session-1", { latestOutput: "next work", tokenDelta: 200 });
+    expect(await runtime.get("session-1")).toMatchObject({
+      status: "active",
+      usage: { iterations: 2, tokens: 300 },
+    });
 
     vi.spyOn(storage, "updateBudget").mockResolvedValueOnce(false);
     await expect(runtime.updateBudget("session-1", { maxIterations: 9 })).rejects.toThrow(
