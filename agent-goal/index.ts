@@ -326,6 +326,55 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
   });
 
   pi.registerTool({
+    name: "update_goal_budget",
+    label: "Update goal budget",
+    description:
+      "Adjust this session goal's bounded turn or token ceiling without replacing the goal. Changes remain constrained by configured limits and cannot discard accounted usage.",
+    promptSnippet: "Adjust the active session goal's bounded turn or token budget.",
+    promptGuidelines: [
+      "Only change a goal budget when more or less capacity is genuinely needed for the existing user-aligned objective.",
+      "Never use budget changes to broaden the objective or evade configured hard limits.",
+      "Inspect the current goal first and keep requested capacity proportionate to the remaining work.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        maxTurns: {
+          type: "integer",
+          minimum: 1,
+          maximum: defaultBudget.maxIterations,
+          description: "New total settled-turn ceiling, including turns already accounted.",
+        },
+        maxTokens: {
+          type: "number",
+          exclusiveMinimum: 0,
+          ...(defaultBudget.maxTokens === undefined ? {} : { maximum: defaultBudget.maxTokens }),
+          description: "New total token ceiling, including tokens already accounted.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, rawParams, _signal, _onUpdate, rawCtx) {
+      const params = rawParams as { maxTurns?: number; maxTokens?: number };
+      const ctx = rawCtx as CompatibleContext;
+      const goal = await runtime.updateBudget(ctx.sessionManager.getSessionId(), {
+        maxIterations: params.maxTurns,
+        maxTokens: params.maxTokens,
+      });
+      await refreshUi(ctx);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Updated goal budget to ${goal.budget.maxIterations} turns${goal.budget.maxTokens === undefined ? "" : ` and ${goal.budget.maxTokens} tokens`}.`,
+          },
+        ],
+        details: { goal },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "get_goal",
     label: "Get goal",
     description: "Read the durable goal and budget state for this agent session.",
@@ -405,7 +454,7 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
 
   pi.registerCommand("goal", {
     description:
-      "Create, inspect, pause, resume, complete, clear, show, or hide this session's goal",
+      "Create, inspect, adjust budget, pause, resume, complete, clear, show, or hide this session's goal",
     handler: async (args, rawCtx) => {
       const ctx = rawCtx as CompatibleContext;
       activeContext = ctx;
@@ -454,6 +503,31 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
         }
 
         const command = input.toLowerCase();
+        if (command === "budget" || command.startsWith("budget ")) {
+          const update: { maxIterations?: number; maxTokens?: number } = {};
+          for (const token of input.slice("budget".length).trim().split(/\s+/).filter(Boolean)) {
+            const separator = token.indexOf("=");
+            if (separator < 1) throw new Error(`Invalid goal budget argument: ${token}`);
+            const key = token.slice(0, separator).toLowerCase();
+            const value = Number(token.slice(separator + 1));
+            if (key === "turns" || key === "maxturns" || key === "iterations") {
+              update.maxIterations = value;
+            } else if (key === "tokens" || key === "maxtokens") {
+              update.maxTokens = value;
+            } else {
+              throw new Error(`Unknown goal budget field: ${key}`);
+            }
+          }
+          const goal = await runtime.updateBudget(scopeId, update);
+          await refreshUi(ctx);
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Goal budget: ${goal.budget.maxIterations} turns${goal.budget.maxTokens === undefined ? "" : ` · ${goal.budget.maxTokens} tokens`}`,
+              "info",
+            );
+          }
+          return;
+        }
         switch (command) {
           case "pause":
           case "resume":

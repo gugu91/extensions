@@ -11,6 +11,11 @@ export interface GoalUsage {
   tokens: number;
 }
 
+export interface GoalBudgetUpdate {
+  maxIterations?: number;
+  maxTokens?: number;
+}
+
 export interface GoalEvaluationRecord {
   id: string;
   outcome: GoalEvaluation["outcome"];
@@ -92,6 +97,7 @@ export interface GoalStorage {
   get(scopeId: string): Promise<AgentGoal | undefined>;
   create(goal: AgentGoal): Promise<void>;
   replace(goal: AgentGoal, expectedVersion: number): Promise<boolean>;
+  updateBudget(goal: AgentGoal, expectedVersion: number): Promise<boolean>;
   delete(scopeId: string, expectedVersion: number): Promise<boolean>;
   getPendingEvaluation(scopeId: string): Promise<GoalPendingEvaluation | undefined>;
   appendPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean>;
@@ -154,6 +160,7 @@ export type GoalEvent =
   | { type: "goal.created"; goal: AgentGoal }
   | { type: "goal.status_changed"; goal: AgentGoal; previousStatus: GoalStatus }
   | { type: "goal.progress_accounted"; goal: AgentGoal; tokenDelta: number }
+  | { type: "goal.budget_changed"; goal: AgentGoal; previousBudget: GoalBudget }
   | { type: "goal.evaluated"; goal: AgentGoal; evaluation: GoalEvaluation }
   | { type: "goal.auto_continued"; goal: AgentGoal }
   | {

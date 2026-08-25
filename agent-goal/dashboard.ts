@@ -41,6 +41,6 @@ export function formatGoalDashboard(goal: AgentGoal, claim?: GoalContinuationCla
   }
   if (goal.blockedReason) lines.push(`Reason: ${displayGoalText(goal.blockedReason, 100)}`);
   if (claim) lines.push(`Continuation: ${claim.state} · attempt ${claim.attempt}`);
-  lines.push("/goal pause · resume · complete · clear · hide");
+  lines.push("/goal budget turns=<n> tokens=<n> · pause · resume · complete · clear · hide");
   return lines;
 }

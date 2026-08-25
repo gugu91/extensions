@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentGoal,
   GoalBudget,
+  GoalBudgetUpdate,
   GoalContinuation,
   GoalContinuationClaim,
   GoalEvaluation,
@@ -127,6 +128,83 @@ export class GoalRuntime {
     await this.storage.create(goal);
     await this.record({ type: "goal.created", goal });
     return goal;
+  }
+
+  async updateBudget(scopeId: string, update: GoalBudgetUpdate): Promise<AgentGoal> {
+    const current = await this.requireGoal(scopeId);
+    if (current.status === "complete") throw new Error("Cannot change a complete goal budget");
+    if (update.maxIterations === undefined && update.maxTokens === undefined) {
+      throw new Error("A goal budget update requires maxIterations or maxTokens");
+    }
+    if (
+      update.maxIterations !== undefined &&
+      (!Number.isInteger(update.maxIterations) || update.maxIterations <= 0)
+    ) {
+      throw new Error("Goal maxIterations must be a positive integer");
+    }
+    if (
+      update.maxTokens !== undefined &&
+      (!Number.isFinite(update.maxTokens) || update.maxTokens <= 0)
+    ) {
+      throw new Error("Goal maxTokens must be a positive finite number");
+    }
+    if (update.maxIterations !== undefined && update.maxIterations > this.budget.maxIterations) {
+      throw new Error(
+        `Goal maxIterations cannot exceed the configured limit of ${this.budget.maxIterations}`,
+      );
+    }
+    if (
+      update.maxTokens !== undefined &&
+      this.budget.maxTokens !== undefined &&
+      update.maxTokens > this.budget.maxTokens
+    ) {
+      throw new Error(
+        `Goal maxTokens cannot exceed the configured limit of ${this.budget.maxTokens}`,
+      );
+    }
+    const minimumIterations =
+      current.status === "active" ? current.usage.iterations + 1 : current.usage.iterations;
+    if (update.maxIterations !== undefined && update.maxIterations < minimumIterations) {
+      throw new Error(
+        current.status === "active"
+          ? `Goal maxIterations must leave capacity for the current turn (${minimumIterations} minimum)`
+          : `Goal maxIterations cannot be lower than ${current.usage.iterations} accounted turns`,
+      );
+    }
+    const minimumTokens =
+      current.status === "active" ? current.usage.tokens + 1 : current.usage.tokens;
+    if (update.maxTokens !== undefined && update.maxTokens < minimumTokens) {
+      throw new Error(
+        current.status === "active"
+          ? `Goal maxTokens must leave capacity beyond ${current.usage.tokens} accounted tokens`
+          : `Goal maxTokens cannot be lower than ${current.usage.tokens} accounted tokens`,
+      );
+    }
+
+    const nextBudget: GoalBudget = {
+      ...current.budget,
+      ...(update.maxIterations === undefined ? {} : { maxIterations: update.maxIterations }),
+      ...(update.maxTokens === undefined ? {} : { maxTokens: update.maxTokens }),
+    };
+    const candidate: AgentGoal = {
+      ...current,
+      budget: nextBudget,
+      version: current.version + 1,
+      updatedAt: this.now().toISOString(),
+    };
+    const exhausted = this.budgetExhausted(candidate);
+    const next =
+      current.status === "budget_limited" && !exhausted
+        ? { ...candidate, status: "active" as const, blockedReason: undefined }
+        : candidate;
+    if (!(await this.storage.updateBudget(next, current.version))) {
+      throw new Error("Goal changed while its budget was being updated; retry the command");
+    }
+    await this.record({ type: "goal.budget_changed", goal: next, previousBudget: current.budget });
+    if (current.status === "budget_limited" && next.status === "active") {
+      await this.continueWithClaim(next, "Continue with the expanded goal budget.");
+    }
+    return next;
   }
 
   async setStatus(
@@ -502,6 +580,24 @@ export class GoalRuntime {
     for (let attempt = claim.attempt + 1; attempt <= this.retryPolicy.maxAttempts; attempt += 1) {
       const currentGoal = await this.storage.get(goal.scopeId);
       const currentClaim = await this.storage.getContinuationClaim(goal.scopeId);
+      if (
+        currentGoal?.id === goal.id &&
+        currentGoal.status === "active" &&
+        currentGoal.version !== goal.version &&
+        currentClaim?.claimId === claim.claimId
+      ) {
+        if (currentClaim.state === "started") {
+          this.scheduleRecovery(goal.scopeId, currentClaim.expiresAt);
+        } else if (
+          currentClaim.state === "deferred" &&
+          Date.parse(currentClaim.availableAt) > this.now().getTime()
+        ) {
+          this.scheduleRecovery(goal.scopeId, currentClaim.availableAt);
+        } else {
+          await this.runContinuationClaim(currentGoal, currentClaim);
+        }
+        return;
+      }
       if (
         !currentGoal ||
         currentGoal.id !== goal.id ||

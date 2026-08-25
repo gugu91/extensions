@@ -2,13 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentGoal,
   GoalContinuationClaim,
   GoalPendingEvaluation,
   GoalTerminalCandidateRecord,
 } from "./domain.js";
+import { GoalRuntime } from "./runtime.js";
 import { SqliteGoalStorage } from "./sqlite-storage.js";
 
 const tempDirectories: string[] = [];
@@ -106,6 +107,79 @@ describe("SqliteGoalStorage", () => {
       }),
     ).toBe(false);
     second.close();
+  });
+
+  it("updates a budget and dependent goal versions in one transaction", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-goal-budget-"));
+    tempDirectories.push(directory);
+    const storage = new SqliteGoalStorage(join(directory, "goals.sqlite"));
+    await storage.create(goal);
+    expect(await storage.putPendingEvaluation(pending)).toBe(true);
+    expect(await storage.putTerminalCandidate(candidate)).toBe(true);
+    expect(await storage.createContinuationClaim(claim)).toBe(true);
+
+    const updated = {
+      ...goal,
+      budget: { maxIterations: 20, maxTokens: 75_000 },
+      version: 4,
+      updatedAt: "2026-01-01T00:02:00.000Z",
+    };
+    expect(await storage.updateBudget(updated, 3)).toBe(true);
+
+    expect(await storage.get("session-1")).toEqual(updated);
+    expect(await storage.getPendingEvaluation("session-1")).toMatchObject({ goalVersion: 4 });
+    expect(await storage.getTerminalCandidate("session-1")).toMatchObject({ goalVersion: 4 });
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({ goalVersion: 4 });
+
+    expect(
+      await storage.appendPendingEvaluation({
+        ...pending,
+        evaluationId: "evaluation-late",
+        iterationsDelta: 2,
+      }),
+    ).toBe(true);
+    expect(await storage.getPendingEvaluation("session-1")).toMatchObject({
+      goalVersion: 4,
+      evaluationId: "evaluation-late",
+      iterationsDelta: 3,
+    });
+    expect(
+      await storage.replaceContinuationClaim({ ...claim, state: "started" }, claim.claimId),
+    ).toBe(true);
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({
+      goalVersion: 4,
+      state: "started",
+    });
+    expect(await storage.updateBudget({ ...updated, version: 5 }, 3)).toBe(false);
+    storage.close();
+  });
+
+  it("does not let a live goal lower its budget onto already-accounted usage", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-goal-live-budget-"));
+    tempDirectories.push(directory);
+    const storage = new SqliteGoalStorage(join(directory, "goals.sqlite"));
+    await storage.create(goal);
+    const runtime = new GoalRuntime(
+      storage,
+      { evaluate: vi.fn().mockResolvedValue({ outcome: "complete", reason: "verified" }) },
+      { continueIfIdle: vi.fn().mockResolvedValue({ status: "started" }) },
+      undefined,
+      { defaultBudget: { maxIterations: 25, maxTokens: 100_000 } },
+    );
+
+    await expect(runtime.updateBudget("session-1", { maxIterations: 2 })).rejects.toThrow(
+      "current turn",
+    );
+    await expect(runtime.updateBudget("session-1", { maxTokens: 1_200 })).rejects.toThrow(
+      "capacity beyond",
+    );
+    await runtime.settle("session-1", { latestOutput: "in-flight work", tokenDelta: 100 });
+
+    expect(await runtime.get("session-1")).toMatchObject({
+      status: "complete",
+      usage: { iterations: 3, tokens: 1_300 },
+    });
+    runtime.close();
   });
 
   it("atomically aggregates superseding pending settlements", async () => {

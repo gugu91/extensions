@@ -315,6 +315,68 @@ export class SqliteGoalStorage implements GoalStorage {
     return result.changes === 1;
   }
 
+  async updateBudget(goal: AgentGoal, expectedVersion: number): Promise<boolean> {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.db
+        .prepare(
+          `UPDATE agent_goals SET objective = ?, status = ?, blocked_reason = ?,
+           max_iterations = ?, max_tokens = ?, max_runtime_ms = ?, iterations_used = ?,
+           tokens_used = ?, last_settled_at = ?, last_evaluation_id = ?,
+           last_evaluation_outcome = ?, last_evaluation_reason = ?, last_evaluation_at = ?,
+           version = ?, updated_at = ?
+           WHERE scope_id = ? AND id = ? AND version = ?`,
+        )
+        .run(
+          goal.objective,
+          goal.status,
+          goal.blockedReason ?? null,
+          goal.budget.maxIterations,
+          goal.budget.maxTokens ?? null,
+          goal.budget.maxRuntimeMs ?? null,
+          goal.usage.iterations,
+          goal.usage.tokens,
+          goal.lastSettledAt ?? null,
+          goal.lastEvaluation?.id ?? null,
+          goal.lastEvaluation?.outcome ?? null,
+          goal.lastEvaluation?.reason ?? null,
+          goal.lastEvaluation?.at ?? null,
+          goal.version,
+          goal.updatedAt,
+          goal.scopeId,
+          goal.id,
+          expectedVersion,
+        );
+      if (result.changes !== 1) {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      this.db
+        .prepare(
+          `UPDATE agent_goal_pending_evaluations SET goal_version = ?
+           WHERE scope_id = ? AND goal_id = ? AND goal_version = ?`,
+        )
+        .run(goal.version, goal.scopeId, goal.id, expectedVersion);
+      this.db
+        .prepare(
+          `UPDATE agent_goal_terminal_candidates SET goal_version = ?
+           WHERE scope_id = ? AND goal_id = ? AND goal_version = ?`,
+        )
+        .run(goal.version, goal.scopeId, goal.id, expectedVersion);
+      this.db
+        .prepare(
+          `UPDATE agent_goal_continuations SET goal_version = ?
+           WHERE scope_id = ? AND goal_id = ? AND goal_version = ?`,
+        )
+        .run(goal.version, goal.scopeId, goal.id, expectedVersion);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   async delete(scopeId: string, expectedVersion: number): Promise<boolean> {
     const result = this.db
       .prepare("DELETE FROM agent_goals WHERE scope_id = ? AND version = ?")
@@ -357,10 +419,9 @@ export class SqliteGoalStorage implements GoalStorage {
          (scope_id, goal_id, goal_version, evaluation_id, iterations_delta, latest_output,
           token_delta, candidate_outcome, candidate_reason, attempt, available_at, last_error,
           created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-         WHERE EXISTS (
-           SELECT 1 FROM agent_goals WHERE scope_id = ? AND id = ? AND version = ?
-         )
+         SELECT ?, ?, goal.version, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         FROM agent_goals AS goal
+         WHERE goal.scope_id = ? AND goal.id = ? AND goal.status = 'active'
          ON CONFLICT(scope_id) DO UPDATE SET goal_id = excluded.goal_id,
            goal_version = excluded.goal_version, evaluation_id = excluded.evaluation_id,
            iterations_delta = CASE
@@ -397,7 +458,6 @@ export class SqliteGoalStorage implements GoalStorage {
       .run(
         pending.scopeId,
         pending.goalId,
-        pending.goalVersion,
         pending.evaluationId,
         pending.iterationsDelta,
         pending.progress.latestOutput,
@@ -411,7 +471,6 @@ export class SqliteGoalStorage implements GoalStorage {
         pending.updatedAt,
         pending.scopeId,
         pending.goalId,
-        pending.goalVersion,
       );
     return result.changes === 1;
   }
@@ -680,13 +739,18 @@ export class SqliteGoalStorage implements GoalStorage {
   ): Promise<boolean> {
     const result = this.db
       .prepare(
-        `UPDATE agent_goal_continuations SET goal_id = ?, goal_version = ?, claim_id = ?,
-         state = ?, reason = ?, attempt = ?, available_at = ?, expires_at = ?,
-         last_error = ?, updated_at = ? WHERE scope_id = ? AND claim_id = ?`,
+        `UPDATE agent_goal_continuations SET goal_id = ?,
+         goal_version = (SELECT version FROM agent_goals WHERE scope_id = ? AND id = ?),
+         claim_id = ?, state = ?, reason = ?, attempt = ?, available_at = ?, expires_at = ?,
+         last_error = ?, updated_at = ? WHERE scope_id = ? AND claim_id = ?
+         AND goal_id = ? AND EXISTS (
+           SELECT 1 FROM agent_goals WHERE scope_id = ? AND id = ? AND status = 'active'
+         )`,
       )
       .run(
         claim.goalId,
-        claim.goalVersion,
+        claim.scopeId,
+        claim.goalId,
         claim.claimId,
         claim.state,
         claim.reason,
@@ -697,6 +761,9 @@ export class SqliteGoalStorage implements GoalStorage {
         claim.updatedAt,
         claim.scopeId,
         expectedClaimId,
+        claim.goalId,
+        claim.scopeId,
+        claim.goalId,
       );
     return result.changes === 1;
   }

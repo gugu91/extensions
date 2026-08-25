@@ -21,6 +21,7 @@ pi -e ./agent-goal/index.ts
 ```text
 /goal <objective>  Create and immediately start a goal
 /goal              Open the minimal goal window (text in headless modes)
+/goal budget turns=<n> [tokens=<n>]  Change total turn/token ceilings
 /goal pause        Pause automatic evaluation and continuation
 /goal resume       Resume and immediately continue
 /goal complete     Mark complete manually
@@ -33,9 +34,10 @@ Pi's footer is the only persistent goal UI and shows compact status and budget u
 
 Only one goal may exist per Pi session. Clear the existing goal before creating another.
 
-The agent also receives three model-visible tools:
+The agent also receives four model-visible tools:
 
 - `create_goal` — create its own bounded, user-aligned durable goal
+- `update_goal_budget` — change the current goal's total turn or token ceiling
 - `get_goal` — inspect the current objective, status, and budget
 - `update_goal` — optionally attach a `complete` or `blocked` hint for independent verification
 
@@ -51,7 +53,9 @@ PI_AGENT_GOAL_MAX_TOKENS=200000
 PI_AGENT_GOAL_MAX_RUNTIME_MS=14400000
 ```
 
-Iteration and runtime limits are always reliable. Token accounting uses usage reported by Pi providers. The evaluator reviews every settled run, including the final allowed turn, so a completed goal is not incorrectly classified as budget-limited; only another continuation is prevented. The former `PI_AGENT_GOAL_EVALUATION_INTERVAL` setting is accepted for configuration compatibility but no longer changes evaluation frequency.
+Iteration and runtime limits are always reliable. Token accounting uses usage reported by Pi providers. Operators and the goal-bearing agent may update total turn and token ceilings without recreating the goal. Changes are optimistic and atomic, cannot reduce a ceiling below accounted usage, must reserve capacity for a currently active turn, and cannot exceed a configured default ceiling when one exists. Increasing an exhausted budget reactivates the same goal when capacity is available; no budget change alters the objective or erases usage.
+
+The evaluator reviews every settled run, including the final allowed turn, so a completed goal is not incorrectly classified as budget-limited; only another continuation is prevented. The former `PI_AGENT_GOAL_EVALUATION_INTERVAL` setting is accepted for configuration compatibility but no longer changes evaluation frequency.
 
 ## Persistence and recovery
 
@@ -114,7 +118,7 @@ A future Pinet integration can use broker storage and evaluation plus RALPH reco
 
 ## Automatic evaluation
 
-The extension registers model-visible `create_goal`, `get_goal`, and `update_goal` tools. The worker can establish its own user-aligned goal and inspect it. `update_goal` is optional: it records a terminal hint rather than mutating goal state directly. Every `agent_settled` event accounts the run and invokes the independent evaluator whether or not the worker supplied that hint.
+The extension registers model-visible `create_goal`, `update_goal_budget`, `get_goal`, and `update_goal` tools. The worker can establish its own user-aligned goal, inspect it, and adjust its bounded capacity. `update_goal` is optional: it records a terminal hint rather than mutating goal state directly. Every `agent_settled` event accounts the run and invokes the independent evaluator whether or not the worker supplied that hint.
 
 The evaluator returns one of:
 
