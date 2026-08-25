@@ -103,6 +103,57 @@ describe("registerAgentGoal", () => {
     },
   );
 
+  it("starts an operator-created goal when the idle session reports pending delivery", async () => {
+    const handlers = new Map<string, GoalEventHandler>();
+    const commands = new Map<string, RegisteredCommand>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on(name: string, handler: GoalEventHandler) {
+        handlers.set(name, handler);
+      },
+      registerTool: vi.fn(),
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      sendMessage,
+    } as object as ExtensionAPI;
+    const context = {
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => true,
+      sessionManager: { getSessionId: () => "session-1" },
+      ui: {
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        notify: vi.fn(),
+      },
+    } as object as ExtensionCommandContext;
+    const storage = new MemoryGoalStorage();
+    registerAgentGoal(pi, {
+      storage,
+      evaluator: {
+        evaluate: vi.fn().mockResolvedValue({ outcome: "complete", reason: "verified" }),
+      },
+    });
+    const command = commands.get("goal");
+    if (!command) throw new Error("goal command was not registered");
+
+    await command.handler("verify operator goal start", context);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({ state: "started" });
+
+    await handlers.get("agent_start")?.({}, context);
+    await handlers.get("agent_end")?.({ messages: [] }, context);
+    await handlers.get("agent_settled")?.({}, context);
+
+    expect(await storage.get("session-1")).toMatchObject({
+      status: "complete",
+      usage: { iterations: 1, tokens: 0 },
+    });
+    await handlers.get("session_shutdown")?.({}, context);
+  });
+
   it("automatically retries a continuation deferred while the session is busy", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
