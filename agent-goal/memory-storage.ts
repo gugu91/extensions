@@ -38,6 +38,25 @@ export class MemoryGoalStorage implements GoalStorage {
     return true;
   }
 
+  async updateBudget(goal: AgentGoal, expectedVersion: number): Promise<boolean> {
+    const current = this.goals.get(goal.scopeId);
+    if (!current || current.version !== expectedVersion || current.id !== goal.id) return false;
+    this.goals.set(goal.scopeId, cloneGoal(goal));
+    const pending = this.pendingEvaluations.get(goal.scopeId);
+    if (pending?.goalId === goal.id && pending.goalVersion === expectedVersion) {
+      this.pendingEvaluations.set(goal.scopeId, { ...pending, goalVersion: goal.version });
+    }
+    const candidate = this.terminalCandidates.get(goal.scopeId);
+    if (candidate?.goalId === goal.id && candidate.goalVersion === expectedVersion) {
+      this.terminalCandidates.set(goal.scopeId, { ...candidate, goalVersion: goal.version });
+    }
+    const claim = this.claims.get(goal.scopeId);
+    if (claim?.goalId === goal.id && claim.goalVersion === expectedVersion) {
+      this.claims.set(goal.scopeId, { ...claim, goalVersion: goal.version });
+    }
+    return true;
+  }
+
   async delete(scopeId: string, expectedVersion: number): Promise<boolean> {
     const current = this.goals.get(scopeId);
     if (!current || current.version !== expectedVersion) return false;

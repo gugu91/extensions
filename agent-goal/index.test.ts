@@ -220,6 +220,62 @@ describe("registerAgentGoal", () => {
     );
   });
 
+  it("lets the operator and agent update the same bounded goal budget", async () => {
+    const tools = new Map<string, ToolDefinition>();
+    const commands = new Map<string, RegisteredCommand>();
+    const pi = {
+      on: vi.fn(),
+      registerTool(tool: ToolDefinition) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      sendMessage: vi.fn(),
+    } as object as ExtensionAPI;
+    const storage = new MemoryGoalStorage();
+    await storage.create({
+      id: "goal-1",
+      scopeId: "session-1",
+      objective: "ship",
+      status: "active",
+      budget: { maxIterations: 5, maxTokens: 10_000 },
+      usage: { iterations: 1, tokens: 500 },
+      version: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const notify = vi.fn();
+    const context = {
+      hasUI: true,
+      sessionManager: { getSessionId: () => "session-1" },
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify },
+    } as object as ExtensionCommandContext;
+    registerAgentGoal(pi, {
+      storage,
+      defaultBudget: { maxIterations: 20, maxTokens: 100_000 },
+    });
+    const tool = tools.get("update_goal_budget");
+    const command = commands.get("goal");
+    if (!tool?.execute || !command) throw new Error("goal budget controls were not registered");
+
+    await tool.execute(
+      "call-1",
+      { maxTurns: 12, maxTokens: 50_000 },
+      new AbortController().signal,
+      undefined,
+      context,
+    );
+    await command.handler("budget turns=8 tokens=30000", context);
+
+    expect(await storage.get("session-1")).toMatchObject({
+      budget: { maxIterations: 8, maxTokens: 30_000 },
+      usage: { iterations: 1, tokens: 500 },
+      version: 3,
+    });
+    expect(notify).toHaveBeenCalledWith("Goal budget: 8 turns · 30000 tokens", "info");
+  });
+
   it("keeps passive UI compact and applies modal actions before refreshing", async () => {
     const handlers = new Map<string, GoalEventHandler>();
     const commands = new Map<string, RegisteredCommand>();

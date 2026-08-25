@@ -108,6 +108,31 @@ describe("SqliteGoalStorage", () => {
     second.close();
   });
 
+  it("updates a budget and dependent goal versions in one transaction", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-goal-budget-"));
+    tempDirectories.push(directory);
+    const storage = new SqliteGoalStorage(join(directory, "goals.sqlite"));
+    await storage.create(goal);
+    expect(await storage.putPendingEvaluation(pending)).toBe(true);
+    expect(await storage.putTerminalCandidate(candidate)).toBe(true);
+    expect(await storage.createContinuationClaim(claim)).toBe(true);
+
+    const updated = {
+      ...goal,
+      budget: { maxIterations: 20, maxTokens: 75_000 },
+      version: 4,
+      updatedAt: "2026-01-01T00:02:00.000Z",
+    };
+    expect(await storage.updateBudget(updated, 3)).toBe(true);
+
+    expect(await storage.get("session-1")).toEqual(updated);
+    expect(await storage.getPendingEvaluation("session-1")).toMatchObject({ goalVersion: 4 });
+    expect(await storage.getTerminalCandidate("session-1")).toMatchObject({ goalVersion: 4 });
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({ goalVersion: 4 });
+    expect(await storage.updateBudget({ ...updated, version: 5 }, 3)).toBe(false);
+    storage.close();
+  });
+
   it("atomically aggregates superseding pending settlements", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agent-goal-"));
     tempDirectories.push(directory);

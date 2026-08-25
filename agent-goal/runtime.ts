@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentGoal,
   GoalBudget,
+  GoalBudgetUpdate,
   GoalContinuation,
   GoalContinuationClaim,
   GoalEvaluation,
@@ -127,6 +128,81 @@ export class GoalRuntime {
     await this.storage.create(goal);
     await this.record({ type: "goal.created", goal });
     return goal;
+  }
+
+  async updateBudget(scopeId: string, update: GoalBudgetUpdate): Promise<AgentGoal> {
+    const current = await this.requireGoal(scopeId);
+    if (current.status === "complete") throw new Error("Cannot change a complete goal budget");
+    if (update.maxIterations === undefined && update.maxTokens === undefined) {
+      throw new Error("A goal budget update requires maxIterations or maxTokens");
+    }
+    if (
+      update.maxIterations !== undefined &&
+      (!Number.isInteger(update.maxIterations) || update.maxIterations <= 0)
+    ) {
+      throw new Error("Goal maxIterations must be a positive integer");
+    }
+    if (
+      update.maxTokens !== undefined &&
+      (!Number.isFinite(update.maxTokens) || update.maxTokens <= 0)
+    ) {
+      throw new Error("Goal maxTokens must be a positive finite number");
+    }
+    if (update.maxIterations !== undefined && update.maxIterations > this.budget.maxIterations) {
+      throw new Error(
+        `Goal maxIterations cannot exceed the configured limit of ${this.budget.maxIterations}`,
+      );
+    }
+    if (
+      update.maxTokens !== undefined &&
+      this.budget.maxTokens !== undefined &&
+      update.maxTokens > this.budget.maxTokens
+    ) {
+      throw new Error(
+        `Goal maxTokens cannot exceed the configured limit of ${this.budget.maxTokens}`,
+      );
+    }
+    if (update.maxIterations !== undefined && update.maxIterations < current.usage.iterations) {
+      throw new Error(
+        `Goal maxIterations cannot be lower than ${current.usage.iterations} accounted turns`,
+      );
+    }
+    if (update.maxTokens !== undefined && update.maxTokens < current.usage.tokens) {
+      throw new Error(
+        `Goal maxTokens cannot be lower than ${current.usage.tokens} accounted tokens`,
+      );
+    }
+
+    const nextBudget: GoalBudget = {
+      ...current.budget,
+      ...(update.maxIterations === undefined ? {} : { maxIterations: update.maxIterations }),
+      ...(update.maxTokens === undefined ? {} : { maxTokens: update.maxTokens }),
+    };
+    const candidate: AgentGoal = {
+      ...current,
+      budget: nextBudget,
+      version: current.version + 1,
+      updatedAt: this.now().toISOString(),
+    };
+    const exhausted = this.budgetExhausted(candidate);
+    const next =
+      current.status === "budget_limited" && !exhausted
+        ? { ...candidate, status: "active" as const, blockedReason: undefined }
+        : current.status === "active" && exhausted
+          ? {
+              ...candidate,
+              status: "budget_limited" as const,
+              blockedReason: "Goal continuation budget exhausted",
+            }
+          : candidate;
+    if (!(await this.storage.updateBudget(next, current.version))) {
+      throw new Error("Goal changed while its budget was being updated; retry the command");
+    }
+    await this.record({ type: "goal.budget_changed", goal: next, previousBudget: current.budget });
+    if (current.status === "budget_limited" && next.status === "active") {
+      await this.continueWithClaim(next, "Continue with the expanded goal budget.");
+    }
+    return next;
   }
 
   async setStatus(

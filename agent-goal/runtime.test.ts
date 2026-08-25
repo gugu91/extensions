@@ -48,6 +48,149 @@ describe("GoalRuntime", () => {
     ).rejects.toThrow("maxRuntimeMs");
   });
 
+  it("updates turn and token budgets atomically within configured ceilings", async () => {
+    const events: GoalEvent[] = [];
+    const runtime = new GoalRuntime(
+      new MemoryGoalStorage(),
+      { evaluate: vi.fn() },
+      startedContinuation(),
+      () => new Date("2026-01-01T00:00:00.000Z"),
+      {
+        defaultBudget: { maxIterations: 20, maxTokens: 100_000 },
+        eventSink: { record: (event) => void events.push(event) },
+      },
+    );
+    await runtime.create("session-1", "ship", { maxIterations: 5, maxTokens: 10_000 });
+
+    const increased = await runtime.updateBudget("session-1", {
+      maxIterations: 12,
+      maxTokens: 50_000,
+    });
+    const decreased = await runtime.updateBudget("session-1", {
+      maxIterations: 8,
+      maxTokens: 30_000,
+    });
+
+    expect(increased).toMatchObject({
+      budget: { maxIterations: 12, maxTokens: 50_000 },
+      version: 2,
+    });
+    expect(decreased).toMatchObject({
+      budget: { maxIterations: 8, maxTokens: 30_000 },
+      version: 3,
+    });
+    expect(events.filter(({ type }) => type === "goal.budget_changed")).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({
+      type: "goal.budget_changed",
+      previousBudget: { maxIterations: 12, maxTokens: 50_000 },
+    });
+  });
+
+  it("enforces configured ceilings, accounted usage, and optimistic versions", async () => {
+    const storage = new MemoryGoalStorage();
+    const runtime = new GoalRuntime(
+      storage,
+      { evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "more work" }) },
+      startedContinuation(),
+      undefined,
+      { defaultBudget: { maxIterations: 10, maxTokens: 1_000 } },
+    );
+    await runtime.create("session-1", "ship");
+    await runtime.settle("session-1", { latestOutput: "work", tokenDelta: 100 });
+
+    await expect(runtime.updateBudget("session-1", { maxIterations: 11 })).rejects.toThrow(
+      "configured limit",
+    );
+    await expect(runtime.updateBudget("session-1", { maxTokens: 1_001 })).rejects.toThrow(
+      "configured limit",
+    );
+    await expect(runtime.updateBudget("session-1", { maxIterations: 0 })).rejects.toThrow(
+      "positive integer",
+    );
+    await expect(runtime.updateBudget("session-1", { maxIterations: 0.5 })).rejects.toThrow(
+      "positive integer",
+    );
+    await expect(runtime.updateBudget("session-1", { maxTokens: 99 })).rejects.toThrow(
+      "accounted tokens",
+    );
+    await expect(runtime.updateBudget("session-1", {})).rejects.toThrow("requires");
+
+    vi.spyOn(storage, "updateBudget").mockResolvedValueOnce(false);
+    await expect(runtime.updateBudget("session-1", { maxIterations: 9 })).rejects.toThrow(
+      "changed while its budget",
+    );
+  });
+
+  it("reactivates an exhausted goal when a larger budget restores capacity", async () => {
+    const continuation = startedContinuation();
+    const runtime = new GoalRuntime(
+      new MemoryGoalStorage(),
+      { evaluate: vi.fn().mockResolvedValue({ outcome: "continue", reason: "more work" }) },
+      continuation,
+      undefined,
+      { defaultBudget: { maxIterations: 5, maxTokens: 10_000 } },
+    );
+    await runtime.create("session-1", "ship", { maxIterations: 1, maxTokens: 100 });
+    await runtime.settle("session-1", { latestOutput: "first pass", tokenDelta: 100 });
+    expect(await runtime.get("session-1")).toMatchObject({ status: "budget_limited" });
+
+    const updated = await runtime.updateBudget("session-1", {
+      maxIterations: 2,
+      maxTokens: 200,
+    });
+
+    expect(updated).toMatchObject({
+      status: "active",
+      budget: { maxIterations: 2, maxTokens: 200 },
+      usage: { iterations: 1, tokens: 100 },
+      blockedReason: undefined,
+    });
+    expect(continuation.continueIfIdle).toHaveBeenCalledOnce();
+  });
+
+  it("preserves in-flight settlement accounting across a concurrent budget update", async () => {
+    let evaluationStarted: (() => void) | undefined;
+    let resolveEvaluation: ((value: { outcome: "continue"; reason: string }) => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      evaluationStarted = resolve;
+    });
+    const evaluator: GoalEvaluator = {
+      evaluate: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveEvaluation = resolve;
+              evaluationStarted?.();
+            }),
+        )
+        .mockResolvedValue({ outcome: "continue", reason: "current budget evaluated" }),
+    };
+    const runtime = new GoalRuntime(
+      new MemoryGoalStorage(),
+      evaluator,
+      startedContinuation(),
+      undefined,
+      { defaultBudget: { maxIterations: 10, maxTokens: 10_000 } },
+    );
+    await runtime.create("session-1", "ship", { maxIterations: 5, maxTokens: 1_000 });
+
+    const settlement = runtime.settle("session-1", {
+      latestOutput: "concurrent work",
+      tokenDelta: 250,
+    });
+    await started;
+    await runtime.updateBudget("session-1", { maxIterations: 8, maxTokens: 2_000 });
+    resolveEvaluation?.({ outcome: "continue", reason: "stale budget evaluated" });
+    await settlement;
+
+    expect(await runtime.get("session-1")).toMatchObject({
+      budget: { maxIterations: 8, maxTokens: 2_000 },
+      usage: { iterations: 1, tokens: 250 },
+    });
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(2);
+  });
+
   it("evaluates ordinary settled progress and continues when work remains", async () => {
     const continuation = startedContinuation();
     const evaluator = {

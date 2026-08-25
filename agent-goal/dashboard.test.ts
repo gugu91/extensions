@@ -28,7 +28,7 @@ describe("goal dashboard", () => {
       "Ship the standalone goal loop",
       "Turns 3/8 · Tokens 12430/50000 · Runtime limit 60m",
       "Last CONTINUE: tests remain",
-      "/goal pause · resume · complete · clear · hide",
+      "/goal budget turns=<n> tokens=<n> · pause · resume · complete · clear · hide",
     ]);
   });
 });
