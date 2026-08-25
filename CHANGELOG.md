@@ -9,6 +9,36 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.11] - 2026-08-25
+
+Pinet v0.2.11 adds safe mutable budgets and reliable operator-driven initiation to the standalone single-session goal loop.
+
+### Version verification
+
+- `pi-extensions` — `0.2.11` (private repo package)
+- `@pinet/transport-core` — `0.2.11`
+- `@pinet/broker-core` — `0.2.11`
+- `@pinet/pinet-core` — `0.2.11`
+- `@pinet/imessage-bridge` — `0.2.11`
+- `@pinet/slack-bridge` — `0.2.11`
+- `@pinet/model-aware-compaction` — `0.2.11`
+- `@pinet/agent-goal` — `0.2.11`
+
+### Release highlights
+
+- Adds atomic, bounded goal turn/token budget updates for operators and agents without recreating a goal or losing accounted usage.
+- Rebinds pending evaluations and continuation claims across budget-version changes, including deterministic memory and SQLite race coverage.
+- Adds turn/token budget editing to the interactive `/goal` overlay with in-place validation and refresh.
+- Starts operator-created goals when Pi is idle even if pending delivery is reported, while preserving one charge per `agent_settled` run.
+
+### Notable pull requests
+
+- [#1011](https://github.com/gugu91/pinet/pull/1011) — add mutable goal budgets and close concurrent settlement/continuation races
+- [#1013](https://github.com/gugu91/pinet/pull/1013) — edit goal budgets from the interactive overlay
+- [#1015](https://github.com/gugu91/pinet/pull/1015) — prevent idle operator-created goals from stalling on pending delivery
+
+See the [full change set since v0.2.10](https://github.com/gugu91/pinet/compare/v0.2.10...v0.2.11).
+
 ## [0.2.10] - 2026-08-23
 
 Pinet v0.2.10 prevents model-aware proactive compaction from racing Pi's native auto-compaction lifecycle.
