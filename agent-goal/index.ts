@@ -136,7 +136,7 @@ export function registerAgentGoal(pi: ExtensionAPI, options: AgentGoalExtensionO
         if (!ctx || ctx.sessionManager.getSessionId() !== goal.scopeId) {
           return { status: "unavailable", reason: "The goal session is not active" };
         }
-        if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        if (!ctx.isIdle()) {
           return { status: "busy", reason: "The goal session is busy", retryAfterMs: 1_000 };
         }
         api.sendMessage(
