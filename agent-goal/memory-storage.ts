@@ -83,14 +83,13 @@ export class MemoryGoalStorage implements GoalStorage {
 
   async appendPendingEvaluation(pending: GoalPendingEvaluation): Promise<boolean> {
     const goal = this.goals.get(pending.scopeId);
-    if (!goal || goal.id !== pending.goalId || goal.version !== pending.goalVersion) return false;
+    if (!goal || goal.id !== pending.goalId || goal.status !== "active") return false;
     const stored = this.pendingEvaluations.get(pending.scopeId);
     const existing =
-      stored?.goalId === pending.goalId && stored.goalVersion === pending.goalVersion
-        ? stored
-        : undefined;
+      stored?.goalId === pending.goalId && stored.goalVersion === goal.version ? stored : undefined;
     this.pendingEvaluations.set(pending.scopeId, {
       ...pending,
+      goalVersion: goal.version,
       iterationsDelta: pending.iterationsDelta + (existing?.iterationsDelta ?? 0),
       progress: {
         ...pending.progress,
@@ -203,8 +202,18 @@ export class MemoryGoalStorage implements GoalStorage {
     expectedClaimId: string,
   ): Promise<boolean> {
     const current = this.claims.get(claim.scopeId);
-    if (!current || current.claimId !== expectedClaimId) return false;
-    this.claims.set(claim.scopeId, { ...claim });
+    const goal = this.goals.get(claim.scopeId);
+    if (
+      !current ||
+      current.claimId !== expectedClaimId ||
+      current.goalId !== claim.goalId ||
+      !goal ||
+      goal.id !== claim.goalId ||
+      goal.status !== "active"
+    ) {
+      return false;
+    }
+    this.claims.set(claim.scopeId, { ...claim, goalVersion: goal.version });
     return true;
   }
 

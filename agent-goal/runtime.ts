@@ -579,6 +579,24 @@ export class GoalRuntime {
       const currentGoal = await this.storage.get(goal.scopeId);
       const currentClaim = await this.storage.getContinuationClaim(goal.scopeId);
       if (
+        currentGoal?.id === goal.id &&
+        currentGoal.status === "active" &&
+        currentGoal.version !== goal.version &&
+        currentClaim?.claimId === claim.claimId
+      ) {
+        if (currentClaim.state === "started") {
+          this.scheduleRecovery(goal.scopeId, currentClaim.expiresAt);
+        } else if (
+          currentClaim.state === "deferred" &&
+          Date.parse(currentClaim.availableAt) > this.now().getTime()
+        ) {
+          this.scheduleRecovery(goal.scopeId, currentClaim.availableAt);
+        } else {
+          await this.runContinuationClaim(currentGoal, currentClaim);
+        }
+        return;
+      }
+      if (
         !currentGoal ||
         currentGoal.id !== goal.id ||
         currentGoal.version !== goal.version ||

@@ -129,6 +129,26 @@ describe("SqliteGoalStorage", () => {
     expect(await storage.getPendingEvaluation("session-1")).toMatchObject({ goalVersion: 4 });
     expect(await storage.getTerminalCandidate("session-1")).toMatchObject({ goalVersion: 4 });
     expect(await storage.getContinuationClaim("session-1")).toMatchObject({ goalVersion: 4 });
+
+    expect(
+      await storage.appendPendingEvaluation({
+        ...pending,
+        evaluationId: "evaluation-late",
+        iterationsDelta: 2,
+      }),
+    ).toBe(true);
+    expect(await storage.getPendingEvaluation("session-1")).toMatchObject({
+      goalVersion: 4,
+      evaluationId: "evaluation-late",
+      iterationsDelta: 3,
+    });
+    expect(
+      await storage.replaceContinuationClaim({ ...claim, state: "started" }, claim.claimId),
+    ).toBe(true);
+    expect(await storage.getContinuationClaim("session-1")).toMatchObject({
+      goalVersion: 4,
+      state: "started",
+    });
     expect(await storage.updateBudget({ ...updated, version: 5 }, 3)).toBe(false);
     storage.close();
   });

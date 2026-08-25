@@ -419,10 +419,9 @@ export class SqliteGoalStorage implements GoalStorage {
          (scope_id, goal_id, goal_version, evaluation_id, iterations_delta, latest_output,
           token_delta, candidate_outcome, candidate_reason, attempt, available_at, last_error,
           created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-         WHERE EXISTS (
-           SELECT 1 FROM agent_goals WHERE scope_id = ? AND id = ? AND version = ?
-         )
+         SELECT ?, ?, goal.version, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         FROM agent_goals AS goal
+         WHERE goal.scope_id = ? AND goal.id = ? AND goal.status = 'active'
          ON CONFLICT(scope_id) DO UPDATE SET goal_id = excluded.goal_id,
            goal_version = excluded.goal_version, evaluation_id = excluded.evaluation_id,
            iterations_delta = CASE
@@ -459,7 +458,6 @@ export class SqliteGoalStorage implements GoalStorage {
       .run(
         pending.scopeId,
         pending.goalId,
-        pending.goalVersion,
         pending.evaluationId,
         pending.iterationsDelta,
         pending.progress.latestOutput,
@@ -473,7 +471,6 @@ export class SqliteGoalStorage implements GoalStorage {
         pending.updatedAt,
         pending.scopeId,
         pending.goalId,
-        pending.goalVersion,
       );
     return result.changes === 1;
   }
@@ -742,13 +739,18 @@ export class SqliteGoalStorage implements GoalStorage {
   ): Promise<boolean> {
     const result = this.db
       .prepare(
-        `UPDATE agent_goal_continuations SET goal_id = ?, goal_version = ?, claim_id = ?,
-         state = ?, reason = ?, attempt = ?, available_at = ?, expires_at = ?,
-         last_error = ?, updated_at = ? WHERE scope_id = ? AND claim_id = ?`,
+        `UPDATE agent_goal_continuations SET goal_id = ?,
+         goal_version = (SELECT version FROM agent_goals WHERE scope_id = ? AND id = ?),
+         claim_id = ?, state = ?, reason = ?, attempt = ?, available_at = ?, expires_at = ?,
+         last_error = ?, updated_at = ? WHERE scope_id = ? AND claim_id = ?
+         AND goal_id = ? AND EXISTS (
+           SELECT 1 FROM agent_goals WHERE scope_id = ? AND id = ? AND status = 'active'
+         )`,
       )
       .run(
         claim.goalId,
-        claim.goalVersion,
+        claim.scopeId,
+        claim.goalId,
         claim.claimId,
         claim.state,
         claim.reason,
@@ -759,6 +761,9 @@ export class SqliteGoalStorage implements GoalStorage {
         claim.updatedAt,
         claim.scopeId,
         expectedClaimId,
+        claim.goalId,
+        claim.scopeId,
+        claim.goalId,
       );
     return result.changes === 1;
   }
