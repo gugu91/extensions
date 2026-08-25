@@ -30,7 +30,7 @@ pi -e ./agent-goal/index.ts
 /goal show         Show the compact persistent goal status
 ```
 
-Pi's footer is the only persistent goal UI and shows compact status and budget usage without duplicating the detailed dashboard. In interactive mode, `/goal` opens the detailed control window with the objective, lifecycle state, budget bars, latest evaluator guidance, and continuation state. Its visible keyboard actions pause or resume the goal, mark it complete, clear it, or close the window; complete and clear require a second keypress, and the window refreshes after state changes. Press Escape, `q`, or Ctrl+C to close it. `/goal` retains the detailed textual dashboard in headless sessions.
+Pi's footer is the only persistent goal UI and shows compact status and budget usage without duplicating the detailed dashboard. In interactive mode, `/goal` opens the detailed control window with the objective, lifecycle state, budget bars, latest evaluator guidance, and continuation state. Press `b` to edit total turn and token ceilings in place; digits edit the selected field, Tab switches fields, Enter saves, and Escape cancels. Other visible keyboard actions pause or resume the goal, mark it complete, clear it, or close the window; complete and clear require a second keypress, and validation errors remain visible in the open window. Press Escape, `q`, or Ctrl+C to close it. `/goal` retains the detailed textual dashboard in headless sessions.
 
 Only one goal may exist per Pi session. Clear the existing goal before creating another.
 

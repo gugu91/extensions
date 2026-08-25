@@ -301,14 +301,24 @@ describe("registerAgentGoal", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    const actions: GoalWindowAction[] = ["pause", "close"];
+    const actions: GoalWindowAction[] = [
+      { type: "budget", maxIterations: 1, maxTokens: 10 },
+      { type: "budget", maxIterations: 4, maxTokens: 1_000 },
+      "pause",
+      "close",
+    ];
+    let customCall = 0;
     const custom = vi.fn(async (factory: GoalWindowFactory) => {
-      factory(
+      const component = factory(
         { requestRender: vi.fn() },
         { fg: (_color, text) => text, bold: (text) => text } as Theme,
         {},
         vi.fn(),
       );
+      customCall += 1;
+      if (customCall === 2) {
+        expect(component.render(66).join("\n")).toContain("current turn");
+      }
       return actions.shift();
     });
     const setStatus = vi.fn();
@@ -329,9 +339,15 @@ describe("registerAgentGoal", () => {
 
     expect(setStatus).toHaveBeenCalledWith("agent-goal", "goal: active · 1/5 turns");
     expect(setWidget).toHaveBeenCalledWith("agent-goal", undefined);
-    expect(custom).toHaveBeenCalledTimes(2);
-    expect(await storage.get("session-1")).toMatchObject({ status: "paused" });
-    expect(setStatus).toHaveBeenLastCalledWith("agent-goal", "goal: paused · 1/5 turns");
+    expect(custom).toHaveBeenCalledTimes(4);
+    expect(await storage.get("session-1")).toMatchObject({
+      status: "paused",
+      budget: { maxIterations: 4, maxTokens: 1_000 },
+    });
+    expect(setStatus).toHaveBeenLastCalledWith(
+      "agent-goal",
+      "goal: paused · 1/4 turns · 10/1000 tok",
+    );
   });
 
   it.each(["complete", "blocked"] as const)(
