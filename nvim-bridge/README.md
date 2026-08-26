@@ -8,12 +8,12 @@ The durable integration is hosted by the active Pinet broker as a `MessageAdapte
 
 Implemented v1 scope for issue #714:
 
-- Existing Fugitive/native single-file diff workflow (`vim.wo.diff`).
+- Existing Fugitive/native single-file diff workflow (`vim.wo.diff`). In a native diff, a worktree-local buffer is the new side and its paired external snapshot is the old side.
 - Create an anchored contextual thread from the current line/visual range.
 - Require an explicit target Pinet agent for new threads.
 - List/open/reply/resolve/reopen threads for the current file.
 - Persist thread state and anchors in Pinet `threads.metadata` and messages in Pinet `messages`.
-- Restore signs by querying the broker when Neovim reconnects, enters a diff buffer, or `:PinetThreads` runs.
+- Restore open and resolved signs by querying the broker when Neovim reconnects, enters a diff buffer, or `:PinetThreads` runs.
 - Match restoration to `repository`, `worktree`, `path`, `baseOid`, `headOid`, `blobOid`, and old/new diff side. Changed revisions are intentionally omitted rather than relocated.
 - Hydrate a bounded summary of relevant unresolved threads before later agent runs.
 - Agent replies use generic `pinet action=reply`, which sends through the stored transport source/channel and updates Neovim.
@@ -45,7 +45,7 @@ Default navigation mappings:
 
 ## Socket and trust boundary
 
-The broker-hosted adapter owns `/tmp/pi-nvim/<sha256(canonicalWorktree + ":" + branch)>.sock`. Both Pi and Neovim canonicalize `git rev-parse --show-toplevel`, so starting Pi in a repository subdirectory does not change the socket identity. The standalone `nvim-bridge` pi extension is a client of this socket for editor-context hydration and `open_in_editor`; it does not start a competing server.
+The broker-hosted adapter owns `/tmp/pi-nvim/<sha256(canonicalWorktree + ":" + branch)>.sock`. Both Pi and Neovim canonicalize `git rev-parse --show-toplevel`, so starting Pi in a repository subdirectory does not change the socket identity. Editor context and repo-relative `open_in_editor` paths use that same canonical worktree root rather than Neovim's current directory. The standalone `nvim-bridge` pi extension is a client of this socket for editor-context hydration and `open_in_editor`; it does not start a competing server.
 
 To avoid the target prompt for each new thread, set the Pinet agent id shown by `/pinet status`:
 

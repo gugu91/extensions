@@ -1,3 +1,4 @@
+local paths = require('pi-nvim.paths')
 local socket = require('pi-nvim.socket')
 
 local M = {}
@@ -33,34 +34,11 @@ local function run_git(worktree, args, stdin)
   return vim.trim(output)
 end
 
-local function buffer_path_and_side(worktree)
-  local bufpath = vim.api.nvim_buf_get_name(0)
-  if bufpath == '' then
-    return nil, nil
-  end
-
-  if vim.startswith(bufpath, 'fugitive://') and vim.fn.exists('*FugitiveParse') == 1 then
-    local parsed = vim.fn.FugitiveParse(bufpath)
-    local object = parsed[1] or ''
-    local file = object:match('^:0:(.+)$') or object:match('^[^:]+:(.+)$')
-    return file, file and 'old' or nil
-  end
-
-  local canonical = vim.uv and vim.uv.fs_realpath(bufpath) or vim.loop.fs_realpath(bufpath)
-  canonical = canonical or bufpath
-  if vim.startswith(canonical, worktree .. '/') then
-    return canonical:sub(#worktree + 2), 'new'
-  end
-  return nil, nil
-end
-
 local function current_anchor()
-  local worktree = vim.fn.systemlist('git rev-parse --show-toplevel 2>/dev/null')[1]
-  if vim.v.shell_error ~= 0 or not worktree then
+  local worktree = paths.worktree_root()
+  if not worktree then
     return nil
   end
-  local realpath = (vim.uv or vim.loop).fs_realpath(worktree)
-  worktree = realpath or worktree
 
   local common_dir =
     run_git(worktree, { 'rev-parse', '--path-format=absolute', '--git-common-dir' })
@@ -68,8 +46,9 @@ local function current_anchor()
   if not common_dir or not head_oid then
     return nil
   end
+  common_dir = (vim.uv or vim.loop).fs_realpath(common_dir) or common_dir
   local repository = common_dir:match('^(.*)/%.git$') or common_dir
-  local file, side = buffer_path_and_side(worktree)
+  local file, side = paths.buffer_path_and_side(worktree)
   if not file or not side then
     return nil
   end
