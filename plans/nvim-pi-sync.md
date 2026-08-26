@@ -136,3 +136,16 @@ nvim/
    ```
 
 3. Both pi and nvim must be in the same git repo on the same branch.
+
+## Issue #714 implemented slice: Pinet contextual threads
+
+The active replacement is intentionally small and Pinet-native:
+
+- Anchored Neovim comments are ordinary Pinet transport threads with `source: "nvim"`.
+- Durable state lives only in BrokerDB `threads.metadata` and `messages.metadata`/`messages.body`.
+- Metadata is versioned as `pinetKind: "contextual_thread"`, `schemaVersion: 1`, with `codeAnchor` and `state.resolved` fields. Anchors carry canonical `repository`, `worktree`, `path`, `baseOid`, `headOid`, `blobOid`, old/new `side`, and the line range.
+- The active broker owns `/tmp/pi-nvim/<sha256(canonicalWorktree + ":" + branch)>.sock`; Neovim is a UI adapter, not an agent. The Pi extension uses the same socket as a client for viewport hydration and `open_in_editor`.
+- New threads require an explicit target agent and are pre-created with explicit owner binding before the inbound message routes through existing Pinet inbox machinery.
+- Relevant unresolved threads are revision-filtered and injected into later agent runs with bounded message history; resolved threads remain durable but are omitted.
+- Agents reply with the generic Pinet dispatcher `reply` action against an existing thread id; no review-specific tool or table exists.
+- v1 supports one current Fugitive/native diff file. GitHub sync, multi-file review UI, and anchor relocation remain deferred; changed revisions are omitted rather than guessed.

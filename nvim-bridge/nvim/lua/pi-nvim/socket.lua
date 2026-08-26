@@ -20,6 +20,7 @@ local function compute_socket_path()
   if vim.v.shell_error ~= 0 or not repo_root then
     return nil
   end
+  repo_root = (vim.uv or vim.loop).fs_realpath(repo_root) or repo_root
 
   local branch = vim.fn.systemlist('git branch --show-current 2>/dev/null')[1]
   if vim.v.shell_error ~= 0 or not branch then

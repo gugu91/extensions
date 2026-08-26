@@ -1,3 +1,4 @@
+local comments = require('pi-nvim.comments')
 local events = require('pi-nvim.events')
 local socket = require('pi-nvim.socket')
 
@@ -19,6 +20,9 @@ function M.setup(_opts)
         return
       end
       events.on_buf_enter()
+      if vim.wo.diff and socket.is_connected() then
+        comments.refresh()
+      end
     end,
   })
 
@@ -55,6 +59,14 @@ function M.setup(_opts)
       socket.connect()
     end,
   })
+
+  socket.on('connected', function()
+    events.on_buf_enter()
+    events.on_win_scrolled()
+    if vim.wo.diff then
+      comments.refresh()
+    end
+  end)
 
   -- Seed initial context, useful when plugin itself is lazy-loaded.
   events.on_buf_enter()
