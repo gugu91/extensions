@@ -9,6 +9,35 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.12] - 2026-08-26
+
+Pinet v0.2.12 replaces the dormant PiComms review store with Pinet-native, revision-aware contextual threads for single-file Neovim diffs.
+
+### Version verification
+
+- `pi-extensions` — `0.2.12` (private repo package)
+- `@pinet/transport-core` — `0.2.12`
+- `@pinet/broker-core` — `0.2.12`
+- `@pinet/pinet-core` — `0.2.12`
+- `@pinet/imessage-bridge` — `0.2.12`
+- `@pinet/slack-bridge` — `0.2.12`
+- `@pinet/model-aware-compaction` — `0.2.12`
+- `@pinet/agent-goal` — `0.2.12`
+
+### Release highlights
+
+- Adds persisted line/range-anchored contextual threads to existing single-file Fugitive and native Neovim diffs without introducing a review-specific service or second database.
+- Stores comments, replies, resolution state, and revision-aware anchors as ordinary Pinet threads/messages in BrokerDB, restoring matching open and resolved signs after restarts.
+- Routes explicit Neovim comments through normal Pinet agent inboxes, supports generic agent thread replies, and hydrates a bounded summary of relevant unresolved threads into later agent turns.
+- Preserves `open_in_editor` and editor-context sync through the broker-owned Unix socket with canonical worktree-relative paths, including subdirectory sessions and native old-side snapshots.
+- Removes the legacy PiComms SQLite/filesystem persistence, RPC surface, and canonical `ctx:<file>:<range>` identities.
+
+### Notable pull requests
+
+- [#1019](https://github.com/gugu91/pinet/pull/1019) — add Pinet-native Neovim contextual threads and replace the dormant PiComms subsystem
+
+See the [full change set since v0.2.11](https://github.com/gugu91/pinet/compare/v0.2.11...v0.2.12).
+
 ## [0.2.11] - 2026-08-25
 
 Pinet v0.2.11 adds safe mutable budgets and reliable operator-driven initiation to the standalone single-session goal loop.
