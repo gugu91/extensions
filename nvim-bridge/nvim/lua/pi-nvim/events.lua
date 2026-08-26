@@ -1,3 +1,4 @@
+local paths = require('pi-nvim.paths')
 local socket = require('pi-nvim.socket')
 
 local M = {}
@@ -35,27 +36,15 @@ local function debounce(key, delay_ms, fn)
   )
 end
 
---- Get the file path relative to the git repo root.
---- Returns nil for non-file buffers.
+--- Get the file path relative to the canonical git worktree root.
+--- Returns nil when the current buffer cannot be mapped to this worktree.
 local function get_relative_path()
-  local bufpath = vim.api.nvim_buf_get_name(0)
-  if bufpath == '' then
+  local worktree = paths.worktree_root()
+  if not worktree then
     return nil
   end
-
-  -- Skip non-file buffers
-  local buftype = vim.bo.buftype
-  if buftype ~= '' then
-    return nil
-  end
-
-  -- Make path relative to cwd (which should be repo root)
-  local cwd = vim.fn.getcwd()
-  if vim.startswith(bufpath, cwd .. '/') then
-    return bufpath:sub(#cwd + 2)
-  end
-
-  return bufpath
+  local file = paths.buffer_path_and_side(worktree)
+  return file
 end
 
 --- BufEnter: send buffer_focus (no debounce).

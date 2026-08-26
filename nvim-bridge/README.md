@@ -1,51 +1,61 @@
 # nvim-bridge
 
-Neovim ↔ pi bridge that sends active editor context (file, viewport, selection) into pi before each agent run.
+Neovim UI/runtime files for the Pinet-native editor bridge.
 
-PiComms is disabled in this environment while the replacement Pinet-native Neovim adapter is tracked separately in issue #714.
+The durable integration is hosted by the active Pinet broker as a `MessageAdapter` with source `nvim`. Neovim connects to the broker-owned local Unix socket and sends versioned thread RPCs. Anchored comments are ordinary Pinet threads/messages with optional code-anchor metadata in BrokerDB; there is no PiComms store, review table, GitHub sync, or separate review service.
 
-## How it works
+## Scope
 
-- A pi extension (`index.ts`) starts a same-host Unix socket server.
-- A Neovim plugin (`nvim/**`) sends editor events to that socket.
-- Before each agent run, pi injects context like:
-  - current file
-  - visible line range
-  - cursor line
-  - selection
+Implemented v1 scope for issue #714:
 
-> Important: Neovim and pi must be in the **same git repo and same branch**.
+- Existing Fugitive/native single-file diff workflow (`vim.wo.diff`). In a native diff, a worktree-local buffer is the new side and its paired external snapshot is the old side.
+- Create an anchored contextual thread from the current line/visual range.
+- Require an explicit target Pinet agent for new threads.
+- List/open/reply/resolve/reopen threads for the current file.
+- Persist thread state and anchors in Pinet `threads.metadata` and messages in Pinet `messages`.
+- Restore open and resolved signs by querying the broker when Neovim reconnects, enters a diff buffer, or `:PinetThreads` runs.
+- Match restoration to `repository`, `worktree`, `path`, `baseOid`, `headOid`, `blobOid`, and old/new diff side. Changed revisions are intentionally omitted rather than relocated.
+- Hydrate a bounded summary of relevant unresolved threads before later agent runs.
+- Agent replies use generic `pinet action=reply`, which sends through the stored transport source/channel and updates Neovim.
+- Preserve editor viewport context and `open_in_editor` through the broker-hosted socket.
 
-## Trust boundary notes
+Out of scope for v1: GitHub/PR synchronization, multi-file review browser, pending-review lifecycle, smart anchor relocation, and any parallel PiComms persistence.
 
-`nvim-bridge` is a **same-host local-power surface**.
+## Neovim commands
 
-- The Unix socket under `/tmp/pi-nvim/<hash>.sock` assumes local trust between Neovim and the pi process on the same machine.
-- There is **no peer authentication handshake** on that socket today; the main boundary is host-local access plus the repo/branch-derived socket name.
-- The bridge tightens the socket directory/socket permissions on a best-effort basis, but that is intentionally narrow hardening rather than a transport redesign.
+Core bridge commands:
 
-Treat the socket as local editor-control access for the current host, not as a remote-safe transport.
+- `:PiNvimEnable`
+- `:PiNvimDisable`
+- `:PiNvimStatus`
 
-## Install / configure
+Contextual thread commands:
 
-### 1) Link this as a pi extension
+- `:PinetComment [body]` — create a thread on the current diff line/range; uses `vim.g.pinet_agent_id` or prompts for the explicit target agent id.
+- `:PinetThreads` — refresh current-file threads/signs, including resolved threads.
+- `:PinetThreadOpen [thread_id]` — open a small thread pane.
+- `:PinetReply <thread_id> <body>` — add a user reply to an existing thread.
+- `:PinetResolve [thread_id]` — mark a thread resolved.
+- `:PinetReopen [thread_id]` — reopen a resolved thread.
 
-From your repo root:
+Default navigation mappings:
 
-```bash
-ln -s "$(pwd)/nvim-bridge" ~/.pi/agent/extensions/nvim-bridge
+- `]p` next current-file Pinet thread
+- `[p` previous current-file Pinet thread
+
+## Socket and trust boundary
+
+The broker-hosted adapter owns `/tmp/pi-nvim/<sha256(canonicalWorktree + ":" + branch)>.sock`. Both Pi and Neovim canonicalize `git rev-parse --show-toplevel`, so starting Pi in a repository subdirectory does not change the socket identity. Editor context and repo-relative `open_in_editor` paths use that same canonical worktree root rather than Neovim's current directory. The standalone `nvim-bridge` pi extension is a client of this socket for editor-context hydration and `open_in_editor`; it does not start a competing server.
+
+To avoid the target prompt for each new thread, set the Pinet agent id shown by `/pinet status`:
+
+```lua
+vim.g.pinet_agent_id = "<agent-id>"
 ```
 
-If you already have a link:
+This is a same-host local-power surface. Socket directory/socket permissions are tightened best-effort, but there is no remote-safe peer authentication handshake.
 
-```bash
-rm -f ~/.pi/agent/extensions/nvim-bridge
-ln -s "$(pwd)/nvim-bridge" ~/.pi/agent/extensions/nvim-bridge
-```
-
-### 2) Add Neovim plugin with lazy.nvim
-
-Because the Neovim plugin lives in `nvim-bridge/nvim`, point lazy to that directory:
+## Install Neovim plugin with lazy.nvim
 
 ```lua
 {
@@ -58,72 +68,22 @@ Because the Neovim plugin lives in `nvim-bridge/nvim`, point lazy to that direct
 }
 ```
 
-If this repo is elsewhere, change the `dir` path.
+Restart the Pinet broker and Neovim after updating.
 
-### 3) Restart pi + Neovim
+## Removed PiComms surface
 
-After linking/configuring, restart both so socket + autocommands are initialized.
+- no `.pi/a2a/comments` store
+- no `.pi/picomms.db`
+- no `comment_add`, `comment_list`, or `comment_wipe_all` tools
+- no `/picomms:*` commands
+- no canonical `ctx:<file>:<range>` thread ids
 
-### Keymaps
+## Development
 
-This plugin does **not** define global keymaps by default. Define mappings in your Neovim config (e.g. lazy `keys` field).
-
-## Usage
-
-Core bridge commands:
-
-- `:PiNvimEnable`
-- `:PiNvimDisable`
-- `:PiNvimStatus`
-
-Disabled PiComms surface:
-
-- no `.pi/a2a/comments` store is initialized by `nvim-bridge`
-- no `comment_add`, `comment_list`, or `comment_wipe_all` tools are registered
-- no `/picomms:*` commands are registered
-- no `:PiComms*` Neovim commands are registered
-- no PiComms panel or line indicators are initialized on startup
-
-Use Pinet directly for durable coordination while the replacement Neovim adapter is designed.
-
-## Development tooling
-
-- **pnpm** for package management
-- **TypeScript** for type checking (`index.ts`)
-- **Oxlint** for TS linting
-- **Prettier** for TS/JSON/Markdown formatting
-- **StyLua** for Lua formatting (`nvim/**`)
-
-### Scripts (from repo root)
-
-- `pnpm format` – format TS/JSON/MD + Lua
-- `pnpm format:check` – formatting checks only
-- `pnpm lint` – lint TypeScript
-- `pnpm typecheck` – run TypeScript checks
-- `pnpm check` – lint + typecheck + format checks
-
-### Quick start
-
-```bash
-# macOS
-brew install stylua
-
-pnpm install
-pnpm check
-```
-
-## Git hooks (Husky)
-
-- **pre-commit**: runs `lint-staged` to auto-format staged files
-  - Prettier: `*.{ts,tsx,js,mjs,cjs,json,md,yml,yaml}`
-  - StyLua: `nvim-bridge/nvim/**/*.lua`
-- **pre-push**: runs `pnpm lint && pnpm typecheck`
-
-## Notes
-
-- Lua files are intentionally ignored by Prettier and formatted with StyLua.
-- A local ambient type declaration is provided in `types/pi-coding-agent.d.ts` so `tsc` can run without requiring external SDK types.
-- If `/tmp` or your local machine account is shared more broadly than usual, remember that `nvim-bridge` still relies on same-host trust rather than explicit socket peer auth.
+- `pnpm --filter @gugu910/pi-nvim-bridge lint`
+- `pnpm --filter @gugu910/pi-nvim-bridge typecheck`
+- `pnpm exec vitest run --config vitest.config.ts nvim-bridge`
+- `pnpm format:lua`
 
 ## License
 

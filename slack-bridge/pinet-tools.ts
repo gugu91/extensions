@@ -147,6 +147,10 @@ export interface RegisterPinetToolsDeps {
     messageIds: number[];
     recipients: string[];
   };
+  replyToPinetThread?: (
+    threadId: string,
+    body: string,
+  ) => Promise<{ messageId: number; threadId: string; source: string; channel: string }>;
   signalAgentFree: (
     ctx: ExtensionContext | undefined,
     options: { requirePinet?: boolean },
@@ -213,6 +217,7 @@ interface PinetAgentsRoutingHint {
 type PinetDispatcherAction =
   | "send"
   | "read"
+  | "reply"
   | "free"
   | "snooze"
   | "schedule"
@@ -285,6 +290,9 @@ const PINET_DISPATCHER_EXAMPLES: Record<string, Array<Record<string, unknown>>> 
   send: [
     { action: "send", args: { to: "@worker", message: "Please review PR #123" } },
     { action: "send", args: { to: "@worker", message: "/steer stop polling" } },
+  ],
+  reply: [
+    { action: "reply", args: { thread_id: "nvim:<repo>:<id>", message: "I updated this block." } },
   ],
   read: [
     // Routine inbox drain: defaults are `unread_only: true` + `mark_read: true`,
@@ -398,6 +406,7 @@ function normalizeDispatcherAction(value: unknown): PinetDispatcherAction {
     "help",
     "send",
     "read",
+    "reply",
     "free",
     "snooze",
     "schedule",
@@ -1083,6 +1092,52 @@ function runPinetSendAction(
           result.transferredThreadId
             ? ["transferred thread", `${result.transferredThreadId}${transferSuffix}`]
             : ["transferred thread", undefined],
+        ],
+        message,
+      ),
+    };
+  })();
+}
+
+// agent-standards-ignore prefer-inline-single-use-helper: dispatcher actions are kept as named seams for progressive discovery.
+function runPinetReplyAction(
+  params: Parameters<PinetActionDefinition["execute"]>[1],
+  deps: RegisterPinetToolsDeps,
+  toolName: string,
+  output: PinetOutputOptions,
+): Promise<PinetToolResult> {
+  return (async () => {
+    const threadId = typeof params.thread_id === "string" ? params.thread_id.trim() : "";
+    const message = typeof params.message === "string" ? params.message : "";
+    if (!threadId) throw new Error("thread_id is required");
+    if (!message) throw new Error("message is required");
+    if (!deps.replyToPinetThread) {
+      throw new Error("pinet:reply is only available when the broker thread sender is active.");
+    }
+
+    deps.requireToolPolicy(toolName, undefined, `thread_id=${threadId} | message=${message}`);
+    const result = await deps.replyToPinetThread(threadId, message);
+    return {
+      content: [
+        {
+          type: "text",
+          text: output.full
+            ? `Reply sent to ${result.source} thread ${result.threadId} (${result.channel}); message id ${result.messageId}.`
+            : `Pinet thread reply sent to ${result.threadId}.`,
+        },
+      ],
+      details: result,
+      compactDetails: {
+        messageId: result.messageId,
+        threadId: result.threadId,
+        source: result.source,
+      },
+      expandedText: buildSentMessageExpandedText(
+        [
+          ["thread id", result.threadId],
+          ["source", result.source],
+          ["channel", result.channel],
+          ["message id", String(result.messageId)],
         ],
         message,
       ),
@@ -2415,6 +2470,18 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
   });
 
   registerAction({
+    name: "reply",
+    description:
+      "Reply to an existing Pinet transport thread using the thread's stored source/channel. Use for ordinary anchored contextual threads such as Neovim code comments.",
+    parameters: Type.Object({
+      thread_id: Type.String({ description: "Existing Pinet transport thread id." }),
+      message: Type.String({ description: "Reply body." }),
+      ...PINET_OUTPUT_OPTION_PARAMETERS,
+    }),
+    execute: (_id, params, output) => runPinetReplyAction(params, deps, "pinet:reply", output),
+  });
+
+  registerAction({
     name: "read",
     description:
       "Read this agent's durable SQLite-backed Pinet inbox context with unread/read semantics. Defaults to draining unread rows (`unread_only: true`, `mark_read: true`) with compact per-message previews — no `full=true` required for routine reads. Override `unread_only`/`mark_read` only for a non-destructive latest-history peek. Ordinary workers only see rows addressed to their own agent identity; broker coordination visibility is limited to broker-addressed inbox rows.",
@@ -2763,7 +2830,7 @@ export function registerPinetTools(pi: ExtensionAPI, deps: RegisterPinetToolsDep
     parameters: Type.Object({
       action: Type.String({
         description:
-          "Action name: help, send, read, free, snooze, schedule, agents, sessions, lanes, ports, reload, exit, hibernate (broker-managed checkpoint+hibernate), or wake (broker-managed fenced wake). Also supports spawn for launching worker-owned subtree children.",
+          "Action name: help, send, read, reply, free, snooze, schedule, agents, sessions, lanes, ports, reload, exit, hibernate (broker-managed checkpoint+hibernate), or wake (broker-managed fenced wake). Also supports spawn for launching worker-owned subtree children.",
       }),
       args: Type.Optional(
         Type.Record(Type.String(), Type.Unknown(), {

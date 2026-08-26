@@ -75,6 +75,15 @@ import {
 } from "./single-player-runtime.js";
 import { createBrokerRuntime } from "./broker-runtime.js";
 import { createSlackPinetRuntimeAdapterFactory } from "./slack-pinet-runtime-adapter.js";
+import {
+  createNvimPinetRuntimeAdapterFactory,
+  resolveNvimRepositoryContext,
+} from "./nvim-pinet-adapter.js";
+import {
+  formatContextualThreadContext,
+  selectOpenContextualThreads,
+  type ContextualThreadContextMessage,
+} from "./contextual-thread-context.js";
 import { SlackActivityLogger } from "./activity-log.js";
 import { createBrokerDeliveryState, queueBrokerInboxIds } from "./broker-delivery.js";
 import { buildBrokerControlPlaneDashboardSnapshot } from "./broker/control-plane-dashboard.js";
@@ -804,10 +813,9 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (decision.action === "deliver" || decision.action === "unrouted") {
-          const persisted =
-            routedMessage.source === "slack" && routedMessage.threadId
-              ? persistDeliveredInboundMessage(broker.db, selfId, routedMessage)
-              : null;
+          const persisted = routedMessage.threadId
+            ? persistDeliveredInboundMessage(broker.db, selfId, routedMessage)
+            : null;
 
           if (persisted && !persisted.result.freshDelivery) {
             return;
@@ -869,7 +877,7 @@ export default function (pi: ExtensionAPI) {
       ),
     buildCurrentDashboardSnapshot: async (openedAt) =>
       buildCurrentBrokerControlPlaneDashboardSnapshot(openedAt),
-    createAdapterBindings: [slackPinetAdapterFactory],
+    createAdapterBindings: [slackPinetAdapterFactory, createNvimPinetRuntimeAdapterFactory()],
     onAdminShutdownRequested: async (ctx) => {
       // `/pinet start replace` from another local session: stop being the
       // broker but keep this session alive (issue #951).
@@ -1477,6 +1485,31 @@ export default function (pi: ExtensionAPI) {
       requireToolPolicy,
       sendPinetAgentMessage,
       sendPinetBroadcastMessage,
+      replyToPinetThread: async (threadId, body) => {
+        if (brokerRole !== "broker") {
+          if (!brokerClient?.client) throw new Error("Pinet is in an unexpected state.");
+          const result = await brokerClient.client.sendMessage({ threadId, body });
+          return {
+            messageId: result.messageId,
+            threadId: result.threadId,
+            source: result.source,
+            channel: result.channel,
+          };
+        }
+        const broker = getActiveBroker();
+        const selfId = getActiveBrokerSelfId();
+        if (!broker || !selfId) throw new Error("Broker agent identity is unavailable.");
+        const result = await sendBrokerMessage(
+          { db: broker.db, adapters: broker.adapters },
+          { threadId, body, senderAgentId: selfId },
+        );
+        return {
+          messageId: result.message.id,
+          threadId: result.thread.threadId,
+          source: result.thread.source,
+          channel: result.thread.channel,
+        };
+      },
       signalAgentFree,
       scheduleBrokerWakeup,
       scheduleFollowerWakeup,
@@ -1902,6 +1935,63 @@ export default function (pi: ExtensionAPI) {
   // ─── Agent event wiring ──────────────────────────────
 
   agentEventRuntime.register(pi);
+
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (!pinetEnabled || !brokerRole) return;
+    const repository = resolveNvimRepositoryContext(ctx.cwd);
+    if (!repository) return;
+
+    try {
+      const brokerDb = brokerRole === "broker" ? getActiveBrokerDb() : null;
+      const selfId = brokerRole === "broker" ? getActiveBrokerSelfId() : null;
+      const threads =
+        brokerDb && selfId
+          ? brokerDb.getThreads(selfId)
+          : brokerRole === "follower" && brokerClient?.client
+            ? await brokerClient.client.listThreads()
+            : [];
+      const selected = selectOpenContextualThreads(threads, repository, 5);
+      if (selected.length === 0) return;
+
+      const messagesByThread = new Map<string, ContextualThreadContextMessage[]>();
+      for (const item of selected) {
+        if (brokerDb) {
+          messagesByThread.set(
+            item.thread.threadId,
+            brokerDb
+              .getMessagesForThread(item.thread.threadId, 6)
+              .map((message) => ({ sender: message.sender, body: message.body })),
+          );
+          continue;
+        }
+        if (brokerClient?.client) {
+          const result = await brokerClient.client.readInbox({
+            threadId: item.thread.threadId,
+            unreadOnly: false,
+            markRead: false,
+            limit: 6,
+          });
+          messagesByThread.set(
+            item.thread.threadId,
+            result.messages.map(({ message }) => ({ sender: message.sender, body: message.body })),
+          );
+        }
+      }
+
+      const content = formatContextualThreadContext(selected, messagesByThread);
+      if (!content) return;
+      return {
+        message: {
+          customType: "pinet-contextual-threads",
+          content,
+          display: true,
+        },
+      };
+    } catch (error) {
+      console.error(`[slack-bridge] contextual thread hydration failed: ${msg(error)}`);
+      return;
+    }
+  });
 
   pi.on("session_before_compact", (event) => {
     compactionGate.begin(event.signal);

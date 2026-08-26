@@ -338,8 +338,26 @@ describe("registerPinetTools", () => {
     expect(pinet?.promptSnippet).toContain('args.format="json"');
     expect(pinet?.promptSnippet).toContain("verbose/debug detail");
     expect(JSON.stringify(pinet?.parameters)).toContain(
-      "help, send, read, free, snooze, schedule, agents, sessions, lanes, ports, reload, exit, hibernate",
+      "help, send, read, reply, free, snooze, schedule, agents, sessions, lanes, ports, reload, exit, hibernate",
     );
+  });
+
+  it("replies to an existing transport thread through the dispatcher", async () => {
+    const replyToPinetThread = vi.fn(async (threadId: string, body: string) => ({
+      messageId: body.length,
+      threadId,
+      source: "nvim",
+      channel: "repo-socket",
+    }));
+    const tools = registerWithDeps(createDeps({ replyToPinetThread }));
+
+    const result = (await tools.get("pinet")?.execute("tool-call-1", {
+      action: "reply",
+      args: { thread_id: "nvim:repo:thread", message: "Done." },
+    })) as { content: Array<{ text: string }> };
+
+    expect(replyToPinetThread).toHaveBeenCalledWith("nvim:repo:thread", "Done.");
+    expect(result.content[0]?.text).toContain("Pinet thread reply sent to nvim:repo:thread");
   });
 
   it("routes reload and exit through the dispatcher remote-control actions", async () => {

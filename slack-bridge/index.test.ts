@@ -892,7 +892,7 @@ describe("slack-bridge top-level shutdown", () => {
     expect(sessionStart).toBeDefined();
     expect(sessionShutdown).toBeDefined();
     expect(pinetStart).toBeDefined();
-    expect(events.has("before_agent_start")).toBe(false);
+    expect(events.has("before_agent_start")).toBe(true);
 
     await sessionStart?.({}, ctx);
     expect(pi.getActiveTools()).not.toContain("pinet");

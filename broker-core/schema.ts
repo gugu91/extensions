@@ -4648,6 +4648,33 @@ export class BrokerDB implements BrokerDBInterface {
     return row ? rowToThread(row) : null;
   }
 
+  getMessagesForThread(threadId: string, limit = 50): BrokerMessage[] {
+    const db = this.getDb();
+    const rows = db
+      .prepare(
+        `SELECT * FROM (
+           SELECT * FROM messages
+           WHERE thread_id = ?
+           ORDER BY id DESC
+           LIMIT ?
+         )
+         ORDER BY id ASC`,
+      )
+      .all(threadId, limit) as unknown as Array<{
+      id: number;
+      thread_id: string;
+      source: string;
+      direction: string;
+      sender: string;
+      body: string;
+      metadata: string | null;
+      external_id?: string | null;
+      external_ts?: string | null;
+      created_at: string;
+    }>;
+    return rows.map(rowToBrokerMessage);
+  }
+
   getThreads(ownerAgent?: string): ThreadInfo[] {
     const db = this.getDb();
     if (ownerAgent) {

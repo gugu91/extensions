@@ -1,3 +1,5 @@
+local paths = require('pi-nvim.paths')
+
 local M = {}
 
 local uv = vim.loop or vim.uv
@@ -16,8 +18,8 @@ local listeners = {}
 --- Compute the socket path from git repo root + branch.
 --- Returns nil if not in a git repo.
 local function compute_socket_path()
-  local repo_root = vim.fn.systemlist('git rev-parse --show-toplevel 2>/dev/null')[1]
-  if vim.v.shell_error ~= 0 or not repo_root then
+  local repo_root = paths.worktree_root()
+  if not repo_root then
     return nil
   end
 
@@ -345,10 +347,10 @@ end
 --- Handle a command from pi.
 function M.handle_command(cmd)
   if cmd.type == 'open_file' and cmd.file then
-    local filepath = cmd.file
-    -- Resolve relative paths against cwd
-    if not vim.startswith(filepath, '/') then
-      filepath = vim.fn.getcwd() .. '/' .. filepath
+    local filepath = paths.resolve_worktree_path(cmd.file)
+    if not filepath then
+      vim.notify('pi-nvim: cannot resolve worktree-relative path', vim.log.levels.ERROR)
+      return
     end
 
     vim.cmd('edit ' .. vim.fn.fnameescape(filepath))
