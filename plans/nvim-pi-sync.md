@@ -149,3 +149,17 @@ The active replacement is intentionally small and Pinet-native:
 - Relevant unresolved threads are revision-filtered and injected into later agent runs with bounded message history; resolved threads remain durable but are omitted.
 - Agents reply with the generic Pinet dispatcher `reply` action against an existing thread id; no review-specific tool or table exists.
 - v1 supports one current Fugitive/native diff file. GitHub sync, multi-file review UI, and anchor relocation remain deferred; changed revisions are omitted rather than guessed.
+
+## Issue #1022: normal documents, ownership, and subscriptions
+
+The contextual-thread adapter also supports ordinary tracked buffers through a shared broker document domain:
+
+- `documents` stores one durable owner and transport-neutral metadata.
+- `document_aliases` binds native identities such as a canonical Git worktree file or Slack thread to that document.
+- `document_subscriptions` stores additional agent recipients. Subscriptions grant delivery, not ownership or reply authority.
+- Neovim Git-file document identity hashes canonical `repository`, `worktree`, and repo-relative `path`; Slack thread identity hashes its scope, channel, and thread timestamp.
+- Both runtime paths resolve existing aliases before minting a document id. `:PinetBindSlack <thread_id>` provides the explicit cross-adapter rebind when a Slack conversation corresponds to a tracked file; subsequent Slack ingress reuses that canonical Git document.
+- Contextual threads retain their existing `threads`/`messages` lifecycle and reference the shared `documentId`. The router fans document events out once to the unique owner/subscriber set.
+- Agent replies continue through the generic transport send path; document subscribers receive those persisted replies without changing the thread owner.
+- Diff anchors remain schema v1. Normal-buffer anchors use schema v2 with `anchorKind: "normal"`, current `headOid`, optional committed `headBlobOid`, current in-memory `blobOid`, and `dirty`. They never claim an old/new diff side.
+- Normal-buffer restoration remains exact: a changed or unsaved buffer blob does not inherit signs from a different content identity.

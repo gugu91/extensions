@@ -20,7 +20,7 @@ function M.setup(_opts)
         return
       end
       events.on_buf_enter()
-      if vim.wo.diff and socket.is_connected() then
+      if socket.is_connected() then
         comments.refresh({ include_resolved = true })
       end
     end,
@@ -63,9 +63,7 @@ function M.setup(_opts)
   socket.on('connected', function()
     events.on_buf_enter()
     events.on_win_scrolled()
-    if vim.wo.diff then
-      comments.refresh({ include_resolved = true })
-    end
+    comments.refresh({ include_resolved = true })
   end)
 
   -- Seed initial context, useful when plugin itself is lazy-loaded.

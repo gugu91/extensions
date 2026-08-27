@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { BrokerDB } from "./schema.js";
+import { BrokerDB, CURRENT_BROKER_SCHEMA_VERSION } from "./schema.js";
 import type { AgentLifecycleState, AgentRuntimeSpecInput } from "./types.js";
 
 function driveTo(db: BrokerDB, agentId: string, path: AgentLifecycleState[]): void {
@@ -165,7 +165,7 @@ function herdrSpec(agentId: string): AgentRuntimeSpecInput {
 }
 
 describe("runtime spec persistence", () => {
-  it("creates fresh v24 databases with exact per-kind payload constraints", () => {
+  it("creates fresh databases with exact per-kind payload constraints", () => {
     const path = dbPath();
     const db = new BrokerDB(path);
     db.initialize();
@@ -200,7 +200,7 @@ describe("runtime spec persistence", () => {
       expect(table.sql).toContain("herdr_session IS NULL");
       expect(table.sql).toContain("tmux_socket IS NULL");
       const version = sqlite.prepare("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(24);
+      expect(version.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
     } finally {
       sqlite.close();
       db.close();
@@ -245,7 +245,7 @@ describe("runtime spec persistence", () => {
         });
 
         const version = sqlite.prepare("PRAGMA user_version").get() as { user_version: number };
-        expect(version.user_version).toBe(24);
+        expect(version.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
       } finally {
         sqlite.close();
       }

@@ -11,6 +11,8 @@ import type {
   AgentInfo,
   AgentSupervisionState,
   ThreadInfo,
+  DocumentAliasInfo,
+  DocumentInfo,
   BrokerMessage,
   InboxEntry,
   InboxReadOptions,
@@ -122,6 +124,17 @@ interface ThreadRow {
   thread_id: string;
   source: string;
   channel: string;
+  owner_agent: string | null;
+  owner_binding: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface DocumentRow {
+  document_id: string;
+  kind: string;
+  title: string;
   owner_agent: string | null;
   owner_binding: string | null;
   metadata: string | null;
@@ -273,6 +286,22 @@ function rowToThread(row: ThreadRow): ThreadInfo {
     ownerAgent: row.owner_agent,
     ownerBinding: row.owner_binding === "explicit" ? "explicit" : null,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToDocument(row: DocumentRow): DocumentInfo {
+  const kind = row.kind === "slack_thread" || row.kind === "slack_channel" ? row.kind : "git_file";
+  return {
+    documentId: row.document_id,
+    kind,
+    title: row.title,
+    ownerAgent: row.owner_agent,
+    ownerBinding: row.owner_binding === "explicit" ? "explicit" : null,
+    metadata: row.metadata
+      ? (JSON.parse(row.metadata) as NonNullable<DocumentInfo["metadata"]>)
+      : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -957,7 +986,7 @@ export function defaultDbPath(): string {
 
 export const DEFAULT_RESUMABLE_WINDOW_MS = 15_000;
 export const DEFAULT_DISCONNECTED_PURGE_GRACE_MS = 60 * 60_000;
-export const CURRENT_BROKER_SCHEMA_VERSION = 24;
+export const CURRENT_BROKER_SCHEMA_VERSION = 25;
 
 /**
  * Lifecycle states whose durable identity, inbox, thread ownership, and runtime
@@ -1940,6 +1969,42 @@ function widenRuntimeSpecPayload(db: DatabaseSync): void {
   `);
 }
 
+// agent-standards-ignore prefer-inline-single-use-helper: one-function-per-migration-case is the established schema-migration seam.
+function createDocumentTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS documents (
+      document_id TEXT PRIMARY KEY NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('git_file','slack_thread','slack_channel')),
+      title TEXT NOT NULL,
+      owner_agent TEXT,
+      owner_binding TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS document_aliases (
+      source TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      metadata TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(source, external_id),
+      FOREIGN KEY(document_id) REFERENCES documents(document_id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS document_subscriptions (
+      document_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(document_id, agent_id),
+      FOREIGN KEY(document_id) REFERENCES documents(document_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_document_subscriptions_agent
+      ON document_subscriptions(agent_id, document_id);
+  `);
+}
+
 function runSchemaMigrations(db: DatabaseSync): void {
   const currentVersion = getUserVersion(db);
   if (currentVersion >= CURRENT_BROKER_SCHEMA_VERSION) {
@@ -2025,6 +2090,9 @@ function runSchemaMigrations(db: DatabaseSync): void {
           break;
         case 24:
           widenRuntimeSpecPayload(db);
+          break;
+        case 25:
+          createDocumentTables(db);
           break;
         default:
           throw new Error(`Unsupported broker schema migration target: ${nextVersion}`);
@@ -4415,6 +4483,127 @@ export class BrokerDB implements BrokerDBInterface {
     return row ?? null;
   }
 
+  // ─── Documents ───────────────────────────────────────
+
+  getDocument(documentId: string): DocumentInfo | null {
+    const row = this.getDb()
+      .prepare("SELECT * FROM documents WHERE document_id = ?")
+      .get(documentId) as DocumentRow | undefined;
+    return row ? rowToDocument(row) : null;
+  }
+
+  getDocumentByAlias(source: string, externalId: string): DocumentInfo | null {
+    const row = this.getDb()
+      .prepare(
+        `SELECT d.* FROM documents d
+         JOIN document_aliases a ON a.document_id = d.document_id
+         WHERE a.source = ? AND a.external_id = ?`,
+      )
+      .get(source, externalId) as DocumentRow | undefined;
+    return row ? rowToDocument(row) : null;
+  }
+
+  upsertDocument(document: Omit<DocumentInfo, "createdAt" | "updatedAt">): DocumentInfo {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO documents
+       (document_id, kind, title, owner_agent, owner_binding, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(document_id) DO UPDATE SET
+         kind = excluded.kind,
+         title = excluded.title,
+         metadata = excluded.metadata,
+         updated_at = excluded.updated_at`,
+    ).run(
+      document.documentId,
+      document.kind,
+      document.title,
+      document.ownerAgent,
+      document.ownerBinding,
+      document.metadata ? JSON.stringify(document.metadata) : null,
+      now,
+      now,
+    );
+    return this.getDocument(document.documentId)!;
+  }
+
+  bindDocumentAlias(
+    source: string,
+    externalId: string,
+    documentId: string,
+    metadata: DocumentInfo["metadata"] = null,
+  ): DocumentAliasInfo {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO document_aliases
+       (source, external_id, document_id, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source, external_id) DO UPDATE SET
+         document_id = excluded.document_id,
+         metadata = excluded.metadata,
+         updated_at = excluded.updated_at`,
+    ).run(source, externalId, documentId, metadata ? JSON.stringify(metadata) : null, now, now);
+    return {
+      source,
+      externalId,
+      documentId,
+      metadata,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  setDocumentOwner(documentId: string, ownerAgent: string | null): DocumentInfo {
+    const db = this.getDb();
+    const result = db
+      .prepare(
+        `UPDATE documents SET owner_agent = ?, owner_binding = 'explicit', updated_at = ?
+         WHERE document_id = ?`,
+      )
+      .run(ownerAgent, new Date().toISOString(), documentId);
+    if (Number(result.changes ?? 0) === 0) throw new Error(`Unknown document ${documentId}`);
+    return this.getDocument(documentId)!;
+  }
+
+  subscribeDocument(documentId: string, agentId: string): void {
+    const now = new Date().toISOString();
+    this.getDb()
+      .prepare(
+        `INSERT INTO document_subscriptions (document_id, agent_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(document_id, agent_id) DO UPDATE SET updated_at = excluded.updated_at`,
+      )
+      .run(documentId, agentId, now, now);
+  }
+
+  unsubscribeDocument(documentId: string, agentId: string): void {
+    this.getDb()
+      .prepare("DELETE FROM document_subscriptions WHERE document_id = ? AND agent_id = ?")
+      .run(documentId, agentId);
+  }
+
+  listDocumentSubscribers(documentId: string): string[] {
+    const rows = this.getDb()
+      .prepare(
+        "SELECT agent_id FROM document_subscriptions WHERE document_id = ? ORDER BY agent_id",
+      )
+      .all(documentId) as Array<{ agent_id: string }>;
+    return rows.map((row) => row.agent_id);
+  }
+
+  getDocumentRecipients(documentId: string): string[] {
+    const document = this.getDocument(documentId);
+    if (!document) return [];
+    return [
+      ...new Set([
+        ...(document.ownerAgent ? [document.ownerAgent] : []),
+        ...this.listDocumentSubscribers(documentId),
+      ]),
+    ];
+  }
+
   // ─── Threads ─────────────────────────────────────────
 
   createThread(thread: ThreadInfo): ThreadInfo;
@@ -5557,6 +5746,23 @@ export class BrokerDB implements BrokerDBInterface {
         message.userId,
         message.text,
         [agentId],
+        this.buildInboundMessageMetadata(message),
+      );
+      this.reclassifyReferencedMessageFromReaction(message);
+    });
+  }
+
+  queueMessageToAgents(agentIds: string[], message: InboundMessage): void {
+    const recipients = [...new Set(agentIds.filter((agentId) => agentId.length > 0))];
+    if (recipients.length === 0) return;
+    this.withTransaction(() => {
+      this.insertMessage(
+        message.threadId,
+        message.source,
+        "inbound",
+        message.userId,
+        message.text,
+        recipients,
         this.buildInboundMessageMetadata(message),
       );
       this.reclassifyReferencedMessageFromReaction(message);

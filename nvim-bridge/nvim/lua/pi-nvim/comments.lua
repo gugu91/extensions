@@ -49,7 +49,14 @@ local function current_anchor()
   common_dir = (vim.uv or vim.loop).fs_realpath(common_dir) or common_dir
   local repository = common_dir:match('^(.*)/%.git$') or common_dir
   local file, side = paths.buffer_path_and_side(worktree)
-  if not file or not side then
+  if not file then
+    return nil
+  end
+  local is_diff = vim.wo.diff
+  if is_diff and not side then
+    return nil
+  end
+  if not is_diff and not run_git(worktree, { 'ls-files', '--error-unmatch', '--', file }) then
     return nil
   end
 
@@ -64,6 +71,21 @@ local function current_anchor()
     return nil
   end
 
+  if not is_diff then
+    local head_blob_oid = run_git(worktree, { 'rev-parse', 'HEAD:' .. file })
+    return {
+      repository = repository,
+      worktree = worktree,
+      path = file,
+      baseOid = base_oid or vim.NIL,
+      headOid = head_oid,
+      blobOid = blob_oid,
+      anchorKind = 'normal',
+      headBlobOid = head_blob_oid or vim.NIL,
+      dirty = head_blob_oid ~= blob_oid,
+    }
+  end
+
   return {
     repository = repository,
     worktree = worktree,
@@ -71,6 +93,7 @@ local function current_anchor()
     baseOid = base_oid or vim.NIL,
     headOid = head_oid,
     blobOid = blob_oid,
+    anchorKind = 'diff',
     side = side,
   }
 end
@@ -166,18 +189,16 @@ end
 
 function M.create(opts)
   opts = opts or {}
-  if not vim.wo.diff then
-    vim.notify('Pinet comment requires a Fugitive/native diff window for v1.', vim.log.levels.WARN)
-    return
-  end
   local revision = current_anchor()
   if not revision then
-    vim.notify('Pinet could not identify this diff side and revision.', vim.log.levels.WARN)
+    vim.notify('Pinet could not identify a tracked file revision.', vim.log.levels.WARN)
     return
   end
-  local target = opts.target_agent_id
-    or vim.g.pinet_agent_id
-    or prompt_text('Target Pinet agent id: ')
+  local document = socket.request('pinet.document.get', { anchor = revision }) or {}
+  local target = opts.target_agent_id or document.ownerAgentId or vim.g.pinet_agent_id
+  if not target and not document.ownerAgentId then
+    target = prompt_text('Document owner Pinet agent id: ')
+  end
   if not target then
     return
   end
@@ -185,7 +206,10 @@ function M.create(opts)
   if not body then
     return
   end
-  local start_line, end_line = get_visual_range_or_cursor()
+  local start_line, end_line = opts.start_line, opts.end_line
+  if not start_line or not end_line then
+    start_line, end_line = get_visual_range_or_cursor()
+  end
   local selected = get_lines_text(start_line, end_line)
   local result, err = socket.request('pinet.thread.create', {
     targetAgentId = target,
@@ -202,6 +226,87 @@ function M.create(opts)
   end
   vim.notify('Pinet thread created: ' .. result.threadId, vim.log.levels.INFO)
   refresh()
+end
+
+function M.document_owner(agent_id)
+  local revision = current_anchor()
+  agent_id = agent_id or prompt_text('Document owner Pinet agent id: ')
+  if not revision or not agent_id then
+    return
+  end
+  local result, err =
+    socket.request('pinet.document.owner', { anchor = revision, agentId = agent_id })
+  if err then
+    vim.notify(
+      'Pinet document owner failed: ' .. (err.message or 'request failed'),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  vim.notify('Pinet document owner: ' .. tostring(result.ownerAgentId), vim.log.levels.INFO)
+end
+
+function M.document_subscribe(agent_id, subscribe)
+  local revision = current_anchor()
+  agent_id = agent_id or vim.g.pinet_agent_id or prompt_text('Subscriber Pinet agent id: ')
+  if not revision or not agent_id then
+    return
+  end
+  local request = subscribe == false and 'pinet.document.unsubscribe' or 'pinet.document.subscribe'
+  local result, err = socket.request(request, { anchor = revision, agentId = agent_id })
+  if err then
+    vim.notify(
+      'Pinet document subscription failed: ' .. (err.message or 'request failed'),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  vim.notify(
+    'Pinet subscribers: ' .. table.concat(result.subscribers or {}, ', '),
+    vim.log.levels.INFO
+  )
+end
+
+function M.document_status()
+  local revision = current_anchor()
+  if not revision then
+    vim.notify('Pinet could not identify a tracked file revision.', vim.log.levels.WARN)
+    return
+  end
+  local result, err = socket.request('pinet.document.get', { anchor = revision })
+  if err then
+    vim.notify(
+      'Pinet document status failed: ' .. (err.message or 'request failed'),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  vim.notify(
+    string.format(
+      'Pinet document owner=%s subscribers=%s',
+      tostring(result.ownerAgentId or 'none'),
+      table.concat(result.subscribers or {}, ', ')
+    ),
+    vim.log.levels.INFO
+  )
+end
+
+function M.document_bind_thread(thread_id)
+  local revision = current_anchor()
+  thread_id = thread_id or prompt_text('Slack thread id: ')
+  if not revision or not thread_id then
+    return
+  end
+  local result, err =
+    socket.request('pinet.document.bind_thread', { anchor = revision, threadId = thread_id })
+  if err then
+    vim.notify(
+      'Pinet document binding failed: ' .. (err.message or 'request failed'),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  vim.notify('Pinet document bound: ' .. tostring(result.documentId), vim.log.levels.INFO)
 end
 
 function M.reply(thread_id, body)

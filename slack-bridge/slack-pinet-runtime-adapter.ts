@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SlackAdapter } from "./broker/adapters/slack.js";
 import type { Broker, ThreadInfo } from "./broker/index.js";
@@ -71,12 +72,47 @@ function rememberKnownSlackThread(
   channelId: string,
   context?: ParsedThreadStarted["context"] | null,
 ): void {
-  const existingMetadata = broker.db.getThread(threadTs)?.metadata ?? {};
+  const existing = broker.db.getThread(threadTs);
+  const existingMetadata = existing?.metadata ?? {};
+  const scopeKey = context ? JSON.stringify(context.scope) : "workspace";
+  const externalId = `${scopeKey}\0${channelId}\0${threadTs}`;
+  const referenceExternalId = `${channelId}\0${threadTs}`;
+  const aliasedDocument =
+    broker.db.getDocumentByAlias("slack-thread-ref", referenceExternalId) ??
+    broker.db.getDocumentByAlias("slack", externalId);
+  const documentId =
+    aliasedDocument?.documentId ??
+    `doc:slack-thread:${createHash("sha256").update(externalId).digest("hex")}`;
+  if (!aliasedDocument) {
+    broker.db.upsertDocument({
+      documentId,
+      kind: "slack_thread",
+      title: `Slack ${channelId}/${threadTs}`,
+      ownerAgent: existing?.ownerAgent ?? null,
+      ownerBinding: existing?.ownerBinding ?? null,
+      metadata: {
+        channelId,
+        threadTs,
+        ...(context ? { slackThreadContext: context } : {}),
+      },
+    });
+  }
+  broker.db.bindDocumentAlias("slack", externalId, documentId, {
+    channelId,
+    threadTs,
+  });
+  broker.db.bindDocumentAlias("slack-thread-ref", referenceExternalId, documentId, {
+    channelId,
+    threadTs,
+  });
   broker.db.updateThread(threadTs, {
     source: "slack",
     channel: channelId,
     metadata: {
       ...existingMetadata,
+      documentId,
+      documentAliasExternalId: externalId,
+      documentReferenceExternalId: referenceExternalId,
       ...(context ? { slackThreadContext: context } : {}),
     },
   });

@@ -9,8 +9,10 @@ The durable integration is hosted by the active Pinet broker as a `MessageAdapte
 Implemented v1 scope for issue #714:
 
 - Existing Fugitive/native single-file diff workflow (`vim.wo.diff`). In a native diff, a worktree-local buffer is the new side and its paired external snapshot is the old side.
+- Normal tracked buffers, with committed and current-buffer blob identities kept distinct instead of pretending the buffer is a diff side.
 - Create an anchored contextual thread from the current line/visual range.
-- Require an explicit target Pinet agent for new threads.
+- Assign one Pinet agent as document owner and subscribe additional agents to document activity through the shared broker document domain.
+- Default new threads to the document owner; require an explicit owner only when the document is first introduced.
 - List/open/reply/resolve/reopen threads for the current file.
 - Persist thread state and anchors in Pinet `threads.metadata` and messages in Pinet `messages`.
 - Restore open and resolved signs by querying the broker when Neovim reconnects, enters a diff buffer, or `:PinetThreads` runs.
@@ -37,6 +39,13 @@ Contextual thread commands:
 - `:PinetReply <thread_id> <body>` — add a user reply to an existing thread.
 - `:PinetResolve [thread_id]` — mark a thread resolved.
 - `:PinetReopen [thread_id]` — reopen a resolved thread.
+- `:PinetOwner [agent_id]` — set the current tracked document owner.
+- `:PinetSubscribe [agent_id]` — subscribe an agent to document thread activity.
+- `:PinetUnsubscribe [agent_id]` — remove a document subscription.
+- `:PinetSubscribers` — show the document owner and subscribers.
+- `:PinetBindSlack <thread_id>` — explicitly bind an existing Slack thread to the current tracked document so both adapters share ownership and subscriptions.
+
+Document ownership and subscriptions are persisted in BrokerDB and shared across adapters. Slack threads are bound to the same document-domain ports through aliases; transports do not maintain separate ownership tables. Subscriptions grant delivery, not thread-ownership or reply authority.
 
 Default navigation mappings:
 
@@ -47,7 +56,7 @@ Default navigation mappings:
 
 The broker-hosted adapter owns `/tmp/pi-nvim/<sha256(canonicalWorktree + ":" + branch)>.sock`. Both Pi and Neovim canonicalize `git rev-parse --show-toplevel`, so starting Pi in a repository subdirectory does not change the socket identity. Editor context and repo-relative `open_in_editor` paths use that same canonical worktree root rather than Neovim's current directory. The standalone `nvim-bridge` pi extension is a client of this socket for editor-context hydration and `open_in_editor`; it does not start a competing server.
 
-To avoid the target prompt for each new thread, set the Pinet agent id shown by `/pinet status`:
+To avoid the owner/subscriber prompt when first assigning a document, set the Pinet agent id shown by `/pinet status`:
 
 ```lua
 vim.g.pinet_agent_id = "<agent-id>"

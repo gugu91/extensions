@@ -342,6 +342,30 @@ export class MessageRouter {
       }
     }
 
+    const messageDocumentId =
+      typeof msg.metadata?.documentId === "string" ? msg.metadata.documentId : null;
+    const threadDocumentId =
+      typeof thread?.metadata?.documentId === "string" ? thread.metadata.documentId : null;
+    const documentId = messageDocumentId ?? threadDocumentId;
+    if (documentId) {
+      const document = this.db.getDocument?.(documentId) ?? null;
+      if (
+        thread?.ownerAgent &&
+        document &&
+        document.ownerAgent !== thread.ownerAgent &&
+        this.db.setDocumentOwner
+      ) {
+        this.db.setDocumentOwner(documentId, thread.ownerAgent);
+      }
+      const recipientIds = (this.db.getDocumentRecipients?.(documentId) ?? [])
+        .map((agentId) => resolveRoutableThreadOwner(this.db, agentId))
+        .filter((agent): agent is AgentInfo => agent !== null)
+        .map((agent) => agent.id);
+      const recipients = [...new Set(recipientIds)];
+      if (recipients.length === 1) return { action: "deliver", agentId: recipients[0]! };
+      if (recipients.length > 1) return { action: "broadcast", agentIds: recipients };
+    }
+
     if (thread) {
       if (thread.ownerBinding === "explicit") {
         const explicitOwner = resolveRoutableThreadOwner(this.db, thread.ownerAgent);

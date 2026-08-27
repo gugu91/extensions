@@ -21,9 +21,14 @@ class StubBrokerDBInterface implements BrokerDBInterface {
   channelAssignments = new Map<string, ChannelAssignment>();
   allowedUsers: Set<string> | null = null;
   inbox: Array<{ agentId: string; message: InboundMessage }> = [];
+  documentRecipients = new Map<string, string[]>();
 
   getThread(threadId: string): ThreadInfo | null {
     return this.threads.get(threadId) ?? null;
+  }
+
+  getDocumentRecipients(documentId: string): string[] {
+    return this.documentRecipients.get(documentId) ?? [];
   }
 
   getAgentById(agentId: string): AgentInfo | null {
@@ -262,6 +267,25 @@ describe("MessageRouter — route", () => {
   beforeEach(() => {
     db = new StubBrokerDBInterface();
     router = new MessageRouter(db);
+  });
+
+  it("broadcasts document activity to its owner and subscribers without duplicates", () => {
+    db.agents = [
+      makeAgent({
+        id: "owner",
+        name: "Owner",
+        disconnectedAt: "2026-01-01T00:00:00Z",
+        resumableUntil: "2099-01-01T00:00:00Z",
+      }),
+      makeAgent({ id: "subscriber", name: "Subscriber" }),
+    ];
+    db.documentRecipients.set("doc:1", ["owner", "subscriber", "owner"]);
+    db.threads.set("t-100", makeThread({ threadId: "t-100", metadata: { documentId: "doc:1" } }));
+
+    expect(router.route(makeMessage())).toEqual({
+      action: "broadcast",
+      agentIds: ["owner", "subscriber"],
+    });
   });
 
   it("routes to thread owner when thread has an owner", () => {
