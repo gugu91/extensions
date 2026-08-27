@@ -232,6 +232,12 @@ describe("NvimPinetAdapter", () => {
           },
         ],
       });
+      await request(socketPath, "pinet.document.owner", {
+        anchor: normalAnchor,
+        agentId: "agent-2",
+      });
+      expect(db.getThread(normalCreated.threadId as string)?.ownerAgent).toBe("agent-2");
+      expect(db.getThread(threadId)?.ownerAgent).toBe("agent-2");
 
       await request(socketPath, "pinet.thread.reply", { threadId, body: "Follow-up" });
       expect(inboundBodies).toContain("Follow-up");

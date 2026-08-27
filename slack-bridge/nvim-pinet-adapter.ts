@@ -645,6 +645,14 @@ export class NvimPinetAdapter implements MessageAdapter {
       `${parsed.anchor.repository}\0${parsed.anchor.worktree}\0${parsed.anchor.path}`,
       documentId,
     );
+    for (const thread of this.options.db.getThreads()) {
+      if (thread.metadata?.documentId === documentId && thread.ownerAgent !== parsed.agentId) {
+        this.options.db.updateThread(thread.threadId, {
+          ownerAgent: parsed.agentId,
+          ownerBinding: "explicit",
+        });
+      }
+    }
     this.emitDocumentEvent(
       documentId,
       parsed.agentId,
