@@ -35,6 +35,31 @@ describe("contextual thread metadata", () => {
     ).toBe(false);
   });
 
+  it("builds a normal-buffer anchor without pretending it is a diff side", () => {
+    const metadata = buildContextualThreadMetadata({
+      repository: "/repo",
+      worktree: "/repo",
+      path: "README.md",
+      headOid: "head",
+      blobOid: "dirty-buffer",
+      anchorKind: "normal",
+      headBlobOid: "committed-blob",
+      dirty: true,
+      startLine: 3,
+    });
+
+    expect(metadata.schemaVersion).toBe(2);
+    expect(metadata.codeAnchor).toMatchObject({
+      anchorKind: "normal",
+      headBlobOid: "committed-blob",
+      blobOid: "dirty-buffer",
+      dirty: true,
+    });
+    expect(metadata.codeAnchor).not.toHaveProperty("side");
+    expect(parseContextualThreadMetadata(metadata as ContextJsonValue)).toEqual(metadata);
+    expect(formatAnchorForMessage(metadata)).toContain("mode=normal dirty=true");
+  });
+
   it("stores resolution state in ordinary thread metadata", () => {
     const metadata = buildContextualThreadMetadata({
       repository: "/repo",

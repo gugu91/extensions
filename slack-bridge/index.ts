@@ -812,7 +812,21 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        if (decision.action === "deliver" || decision.action === "unrouted") {
+        if (decision.action === "broadcast") {
+          const remoteAgentIds = decision.agentIds.filter((agentId) => agentId !== selfId);
+          if (broker.db.queueMessageToAgents) {
+            broker.db.queueMessageToAgents(remoteAgentIds, routedMessage);
+          } else {
+            for (const agentId of remoteAgentIds) broker.db.queueMessage(agentId, routedMessage);
+          }
+          if (!decision.agentIds.includes(selfId)) return;
+        }
+
+        if (
+          decision.action === "deliver" ||
+          decision.action === "broadcast" ||
+          decision.action === "unrouted"
+        ) {
           const persisted = routedMessage.threadId
             ? persistDeliveredInboundMessage(broker.db, selfId, routedMessage)
             : null;

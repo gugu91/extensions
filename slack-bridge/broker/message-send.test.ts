@@ -5,9 +5,15 @@ import type { BrokerMessage, ThreadInfo } from "./types.js";
 function createFakeDb() {
   const threads = new Map<string, ThreadInfo>();
   let nextMessageId = 1;
+  const documentRecipients = new Map<string, string[]>();
 
   return {
     threads,
+    documentRecipients,
+    lastTargetAgentIds: [] as string[],
+    getDocumentRecipients(documentId: string) {
+      return documentRecipients.get(documentId) ?? [];
+    },
     getThread(threadId: string) {
       return threads.get(threadId) ?? null;
     },
@@ -59,9 +65,10 @@ function createFakeDb() {
       direction: "inbound" | "outbound",
       sender: string,
       body: string,
-      _targetAgentIds: string[],
+      targetAgentIds: string[],
       metadata?: Record<string, unknown>,
     ): BrokerMessage {
+      this.lastTargetAgentIds = targetAgentIds;
       return {
         id: nextMessageId++,
         threadId,
@@ -252,6 +259,26 @@ describe("sendBrokerMessage", () => {
       ownerAgent: "agent-1",
     });
     expect(result.thread).toMatchObject({ ownerAgent: "agent-1", channel: "C-NEW" });
+  });
+
+  it("fans document-backed replies out to subscribers without echoing to the sender", async () => {
+    const db = createFakeDb();
+    const send = vi.fn(async () => undefined);
+    db.createThread("nvim:1", "nvim", "repo", "owner");
+    db.updateThread("nvim:1", { metadata: { documentId: "doc:1" } });
+    db.documentRecipients.set("doc:1", ["owner", "subscriber", "subscriber"]);
+
+    const result = await sendBrokerMessage(
+      { db, adapters: [{ name: "nvim", send }] },
+      {
+        threadId: "nvim:1",
+        body: "Reviewed",
+        senderAgentId: "owner",
+      },
+    );
+
+    expect(db.lastTargetAgentIds).toEqual(["subscriber"]);
+    expect(result.message.metadata).toMatchObject({ documentId: "doc:1" });
   });
 
   it("does not steal or send to an existing transport thread owned by another agent", async () => {

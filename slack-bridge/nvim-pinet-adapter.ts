@@ -21,10 +21,24 @@ import type {
   MessageAdapter,
   OutboundMessage,
   ThreadInfo,
+  DocumentInfo,
 } from "./broker/types.js";
 
 export interface NvimAdapterDbPort {
   getThread(threadId: string): ThreadInfo | null;
+  getDocument(documentId: string): DocumentInfo | null;
+  upsertDocument(document: Omit<DocumentInfo, "createdAt" | "updatedAt">): DocumentInfo;
+  bindDocumentAlias(
+    source: string,
+    externalId: string,
+    documentId: string,
+    metadata?: Record<string, ContextJsonValue> | null,
+  ): void;
+  setDocumentOwner(documentId: string, ownerAgent: string | null): DocumentInfo;
+  subscribeDocument(documentId: string, agentId: string): void;
+  unsubscribeDocument(documentId: string, agentId: string): void;
+  listDocumentSubscribers(documentId: string): string[];
+  getDocumentRecipients(documentId: string): string[];
   createThread(thread: ThreadInfo): ThreadInfo;
   updateThread(threadId: string, updates: Partial<ThreadInfo>): void;
   getThreads(ownerAgent?: string): ThreadInfo[];
@@ -61,7 +75,7 @@ interface NvimRpcRequest {
 }
 
 interface NvimCreateThreadRequest {
-  targetAgentId: string;
+  targetAgentId: string | null;
   body: string;
   anchor: CodeRevisionIdentity;
   startLine: number;
@@ -84,6 +98,15 @@ interface NvimListRequest {
   anchor: CodeRevisionIdentity;
   includeResolved: boolean;
   limit: number;
+}
+
+interface NvimDocumentAgentRequest {
+  anchor: CodeRevisionIdentity;
+  agentId: string;
+}
+
+interface NvimDocumentRequest {
+  anchor: CodeRevisionIdentity;
 }
 
 interface NvimEditorState {
@@ -122,6 +145,13 @@ export function resolveNvimRepositoryContext(cwd: string): NvimRepositoryContext
   } catch {
     return null;
   }
+}
+
+export function buildGitFileDocumentId(
+  anchor: Pick<CodeRevisionIdentity, "repository" | "worktree" | "path">,
+): string {
+  const identity = `${anchor.repository}\0${anchor.worktree}\0${anchor.path}`;
+  return `doc:git-file:${createHash("sha256").update(identity).digest("hex")}`;
 }
 
 function computeRepoSocketHash(worktree: string, branch: string): string {
@@ -181,7 +211,15 @@ function parseAnchor(payload: ContextJsonObject): NvimListRequest["anchor"] | nu
   const headOid = getString(anchor, "headOid");
   const blobOid = getString(anchor, "blobOid");
   const side = anchor.side === "old" || anchor.side === "new" ? anchor.side : null;
-  if (!repository || !worktree || !anchorPath || !headOid || !blobOid || !side) return null;
+  const anchorKind =
+    anchor.anchorKind === "normal" || anchor.anchorKind === "diff"
+      ? anchor.anchorKind
+      : side
+        ? "diff"
+        : null;
+  if (!repository || !worktree || !anchorPath || !headOid || !blobOid || !anchorKind) return null;
+  if (anchorKind === "diff" && !side) return null;
+  if (anchorKind === "normal" && typeof anchor.dirty !== "boolean") return null;
   return {
     repository,
     worktree,
@@ -189,7 +227,11 @@ function parseAnchor(payload: ContextJsonObject): NvimListRequest["anchor"] | nu
     baseOid: getString(anchor, "baseOid"),
     headOid,
     blobOid,
-    side,
+    anchorKind,
+    ...(side ? { side } : {}),
+    ...(anchorKind === "normal"
+      ? { headBlobOid: getString(anchor, "headBlobOid"), dirty: anchor.dirty === true }
+      : {}),
   };
 }
 
@@ -200,7 +242,7 @@ function parseCreateThreadRequest(payload: ContextJsonObject): NvimCreateThreadR
   const anchor = parseAnchor(payload);
   const startLine = getPositiveInteger(payload, "startLine", null);
   const endLine = getPositiveInteger(payload, "endLine", startLine);
-  if (!targetAgentId || !body || !anchor || startLine == null || endLine == null) return null;
+  if (!body || !anchor || startLine == null || endLine == null) return null;
   return {
     targetAgentId,
     body,
@@ -235,6 +277,18 @@ function parseListRequest(payload: ContextJsonObject): NvimListRequest | null {
     includeResolved: typeof payload.includeResolved === "boolean" ? payload.includeResolved : false,
     limit: getPositiveInteger(payload, "limit", 100) ?? 100,
   };
+}
+
+// agent-standards-ignore prefer-inline-single-use-helper: document payload parser is a named protocol DTO boundary.
+function parseDocumentRequest(payload: ContextJsonObject): NvimDocumentRequest | null {
+  const anchor = parseAnchor(payload);
+  return anchor ? { anchor } : null;
+}
+
+function parseDocumentAgentRequest(payload: ContextJsonObject): NvimDocumentAgentRequest | null {
+  const anchor = parseAnchor(payload);
+  const agentId = getString(payload, "agentId");
+  return anchor && agentId ? { anchor, agentId } : null;
 }
 
 function serializeMetadata(metadata: ContextualThreadMetadata): Record<string, ContextJsonValue> {
@@ -401,6 +455,14 @@ export class NvimPinetAdapter implements MessageAdapter {
         return this.listThreads(request.payload);
       case "pinet.thread.get":
         return this.getThread(request.payload);
+      case "pinet.document.get":
+        return this.getDocument(request.payload);
+      case "pinet.document.owner":
+        return this.setDocumentOwner(request.payload);
+      case "pinet.document.subscribe":
+        return this.subscribeDocument(request.payload, true);
+      case "pinet.document.unsubscribe":
+        return this.subscribeDocument(request.payload, false);
       default:
         throw new Error(`Unknown nvim request: ${request.type}`);
     }
@@ -408,16 +470,39 @@ export class NvimPinetAdapter implements MessageAdapter {
 
   private createThread(payload: ContextJsonObject): ContextJsonObject {
     const parsed = parseCreateThreadRequest(payload);
-    if (!parsed)
-      throw new Error("targetAgentId, body, anchor, startLine, and endLine are required");
+    if (!parsed) throw new Error("body, anchor, startLine, and endLine are required");
     if (
       parsed.anchor.repository !== this.options.repository ||
       parsed.anchor.worktree !== this.options.worktree
     ) {
       throw new Error("code anchor does not belong to this Pinet worktree");
     }
-    if (!this.options.getAgentById(parsed.targetAgentId)) {
-      throw new Error(`Unknown target agent: ${parsed.targetAgentId}`);
+    const documentId = buildGitFileDocumentId(parsed.anchor);
+    let document = this.options.db.getDocument(documentId);
+    const targetAgentId = parsed.targetAgentId ?? document?.ownerAgent ?? null;
+    if (!targetAgentId)
+      throw new Error("targetAgentId is required until this document has an owner");
+    if (!this.options.getAgentById(targetAgentId)) {
+      throw new Error(`Unknown target agent: ${targetAgentId}`);
+    }
+    if (!document) {
+      document = this.options.db.upsertDocument({
+        documentId,
+        kind: "git_file",
+        title: parsed.anchor.path,
+        ownerAgent: targetAgentId,
+        ownerBinding: "explicit",
+        metadata: {
+          repository: parsed.anchor.repository,
+          worktree: parsed.anchor.worktree,
+          path: parsed.anchor.path,
+        },
+      });
+      this.options.db.bindDocumentAlias(
+        "nvim",
+        `${parsed.anchor.repository}\0${parsed.anchor.worktree}\0${parsed.anchor.path}`,
+        documentId,
+      );
     }
     const metadata = buildContextualThreadMetadata({
       ...parsed.anchor,
@@ -432,20 +517,21 @@ export class NvimPinetAdapter implements MessageAdapter {
       threadId,
       source: "nvim",
       channel: this.repoSocketHash,
-      ownerAgent: parsed.targetAgentId,
+      ownerAgent: targetAgentId,
       ownerBinding: "explicit",
-      metadata: serializeMetadata(metadata),
+      metadata: { ...serializeMetadata(metadata), documentId },
       createdAt: now,
       updatedAt: now,
     });
     this.emitInbound(
       threadId,
-      parsed.targetAgentId,
+      targetAgentId,
       `${formatAnchorForMessage(metadata)}\n\n${parsed.body}`,
       {
         pinetKind: "contextual_thread_message",
         schemaVersion: 1,
         event: "thread.created",
+        documentId,
       },
     );
     return { threadId, metadata: serializeMetadata(metadata) };
@@ -456,10 +542,13 @@ export class NvimPinetAdapter implements MessageAdapter {
     if (!parsed) throw new Error("threadId and body are required");
     const thread = this.options.db.getThread(parsed.threadId);
     if (!thread) throw new Error(`Unknown thread: ${parsed.threadId}`);
+    const documentId =
+      typeof thread.metadata?.documentId === "string" ? thread.metadata.documentId : null;
     this.emitInbound(parsed.threadId, thread.ownerAgent ?? "", parsed.body, {
       pinetKind: "contextual_thread_message",
       schemaVersion: 1,
       event: "thread.reply",
+      ...(documentId ? { documentId } : {}),
     });
     return { threadId: parsed.threadId };
   }
@@ -472,17 +561,17 @@ export class NvimPinetAdapter implements MessageAdapter {
     if (!thread || !metadata) throw new Error(`Unknown contextual thread: ${parsed.threadId}`);
     const updated = updateContextualThreadResolvedState(metadata, parsed.resolved, "nvim");
     this.options.db.updateThread(parsed.threadId, { metadata: serializeMetadata(updated) });
-    this.options.db.insertMessage(
+    const documentId =
+      typeof thread.metadata?.documentId === "string" ? thread.metadata.documentId : null;
+    this.emitInbound(
       parsed.threadId,
-      "nvim",
-      "inbound",
-      "nvim",
+      thread.ownerAgent ?? "",
       parsed.resolved ? "Resolved this thread." : "Reopened this thread.",
-      thread.ownerAgent ? [thread.ownerAgent] : [],
       {
         pinetKind: "contextual_thread_message",
         schemaVersion: 1,
         event: parsed.resolved ? "thread.resolved" : "thread.reopened",
+        ...(documentId ? { documentId } : {}),
       },
     );
     this.broadcast({ type: "thread.updated", payload: { threadId: parsed.threadId } });
@@ -515,6 +604,108 @@ export class NvimPinetAdapter implements MessageAdapter {
     const metadata = parseContextualThreadMetadata(thread?.metadata as ContextJsonValue);
     if (!thread || !metadata) throw new Error(`Unknown contextual thread: ${threadId}`);
     return this.serializeThread(thread, metadata, 50);
+  }
+
+  private getDocument(payload: ContextJsonObject): ContextJsonObject {
+    const parsed = parseDocumentRequest(payload);
+    if (!parsed) throw new Error("revision-aware anchor is required");
+    const documentId = buildGitFileDocumentId(parsed.anchor);
+    const document = this.options.db.getDocument(documentId);
+    return {
+      documentId,
+      ownerAgentId: document?.ownerAgent ?? null,
+      subscribers: document ? this.options.db.listDocumentSubscribers(documentId) : [],
+    };
+  }
+
+  private setDocumentOwner(payload: ContextJsonObject): ContextJsonObject {
+    const parsed = parseDocumentAgentRequest(payload);
+    if (!parsed) throw new Error("anchor and agentId are required");
+    if (!this.options.getAgentById(parsed.agentId))
+      throw new Error(`Unknown agent: ${parsed.agentId}`);
+    const documentId = buildGitFileDocumentId(parsed.anchor);
+    if (!this.options.db.getDocument(documentId)) {
+      this.options.db.upsertDocument({
+        documentId,
+        kind: "git_file",
+        title: parsed.anchor.path,
+        ownerAgent: parsed.agentId,
+        ownerBinding: "explicit",
+        metadata: {
+          repository: parsed.anchor.repository,
+          worktree: parsed.anchor.worktree,
+          path: parsed.anchor.path,
+        },
+      });
+    } else {
+      this.options.db.setDocumentOwner(documentId, parsed.agentId);
+    }
+    this.options.db.bindDocumentAlias(
+      "nvim",
+      `${parsed.anchor.repository}\0${parsed.anchor.worktree}\0${parsed.anchor.path}`,
+      documentId,
+    );
+    this.emitDocumentEvent(
+      documentId,
+      parsed.agentId,
+      `Document owner changed to ${parsed.agentId}.`,
+      "document.owner_changed",
+    );
+    return this.getDocument({ anchor: parsed.anchor });
+  }
+
+  private subscribeDocument(payload: ContextJsonObject, subscribe: boolean): ContextJsonObject {
+    const parsed = parseDocumentAgentRequest(payload);
+    if (!parsed) throw new Error("anchor and agentId are required");
+    if (!this.options.getAgentById(parsed.agentId))
+      throw new Error(`Unknown agent: ${parsed.agentId}`);
+    const documentId = buildGitFileDocumentId(parsed.anchor);
+    if (!this.options.db.getDocument(documentId))
+      throw new Error(`Unknown document: ${documentId}`);
+    if (subscribe) this.options.db.subscribeDocument(documentId, parsed.agentId);
+    else this.options.db.unsubscribeDocument(documentId, parsed.agentId);
+    const document = this.options.db.getDocument(documentId)!;
+    this.emitDocumentEvent(
+      documentId,
+      document.ownerAgent ?? parsed.agentId,
+      subscribe
+        ? `${parsed.agentId} subscribed to this document.`
+        : `${parsed.agentId} unsubscribed from this document.`,
+      subscribe ? "document.subscribed" : "document.unsubscribed",
+    );
+    return this.getDocument({ anchor: parsed.anchor });
+  }
+
+  private emitDocumentEvent(
+    documentId: string,
+    ownerAgentId: string,
+    body: string,
+    event: string,
+  ): void {
+    const threadId = `document:${documentId}`;
+    const now = new Date().toISOString();
+    const existing = this.options.db.getThread(threadId);
+    if (!existing) {
+      this.options.db.createThread({
+        threadId,
+        source: "nvim",
+        channel: this.repoSocketHash,
+        ownerAgent: ownerAgentId,
+        ownerBinding: "explicit",
+        metadata: { pinetKind: "document_thread", documentId },
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else if (existing.ownerAgent !== ownerAgentId) {
+      this.options.db.updateThread(threadId, { ownerAgent: ownerAgentId });
+    }
+    this.emitInbound(threadId, ownerAgentId, body, {
+      pinetKind: "document_message",
+      schemaVersion: 1,
+      event,
+      documentId,
+    });
+    this.broadcast({ type: "document.updated", payload: { documentId } });
   }
 
   private serializeThread(

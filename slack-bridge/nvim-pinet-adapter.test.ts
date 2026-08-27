@@ -12,7 +12,7 @@ import {
   type NvimAdapterDbPort,
 } from "./nvim-pinet-adapter.js";
 import { BrokerDB } from "./broker/schema.js";
-import type { BrokerMessage, ThreadInfo } from "./broker/types.js";
+import type { BrokerMessage, DocumentInfo, ThreadInfo } from "./broker/types.js";
 
 function request(
   socketPath: string,
@@ -45,9 +45,43 @@ function request(
 
 function createDb(): NvimAdapterDbPort {
   const threads = new Map<string, ThreadInfo>();
+  const documents = new Map<string, DocumentInfo>();
+  const subscribers = new Map<string, Set<string>>();
   const messages: BrokerMessage[] = [];
   return {
     getThread: (threadId) => threads.get(threadId) ?? null,
+    getDocument: (documentId) => documents.get(documentId) ?? null,
+    upsertDocument: (document) => {
+      const now = new Date().toISOString();
+      const existing = documents.get(document.documentId);
+      const stored = { ...document, createdAt: existing?.createdAt ?? now, updatedAt: now };
+      documents.set(document.documentId, stored);
+      return stored;
+    },
+    bindDocumentAlias: () => ({}),
+    setDocumentOwner: (documentId, ownerAgent) => {
+      const existing = documents.get(documentId);
+      if (!existing) throw new Error(`Unknown document ${documentId}`);
+      const updated = { ...existing, ownerAgent, ownerBinding: "explicit" as const };
+      documents.set(documentId, updated);
+      return updated;
+    },
+    subscribeDocument: (documentId, agentId) => {
+      const values = subscribers.get(documentId) ?? new Set<string>();
+      values.add(agentId);
+      subscribers.set(documentId, values);
+    },
+    unsubscribeDocument: (documentId, agentId) => subscribers.get(documentId)?.delete(agentId),
+    listDocumentSubscribers: (documentId) => [...(subscribers.get(documentId) ?? [])].sort(),
+    getDocumentRecipients: (documentId) => {
+      const document = documents.get(documentId);
+      return [
+        ...new Set([
+          ...(document?.ownerAgent ? [document.ownerAgent] : []),
+          ...(subscribers.get(documentId) ?? []),
+        ]),
+      ];
+    },
     createThread: (thread) => {
       threads.set(thread.threadId, thread);
       return thread;
@@ -108,7 +142,10 @@ describe("NvimPinetAdapter", () => {
       headOid,
       baseOid: null,
       db,
-      getAgentById: (agentId) => (agentId === "agent-1" ? { id: agentId, name: "Agent" } : null),
+      getAgentById: (agentId) =>
+        agentId === "agent-1" || agentId === "agent-2"
+          ? { id: agentId, name: `Agent ${agentId}` }
+          : null,
     });
     const inboundBodies: string[] = [];
     adapter.onInbound((message) => inboundBodies.push(message.text));
@@ -144,6 +181,7 @@ describe("NvimPinetAdapter", () => {
         baseOid: null,
         headOid,
         blobOid,
+        anchorKind: "diff",
         side: "new",
       };
       const created = await request(socketPath, "pinet.thread.create", {
@@ -156,6 +194,44 @@ describe("NvimPinetAdapter", () => {
       const threadId = created.threadId as string;
       expect(threadId).toMatch(/^nvim:/);
       expect(inboundBodies[0]).toContain(`[code-anchor app.ts:1 side=new head=${headOid}`);
+
+      const normalAnchor = {
+        repository: repoRoot,
+        worktree: repoRoot,
+        path: "app.ts",
+        baseOid: null,
+        headOid,
+        blobOid,
+        anchorKind: "normal",
+        headBlobOid: blobOid,
+        dirty: false,
+      };
+      await expect(
+        request(socketPath, "pinet.document.subscribe", {
+          anchor: normalAnchor,
+          agentId: "agent-2",
+        }),
+      ).resolves.toMatchObject({ ownerAgentId: "agent-1", subscribers: ["agent-2"] });
+      const normalCreated = await request(socketPath, "pinet.thread.create", {
+        body: "Normal buffer comment",
+        anchor: normalAnchor,
+        startLine: 1,
+        endLine: 1,
+      });
+      expect(normalCreated.threadId).toMatch(/^nvim:/);
+      await expect(
+        request(socketPath, "pinet.thread.list", { anchor: normalAnchor }),
+      ).resolves.toMatchObject({
+        threads: [
+          {
+            threadId: normalCreated.threadId,
+            metadata: {
+              schemaVersion: 2,
+              codeAnchor: { anchorKind: "normal", dirty: false, headBlobOid: blobOid },
+            },
+          },
+        ],
+      });
 
       await request(socketPath, "pinet.thread.reply", { threadId, body: "Follow-up" });
       expect(inboundBodies).toContain("Follow-up");
@@ -207,6 +283,7 @@ describe("NvimPinetAdapter", () => {
       baseOid: null,
       headOid,
       blobOid,
+      anchorKind: "diff",
       side: "new",
     };
     const socketPath =

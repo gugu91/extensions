@@ -417,6 +417,26 @@ export interface ThreadInfo {
   updatedAt: string;
 }
 
+export interface DocumentInfo {
+  documentId: string;
+  kind: "git_file" | "slack_thread" | "slack_channel";
+  title: string;
+  ownerAgent: string | null;
+  ownerBinding: "explicit" | null;
+  metadata: ThreadInfo["metadata"];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentAliasInfo {
+  source: string;
+  externalId: string;
+  documentId: string;
+  metadata: ThreadInfo["metadata"];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BrokerMessage {
   id: number;
   threadId: string;
@@ -755,6 +775,20 @@ export const buildRuntimeScopeCarrier = _buildRuntimeScopeCarrier;
 
 export interface BrokerDBInterface {
   getThread(threadId: string): ThreadInfo | null;
+  getDocument?(documentId: string): DocumentInfo | null;
+  getDocumentByAlias?(source: string, externalId: string): DocumentInfo | null;
+  upsertDocument?(document: Omit<DocumentInfo, "createdAt" | "updatedAt">): DocumentInfo;
+  bindDocumentAlias?(
+    source: string,
+    externalId: string,
+    documentId: string,
+    metadata?: ThreadInfo["metadata"],
+  ): DocumentAliasInfo;
+  setDocumentOwner?(documentId: string, ownerAgent: string | null): DocumentInfo;
+  subscribeDocument?(documentId: string, agentId: string): void;
+  unsubscribeDocument?(documentId: string, agentId: string): void;
+  listDocumentSubscribers?(documentId: string): string[];
+  getDocumentRecipients?(documentId: string): string[];
   getAgentById(agentId: string): AgentInfo | null;
   getAgentByStableId(stableId: string): AgentInfo | null;
   getAgents(): AgentInfo[];
@@ -785,4 +819,5 @@ export interface BrokerDBInterface {
   claimThread(threadId: string, agentId: string, source?: string, channel?: string): boolean;
 
   queueMessage(agentId: string, message: InboundMessage): void;
+  queueMessageToAgents?(agentIds: string[], message: InboundMessage): void;
 }

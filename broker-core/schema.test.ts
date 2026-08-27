@@ -1701,6 +1701,50 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("persists document ownership, aliases, and deduplicated subscriptions", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    const dbPath = path.join(dir, "broker.db");
+    try {
+      db.upsertDocument({
+        documentId: "doc:git-file:test",
+        kind: "git_file",
+        title: "src/app.ts",
+        ownerAgent: "owner",
+        ownerBinding: "explicit",
+        metadata: { path: "src/app.ts" },
+      });
+      db.bindDocumentAlias("nvim", "repo\\0worktree\\0src/app.ts", "doc:git-file:test");
+      db.subscribeDocument("doc:git-file:test", "subscriber");
+      db.subscribeDocument("doc:git-file:test", "owner");
+      expect(db.getDocumentByAlias("nvim", "repo\\0worktree\\0src/app.ts")).toMatchObject({
+        documentId: "doc:git-file:test",
+        ownerAgent: "owner",
+      });
+      expect(db.getDocumentRecipients("doc:git-file:test")).toEqual(["owner", "subscriber"]);
+      db.close();
+
+      const restarted = new BrokerDB(dbPath);
+      restarted.initialize();
+      expect(restarted.getDocument("doc:git-file:test")?.metadata).toEqual({
+        path: "src/app.ts",
+      });
+      expect(restarted.listDocumentSubscribers("doc:git-file:test")).toEqual([
+        "owner",
+        "subscriber",
+      ]);
+      restarted.unsubscribeDocument("doc:git-file:test", "owner");
+      restarted.setDocumentOwner("doc:git-file:test", "new-owner");
+      expect(restarted.getDocumentRecipients("doc:git-file:test")).toEqual([
+        "new-owner",
+        "subscriber",
+      ]);
+      restarted.close();
+    } finally {
+      db.close();
+    }
+  });
+
   it("acquires requested and allocated port leases with active uniqueness", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);

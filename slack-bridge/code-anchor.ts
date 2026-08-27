@@ -12,6 +12,7 @@ export interface ContextJsonObject {
 }
 
 export type CodeAnchorSide = "old" | "new";
+export type CodeAnchorKind = "diff" | "normal";
 
 export interface CodeRevisionIdentity extends ContextJsonObject {
   repository: string;
@@ -20,7 +21,10 @@ export interface CodeRevisionIdentity extends ContextJsonObject {
   baseOid: string | null;
   headOid: string;
   blobOid: string;
-  side: CodeAnchorSide;
+  anchorKind: CodeAnchorKind;
+  side?: CodeAnchorSide;
+  headBlobOid?: string | null;
+  dirty?: boolean;
 }
 
 export interface CodeAnchor extends CodeRevisionIdentity {
@@ -38,7 +42,7 @@ export interface ContextualThreadState extends ContextJsonObject {
 
 export interface ContextualThreadMetadata extends ContextJsonObject {
   pinetKind: "contextual_thread";
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   codeAnchor: CodeAnchor;
   state: ContextualThreadState;
 }
@@ -58,7 +62,10 @@ export function buildContextualThreadMetadata(input: {
   baseOid?: string | null;
   headOid: string;
   blobOid: string;
-  side: CodeAnchorSide;
+  anchorKind?: CodeAnchorKind;
+  side?: CodeAnchorSide;
+  headBlobOid?: string | null;
+  dirty?: boolean;
   startLine: number;
   endLine?: number;
   selectedText?: string | null;
@@ -66,9 +73,11 @@ export function buildContextualThreadMetadata(input: {
 }): ContextualThreadMetadata {
   const startLine = Math.max(1, Math.floor(input.startLine));
   const endLine = Math.max(startLine, Math.floor(input.endLine ?? startLine));
+  const anchorKind = input.anchorKind ?? "diff";
+  if (anchorKind === "diff" && !input.side) throw new Error("diff code anchor side is required");
   return {
     pinetKind: "contextual_thread",
-    schemaVersion: 1,
+    schemaVersion: anchorKind === "normal" ? 2 : 1,
     codeAnchor: {
       repository: input.repository,
       worktree: input.worktree,
@@ -76,7 +85,11 @@ export function buildContextualThreadMetadata(input: {
       baseOid: input.baseOid ?? null,
       headOid: input.headOid,
       blobOid: input.blobOid,
-      side: input.side,
+      anchorKind,
+      ...(input.side ? { side: input.side } : {}),
+      ...(anchorKind === "normal"
+        ? { headBlobOid: input.headBlobOid ?? null, dirty: input.dirty === true }
+        : {}),
       startLine,
       endLine,
       selectedTextSha256: input.selectedText ? sha256Text(input.selectedText) : null,
@@ -106,7 +119,11 @@ export function parseContextualThreadMetadata(
   value: ContextJsonValue | undefined,
 ): ContextualThreadMetadata | null {
   const metadata = readRecord(value);
-  if (!metadata || metadata.pinetKind !== "contextual_thread" || metadata.schemaVersion !== 1) {
+  if (
+    !metadata ||
+    metadata.pinetKind !== "contextual_thread" ||
+    (metadata.schemaVersion !== 1 && metadata.schemaVersion !== 2)
+  ) {
     return null;
   }
 
@@ -119,8 +136,12 @@ export function parseContextualThreadMetadata(
   const path = readString(anchorRecord, "path");
   const headOid = readString(anchorRecord, "headOid");
   const blobOid = readString(anchorRecord, "blobOid");
+  const anchorKind = metadata.schemaVersion === 2 ? anchorRecord.anchorKind : "diff";
+  if (anchorKind !== "diff" && anchorKind !== "normal") return null;
   const side =
     anchorRecord.side === "old" || anchorRecord.side === "new" ? anchorRecord.side : null;
+  if (anchorKind === "diff" && !side) return null;
+  if (anchorKind === "normal" && typeof anchorRecord.dirty !== "boolean") return null;
   const startLine = readPositiveInteger(anchorRecord, "startLine");
   const endLine = readPositiveInteger(anchorRecord, "endLine");
   if (
@@ -129,7 +150,6 @@ export function parseContextualThreadMetadata(
     !path ||
     !headOid ||
     !blobOid ||
-    !side ||
     startLine == null ||
     endLine == null
   ) {
@@ -140,7 +160,7 @@ export function parseContextualThreadMetadata(
   const resolvedBy = readString(stateRecord, "resolvedBy");
   return {
     pinetKind: "contextual_thread",
-    schemaVersion: 1,
+    schemaVersion: metadata.schemaVersion,
     codeAnchor: {
       repository,
       worktree,
@@ -148,7 +168,14 @@ export function parseContextualThreadMetadata(
       baseOid: readString(anchorRecord, "baseOid"),
       headOid,
       blobOid,
-      side,
+      anchorKind,
+      ...(side ? { side } : {}),
+      ...(anchorKind === "normal"
+        ? {
+            headBlobOid: readString(anchorRecord, "headBlobOid"),
+            dirty: anchorRecord.dirty === true,
+          }
+        : {}),
       startLine,
       endLine,
       selectedTextSha256: readString(anchorRecord, "selectedTextSha256"),
@@ -182,7 +209,10 @@ export function hasSameCodeRevision(anchor: CodeAnchor, candidate: CodeRevisionI
     anchor.baseOid === candidate.baseOid &&
     anchor.headOid === candidate.headOid &&
     anchor.blobOid === candidate.blobOid &&
-    anchor.side === candidate.side
+    anchor.anchorKind === candidate.anchorKind &&
+    anchor.side === candidate.side &&
+    anchor.headBlobOid === candidate.headBlobOid &&
+    anchor.dirty === candidate.dirty
   );
 }
 
@@ -193,5 +223,7 @@ export function formatAnchorForMessage(metadata: ContextualThreadMetadata): stri
       ? `${anchor.path}:${anchor.startLine}`
       : `${anchor.path}:${anchor.startLine}-${anchor.endLine}`;
   const base = anchor.baseOid ? ` base=${anchor.baseOid}` : "";
-  return `[code-anchor ${range} side=${anchor.side} head=${anchor.headOid} blob=${anchor.blobOid}${base}]`;
+  const mode =
+    anchor.anchorKind === "diff" ? `side=${anchor.side}` : `mode=normal dirty=${anchor.dirty}`;
+  return `[code-anchor ${range} ${mode} head=${anchor.headOid} blob=${anchor.blobOid}${base}]`;
 }

@@ -44,7 +44,7 @@ describe("pi-nvim Lua integration", () => {
             "+runtime plugin/pi-nvim.lua",
             `+lua ${fakeSocket}`,
             "+lua require('pi-nvim').setup()",
-            "+lua for _, name in ipairs({ 'PiCommsOpen', 'PiCommsAdd', 'PiCommsRead', 'PiCommsClean' }) do assert(vim.fn.exists(':' .. name) == 0) end; for _, name in ipairs({ 'PinetComment', 'PinetThreads', 'PinetReply' }) do assert(vim.fn.exists(':' .. name) == 2) end",
+            "+lua for _, name in ipairs({ 'PiCommsOpen', 'PiCommsAdd', 'PiCommsRead', 'PiCommsClean' }) do assert(vim.fn.exists(':' .. name) == 0) end; for _, name in ipairs({ 'PinetComment', 'PinetThreads', 'PinetReply', 'PinetOwner', 'PinetSubscribe', 'PinetUnsubscribe', 'PinetSubscribers' }) do assert(vim.fn.exists(':' .. name) == 2) end",
             "+qa",
           ],
           { encoding: "utf8" },
@@ -93,6 +93,57 @@ describe("pi-nvim Lua integration", () => {
         { cwd: subdir, encoding: "utf8" },
       );
       expect(`${result.stdout}${result.stderr}`).toBe("");
+      expect(result.status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!hasNvim())("creates a revision-aware comment from a normal tracked buffer", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "pi-nvim-normal-buffer-"));
+    const appPath = path.join(dir, "src", "app.ts");
+    const scriptPath = path.join(dir, "test.lua");
+    mkdirSync(path.dirname(appPath), { recursive: true });
+    writeFileSync(appPath, "export const value = 1;\n", "utf8");
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+    execFileSync("git", ["add", "src/app.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-qm", "initial"], { cwd: dir });
+
+    const pluginRoot = path.join(__dirname, "nvim");
+    writeFileSync(
+      scriptPath,
+      [
+        `_G.pinet_create = nil`,
+        `package.loaded['pi-nvim.socket'] = {`,
+        `  request = function(kind, payload)`,
+        `    if kind == 'pinet.document.get' then return { ownerAgentId = 'agent-1', subscribers = {} }, nil end`,
+        `    if kind == 'pinet.thread.create' then _G.pinet_create = payload; return { threadId = 'nvim:test' }, nil end`,
+        `    if kind == 'pinet.thread.list' then return { threads = {} }, nil end`,
+        `    error('unexpected request ' .. kind)`,
+        `  end,`,
+        `  on = function() return function() end end,`,
+        `}`,
+        `vim.cmd('edit ' .. vim.fn.fnameescape(${JSON.stringify(appPath)}))`,
+        `require('pi-nvim.comments').create({ body = 'Normal comment' })`,
+        `assert(_G.pinet_create.targetAgentId == 'agent-1')`,
+        `assert(_G.pinet_create.anchor.anchorKind == 'normal')`,
+        `assert(_G.pinet_create.anchor.path == 'src/app.ts')`,
+        `assert(_G.pinet_create.anchor.dirty == false)`,
+        `assert(_G.pinet_create.anchor.headBlobOid == _G.pinet_create.anchor.blobOid)`,
+        `vim.cmd('qa!')`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const result = spawnSync(
+        "nvim",
+        ["--headless", "--clean", "-n", "--cmd", `set rtp^=${pluginRoot}`, "-l", scriptPath],
+        { cwd: dir, encoding: "utf8" },
+      );
+      expect(`${result.stdout}${result.stderr}`).not.toContain("Error");
       expect(result.status).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -24,8 +24,16 @@ vim.api.nvim_create_user_command('PiNvimStatus', function()
 end, { desc = 'Show pi-nvim bridge status' })
 
 vim.api.nvim_create_user_command('PinetComment', function(opts)
-  require('pi-nvim.comments').create({ body = opts.args ~= '' and opts.args or nil })
-end, { desc = 'Create a Pinet contextual thread on the current diff line/range', nargs = '*' })
+  require('pi-nvim.comments').create({
+    body = opts.args ~= '' and opts.args or nil,
+    start_line = opts.range > 0 and opts.line1 or nil,
+    end_line = opts.range > 0 and opts.line2 or nil,
+  })
+end, {
+  desc = 'Create a Pinet contextual thread on the current file line/range',
+  nargs = '*',
+  range = true,
+})
 
 vim.api.nvim_create_user_command('PinetThreads', function()
   require('pi-nvim.comments').refresh({ include_resolved = true })
@@ -46,6 +54,22 @@ end, { desc = 'Reopen a Pinet contextual thread', nargs = '?' })
 vim.api.nvim_create_user_command('PinetThreadOpen', function(opts)
   require('pi-nvim.comments').open_thread(opts.args ~= '' and opts.args or nil)
 end, { desc = 'Open a Pinet contextual thread pane', nargs = '?' })
+
+vim.api.nvim_create_user_command('PinetOwner', function(opts)
+  require('pi-nvim.comments').document_owner(opts.args ~= '' and opts.args or nil)
+end, { desc = 'Set the current document Pinet owner', nargs = '?' })
+
+vim.api.nvim_create_user_command('PinetSubscribe', function(opts)
+  require('pi-nvim.comments').document_subscribe(opts.args ~= '' and opts.args or nil, true)
+end, { desc = 'Subscribe an agent to the current document', nargs = '?' })
+
+vim.api.nvim_create_user_command('PinetUnsubscribe', function(opts)
+  require('pi-nvim.comments').document_subscribe(opts.args ~= '' and opts.args or nil, false)
+end, { desc = 'Unsubscribe an agent from the current document', nargs = '?' })
+
+vim.api.nvim_create_user_command('PinetSubscribers', function()
+  require('pi-nvim.comments').document_status()
+end, { desc = 'Show current document owner and subscribers' })
 
 vim.keymap.set('n', ']p', function()
   require('pi-nvim.comments').next()

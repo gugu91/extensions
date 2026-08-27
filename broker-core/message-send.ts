@@ -10,6 +10,7 @@ import type {
 
 export interface BrokerMessageSenderDb {
   getThread(threadId: string): ThreadInfo | null;
+  getDocumentRecipients?(documentId: string): string[];
   createThread(
     threadId: string,
     source: string,
@@ -141,14 +142,24 @@ export async function sendBrokerMessage(
   };
   await adapter.send(outbound);
 
+  const documentId =
+    typeof thread.metadata?.documentId === "string" ? thread.metadata.documentId : null;
+  const documentRecipients = documentId
+    ? (deps.db.getDocumentRecipients?.(documentId) ?? []).filter(
+        (agentId) => agentId !== input.senderAgentId,
+      )
+    : [];
   const message = deps.db.insertMessage(
     threadId,
     source,
     "outbound",
     input.senderAgentId,
     messageBody,
-    [],
-    input.metadata,
+    [...new Set(documentRecipients)],
+    {
+      ...(input.metadata ?? {}),
+      ...(documentId ? { documentId } : {}),
+    },
   );
 
   return {
