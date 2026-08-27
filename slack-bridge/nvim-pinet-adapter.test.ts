@@ -46,11 +46,16 @@ function request(
 function createDb(): NvimAdapterDbPort {
   const threads = new Map<string, ThreadInfo>();
   const documents = new Map<string, DocumentInfo>();
+  const aliases = new Map<string, string>();
   const subscribers = new Map<string, Set<string>>();
   const messages: BrokerMessage[] = [];
   return {
     getThread: (threadId) => threads.get(threadId) ?? null,
     getDocument: (documentId) => documents.get(documentId) ?? null,
+    getDocumentByAlias: (source, externalId) => {
+      const documentId = aliases.get(`${source}\0${externalId}`);
+      return documentId ? (documents.get(documentId) ?? null) : null;
+    },
     upsertDocument: (document) => {
       const now = new Date().toISOString();
       const existing = documents.get(document.documentId);
@@ -58,7 +63,9 @@ function createDb(): NvimAdapterDbPort {
       documents.set(document.documentId, stored);
       return stored;
     },
-    bindDocumentAlias: () => ({}),
+    bindDocumentAlias: (source, externalId, documentId) => {
+      aliases.set(`${source}\0${externalId}`, documentId);
+    },
     setDocumentOwner: (documentId, ownerAgent) => {
       const existing = documents.get(documentId);
       if (!existing) throw new Error(`Unknown document ${documentId}`);
@@ -238,6 +245,36 @@ describe("NvimPinetAdapter", () => {
       });
       expect(db.getThread(normalCreated.threadId as string)?.ownerAgent).toBe("agent-2");
       expect(db.getThread(threadId)?.ownerAgent).toBe("agent-2");
+
+      db.upsertDocument({
+        documentId: "doc:slack-thread:old",
+        kind: "slack_thread",
+        title: "Slack C123/111.222",
+        ownerAgent: "agent-1",
+        ownerBinding: "explicit",
+        metadata: null,
+      });
+      db.subscribeDocument("doc:slack-thread:old", "agent-1");
+      db.createThread({
+        threadId: "111.222",
+        source: "slack",
+        channel: "C123",
+        ownerAgent: "agent-1",
+        ownerBinding: "explicit",
+        metadata: {
+          documentId: "doc:slack-thread:old",
+          documentAliasExternalId: "workspace\\0C123\\0111.222",
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      const bound = await request(socketPath, "pinet.document.bind_thread", {
+        anchor: normalAnchor,
+        threadId: "111.222",
+      });
+      expect(db.getThread("111.222")?.metadata?.documentId).toBe(bound.documentId);
+      expect(db.getThread("111.222")?.ownerAgent).toBe("agent-2");
+      expect(bound.subscribers).toEqual(["agent-1", "agent-2"]);
 
       await request(socketPath, "pinet.thread.reply", { threadId, body: "Follow-up" });
       expect(inboundBodies).toContain("Follow-up");

@@ -76,20 +76,32 @@ function rememberKnownSlackThread(
   const existingMetadata = existing?.metadata ?? {};
   const scopeKey = context ? JSON.stringify(context.scope) : "workspace";
   const externalId = `${scopeKey}\0${channelId}\0${threadTs}`;
-  const documentId = `doc:slack-thread:${createHash("sha256").update(externalId).digest("hex")}`;
-  broker.db.upsertDocument({
-    documentId,
-    kind: "slack_thread",
-    title: `Slack ${channelId}/${threadTs}`,
-    ownerAgent: existing?.ownerAgent ?? null,
-    ownerBinding: existing?.ownerBinding ?? null,
-    metadata: {
-      channelId,
-      threadTs,
-      ...(context ? { slackThreadContext: context } : {}),
-    },
-  });
+  const referenceExternalId = `${channelId}\0${threadTs}`;
+  const aliasedDocument =
+    broker.db.getDocumentByAlias("slack-thread-ref", referenceExternalId) ??
+    broker.db.getDocumentByAlias("slack", externalId);
+  const documentId =
+    aliasedDocument?.documentId ??
+    `doc:slack-thread:${createHash("sha256").update(externalId).digest("hex")}`;
+  if (!aliasedDocument) {
+    broker.db.upsertDocument({
+      documentId,
+      kind: "slack_thread",
+      title: `Slack ${channelId}/${threadTs}`,
+      ownerAgent: existing?.ownerAgent ?? null,
+      ownerBinding: existing?.ownerBinding ?? null,
+      metadata: {
+        channelId,
+        threadTs,
+        ...(context ? { slackThreadContext: context } : {}),
+      },
+    });
+  }
   broker.db.bindDocumentAlias("slack", externalId, documentId, {
+    channelId,
+    threadTs,
+  });
+  broker.db.bindDocumentAlias("slack-thread-ref", referenceExternalId, documentId, {
     channelId,
     threadTs,
   });
@@ -99,6 +111,8 @@ function rememberKnownSlackThread(
     metadata: {
       ...existingMetadata,
       documentId,
+      documentAliasExternalId: externalId,
+      documentReferenceExternalId: referenceExternalId,
       ...(context ? { slackThreadContext: context } : {}),
     },
   });

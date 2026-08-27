@@ -35,6 +35,33 @@ describe("contextual thread metadata", () => {
     ).toBe(false);
   });
 
+  it("parses stored schema-v1 diff anchors without an anchorKind field", () => {
+    const stored: ContextJsonValue = {
+      pinetKind: "contextual_thread",
+      schemaVersion: 1,
+      codeAnchor: {
+        repository: "/repo",
+        worktree: "/repo",
+        path: "src/legacy.ts",
+        baseOid: null,
+        headOid: "head",
+        blobOid: "blob",
+        side: "old",
+        startLine: 4,
+        endLine: 4,
+        selectedTextSha256: null,
+        contextSha256: null,
+      },
+      state: { resolved: false },
+    };
+
+    expect(parseContextualThreadMetadata(stored)?.codeAnchor).toMatchObject({
+      anchorKind: "diff",
+      side: "old",
+      path: "src/legacy.ts",
+    });
+  });
+
   it("builds a normal-buffer anchor without pretending it is a diff side", () => {
     const metadata = buildContextualThreadMetadata({
       repository: "/repo",

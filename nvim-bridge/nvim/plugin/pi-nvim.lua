@@ -71,6 +71,10 @@ vim.api.nvim_create_user_command('PinetSubscribers', function()
   require('pi-nvim.comments').document_status()
 end, { desc = 'Show current document owner and subscribers' })
 
+vim.api.nvim_create_user_command('PinetBindSlack', function(opts)
+  require('pi-nvim.comments').document_bind_thread(opts.args)
+end, { desc = 'Bind a Slack thread to the current document', nargs = 1 })
+
 vim.keymap.set('n', ']p', function()
   require('pi-nvim.comments').next()
 end, { desc = 'Next Pinet contextual thread' })

@@ -43,6 +43,7 @@ Contextual thread commands:
 - `:PinetSubscribe [agent_id]` — subscribe an agent to document thread activity.
 - `:PinetUnsubscribe [agent_id]` — remove a document subscription.
 - `:PinetSubscribers` — show the document owner and subscribers.
+- `:PinetBindSlack <thread_id>` — explicitly bind an existing Slack thread to the current tracked document so both adapters share ownership and subscriptions.
 
 Document ownership and subscriptions are persisted in BrokerDB and shared across adapters. Slack threads are bound to the same document-domain ports through aliases; transports do not maintain separate ownership tables. Subscriptions grant delivery, not thread-ownership or reply authority.
 

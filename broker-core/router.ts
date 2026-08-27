@@ -358,8 +358,8 @@ export class MessageRouter {
         this.db.setDocumentOwner(documentId, thread.ownerAgent);
       }
       const recipientIds = (this.db.getDocumentRecipients?.(documentId) ?? [])
-        .map((agentId) => agents.find((agent) => agent.id === agentId) ?? null)
-        .filter((agent): agent is AgentInfo => agent !== null && isRoutableOwner(agent))
+        .map((agentId) => resolveRoutableThreadOwner(this.db, agentId))
+        .filter((agent): agent is AgentInfo => agent !== null)
         .map((agent) => agent.id);
       const recipients = [...new Set(recipientIds)];
       if (recipients.length === 1) return { action: "deliver", agentId: recipients[0]! };

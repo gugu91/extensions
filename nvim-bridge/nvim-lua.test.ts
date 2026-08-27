@@ -44,7 +44,7 @@ describe("pi-nvim Lua integration", () => {
             "+runtime plugin/pi-nvim.lua",
             `+lua ${fakeSocket}`,
             "+lua require('pi-nvim').setup()",
-            "+lua for _, name in ipairs({ 'PiCommsOpen', 'PiCommsAdd', 'PiCommsRead', 'PiCommsClean' }) do assert(vim.fn.exists(':' .. name) == 0) end; for _, name in ipairs({ 'PinetComment', 'PinetThreads', 'PinetReply', 'PinetOwner', 'PinetSubscribe', 'PinetUnsubscribe', 'PinetSubscribers' }) do assert(vim.fn.exists(':' .. name) == 2) end",
+            "+lua for _, name in ipairs({ 'PiCommsOpen', 'PiCommsAdd', 'PiCommsRead', 'PiCommsClean' }) do assert(vim.fn.exists(':' .. name) == 0) end; for _, name in ipairs({ 'PinetComment', 'PinetThreads', 'PinetReply', 'PinetOwner', 'PinetSubscribe', 'PinetUnsubscribe', 'PinetSubscribers', 'PinetBindSlack' }) do assert(vim.fn.exists(':' .. name) == 2) end",
             "+qa",
           ],
           { encoding: "utf8" },

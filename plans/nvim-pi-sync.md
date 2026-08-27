@@ -158,6 +158,7 @@ The contextual-thread adapter also supports ordinary tracked buffers through a s
 - `document_aliases` binds native identities such as a canonical Git worktree file or Slack thread to that document.
 - `document_subscriptions` stores additional agent recipients. Subscriptions grant delivery, not ownership or reply authority.
 - Neovim Git-file document identity hashes canonical `repository`, `worktree`, and repo-relative `path`; Slack thread identity hashes its scope, channel, and thread timestamp.
+- Both runtime paths resolve existing aliases before minting a document id. `:PinetBindSlack <thread_id>` provides the explicit cross-adapter rebind when a Slack conversation corresponds to a tracked file; subsequent Slack ingress reuses that canonical Git document.
 - Contextual threads retain their existing `threads`/`messages` lifecycle and reference the shared `documentId`. The router fans document events out once to the unique owner/subscriber set.
 - Agent replies continue through the generic transport send path; document subscribers receive those persisted replies without changing the thread owner.
 - Diff anchors remain schema v1. Normal-buffer anchors use schema v2 with `anchorKind: "normal"`, current `headOid`, optional committed `headBlobOid`, current in-memory `blobOid`, and `dirty`. They never claim an old/new diff side.

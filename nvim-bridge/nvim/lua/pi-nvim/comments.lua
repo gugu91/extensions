@@ -291,6 +291,24 @@ function M.document_status()
   )
 end
 
+function M.document_bind_thread(thread_id)
+  local revision = current_anchor()
+  thread_id = thread_id or prompt_text('Slack thread id: ')
+  if not revision or not thread_id then
+    return
+  end
+  local result, err =
+    socket.request('pinet.document.bind_thread', { anchor = revision, threadId = thread_id })
+  if err then
+    vim.notify(
+      'Pinet document binding failed: ' .. (err.message or 'request failed'),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  vim.notify('Pinet document bound: ' .. tostring(result.documentId), vim.log.levels.INFO)
+end
+
 function M.reply(thread_id, body)
   thread_id = thread_id or prompt_text('Thread id: ')
   body = body or prompt_text('Reply: ')

@@ -271,7 +271,12 @@ describe("MessageRouter — route", () => {
 
   it("broadcasts document activity to its owner and subscribers without duplicates", () => {
     db.agents = [
-      makeAgent({ id: "owner", name: "Owner" }),
+      makeAgent({
+        id: "owner",
+        name: "Owner",
+        disconnectedAt: "2026-01-01T00:00:00Z",
+        resumableUntil: "2099-01-01T00:00:00Z",
+      }),
       makeAgent({ id: "subscriber", name: "Subscriber" }),
     ];
     db.documentRecipients.set("doc:1", ["owner", "subscriber", "owner"]);

@@ -1701,6 +1701,54 @@ describe("BrokerDB message sync identity", () => {
     }
   });
 
+  it("migrates an existing v24 broker database to document schema v25", () => {
+    const { db, dir } = createDb();
+    cleanupDirs.push(dir);
+    const dbPath = path.join(dir, "broker.db");
+    db.createThread("existing-thread", "slack", "C123", "agent-1");
+    db.close();
+
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec(`
+        DROP TABLE document_subscriptions;
+        DROP TABLE document_aliases;
+        DROP TABLE documents;
+        PRAGMA user_version = 24;
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const upgraded = new BrokerDB(dbPath);
+    try {
+      upgraded.initialize();
+      expect(upgraded.getThread("existing-thread")).toMatchObject({ ownerAgent: "agent-1" });
+      expect(upgraded.getDocument("doc:missing")).toBeNull();
+      upgraded.upsertDocument({
+        documentId: "doc:git-file:migrated",
+        kind: "git_file",
+        title: "README.md",
+        ownerAgent: "agent-1",
+        ownerBinding: "explicit",
+        metadata: null,
+      });
+      expect(upgraded.getDocument("doc:git-file:migrated")?.title).toBe("README.md");
+    } finally {
+      upgraded.close();
+    }
+
+    const versionDb = new DatabaseSync(dbPath);
+    try {
+      const version = versionDb.prepare("PRAGMA user_version").get() as {
+        user_version?: number;
+      };
+      expect(version.user_version).toBe(CURRENT_BROKER_SCHEMA_VERSION);
+    } finally {
+      versionDb.close();
+    }
+  });
+
   it("persists document ownership, aliases, and deduplicated subscriptions", () => {
     const { db, dir } = createDb();
     cleanupDirs.push(dir);
