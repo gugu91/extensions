@@ -9,6 +9,35 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
+## [0.2.13] - 2026-08-28
+
+Pinet v0.2.13 extends contextual threads to normal tracked Neovim buffers and introduces broker-owned, transport-neutral document ownership and subscriptions shared across Neovim and Slack.
+
+### Version verification
+
+- `pi-extensions` — `0.2.13` (private repo package)
+- `@pinet/transport-core` — `0.2.13`
+- `@pinet/broker-core` — `0.2.13`
+- `@pinet/pinet-core` — `0.2.13`
+- `@pinet/imessage-bridge` — `0.2.13`
+- `@pinet/slack-bridge` — `0.2.13`
+- `@pinet/model-aware-compaction` — `0.2.13`
+- `@pinet/agent-goal` — `0.2.13`
+
+### Release highlights
+
+- Enables `:PinetComment` in normal tracked buffers with revision-aware schema-v2 anchors that do not invent diff sides, while preserving schema-v1 diff anchors.
+- Adds broker-persisted documents, aliases, one authoritative owner, and deduplicated subscribers without introducing transport-specific ownership stores.
+- Adds Neovim ownership and subscription commands plus explicit `:PinetBindSlack <thread_id>` binding so Slack and Git-file aliases resolve to one canonical document.
+- Preserves delivery to durable resumable or hibernated owners and subscribers even when they are not in the live process roster.
+- Migrates BrokerDB from schema v24 to v25 while preserving existing threads and validates restart persistence, ownership transfer, fanout, alias resolution, and legacy anchors.
+
+### Notable pull requests
+
+- [#1023](https://github.com/gugu91/pinet/pull/1023) — add normal-buffer contextual threads and shared document ownership/subscriptions
+
+See the [full change set since v0.2.12](https://github.com/gugu91/pinet/compare/v0.2.12...v0.2.13).
+
 ## [0.2.12] - 2026-08-26
 
 Pinet v0.2.12 replaces the dormant PiComms review store with Pinet-native, revision-aware contextual threads for single-file Neovim diffs.
