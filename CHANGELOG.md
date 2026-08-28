@@ -9,7 +9,7 @@ themselves create a new release entry, tag, or package version. Add a versioned
 entry only when a maintainer approves a real release with intentional package
 version bumps and publish scope.
 
-## [0.2.13] - 2026-08-27
+## [0.2.13] - 2026-08-28
 
 Pinet v0.2.13 extends contextual threads to normal tracked Neovim buffers and introduces broker-owned, transport-neutral document ownership and subscriptions shared across Neovim and Slack.
 
